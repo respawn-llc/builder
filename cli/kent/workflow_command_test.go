@@ -16,6 +16,7 @@ import (
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
 	"core/server/workflowview"
@@ -925,7 +926,8 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
 	}
 	projector := workflowview.NewTaskProjector()
-	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
@@ -933,7 +935,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -945,6 +947,10 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(workflowexecution.NewAutomaticIntents(), workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
 	service, err := workflowsvc.New(store, workflowsvc.ReadModels{
 		Definitions: definitions,
 		Board:       board,
@@ -952,7 +958,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 		TaskDetail:  taskDetail,
 		Activity:    activity,
 		Attention:   attention,
-	}, resolver)
+	}, resolver, workflowexecution.NewMutationPermit(), automaticStarts)
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

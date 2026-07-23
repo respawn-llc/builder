@@ -283,6 +283,7 @@ func prepareSessionUIRun(
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
 	}
 	return runtimePlan, uiLoopRequest{
+		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,

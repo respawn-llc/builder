@@ -12,6 +12,8 @@ var (
 	ErrSchedulerStopped            = errors.New("workflow scheduler stopped")
 	ErrSchedulerClaimFailed        = errors.New("workflow scheduler claim failed")
 	ErrSchedulerRuntimeStartFailed = errors.New("workflow runtime start failed")
+	ErrNoInterruptibleExecution    = errors.New("task has no actively executing workflow scope to interrupt")
+	ErrTaskExecutionNotQuiescent   = errors.New("workflow task execution is not quiescent")
 )
 
 type SchedulerStore interface {

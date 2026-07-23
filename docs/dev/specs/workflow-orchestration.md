@@ -171,6 +171,7 @@
 - Applied and rejected Transitions are not retained as workflow movement history. Pending Approval state is removed when the Approval applies or a manual move supersedes it.
 - A Task awaiting Approval remains at the source current Node and exposes `waiting_approval` status; target Nodes are not current yet.
 - Manually moving a Task that is awaiting Approval clears the proposed Transition and replaces the source current Node with the chosen target.
+- Manually moving a Task whose Exact Execution Scope is waiting on a Question cancels and joins that scope before applying the move. The Question remains in the Session transcript, but its runtime waiter and unresolved attention do not migrate to the target Run; the chosen edge's context-preservation mode determines whether the target reuses the Session.
 - Missing-edge manual overrides cannot target executable Nodes. Manual movement into an agent or Script Node requires a concrete Workflow Edge so the target has a real prompt and completion contract.
 - Task start and manual movement into an executable node apply no movement or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
 - Approvals occur only after a task has reached an executable node and therefore always reuse the task's locked execution target.
@@ -222,15 +223,17 @@
 - Automatic intents form one small typed in-memory queue. Membership and order are intentionally lost on restart; no durable claim, queue journal, reconstruction scan, recovery worker, or startup runnable derivation exists.
 - Automatic scheduling is work-conserving and task-affine. `[workflow].concurrency` limits automatic starts only.
 - Explicit Start, Resume, approval, and executable manual move may exceed the automatic concurrency limit without preempting existing work.
-- A live agent or script Exact Execution Scope is the only execution-liveness authority. Durable current-Node state, Session relations, Task status, transcript rows, and Goals do not prove execution.
+- An Exact Execution Scope whose agent loop or Script process is actively executing is the only execution-liveness and Interrupt authority. Durable current-Node or Run state, Automatic Intents, runtime gates, Session relations, waiting-Question state, Task status, transcript rows, and Goals do not prove an interruptible execution.
 - Start and Resume admit selected parallel branches independently and return typed per-current-Node outcomes. A failed branch does not roll back, compensate, or block an independently admitted sibling.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
 - Runtime Question and Approval waiters, Automatic Intents, runtime gates, and Exact Execution Scopes are volatile. Restart reconstructs none of them and marks affected current executable Nodes interrupted with a typed restart reason.
 - Persisted workflow transition approvals remain pending across restart with their frozen transition snapshots.
 - Resume closes stale bounded active-segment tool operations with a typed restart outcome before continuing. It does not reconstruct waiters, replay answers, re-execute interrupted tool calls, or traverse full transcript history.
 - Interrupted current Nodes are never automatically retried.
-- Task Interrupt is Task-level with an optional Session-ID selector: no Session interrupts every Exact Execution Scope of the Task; a specific Session interrupts only its agent execution. Script execution is interrupted through the Task-wide operation.
-- Manual moves are rejected while a task has an exact live execution or runtime gate that conflicts with movement. The operator must Interrupt or wait for the lifecycle transition to finish.
+- Task Interrupt is Task-level with an optional Session-ID selector. No Session interrupts every actively executing agent loop or Script process of the Task; a specific Session interrupts only its actively executing agent loop. Waiting-Question scopes and every state without an actively executing loop or process are not interruptible.
+- Clients expose Interrupt if and only if the server reports at least one actively executing Exact Execution Scope. The Interrupt mutation revalidates the same fact and fails without changing persistence when no matching execution is active.
+- A durable Run without an actively executing Exact Execution Scope is never made interruptible as a recovery fallback. Workflow Execution must prevent that state, fail the owning lifecycle transition loudly, or let restart reconciliation convert it to canonical interrupted state.
+- Manual moves are rejected while an agent loop or Script process is actively executing or while a runtime gate conflicts with movement. A waiting-Question scope is canceled and joined by the Move operation before durable movement. A durable-only stale source Run is superseded atomically and never gains Interrupt authority.
 - Completion and Transition application require either the matching Exact Execution Scope or one unambiguous current idle executable Node selected by Workflow Execution. A stopped scope and a Node that is no longer current cannot mutate Task state.
 - Completion and Current Nodes replacement remain one SQLite transaction.
 - Runtime failures, crashes, model/runtime interruptions, and fixable admission validation blockers leave the affected current Node interrupted with reason metadata.
@@ -245,7 +248,7 @@
 - Task attention may read the newest active transcript segment to recover unresolved question content. Desktop task detail starts this read independently in parallel so core detail is not blocked.
 - Task status is UI-neutral structured data. Clients render and localize status labels.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
-- Running, queued, and live-Question status require matching Exact Execution Scope evidence. Interruption metadata on a current Node never proves liveness.
+- Running, queued, and live-Question status require matching Exact Execution Scope evidence. `running` means an agent loop or Script process is actively executing; `waiting_question` is not running and is not interruptible. Interruption metadata on a current Node never proves liveness.
 - Task read models expose server-authoritative `can_delete` derived from the same snapshot. The Delete mutation treats it as advisory and revalidates quiescence before changing artifacts or persistence.
 - The status projection preserves all applicable typed attention kinds and Session/current-Node references when parallel branches have different conditions.
 - Workflow validity is workflow-level state and is not a task status.

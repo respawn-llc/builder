@@ -1403,6 +1403,21 @@ WHERE r.task_id = sqlc.arg(task_id)
   AND p.state = 'active'
 ORDER BY r.id ASC;
 
+-- name: ListWorkflowTaskCurrentRunFactsByTasks :many
+SELECT
+    r.task_id,
+    r.id,
+    r.run_generation,
+    r.waiting_ask_id
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id IN (sqlc.slice('task_ids'))
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND p.state = 'active'
+ORDER BY r.task_id ASC, r.id ASC;
+
 -- name: ListWorkflowTaskRunActionFactsByTasks :many
 SELECT
     p.task_id,
@@ -2891,6 +2906,18 @@ SET state = 'completed',
 WHERE task_node_placements.id = sqlc.arg(placement_id)
   AND state = 'active';
 
+-- name: InterruptManualMoveSourceRun :execrows
+UPDATE task_runs
+SET
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms),
+    interruption_reason = 'user_interrupt',
+    interruption_detail_json = '{}',
+    waiting_ask_id = NULL
+WHERE id = sqlc.arg(run_id)
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL;
+
 -- name: SupersedeActiveTerminalManualMoveSourcePlacement :execrows
 UPDATE task_node_placements
 SET state = 'superseded',
@@ -4105,6 +4132,7 @@ JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = sqlc.arg(task_id)
   AND (sqlc.arg(session_id) = '' OR r.session_id = sqlc.arg(session_id))
   AND r.started_at_unix_ms IS NOT NULL
+  AND r.waiting_ask_id IS NULL
   AND r.completed_at_unix_ms IS NULL
   AND r.interrupted_at_unix_ms IS NULL
   AND p.state = 'active'

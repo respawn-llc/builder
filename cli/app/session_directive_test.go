@@ -133,6 +133,7 @@ func TestSessionLifecycleResultResumeReleasesThenUsesSamePickerWithoutPlan(t *te
 	}
 	planner := newSessionLaunchPlanner(server)
 	planner.pickSession = func(
+		context.Context,
 		sessionPageLoader,
 		string,
 		sessionPickerHeaderInfo,
@@ -268,6 +269,7 @@ func TestSessionSelectionPickerCreateSendsCreateNewWithoutParent(t *testing.T) {
 	originalPicker := runSessionPickerFlow
 	defer func() { runSessionPickerFlow = originalPicker }()
 	runSessionPickerFlow = func(
+		context.Context,
 		sessionPageLoader,
 		string,
 		sessionPickerHeaderInfo,

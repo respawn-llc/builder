@@ -8,28 +8,37 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/prompts"
 	"core/server/attentionnotify"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
+	"core/server/workflowrunner"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -41,6 +50,16 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 		t.Fatalf("subscription Next: %v", err)
 	}
 	return event
+}
+
+func installWorkflowServiceScheduler(t *testing.T, service *Service, notifier *recordingSchedulerNotifier) {
+	t.Helper()
+	service.schedulerWake = notifier
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(notifier, workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	service.automaticStarts = automaticStarts
 }
 
 func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource serverapi.WorkflowProjectEventResource, expected ...serverapi.WorkflowProjectEventAction) []serverapi.WorkflowProjectEvent {
@@ -435,7 +454,7 @@ func TestServiceTaskStartValidatesCurrentGraph(t *testing.T) {
 func TestServiceTaskStartRequiresSelectionWithoutApplyingAction(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	notifier := &recordingSchedulerNotifier{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -590,7 +609,7 @@ func TestServiceTaskStartLeavesActionUnlockedWhenMaterializationFails(t *testing
 		materializeErr: setupErr,
 	}
 	notifier := &recordingSchedulerNotifier{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 
 	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -1091,7 +1110,7 @@ func TestServiceStartTaskAutomationValidatesAndRecordsRunnableRun(t *testing.T) 
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	notifier := &recordingSchedulerNotifier{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 
 	started, err := service.StartTaskAutomation(ctx, task.Task.ID)
 	if err != nil {
@@ -1132,7 +1151,7 @@ func TestServiceRejectsUnsafeTaskStartBeforeExecutionTargetOrScheduler(t *testin
 	infrastructure := &recordingExecutionTargetInfrastructure{}
 	notifier := &recordingSchedulerNotifier{}
 	service.executionTargets = infrastructure
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 
 	_, err := service.StartTaskAutomation(ctx, taskID)
 	var validationErr workflowstore.WorkflowValidationError
@@ -1147,9 +1166,9 @@ func TestServiceRejectsUnsafeTaskStartBeforeExecutionTargetOrScheduler(t *testin
 	}
 }
 
-func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWake(t *testing.T) {
+func TestServiceCompleteWorkflowTaskFromAgentSessionRequestsAutomaticSuccessorStart(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
@@ -1162,13 +1181,14 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 	defer func() { _ = sub.Close() }()
 	notifier := &recordingSchedulerNotifier{}
 	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.attentionFinalizer = finalizer
 
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID,
 		Commentary:     "finished",
+		OutputValues:   map[string]string{"prior_summary": "plan"},
 	})
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
@@ -1176,11 +1196,17 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 	if completed.TaskID != task.Task.ID || completed.RunID != started.RunID || completed.State != "applied" {
 		t.Fatalf("complete response = %+v", completed)
 	}
-	if completed.Handoff.SourceNodeDisplayName != "Agent" || completed.Handoff.DestinationDisplayName != "Done" {
-		t.Fatalf("completion handoff = %+v, want Agent -> Done", completed.Handoff)
+	if completed.Handoff.SourceNodeDisplayName != "Plan" || completed.Handoff.DestinationDisplayName != "Implement" {
+		t.Fatalf("completion handoff = %+v, want Plan -> Implement", completed.Handoff)
 	}
-	if notifier.count != 0 {
-		t.Fatalf("agent completion scheduler notifications = %d, want 0", notifier.count)
+	if len(completed.RunIDs) != 1 ||
+		len(notifier.automatic) != 1 ||
+		len(notifier.automatic[0]) != 1 ||
+		string(notifier.automatic[0][0]) != completed.RunIDs[0] {
+		t.Fatalf("agent completion automatic starts = %+v, response runs = %+v", notifier.automatic, completed.RunIDs)
+	}
+	if len(notifier.explicit) != 0 {
+		t.Fatalf("agent completion explicit starts = %+v, want none", notifier.explicit)
 	}
 	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != workflow.TransitionID(completed.TransitionID) || finalizer.results[0].State != "applied" {
 		t.Fatalf("attention finalizer results = %+v", finalizer.results)
@@ -1200,8 +1226,45 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == nil {
-		t.Fatalf("runs after completion = %+v, want completed source run", runs)
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].StartedAt != nil {
+		t.Fatalf("runs after completion = %+v, want completed source and queued successor", runs)
+	}
+}
+
+func TestServiceCompleteWorkflowTaskSignalsFatalFailureWhenCommittedSuccessorsCannotBeRegistered(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	sessionID := "session-agent-registration-failure"
+	claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, sessionID)
+	registrationErr := errors.New("automatic successor registration failed")
+	fatalSignal := workflowexecution.NewFatalSignal()
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(&recordingSchedulerNotifier{registrationErr: registrationErr}, fatalSignal)
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	service.automaticStarts = automaticStarts
+
+	_, err = service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
+		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
+		AgentSessionID: sessionID,
+		OutputValues:   map[string]string{"prior_summary": "plan"},
+	})
+	var fatalErr workflowexecution.WorkflowExecutionFatalError
+	if !errors.As(err, &fatalErr) {
+		t.Fatalf("CompleteWorkflowTask error = %T %v, want workflow execution fatal error", err, err)
+	}
+	if signaled := <-fatalSignal.Failures(); !errors.As(signaled, &fatalErr) {
+		t.Fatalf("signaled failure = %T %v, want workflow execution fatal error", signaled, signaled)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].StartedAt != nil || runs[1].InterruptedAt != nil {
+		t.Fatalf("runs after registration panic = %+v, want committed source and unstarted successor for restart reconciliation", runs)
 	}
 }
 
@@ -1251,7 +1314,7 @@ func TestServiceCompleteWorkflowTaskForceRequestsRuntimeCancelWithoutDirectSched
 	claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, "session-human-force")
 	notifier := &recordingSchedulerNotifier{}
 	canceler := &recordingTaskRuntimeRunCancelRequester{active: true}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.runtimeCancel = canceler
 
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
@@ -1286,7 +1349,7 @@ func TestServiceCompleteWorkflowTaskForceWakesSchedulerWhenNoRuntimeOwnsRun(t *t
 	claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, "session-human-force")
 	notifier := &recordingSchedulerNotifier{}
 	canceler := &recordingTaskRuntimeRunCancelRequester{active: false}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.runtimeCancel = canceler
 
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
@@ -1321,7 +1384,7 @@ func TestServiceCompleteWorkflowTaskForceKeepsCompletionWhenRuntimeCancelFails(t
 	claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, "session-human-force")
 	notifier := &recordingSchedulerNotifier{}
 	canceler := &recordingTaskRuntimeCanceler{err: errors.New("runtime already gone")}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.runtimeCancel = canceler
 
 	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
@@ -1458,6 +1521,157 @@ func TestServiceManualMoveResolvesCapturedInterruptionWithFreshFinalizer(t *test
 	}
 }
 
+type workflowServiceMoveRuntimeClient struct{}
+
+func (workflowServiceMoveRuntimeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, nil
+}
+
+func TestServiceMovePreflightPreservesRealWaitingQuestion(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	cfg, err := config.Load(binding.CanonicalRoot, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	projectSessionsDir := filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID, "sessions")
+	sessionStore, err := session.Create(
+		projectSessionsDir,
+		"move-preflight",
+		cfg.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("NewOpenSessionDescriptor: %v", err)
+	}
+	cfg.Settings.Model = "gpt-5"
+	cfg.Settings.ModelContextWindow = 200000
+	cfg.Settings.Reviewer.Frequency = "off"
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: cfg.Settings,
+		Workdir:  cfg.WorkspaceRoot,
+		Client:   workflowServiceMoveRuntimeClient{},
+	})
+	if err != nil {
+		t.Fatalf("NewAgentRuntimePlan: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(workflowexecution.NewAutomaticIntents(), workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	starter, err := workflowrunner.NewStarter(
+		cfg,
+		metadataStore,
+		service.store,
+		nil,
+		nil,
+		workflowrunner.StarterOptions{
+			RuntimeAuthority: authority,
+			AutomaticStarts:  automaticStarts,
+			MutationPermit:   service.mutationPermit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewStarter: %v", err)
+	}
+	service.moveAuthority = starter
+	workflowRef := sessionruntime.WorkflowExecutionRef{
+		TaskID:     workflow.TaskID(task.Task.ID),
+		RunID:      workflow.RunID("run-move-preflight-waiting"),
+		Generation: 1,
+	}
+	handle, err := authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Runtime:    &runtimePlan,
+		Workflow:   &workflowRef,
+		Resource:   sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			_, waitErr := authority.AwaitPromptResponse(ctx, scope.ID(), askquestion.AskQuestionRequest{
+				ID:       uuid.NewString(),
+				StepID:   uuid.NewString(),
+				Question: "Proceed?",
+			})
+			return waitErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = handle.Stop(context.Background())
+	})
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		snapshot, snapshotErr := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+		return snapshotErr == nil && len(snapshot.Executions) == 1 && snapshot.Executions[0].WaitingQuestion
+	}) {
+		waitCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		_, waitErr := handle.Wait(waitCtx)
+		snapshot, snapshotErr := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+		t.Fatalf("agent execution did not enter waiting-question state: wait=%v snapshot=%+v snapshotErr=%v", waitErr, snapshot, snapshotErr)
+	}
+	assertWaiting := func(label string) {
+		t.Helper()
+		snapshot, snapshotErr := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+		if snapshotErr != nil {
+			t.Fatalf("%s CurrentTaskExecutionSnapshot: %v", label, snapshotErr)
+		}
+		if len(snapshot.Executions) != 1 || !snapshot.Executions[0].WaitingQuestion {
+			t.Fatalf("%s waiting-question snapshot = %+v, want unchanged live waiter", label, snapshot)
+		}
+	}
+
+	if _, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           task.Task.ID,
+		TargetNodeID:     "missing-node",
+		AllowMissingEdge: true,
+	}); err == nil {
+		t.Fatal("invalid MoveWorkflowTask succeeded")
+	}
+	assertWaiting("invalid move")
+
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	agentNodeID := workflowServiceNodeIDByKind(t, definition.Definition, "agent")
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           task.Task.ID,
+		TargetNodeID:     agentNodeID,
+		AllowMissingEdge: true,
+		AutoApprove:      true,
+	})
+	if err != nil {
+		t.Fatalf("selection-required MoveWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired || response.SelectionRequired == nil || response.Applied != nil {
+		t.Fatalf("selection-required response = %+v", response)
+	}
+	assertWaiting("selection-required move")
+}
+
 func TestServiceApproveTerminalTransitionDoesNotResolveExecutionTarget(t *testing.T) {
 	ctx, service, _, _, _, transitionID := newWorkflowServicePendingCompletionApproval(t)
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
@@ -1520,7 +1734,7 @@ func TestServiceApproveExecutableTransitionRequiresSelectionWithoutApplyingAppro
 	}
 	notifier := &recordingSchedulerNotifier{}
 	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.attentionFinalizer = finalizer
 
 	response, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
@@ -1670,11 +1884,11 @@ func TestServiceApproveExecutableTransitionMaterializesSelectionBeforeApplying(t
 func TestServiceInterruptTaskTargetsRunAndCancelsRuntime(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
-	if _, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0); err != nil {
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
-	canceler := &recordingTaskRuntimeCanceler{}
-	service.runtimeCancel = canceler
+	prepared := prepareWorkflowServiceInterrupt(service, taskID, started.RunID, claimed.Generation)
 
 	interrupted, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{TaskID: taskID})
 	if err != nil {
@@ -1683,17 +1897,125 @@ func TestServiceInterruptTaskTargetsRunAndCancelsRuntime(t *testing.T) {
 	if len(interrupted.Runs) != 1 {
 		t.Fatalf("interrupt response=%+v, want one run", interrupted)
 	}
-	if len(canceler.taskIDs) != 1 || canceler.taskIDs[0] != workflow.TaskID(taskID) {
-		t.Fatalf("canceled task runtimes=%+v, want task %s", canceler.taskIDs, taskID)
+	if prepared.requestStopCalls != 1 || prepared.waitCalls != 1 {
+		t.Fatalf("prepared interrupt request/wait calls = %d/%d, want 1/1", prepared.requestStopCalls, prepared.waitCalls)
+	}
+}
+
+func TestServiceInterruptTaskRejectsDurableStartedRunWithoutExactLiveExecution(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	if _, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+
+	_, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{TaskID: taskID})
+	if !errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		t.Fatalf("InterruptWorkflowTask error = %v, want no exact live execution", err)
+	}
+	run, err := service.store.GetRun(ctx, workflow.RunID(started.RunID))
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.InterruptedAt != nil {
+		t.Fatalf("durable-only run was interrupted: %+v", run)
+	}
+}
+
+func TestWorkflowMutationPermitSerializesConcurrentTaskStarts(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	const taskCount = 12
+	taskIDs := make([]string, 0, taskCount)
+	for range taskCount {
+		task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+		taskIDs = append(taskIDs, task.Task.ID)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, taskCount)
+	var wg sync.WaitGroup
+	for _, taskID := range taskIDs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				TaskID:           taskID,
+				ExecutionTarget:  &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent StartWorkflowTask: %v", err)
+		}
+	}
+}
+
+func TestInterruptRejectsClaimedRunUntilExactExecutionScopeRegisters(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	runtime := newClaimScopeRaceRuntime()
+	service.interruptAuthority = runtime
+	scheduler, err := workflowexecution.NewSchedulerService(
+		service.store,
+		runtime,
+		service.mutationPermit,
+		workflowexecution.SchedulerConfig{Concurrency: 1},
+	)
+	if err != nil {
+		t.Fatalf("NewSchedulerService: %v", err)
+	}
+	t.Cleanup(func() { _ = scheduler.Close() })
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- scheduler.StartExplicitRuns(ctx, []workflow.RunID{workflow.RunID(started.RunID)})
+	}()
+	request := <-runtime.entered
+
+	if _, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{TaskID: taskID}); !errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		t.Fatalf("InterruptWorkflowTask during preparation error = %v, want no interruptible execution", err)
+	}
+	run, err := service.store.GetRun(ctx, request.RunID)
+	if err != nil {
+		t.Fatalf("GetRun during preparation: %v", err)
+	}
+	if run.InterruptedAt != nil {
+		t.Fatalf("preparing run was durably interrupted without an exact scope: %+v", run)
+	}
+
+	close(runtime.release)
+	if err := <-startDone; err != nil {
+		t.Fatalf("StartExplicitRuns: %v", err)
+	}
+	if _, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{TaskID: taskID}); err != nil {
+		t.Fatalf("InterruptWorkflowTask: %v", err)
+	}
+	run, err = service.store.GetRun(ctx, request.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.InterruptedAt == nil {
+		t.Fatalf("run was not interrupted after exact scope registration: %+v", run)
 	}
 }
 
 func TestServiceInterruptTaskWithCustomReasonDoesNotSurfaceInterruptedRunAttention(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
-	if _, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0); err != nil {
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
+	prepareWorkflowServiceInterrupt(service, taskID, started.RunID, claimed.Generation)
 
 	if _, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{
 		TaskID: taskID,
@@ -2102,7 +2424,7 @@ func TestServiceResumeTaskRequeuesRunAndNotifiesScheduler(t *testing.T) {
 	}
 	notifier := &recordingSchedulerNotifier{}
 	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.schedulerWake = notifier
+	installWorkflowServiceScheduler(t, service, notifier)
 	service.attentionFinalizer = finalizer
 
 	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID})
@@ -2146,19 +2468,25 @@ func TestServiceResumeTaskResolvesCapturedInterruptionWithFreshFinalizer(t *test
 }
 
 type recordingSchedulerNotifier struct {
-	count     int
-	automatic [][]workflow.RunID
-	explicit  [][]workflow.RunID
+	count           int
+	automatic       [][]workflow.RunID
+	explicit        [][]workflow.RunID
+	registrationErr error
 }
 
-func (n *recordingSchedulerNotifier) RequestAutomaticStarts(runIDs []workflow.RunID) {
+func (n *recordingSchedulerNotifier) RegisterAutomaticStarts(runIDs []workflow.RunID) error {
 	n.count++
 	n.automatic = append(n.automatic, append([]workflow.RunID(nil), runIDs...))
+	return n.registrationErr
 }
 
 func (n *recordingSchedulerNotifier) StartExplicitRuns(_ context.Context, runIDs []workflow.RunID) error {
 	n.count++
 	n.explicit = append(n.explicit, append([]workflow.RunID(nil), runIDs...))
+	return nil
+}
+
+func (n *recordingSchedulerNotifier) EnsureTaskQuiescent(context.Context, workflow.TaskID) error {
 	return nil
 }
 
@@ -2228,6 +2556,92 @@ type recordingTaskRuntimeRunCancelRequester struct {
 	recordingTaskRuntimeCanceler
 	requestedRunIDs []workflow.RunID
 	active          bool
+}
+
+type recordingPreparedInterrupt struct {
+	executions       []workflowexecution.ExactExecutionScope
+	requestStopCalls int
+	waitCalls        int
+	waitErr          error
+	commitErr        error
+}
+
+func prepareWorkflowServiceInterrupt(service *Service, taskID string, runID string, generation int64) *recordingPreparedInterrupt {
+	prepared := &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
+		ScopeID:    runtimeids.NewExecutionScopeID(),
+		TaskID:     workflow.TaskID(taskID),
+		RunID:      workflow.RunID(runID),
+		Generation: generation,
+	}}}
+	service.interruptAuthority = &recordingInterruptAuthority{prepared: prepared}
+	return prepared
+}
+
+func (p *recordingPreparedInterrupt) Commit(operation func([]workflowexecution.ExactExecutionScope) error) error {
+	if p.commitErr != nil {
+		return p.commitErr
+	}
+	if err := operation(append([]workflowexecution.ExactExecutionScope(nil), p.executions...)); err != nil {
+		return err
+	}
+	p.requestStopCalls++
+	return nil
+}
+
+func (p *recordingPreparedInterrupt) Wait(context.Context) error {
+	p.waitCalls++
+	return p.waitErr
+}
+
+type recordingInterruptAuthority struct {
+	prepared workflowexecution.PreparedInterrupt
+	err      error
+}
+
+func (a *recordingInterruptAuthority) PrepareWorkflowInterrupt(workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
+	return a.prepared, a.err
+}
+
+type claimScopeRaceRuntime struct {
+	entered chan workflowexecution.SchedulerStartRunRequest
+	release chan struct{}
+
+	mu       sync.Mutex
+	prepared workflowexecution.PreparedInterrupt
+}
+
+func newClaimScopeRaceRuntime() *claimScopeRaceRuntime {
+	return &claimScopeRaceRuntime{
+		entered: make(chan workflowexecution.SchedulerStartRunRequest, 1),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *claimScopeRaceRuntime) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
+	r.entered <- req
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-r.release:
+	}
+	r.mu.Lock()
+	r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
+		ScopeID:    runtimeids.NewExecutionScopeID(),
+		TaskID:     req.TaskID,
+		RunID:      req.RunID,
+		Generation: req.Generation,
+	}}}
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *claimScopeRaceRuntime) PrepareWorkflowInterrupt(selector workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.prepared == nil {
+		return nil, workflowexecution.ErrNoInterruptibleExecution
+	}
+	return r.prepared, nil
 }
 
 func (c *recordingTaskRuntimeRunCancelRequester) RequestCancelRun(runID workflow.RunID) bool {
@@ -2818,7 +3232,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit(), service.automaticStarts); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -2849,7 +3263,11 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver)
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(workflowexecution.NewAutomaticIntents(), workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), automaticStarts)
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
@@ -2870,7 +3288,8 @@ func newWorkflowServiceReadModels(
 		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
 	}
 	projector := workflowview.NewTaskProjector()
-	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
@@ -2878,7 +3297,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}

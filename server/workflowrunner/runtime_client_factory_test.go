@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -150,10 +151,16 @@ func TestNewStarterRejectsLegacyAndRuntimeClientFactoriesTogether(t *testing.T) 
 	t.Parallel()
 
 	metadataStore, workflowStore, runtimeAuthority := newStarterFactoryStores(t)
+	automaticStarts, registrationErr := workflowexecution.NewAutomaticStartRegistration(workflowexecution.NewAutomaticIntents(), workflowexecution.NewFatalSignal())
+	if registrationErr != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", registrationErr)
+	}
 	_, err := NewStarter(config.App{PersistenceRoot: t.TempDir()}, metadataStore, workflowStore, nil, nil, StarterOptions{
 		ClientFactory:        func(SchedulerStartRunRequest) llm.Client { return NewScriptedClient(llm.ProviderCapabilities{}) },
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
 		RuntimeAuthority:     runtimeAuthority,
+		AutomaticStarts:      automaticStarts,
+		MutationPermit:       workflowexecution.NewMutationPermit(),
 	})
 	if !errors.Is(err, runtimewire.ErrRuntimeClientFactoryConflict) {
 		t.Fatalf("error = %v, want factory conflict", err)

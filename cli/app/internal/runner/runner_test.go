@@ -22,6 +22,15 @@ func (s *fakeServer) Close() error {
 	return nil
 }
 
+type failingServer struct {
+	fakeServer
+	failures chan error
+}
+
+func (s *failingServer) Failures() <-chan error {
+	return s.failures
+}
+
 func TestRunInteractiveUsesInjectedStarterAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	auth := &struct{}{}
@@ -128,6 +137,28 @@ func TestRunInteractiveClosesServerAfterLifecycleError(t *testing.T) {
 	}
 	if !server.closed {
 		t.Fatal("server was not closed after lifecycle error")
+	}
+}
+
+func TestRunInteractiveCancelsLifecycleAndReturnsServerFailure(t *testing.T) {
+	failure := errors.New("fatal workflow execution failure")
+	server := &failingServer{failures: make(chan error, 1)}
+	err := RunInteractive(context.Background(), Request[NoStartupOptions]{}, Dependencies[*failingServer, struct{}, NoStartupOptions]{
+		NewAuthInteractor: func() struct{} { return struct{}{} },
+		StartSessionServer: func(context.Context, Request[NoStartupOptions], struct{}, bool) (*failingServer, error) {
+			return server, nil
+		},
+		RunSessionLifecycle: func(ctx context.Context, _ *failingServer, _ struct{}, _ SessionLifecycleOptions) error {
+			server.failures <- failure
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("RunInteractive error = %v, want server failure", err)
+	}
+	if !server.closed {
+		t.Fatal("server was not closed after fatal failure")
 	}
 }
 

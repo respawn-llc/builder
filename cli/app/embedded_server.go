@@ -53,6 +53,13 @@ func (s *embeddedAppServer) Close() error {
 	return s.inner.Close()
 }
 
+func (s *embeddedAppServer) Failures() <-chan error {
+	if s == nil || s.inner == nil {
+		return nil
+	}
+	return s.inner.Failures()
+}
+
 func (s *embeddedAppServer) OwnsServer() bool {
 	return s != nil && s.inner != nil
 }

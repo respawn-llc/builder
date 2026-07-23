@@ -30,30 +30,33 @@ func (s *Starter) startScriptWorkflowRun(req workflowexecution.SchedulerStartRun
 	if err != nil {
 		return err
 	}
-	scriptReq.Finalize = func(_ context.Context, _ sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
-		return s.finalizeWorkflowScript(req, input, workflowScriptResultFromExecution(resolvedPath, result), runErr)
+	scriptReq.Finalize = func(ctx context.Context, _ sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
+		return s.finalizeWorkflowScript(ctx, req, input, workflowScriptResultFromExecution(resolvedPath, result), runErr)
 	}
 	_, err = s.runtimeAuthority.StartScriptExecution(context.Background(), scriptReq)
 	return err
 }
 
-func (s *Starter) finalizeWorkflowScript(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
+func (s *Starter) finalizeWorkflowScript(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
+	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		return s.finalizeWorkflowScriptWithPermit(ctx, req, input, result, runErr)
+	})
+}
+
+func (s *Starter) finalizeWorkflowScriptWithPermit(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
 	err := workflowScriptRunError(result, runErr)
 	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, scriptFailureReason(err), scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return err
+		return errors.Join(err, s.interrupt(ctx, req.RunID, req.Generation, scriptFailureReason(err), scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)}))
 	}
-	contract, err := s.scriptCompletionContract(context.Background(), req, input)
+	contract, err := s.scriptCompletionContract(ctx, req, input)
 	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return err
+		return errors.Join(err, s.interrupt(ctx, req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)}))
 	}
 	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return err
+		return errors.Join(err, s.interrupt(ctx, req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)}))
 	}
-	completed, err := s.store.CompleteRun(context.Background(), workflowstore.CompleteRunRequest{
+	completed, err := s.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
 		RunID:              req.RunID,
 		TransitionID:       string(parsed.TransitionID),
 		OutputValues:       parsed.OutputValues,
@@ -63,10 +66,19 @@ func (s *Starter) finalizeWorkflowScript(req workflowexecution.SchedulerStartRun
 		RequireGeneration:  true,
 	})
 	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
+		return errors.Join(err, s.interrupt(ctx, req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)}))
+	}
+	s.finalizeScriptCompletionAttention(ctx, completed.Result)
+	sourceRunID := req.RunID
+	transitionID := completed.Result.TransitionID
+	if err := s.automaticStarts.Register(workflowexecution.AutomaticStartRegistrationRequest{
+		Producer:     workflowexecution.AutomaticStartProducerScriptCompletion,
+		SourceRunID:  &sourceRunID,
+		TransitionID: &transitionID,
+		RunIDs:       completed.Result.RunIDs,
+	}); err != nil {
 		return err
 	}
-	s.finalizeScriptCompletionAttention(context.Background(), completed.Result)
 	return nil
 }
 

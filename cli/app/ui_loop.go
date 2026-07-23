@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ type uiProgramComposition struct {
 }
 
 type uiLoopRequest struct {
+	ctx                          context.Context
 	wiring                       *runtimeWiring
 	active                       config.Settings
 	commandRegistry              *commands.Registry
@@ -92,6 +94,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		rendererOutputGate,
 		terminalOutput,
 	)
+	programContext := request.ctx
+	if programContext == nil {
+		programContext = context.Background()
+	}
+	options = append(options, tea.WithContext(programContext))
 	tuiLogger, _ := newRollingTUILogger(request.statusConfig.PersistenceRoot)
 	uiLogger := newMultiUILogger(tuiLogger)
 	runtimeClient := request.wiring.runtimeClient

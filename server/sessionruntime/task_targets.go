@@ -29,17 +29,33 @@ type TaskExecutionSnapshot struct {
 }
 
 func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
-	if a == nil {
-		return TaskExecutionSnapshot{}, errors.New("session runtime authority is required")
+	snapshots, err := a.CurrentTaskExecutionSnapshots([]workflow.TaskID{taskID})
+	if err != nil {
+		return TaskExecutionSnapshot{}, err
 	}
-	if strings.TrimSpace(string(taskID)) == "" {
-		return TaskExecutionSnapshot{}, errors.New("workflow task id is required")
+	return snapshots[taskID], nil
+}
+
+func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	wanted := make(map[workflow.TaskID]struct{}, len(taskIDs))
+	snapshots := make(map[workflow.TaskID]TaskExecutionSnapshot, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if strings.TrimSpace(string(taskID)) == "" {
+			return nil, errors.New("workflow task id is required")
+		}
+		if _, exists := wanted[taskID]; exists {
+			return nil, errors.New("workflow task id is duplicated")
+		}
+		wanted[taskID] = struct{}{}
+		snapshots[taskID] = TaskExecutionSnapshot{Executions: []TaskExecution{}}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	snapshot := TaskExecutionSnapshot{Executions: make([]TaskExecution, 0)}
 	for ref, execution := range a.byWorkflow {
-		if ref.TaskID != taskID {
+		if _, exists := wanted[ref.TaskID]; !exists {
 			continue
 		}
 		target := TaskExecution{
@@ -50,22 +66,27 @@ func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskEx
 			target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
 		} else {
 			if execution.script == nil {
-				return TaskExecutionSnapshot{}, errors.New("live workflow script execution is missing its target")
+				return nil, errors.New("live workflow script execution is missing its target")
 			}
 			target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
 		}
 		if err := target.validate(); err != nil {
-			return TaskExecutionSnapshot{}, err
+			return nil, err
 		}
+		snapshot := snapshots[ref.TaskID]
 		snapshot.Executions = append(snapshot.Executions, target)
+		snapshots[ref.TaskID] = snapshot
 	}
-	sort.Slice(snapshot.Executions, func(i, j int) bool {
-		if snapshot.Executions[i].Ref.RunID != snapshot.Executions[j].Ref.RunID {
-			return snapshot.Executions[i].Ref.RunID < snapshot.Executions[j].Ref.RunID
-		}
-		return snapshot.Executions[i].Ref.Generation < snapshot.Executions[j].Ref.Generation
-	})
-	return snapshot, nil
+	for taskID, snapshot := range snapshots {
+		sort.Slice(snapshot.Executions, func(i, j int) bool {
+			if snapshot.Executions[i].Ref.RunID != snapshot.Executions[j].Ref.RunID {
+				return snapshot.Executions[i].Ref.RunID < snapshot.Executions[j].Ref.RunID
+			}
+			return snapshot.Executions[i].Ref.Generation < snapshot.Executions[j].Ref.Generation
+		})
+		snapshots[taskID] = snapshot
+	}
+	return snapshots, nil
 }
 
 func (e TaskExecution) validate() error {

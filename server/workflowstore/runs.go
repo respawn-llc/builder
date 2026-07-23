@@ -102,6 +102,81 @@ func (s *Store) InterruptRunGeneration(ctx context.Context, runID workflow.RunID
 	return nil
 }
 
+type ExactRunRef struct {
+	TaskID     workflow.TaskID
+	RunID      workflow.RunID
+	Generation int64
+}
+
+func (s *Store) InterruptExactRuns(ctx context.Context, refs []ExactRunRef, reason string, detailJSON string) ([]RunRecord, error) {
+	if len(refs) == 0 {
+		return nil, errors.New("at least one exact workflow run is required")
+	}
+	if strings.TrimSpace(detailJSON) == "" {
+		detailJSON = "{}"
+	}
+	seen := make(map[workflow.RunID]struct{}, len(refs))
+	for _, ref := range refs {
+		if strings.TrimSpace(string(ref.TaskID)) == "" {
+			return nil, errors.New("exact workflow run task id is required")
+		}
+		if strings.TrimSpace(string(ref.RunID)) == "" {
+			return nil, errors.New("exact workflow run id is required")
+		}
+		if ref.Generation < 0 {
+			return nil, errors.New("exact workflow run generation is invalid")
+		}
+		if _, exists := seen[ref.RunID]; exists {
+			return nil, fmt.Errorf("exact workflow run %q is duplicated", ref.RunID)
+		}
+		seen[ref.RunID] = struct{}{}
+	}
+	interruptReason := strings.TrimSpace(reason)
+	if interruptReason == "" {
+		interruptReason = "user_interrupt"
+	}
+	now := s.now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	interrupted := make([]RunRecord, 0, len(refs))
+	for _, ref := range refs {
+		current, err := q.GetTaskRun(ctx, string(ref.RunID))
+		if err != nil {
+			return nil, err
+		}
+		if current.TaskID != string(ref.TaskID) || current.RunGeneration != ref.Generation {
+			return nil, sql.ErrNoRows
+		}
+		updated, err := q.InterruptRunGeneration(ctx, sqlitegen.InterruptRunGenerationParams{
+			UpdatedAtUnixMs:        now,
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+			InterruptionReason:     sql.NullString{String: interruptReason, Valid: true},
+			InterruptionDetailJson: detailJSON,
+			RunID:                  string(ref.RunID),
+			RunGeneration:          ref.Generation,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, sql.ErrNoRows
+		}
+		row, err := q.GetTaskRun(ctx, string(ref.RunID))
+		if err != nil {
+			return nil, err
+		}
+		interrupted = append(interrupted, runRecordFromTaskRun(row))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return interrupted, nil
+}
+
 func (s *Store) InterruptTaskRuns(ctx context.Context, taskID workflow.TaskID, sessionID string, reason string) ([]RunRecord, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")

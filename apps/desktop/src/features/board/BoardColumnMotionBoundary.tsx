@@ -47,6 +47,8 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   onRegisterColumn: (columnID: string, element: HTMLElement | null) => void;
   onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>;
 
@@ -93,6 +95,8 @@ export function BoardColumnMotionBoundary({
   onRegisterColumn,
   onRegisterColumnScrollport,
   onResumeTask,
+  pendingInterruptTaskIDs,
+  pendingResumeTaskIDs,
   scrollportRef,
 }: BoardColumnMotionBoundaryProps) {
   const { t } = useTranslation();
@@ -205,6 +209,8 @@ export function BoardColumnMotionBoundary({
         onLoadMoreCards={activeDataView.onLoadMore}
         onLoadPreviousCards={activeDataView.onLoadPrevious}
         onResumeTask={stableOnResumeTask}
+        pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+        pendingResumeTaskIDs={pendingResumeTaskIDs}
         pinnedItemKeys={pinnedItemKeys}
         previousBoundary={presentation.previousBoundary}
       />

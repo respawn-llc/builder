@@ -98,7 +98,7 @@ func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 	return p.closeErr
 }
 
-type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
+type sessionPickerRunner func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
 
 type sessionViewReader interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
@@ -138,8 +138,8 @@ type launchPlanner struct {
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 	return &launchPlanner{
 		server: server,
-		pickSession: func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-			return runSessionPickerFlow(loader, theme, header)
+		pickSession: func(ctx context.Context, loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+			return runSessionPickerFlow(ctx, loader, theme, header)
 		},
 	}
 }
@@ -278,7 +278,7 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 	}
 	header := p.sessionPickerHeaderInfo(p.server.Config())
 	header.Notice = notice
-	return p.pickSession(loader, p.server.PresentationTheme(), header)
+	return p.pickSession(ctx, loader, p.server.PresentationTheme(), header)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

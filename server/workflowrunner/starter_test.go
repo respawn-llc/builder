@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -445,6 +446,89 @@ func TestWorkflowAskHandlerApprovalUsesDurableTaskQuestionState(t *testing.T) {
 	}
 	if len(f.runtimes.approvalCleared) != 1 || f.runtimes.approvalCleared[0] != "approval-1" {
 		t.Fatalf("approval clear markers = %+v, want approval-1", f.runtimes.approvalCleared)
+	}
+}
+
+func TestPrepareWorkflowInterruptRejectsWaitingQuestionScopeWithoutPersistenceChange(t *testing.T) {
+	fixture := newWorkflowQuestionBatchStarterFixture(t)
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	waiting := fixture.waitForWaitingAsk(t, task.ID, "call-ask-1")
+
+	_, err := fixture.starter.PrepareWorkflowInterrupt(workflowexecution.InterruptSelector{TaskID: task.ID})
+	if !errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		t.Fatalf("PrepareWorkflowInterrupt error = %v, want waiting question to be non-interruptible", err)
+	}
+	run, err := fixture.store.GetRun(context.Background(), waiting.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.InterruptedAt != nil || run.WaitingAskID == nil {
+		t.Fatalf("waiting-question run changed during rejected interrupt: %+v", run)
+	}
+
+	if err := fixture.starter.CancelRun(context.Background(), waiting.ID); err != nil {
+		t.Fatalf("CancelRun cleanup: %v", err)
+	}
+}
+
+func TestPreparedWorkflowInterruptRejectsScriptThatRetiredBeforeCommit(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh is unavailable")
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	releasePath := filepath.Join(t.TempDir(), "release")
+	finalizeEntered := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	ref := sessionruntime.WorkflowExecutionRef{
+		TaskID:     "task-script-race",
+		RunID:      "run-script-race",
+		Generation: 1,
+	}
+	handle, err := authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &ref,
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", `while [ ! -f "$1" ]; do sleep 0.01; done`, "sh", releasePath},
+		},
+		Finalize: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.ScriptResult, error) error {
+			close(finalizeEntered)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	starter := &Starter{runtimeAuthority: authority}
+	prepared, err := starter.PrepareWorkflowInterrupt(workflowexecution.InterruptSelector{TaskID: ref.TaskID})
+	if err != nil {
+		t.Fatalf("PrepareWorkflowInterrupt: %v", err)
+	}
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatalf("release script: %v", err)
+	}
+	<-finalizeEntered
+
+	committed := false
+	err = prepared.Commit(func([]workflowexecution.ExactExecutionScope) error {
+		committed = true
+		return nil
+	})
+	if !errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		t.Fatalf("Commit error = %v, want no interruptible execution", err)
+	}
+	if committed {
+		t.Fatal("retired script reached durable interrupt operation")
+	}
+	close(releaseFinalize)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
 }
 
@@ -1391,7 +1475,7 @@ func TestWorkflowRuntimeCompletionWakesSchedulerForSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimRun source: %v", err)
 	}
-	controller := workflowruntime.StoreController{Store: fixture.store, AutomaticIntents: fixture.automaticIntents}
+	controller := workflowruntime.StoreController{Store: fixture.store, AutomaticStarts: fixture.automaticStarts, MutationPermit: fixture.starter.mutationPermit}
 	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
 		RunID:              source.ID,
 		ExpectedGeneration: source.Generation,
@@ -1820,6 +1904,7 @@ type starterFixture struct {
 	projectID            string
 	attentionBroker      *attentionnotify.Broker
 	automaticIntents     *workflowexecution.AutomaticIntents
+	automaticStarts      *workflowexecution.AutomaticStartRegistration
 }
 
 type starterRuntimeRegistry interface {
@@ -1863,6 +1948,11 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	attentionBroker := attentionnotify.NewBroker()
 	automaticIntents := workflowexecution.NewAutomaticIntents()
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(automaticIntents, workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	mutationPermit := workflowexecution.NewMutationPermit()
 	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	schedulerTarget := new(*SchedulerService)
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -1889,7 +1979,8 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 		ClientFactory:    clientFactory,
 		Worktrees:        worktrees,
 		RuntimeAuthority: runtimeAuthority,
-		AutomaticIntents: automaticIntents,
+		AutomaticStarts:  automaticStarts,
+		MutationPermit:   mutationPermit,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1899,7 +1990,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, runtimeAuthority: runtimeAuthority, schedulerTarget: schedulerTarget, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker, automaticIntents: automaticIntents}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, runtimeAuthority: runtimeAuthority, schedulerTarget: schedulerTarget, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker, automaticIntents: automaticIntents, automaticStarts: automaticStarts}
 }
 
 func (f starterFixture) submitPromptResponse(sessionID string, response askquestion.AskQuestionResponse) error {
@@ -1930,7 +2021,8 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 		ClientFactory:    f.clientFactory,
 		Worktrees:        f.worktrees,
 		RuntimeAuthority: f.runtimeAuthority,
-		AutomaticIntents: f.automaticIntents,
+		AutomaticStarts:  f.automaticStarts,
+		MutationPermit:   f.starter.mutationPermit,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1947,7 +2039,7 @@ func (f starterFixture) scheduler(t *testing.T) *SchedulerService {
 func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOption) *SchedulerService {
 	t.Helper()
 	opts = append(opts, WithAutomaticIntents(f.automaticIntents))
-	scheduler, err := NewSchedulerService(f.store, f.starter, SchedulerConfig{Concurrency: 1}, opts...)
+	scheduler, err := NewSchedulerService(f.store, f.starter, f.starter.mutationPermit, SchedulerConfig{Concurrency: 1}, opts...)
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
 	}
@@ -1970,7 +2062,9 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 	if err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
-	f.automaticIntents.RequestAutomaticStarts([]workflow.RunID{started.RunID})
+	if err := f.automaticIntents.RegisterAutomaticStarts([]workflow.RunID{started.RunID}); err != nil {
+		t.Fatalf("RegisterAutomaticStarts: %v", err)
+	}
 	return task
 }
 
@@ -2006,7 +2100,9 @@ func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) wo
 	if err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
-	f.automaticIntents.RequestAutomaticStarts([]workflow.RunID{started.RunID})
+	if err := f.automaticIntents.RegisterAutomaticStarts([]workflow.RunID{started.RunID}); err != nil {
+		t.Fatalf("RegisterAutomaticStarts: %v", err)
+	}
 	return task
 }
 
@@ -2175,7 +2271,7 @@ type workflowAskHandlerFixture struct {
 func newWorkflowAskHandlerFixture() workflowAskHandlerFixture {
 	store := &recordingRuntimeStore{}
 	runtimes := &workflowAskHandlerRuntime{}
-	return workflowAskHandlerFixture{starter: &Starter{store: store, attention: runtimes}, store: store, runtimes: runtimes}
+	return workflowAskHandlerFixture{starter: &Starter{store: store, attention: runtimes, mutationPermit: workflowexecution.NewMutationPermit()}, store: store, runtimes: runtimes}
 }
 
 func (f workflowAskHandlerFixture) handle(ctx context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -2311,6 +2407,7 @@ func TestFinalizeWorkflowScriptUsesBaseCompletionResultForAttention(t *testing.T
 			Result: workflowstore.CompleteRunResult{
 				TransitionID: "transition-base",
 				State:        "applied",
+				RunIDs:       []workflow.RunID{"run-successor"},
 				ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
 					TransitionID: "transition-resolved",
 					ProjectID:    "project-1",
@@ -2324,14 +2421,19 @@ func TestFinalizeWorkflowScriptUsesBaseCompletionResultForAttention(t *testing.T
 			},
 		},
 	}
-	starter := &Starter{store: store, attentionFinalizer: finalizer}
+	automaticIntents := workflowexecution.NewAutomaticIntents()
+	automaticStarts, registrationErr := workflowexecution.NewAutomaticStartRegistration(automaticIntents, workflowexecution.NewFatalSignal())
+	if registrationErr != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", registrationErr)
+	}
+	starter := &Starter{store: store, attentionFinalizer: finalizer, automaticStarts: automaticStarts, mutationPermit: workflowexecution.NewMutationPermit()}
 	request := SchedulerStartRunRequest{RunID: "run-script", Generation: 4}
 	input := workflowstore.RunStartContext{
 		Run:           workflowstore.RunRecord{ID: request.RunID, Generation: request.Generation},
 		TransitionIDs: []string{"done"},
 	}
 
-	err := starter.finalizeWorkflowScript(request, input, workflowScriptResult{Stdout: []byte(`{"transition":"done"}`)}, nil)
+	err := starter.finalizeWorkflowScript(context.Background(), request, input, workflowScriptResult{Stdout: []byte(`{"transition":"done"}`)}, nil)
 	if err != nil {
 		t.Fatalf("finalizeWorkflowScript: %v", err)
 	}
@@ -2344,6 +2446,9 @@ func TestFinalizeWorkflowScriptUsesBaseCompletionResultForAttention(t *testing.T
 		len(finalizer.transitions[0].ResolvedApprovalProjections) != 1 ||
 		finalizer.transitions[0].ResolvedApprovalProjections[0].TransitionID != "transition-resolved" {
 		t.Fatalf("script attention finalization = %+v, want base transition result", finalizer.transitions)
+	}
+	if runIDs := automaticIntents.Take(1); len(runIDs) != 1 || runIDs[0] != "run-successor" {
+		t.Fatalf("script successor automatic intents = %+v, want run-successor", runIDs)
 	}
 }
 

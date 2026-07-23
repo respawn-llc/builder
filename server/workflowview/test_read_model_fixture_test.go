@@ -18,6 +18,7 @@ type workflowViewTestFixture struct {
 	roleResolver workflow.RoleResolver
 	transcripts  SessionActiveTranscriptProvider
 	prompts      PendingPromptSource
+	authority    *sessionruntime.Authority
 	boardModule  *Board
 	taskList     *TaskList
 	taskDetail   *TaskDetail
@@ -44,6 +45,7 @@ func newWorkflowViewTestFixture(metadataStore *metadata.Store, workflowStore *wo
 		roleResolver: roleResolver,
 		transcripts:  transcripts,
 		prompts:      prompts,
+		authority:    sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
 	}, nil
 }
 
@@ -51,7 +53,7 @@ func (f *workflowViewTestFixture) board(t *testing.T) *Board {
 	t.Helper()
 	if f.boardModule == nil {
 		var err error
-		f.boardModule, err = NewBoard(f.metadata, f.definitions, f.roleResolver, f.projector)
+		f.boardModule, err = NewBoard(f.metadata, f.definitions, f.roleResolver, f.projector, f.authority)
 		if err != nil {
 			t.Fatalf("NewBoard: %v", err)
 		}
@@ -75,7 +77,7 @@ func (f *workflowViewTestFixture) detail(t *testing.T) *TaskDetail {
 	t.Helper()
 	if f.taskDetail == nil {
 		var err error
-		f.taskDetail, err = NewTaskDetail(f.metadata, f.projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+		f.taskDetail, err = NewTaskDetail(f.metadata, f.projector, f.authority)
 		if err != nil {
 			t.Fatalf("NewTaskDetail: %v", err)
 		}

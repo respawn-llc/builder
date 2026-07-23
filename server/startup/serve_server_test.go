@@ -16,7 +16,11 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
+	"core/server/core"
 	"core/server/metadata"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowstore"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
@@ -268,6 +272,181 @@ func TestServeWaitsForContextCancellation(t *testing.T) {
 	if err := server.Serve(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Serve error = %v, want context canceled", err)
 	}
+}
+
+func TestServeExitsAfterFatalAutomaticRegistrationAndRestartMakesSuccessorResumable(t *testing.T) {
+	workspace := newServeWorkspace(t)
+	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
+	fatalSignal := workflowexecution.NewFatalSignal()
+	embedded, err := StartWithOptions(
+		context.Background(),
+		request,
+		envAuthHandler{},
+		noopOnboarding,
+		Options{Core: core.Options{WorkflowExecutionFatal: fatalSignal}},
+	)
+	if err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	server := &ServeServer{Core: embedded.Core}
+	t.Cleanup(func() { _ = server.Close() })
+	taskID, sourceRunID, successorRunID, transitionID := createStrandedSuccessor(t, server)
+
+	releaseServeTestPortForConfig(server.Config())
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(context.Background())
+	}()
+	healthURL := config.ServerHTTPBaseURL(server.Config()) + protocol.HealthPath
+	response := waitForServeResponse(t, http.DefaultClient, healthURL)
+	_ = response.Body.Close()
+
+	registration, err := workflowexecution.NewAutomaticStartRegistration(
+		failingServeAutomaticStartRegistrar{err: errors.New("automatic successor registration failed")},
+		fatalSignal,
+	)
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	err = registration.Register(workflowexecution.AutomaticStartRegistrationRequest{
+		Producer:     workflowexecution.AutomaticStartProducerTaskCompletion,
+		SourceRunID:  &sourceRunID,
+		TransitionID: &transitionID,
+		RunIDs:       []workflow.RunID{successorRunID},
+	})
+	var fatalErr workflowexecution.WorkflowExecutionFatalError
+	if !errors.As(err, &fatalErr) {
+		t.Fatalf("Register error = %T %v, want workflow execution fatal error", err, err)
+	}
+	select {
+	case err := <-serveErr:
+		if !errors.As(err, &fatalErr) {
+			t.Fatalf("Serve error = %T %v, want workflow execution fatal error", err, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not exit after fatal workflow execution failure")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close failed server: %v", err)
+	}
+	server.Core = nil
+
+	restarted, err := StartWithOptions(context.Background(), request, envAuthHandler{}, noopOnboarding, Options{})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	detail, err := restarted.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: string(taskID)})
+	if err != nil {
+		t.Fatalf("GetWorkflowTask after restart: %v", err)
+	}
+	if !detail.Task.Actions.CanResume || detail.Task.Actions.CanInterrupt {
+		t.Fatalf("task actions after restart reconciliation = %+v, want resumable and not interruptible", detail.Task.Actions)
+	}
+}
+
+type failingServeAutomaticStartRegistrar struct {
+	err error
+}
+
+func (r failingServeAutomaticStartRegistrar) RegisterAutomaticStarts([]workflow.RunID) error {
+	return r.err
+}
+
+func createStrandedSuccessor(t *testing.T, server *ServeServer) (workflow.TaskID, workflow.RunID, workflow.RunID, workflow.TransitionID) {
+	t.Helper()
+	ctx := context.Background()
+	client := server.WorkflowClient()
+	created, err := client.CreateAndLinkWorkflowToProject(ctx, serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Fatal restart reconciliation",
+		ProjectID:     server.ProjectID(),
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultAlways,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+	definition, err := client.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var startID, terminalID string
+	for _, node := range definition.Definition.Nodes {
+		switch node.Kind {
+		case "start":
+			startID = node.ID
+		case "terminal":
+			terminalID = node.ID
+		}
+	}
+	if startID == "" || terminalID == "" {
+		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
+	}
+	planID := "node-plan-" + created.Workflow.ID
+	implementID := "node-implement-" + created.Workflow.ID
+	for _, node := range []serverapi.WorkflowNodeAddRequest{
+		{WorkflowID: created.Workflow.ID, NodeID: planID, Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"},
+		{WorkflowID: created.Workflow.ID, NodeID: implementID, Key: "implement", Kind: "agent", DisplayName: "Implement", SubagentRole: "coder"},
+	} {
+		if _, err := client.AddWorkflowNode(ctx, node); err != nil {
+			t.Fatalf("AddWorkflowNode: %v", err)
+		}
+	}
+	startGroupID := "group-start-" + created.Workflow.ID
+	nextGroupID := "group-next-" + created.Workflow.ID
+	doneGroupID := "group-done-" + created.Workflow.ID
+	for _, group := range []serverapi.WorkflowTransitionGroupAddRequest{
+		{WorkflowID: created.Workflow.ID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{WorkflowID: created.Workflow.ID, GroupID: nextGroupID, SourceNodeID: planID, TransitionID: "next", DisplayName: "Next"},
+		{WorkflowID: created.Workflow.ID, GroupID: doneGroupID, SourceNodeID: implementID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := client.AddWorkflowTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddWorkflowTransitionGroup: %v", err)
+		}
+	}
+	for _, edge := range []serverapi.WorkflowEdgeAddRequest{
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: planID, ContextMode: "new_session", PromptTemplate: "Plan the work."},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID, TransitionGroupID: nextGroupID, Key: "next", TargetNodeID: implementID, ContextMode: "new_session", PromptTemplate: "Implement the plan."},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, ContextMode: "new_session"},
+	} {
+		if _, err := client.AddWorkflowEdge(ctx, edge); err != nil {
+			t.Fatalf("AddWorkflowEdge: %v", err)
+		}
+	}
+	workflowID := created.Workflow.ID
+	task, err := client.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  server.ProjectID(),
+		WorkflowID: &workflowID,
+		Title:      "Recover committed successor",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	store, err := workflowstore.New(server.MetadataStore(), workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	started, err := store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	completed, err := store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+		RunID:              claimed.ID,
+		TransitionID:       "next",
+		Actor:              "agent",
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if len(completed.Result.RunIDs) != 1 {
+		t.Fatalf("successor run IDs = %+v, want one", completed.Result.RunIDs)
+	}
+	return workflow.TaskID(task.Task.ID), claimed.ID, completed.Result.RunIDs[0], completed.Result.TransitionID
 }
 
 func TestServeRequiresContext(t *testing.T) {

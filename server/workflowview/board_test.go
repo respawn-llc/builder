@@ -1,17 +1,50 @@
 package workflowview
 
 import (
+	"context"
+	"database/sql"
 	"reflect"
 	"slices"
 	"sort"
 	"testing"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
+
+func TestBoardBatchesCurrentRunFactLoadingForMultipleTasks(t *testing.T) {
+	ctx, metadataStore, _, _ := newWorkflowViewTestContextStore(t)
+	db := &workflowViewQueryCountingDB{DBTX: metadataStore.DB()}
+	board := &Board{
+		queries:   sqlitegen.New(db),
+		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+	}
+
+	current, err := board.liveExecutionsByTask(ctx, []string{"task-1", "task-2", "task-3"})
+	if err != nil {
+		t.Fatalf("liveExecutionsByTask: %v", err)
+	}
+	if len(current) != 3 {
+		t.Fatalf("current executions = %+v, want one entry per task", current)
+	}
+	if db.queryCount != 1 {
+		t.Fatalf("current run fact queries = %d, want one batched query", db.queryCount)
+	}
+}
+
+type workflowViewQueryCountingDB struct {
+	sqlitegen.DBTX
+	queryCount int
+}
+
+func (db *workflowViewQueryCountingDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	db.queryCount++
+	return db.DBTX.QueryContext(ctx, query, args...)
+}
 
 func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocusedInterface(t *testing.T) {
 	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
@@ -20,7 +53,7 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	projector := NewTaskProjector()
-	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector)
+	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
@@ -161,7 +194,7 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	projector := NewTaskProjector()
-	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector)
+	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
@@ -294,20 +327,19 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	if err != nil {
 		t.Fatalf("ListNodeCards active: %v", err)
 	}
-	for taskID, wantCardKind := range map[string]serverapi.WorkflowTaskStatusKind{
-		string(queuedTask.ID):  serverapi.WorkflowTaskStatusKindQueued,
-		string(runningTask.ID): serverapi.WorkflowTaskStatusKindRunning,
-	} {
+	for _, taskID := range []string{string(queuedTask.ID), string(runningTask.ID)} {
 		card := requireBoardCard(t, activePage.Cards, taskID)
 		detail, err := detailView.GetTask(ctx, taskID)
 		if err != nil {
 			t.Fatalf("GetTask %s: %v", taskID, err)
 		}
-		if card.Status.Kind != wantCardKind {
-			t.Fatalf("durable card status for %s = %+v, want %q", taskID, card.Status, wantCardKind)
+		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+			len(detail.Status.RunIDs) != 0 ||
+			detail.Actions.CanInterrupt {
+			t.Fatalf("detail for %s = %+v, want non-interruptible active state without exact live authority", taskID, detail)
 		}
-		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive || len(detail.Status.RunIDs) != 0 {
-			t.Fatalf("detail status for %s = %+v, want active without exact live authority", taskID, detail.Status)
+		if !reflect.DeepEqual(card.Status, detail.Status) || card.Actions.CanInterrupt {
+			t.Fatalf("card for %s = %+v, want exact-live detail status %+v", taskID, card, detail.Status)
 		}
 		if card.SourceWorkspace.WorkspaceID != sourceWorkspace.WorkspaceID || !reflect.DeepEqual(card.SourceWorkspace, detail.SourceWorkspace) {
 			t.Fatalf("card source workspace for %s = %+v, want detail %+v", taskID, card.SourceWorkspace, detail.SourceWorkspace)

@@ -53,8 +53,9 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 }
 
 type Options struct {
-	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	RootLease            *RootLockLease
+	RuntimeClientFactory   runtimewire.RuntimeClientFactory
+	RootLease              *RootLockLease
+	WorkflowExecutionFatal *workflowexecution.FatalSignal
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
@@ -221,7 +222,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector)
+	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, runtimeAuthority)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: board: %w", err)
@@ -254,13 +255,23 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: attention: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
+	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	automaticIntents := workflowexecution.NewAutomaticIntents()
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer, AutomaticIntents: automaticIntents})
+	workflowExecutionFatal := opts.WorkflowExecutionFatal
+	if workflowExecutionFatal == nil {
+		workflowExecutionFatal = workflowexecution.NewFatalSignal()
+	}
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(automaticIntents, workflowExecutionFatal)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: automatic start registration: %w", err)
+	}
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer, AutomaticStarts: automaticStarts, MutationPermit: workflowMutationPermit})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
 	}
-	workflowScheduler, err = workflowexecution.NewSchedulerService(workflowStore, workflowRuntimeStarter, workflowexecution.SchedulerConfig{Concurrency: cfg.Settings.Workflow.Concurrency}, workflowexecution.WithSchedulerPendingAskResolver(runtimePendingAskResolver{prompts: runtimeRegistry}), workflowexecution.WithSchedulerAttentionFinalizer(workflowAttentionFinalizer), workflowexecution.WithAutomaticIntents(automaticIntents))
+	workflowScheduler, err = workflowexecution.NewSchedulerService(workflowStore, workflowRuntimeStarter, workflowMutationPermit, workflowexecution.SchedulerConfig{Concurrency: cfg.Settings.Workflow.Concurrency}, workflowexecution.WithSchedulerPendingAskResolver(runtimePendingAskResolver{prompts: runtimeRegistry}), workflowexecution.WithSchedulerAttentionFinalizer(workflowAttentionFinalizer), workflowexecution.WithAutomaticIntents(automaticIntents))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
@@ -272,7 +283,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskDetail:  workflowTaskDetail,
 		Activity:    workflowActivity,
 		Attention:   workflowAttention,
-	}, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(authorityPromptResponder{authority: runtimeAuthority}), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowMutationPermit, automaticStarts, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithWorkflowInterruptAuthority(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(authorityPromptResponder{authority: runtimeAuthority}), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -303,6 +314,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		updateStatusService:     updateStatusService,
 		workflowService:         workflowService,
 		workflowScheduler:       workflowScheduler,
+		workflowFatal:           workflowExecutionFatal,
 		workflowRuntimeStarter:  workflowRuntimeStarter,
 		worktreeService:         worktreeService,
 		sleepManager:            sleepManager,

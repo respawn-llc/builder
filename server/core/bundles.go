@@ -110,6 +110,7 @@ type WorktreeBundle struct {
 type WorkflowBundle struct {
 	workflows apicontract.WorkflowService
 	scheduler *workflowexecution.SchedulerService
+	fatal     *workflowexecution.FatalSignal
 }
 
 func (s *Core) safeBundles() *Bundles {
@@ -194,6 +195,7 @@ type bundleCompositionInput struct {
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
 	workflowScheduler       *workflowexecution.SchedulerService
+	workflowFatal           *workflowexecution.FatalSignal
 	workflowRuntimeStarter  *workflowrunner.Starter
 	worktreeService         *worktree.Service
 	sleepManager            *sleepguard.Manager
@@ -245,7 +247,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeAuthority, in.runtimeControlService, in.sessionRuntimeAPI),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
-		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
+		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler, in.workflowFatal),
 		Worktrees:   &WorktreeBundle{worktrees: in.worktreeService},
 	}
 }
@@ -311,8 +313,8 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 	}
 }
 
-func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowexecution.SchedulerService) *WorkflowBundle {
-	return &WorkflowBundle{workflows: workflowService, scheduler: scheduler}
+func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowexecution.SchedulerService, fatal *workflowexecution.FatalSignal) *WorkflowBundle {
+	return &WorkflowBundle{workflows: workflowService, scheduler: scheduler, fatal: fatal}
 }
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService) *SessionBundle {

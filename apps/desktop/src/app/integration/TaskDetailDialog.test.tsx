@@ -571,6 +571,52 @@ describe("TaskDetailSurface", () => {
     });
   });
 
+  it("surfaces failed task-detail interrupts through a persistent danger status notice", async () => {
+    taskDetailFixture(taskDetailResponse, {
+      routes: [{ method: "workflow.task.interrupt", error: new Error("interrupt unavailable") }],
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("board.interrupt") }));
+
+    await waitFor(() => {
+      expect(statusNotice("task-interrupt-error")).toBeDefined();
+    });
+    expect(statusNotice("task-interrupt-error")).toMatchObject({
+      durationMs: Infinity,
+      tone: "danger",
+    });
+  });
+
+  it("disables a pending task-detail interrupt to prevent duplicate requests", async () => {
+    const interrupt = pendingVoidPromise();
+    const services = taskDetailFixture(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.interrupt",
+          handler: async () => interrupt.promise,
+        },
+      ],
+    });
+
+    const interruptButton = await screen.findByRole("button", {
+      name: appI18n.t("board.interrupt"),
+    });
+    fireEvent.click(interruptButton);
+
+    await waitFor(() => {
+      expect(getCallCount(services.transport.calls, "workflow.task.interrupt")).toBe(1);
+      expect(interruptButton).toBeDisabled();
+    });
+
+    fireEvent.click(interruptButton);
+    expect(getCallCount(services.transport.calls, "workflow.task.interrupt")).toBe(1);
+
+    await act(async () => {
+      interrupt.resolve();
+      await interrupt.promise;
+    });
+  });
+
   it("submits a comment after the focused composer receives typed input", async () => {
     const services = taskDetailFixture(taskDetailResponse, {
       comments: commentListResponse,
@@ -1091,4 +1137,15 @@ function toastCount(): number {
 
 function statusNotice(id: string): StatusNotice | undefined {
   return statusToastHarness.notices.get(id);
+}
+
+function pendingVoidPromise(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  if (resolve === undefined) {
+    throw new Error("Promise resolver was not initialized.");
+  }
+  return { promise, resolve };
 }

@@ -189,8 +189,10 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 	for _, taskID := range []workflow.TaskID{queued.ID, running.ID, question.ID} {
 		detail := mustTaskDetail(t, view, ctx, string(taskID))
-		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive || len(detail.Status.RunIDs) != 0 {
-			t.Fatalf("detail status for durable-only live task %s = %+v, want active", taskID, detail.Status)
+		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+			len(detail.Status.RunIDs) != 0 ||
+			detail.Actions.CanInterrupt {
+			t.Fatalf("detail for durable-only task %s = %+v, want non-interruptible active state", taskID, detail)
 		}
 	}
 

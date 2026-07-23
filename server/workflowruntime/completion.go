@@ -16,6 +16,7 @@ import (
 	"core/server/llm"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 )
@@ -163,11 +164,8 @@ type StoreController struct {
 	AttentionFinalizer interface {
 		FinalizeTransition(context.Context, workflowattention.TransitionResult)
 	}
-	AutomaticIntents AutomaticStartRequester
-}
-
-type AutomaticStartRequester interface {
-	RequestAutomaticStarts([]workflow.RunID)
+	AutomaticStarts *workflowexecution.AutomaticStartRegistration
+	MutationPermit  *workflowexecution.MutationPermit
 }
 
 type interruptedRunAttentionFinalizer interface {
@@ -175,6 +173,12 @@ type interruptedRunAttentionFinalizer interface {
 }
 
 func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
+	return workflowexecution.RunMutation(ctx, c.MutationPermit, func(ctx context.Context) (CompletionResult, error) {
+		return c.completeWorkflowRun(ctx, req)
+	})
+}
+
+func (c StoreController) completeWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
 	if c.Store == nil {
 		return CompletionResult{}, errors.New("workflow completion store is required")
 	}
@@ -211,8 +215,18 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 			}
 		}
 	}
-	if c.AutomaticIntents != nil {
-		c.AutomaticIntents.RequestAutomaticStarts(result.RunIDs)
+	sourceRunID := req.RunID
+	transitionID := result.TransitionID
+	if c.AutomaticStarts == nil {
+		return CompletionResult{}, errors.New("automatic workflow start registration is required")
+	}
+	if err := c.AutomaticStarts.Register(workflowexecution.AutomaticStartRegistrationRequest{
+		Producer:     workflowexecution.AutomaticStartProducerRuntimeCompletion,
+		SourceRunID:  &sourceRunID,
+		TransitionID: &transitionID,
+		RunIDs:       result.RunIDs,
+	}); err != nil {
+		return CompletionResult{}, err
 	}
 	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
 }
@@ -232,6 +246,12 @@ func (c StoreController) ObserveWorkflowRunCompletion(ctx context.Context, req C
 }
 
 func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {
+	return workflowexecution.RunMutation(ctx, c.MutationPermit, func(ctx context.Context) (ViolationResult, error) {
+		return c.recordWorkflowProtocolViolation(ctx, req)
+	})
+}
+
+func (c StoreController) recordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {
 	if c.Store == nil {
 		return ViolationResult{}, errors.New("workflow completion store is required")
 	}
@@ -257,6 +277,12 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 }
 
 func (c StoreController) ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
+	return c.MutationPermit.Run(ctx, func(ctx context.Context) error {
+		return c.resetWorkflowProtocolViolationBudget(ctx, req)
+	})
+}
+
+func (c StoreController) resetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
 	if c.Store == nil {
 		return errors.New("workflow completion store is required")
 	}
