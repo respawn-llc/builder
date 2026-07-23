@@ -13,26 +13,9 @@ import (
 func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	const autoCompactLimit = 190_000
 
-	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
-		OutputItems: []llm.ResponseItem{
-			{
-				Type:        llm.ResponseItemTypeMessage,
-				Role:        textutil.Value(llm.RoleUser),
-				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-				Content:     textutil.Value("summary"),
-			},
-			{
-				Type:             llm.ResponseItemTypeCompaction,
-				ID:               textutil.Value("compaction-checkpoint"),
-				EncryptedContent: textutil.Value("encrypted"),
-			},
-		},
-		Usage: llm.Usage{
-			InputTokens:  autoCompactLimit,
-			OutputTokens: 1_000,
-			WindowTokens: 200_000,
-		},
-	}}}
+	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
+		remoteCompactionReplacement(autoCompactLimit, 1_000, 200_000),
+	}}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   200_000,
@@ -75,5 +58,32 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 			activeGoalContinuations,
 			len(client.compactionCalls),
 		)
+	}
+}
+
+func remoteCompactionReplacement(
+	inputTokens int,
+	outputTokens int,
+	windowTokens int,
+) llm.CompactionResponse {
+	return llm.CompactionResponse{
+		OutputItems: []llm.ResponseItem{
+			{
+				Type:        llm.ResponseItemTypeMessage,
+				Role:        textutil.Value(llm.RoleUser),
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("summary"),
+			},
+			{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("compaction-checkpoint"),
+				EncryptedContent: textutil.Value("encrypted"),
+			},
+		},
+		Usage: llm.Usage{
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			WindowTokens: windowTokens,
+		},
 	}
 }
