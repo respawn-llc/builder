@@ -25,7 +25,7 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 	if err != nil {
 		return err
 	}
-	workdir, normalizedReminder, err := normalizeTarget(target, reminder)
+	normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 		retire := false
 		err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
 			var syncErr error
-			retire, syncErr = syncResourceExecutionTarget(resource, engine, workdir, normalizedReminder)
+			retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
 			return syncErr
 		})
 		return retire, err
@@ -87,12 +87,12 @@ func (a *Authority) RunWorktreeTransition(
 					if !active {
 						return errors.New("worktree transition target synchronizer is no longer active")
 					}
-					workdir, normalizedReminder, err := normalizeTarget(target, reminder)
+					normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
 					if err != nil {
 						return err
 					}
 					var syncErr error
-					retire, syncErr = syncResourceExecutionTarget(resource, engine, workdir, normalizedReminder)
+					retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
 					return syncErr
 				})
 			})
@@ -118,12 +118,12 @@ func (a *Authority) RunWorktreeTransition(
 			if !active {
 				return runtime.ErrActiveStepInactive
 			}
-			workdir, normalizedReminder, err := normalizeTarget(target, reminder)
+			normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
 			if err != nil {
 				return err
 			}
 			var syncErr error
-			retire, syncErr = syncResourceExecutionTarget(resource, engine, workdir, normalizedReminder)
+			retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
 			return syncErr
 		})
 		if err != nil {
@@ -394,25 +394,25 @@ func (a *Authority) retireExactResource(ctx context.Context, resource *agentReso
 	return resource.closeResource(ctx)
 }
 
-func normalizeTarget(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) (string, *session.WorktreeReminderState, error) {
-	workdir := strings.TrimSpace(target.EffectiveWorkdir)
-	if workdir == "" {
-		return "", nil, errors.New("execution target effective workdir is required")
+func normalizeTarget(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) (clientui.SessionExecutionTarget, *session.WorktreeReminderState, error) {
+	normalizedTarget := clientui.NormalizeSessionExecutionTarget(target)
+	if normalizedTarget.EffectiveWorkdir == "" {
+		return clientui.SessionExecutionTarget{}, nil, errors.New("execution target effective workdir is required")
 	}
 	if reminder == nil {
-		return workdir, nil, nil
+		return normalizedTarget, nil, nil
 	}
 	normalized, err := session.NormalizeWorktreeReminderState(*reminder)
 	if err != nil {
-		return "", nil, err
+		return clientui.SessionExecutionTarget{}, nil, err
 	}
-	return workdir, &normalized, nil
+	return normalizedTarget, &normalized, nil
 }
 
-func syncResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, workdir string, reminder *session.WorktreeReminderState) (bool, error) {
+func syncResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) (bool, error) {
 	previousWorkdir := strings.TrimSpace(engine.TranscriptWorkingDir())
 	previousReminder := engine.WorktreeReminderState()
-	if err := rebindResource(resource, engine, workdir); err != nil {
+	if err := rebindResourceExecutionTarget(resource, engine, target); err != nil {
 		return false, err
 	}
 	if err := engine.SetWorktreeReminderState(reminder); err != nil {
@@ -436,6 +436,23 @@ func rebindResource(resource *agentResource, engine *runtime.Engine, workdir str
 		}
 	}
 	engine.SetTranscriptWorkingDir(workdir)
+	return nil
+}
+
+func rebindResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, target clientui.SessionExecutionTarget) error {
+	if resource == nil || engine == nil {
+		return errors.New("active runtime resource is required")
+	}
+	if resource.localTools != nil {
+		currentWorktreeRoot := ""
+		if target.Worktree != nil {
+			currentWorktreeRoot = target.Worktree.Root
+		}
+		if err := resource.localTools.RebindExecutionTarget(target.EffectiveWorkdir, currentWorktreeRoot); err != nil {
+			return err
+		}
+	}
+	engine.SetTranscriptWorkingDir(target.EffectiveWorkdir)
 	return nil
 }
 

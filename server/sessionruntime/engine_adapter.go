@@ -26,6 +26,8 @@ type AgentRuntimePlanOptions struct {
 	Settings                            config.Settings
 	EnabledTools                        []toolspec.ID
 	Workdir                             string
+	ManagedWorktreeBaseDir              string
+	CurrentWorktreeRoot                 string
 	Sources                             map[string]string
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
@@ -213,6 +215,8 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,
 		SkipContinuationAgentRoleValidation: options.SkipContinuationAgentRoleValidation,
 		GlobalConfigDir:                     a.options.persistenceRoot,
+		ManagedWorktreeBaseDir:              options.ManagedWorktreeBaseDir,
+		CurrentWorktreeRoot:                 options.CurrentWorktreeRoot,
 		StepLifecycle:                       resource,
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)

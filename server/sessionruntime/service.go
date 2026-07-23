@@ -135,9 +135,16 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:                 req.ActiveSettings,
-		EnabledTools:             enabledTools,
-		Workdir:                  target.EffectiveWorkdir,
+		Settings:               req.ActiveSettings,
+		EnabledTools:           enabledTools,
+		Workdir:                target.EffectiveWorkdir,
+		ManagedWorktreeBaseDir: req.ActiveSettings.Worktrees.BaseDir,
+		CurrentWorktreeRoot: func() string {
+			if target.Worktree == nil {
+				return ""
+			}
+			return target.Worktree.Root
+		}(),
 		Sources:                  req.Source.Sources,
 		FastMode:                 s.fastModeState,
 		ClientFactory:            s.runtimeClientFactory,

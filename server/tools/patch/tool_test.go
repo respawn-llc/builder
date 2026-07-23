@@ -2,7 +2,9 @@ package patch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"core/internal/testharness/filemode"
+	"core/server/tools"
 )
 
 func TestNewMissingWorkspaceSuggestsRebind(t *testing.T) {
@@ -26,6 +29,99 @@ func TestNewMissingWorkspaceSuggestsRebind(t *testing.T) {
 	if got := err.Error(); got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
+}
+
+func TestSuccessfulAbsoluteForeignManagedWorktreePatchWarnsForMoveDestination(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	for _, dir := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested workdir: %v", err)
+	}
+	source := filepath.Join(currentRoot, "source.txt")
+	destination := filepath.Join(foreignRoot, "destination.txt")
+	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot))
+
+	result := callPatch(t, tool, "foreign-move", "*** Begin Patch\n*** Update File: "+source+"\n*** Move to: "+destination+"\n-before\n+after\n*** End Patch\n")
+
+	if result.IsError {
+		t.Fatalf("expected success, got %s", string(result.Output))
+	}
+	if len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
+		t.Fatalf("managed worktree warning = %+v", result.ModelWarnings)
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	if string(data) != "after\n" {
+		t.Fatalf("destination = %q, want after", data)
+	}
+}
+
+func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	outsideRoot := t.TempDir()
+	for _, dir := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested workdir: %v", err)
+	}
+	current := filepath.Join(currentRoot, "current.txt")
+	foreign := filepath.Join(foreignRoot, "foreign.txt")
+	outside := filepath.Join(outsideRoot, "outside.txt")
+	for _, path := range []string{current, foreign, outside} {
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot), WithAllowOutsideWorkspace(true))
+
+	tests := []struct {
+		name    string
+		path    string
+		old     string
+		new     string
+		isError bool
+	}{
+		{name: "relative current", path: "../current.txt", old: "before", new: "after"},
+		{name: "absolute current", path: current, old: "after", new: "again"},
+		{name: "absolute outside managed base", path: outside, old: "before", new: "after"},
+		{name: "failed foreign", path: foreign, old: "missing", new: "after", isError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := callPatch(t, tool, "skip-"+tc.name, "*** Begin Patch\n*** Update File: "+tc.path+"\n-"+tc.old+"\n+"+tc.new+"\n*** End Patch\n")
+			if result.IsError != tc.isError {
+				t.Fatalf("error = %t, want %t; result=%q", result.IsError, tc.isError, patchResultText(t, result))
+			}
+			if len(result.ModelWarnings) != 0 {
+				t.Fatalf("unexpected managed worktree warning: %+v", result.ModelWarnings)
+			}
+		})
+	}
+}
+
+func patchResultText(t *testing.T, result tools.Result) string {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(result.Output, &value); err != nil {
+		t.Fatalf("decode patch result: %v", err)
+	}
+	return fmt.Sprint(value)
 }
 
 func TestDeleteParticipatesInAtomicPatchCommit(t *testing.T) {

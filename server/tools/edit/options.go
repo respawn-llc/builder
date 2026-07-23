@@ -1,6 +1,10 @@
 package edit
 
-import "core/server/tools"
+import (
+	"strings"
+
+	"core/server/tools"
+)
 
 type Option func(*Tool)
 
@@ -19,5 +23,18 @@ func WithOutsideWorkspaceApprover(approver tools.FSGuardApprover) Option {
 func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
 	return func(t *Tool) {
 		t.pathDenyPolicy = policy
+	}
+}
+
+func WithManagedWorktreePathContext(baseDir string, currentWorktreeRoot string) Option {
+	return func(t *Tool) {
+		if strings.TrimSpace(baseDir) == "" {
+			return
+		}
+		context, err := tools.NewManagedWorktreePathContext(baseDir, currentWorktreeRoot)
+		if err != nil {
+			panic(err)
+		}
+		t.managedWorktreePathContext = &context
 	}
 }

@@ -111,6 +111,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			}
 			res.CallID = tc.ID
 			res.Name = toolID
+			res = tools.MaterializeModelWarnings(res)
 			results[idx] = res
 			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
 				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)

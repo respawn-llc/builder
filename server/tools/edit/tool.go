@@ -32,6 +32,7 @@ type Tool struct {
 	outsideWorkspaceSessionMu    sync.RWMutex
 	outsideWorkspaceSessionAllow bool
 	pathDenyPolicy               tools.PathDenyPolicy
+	managedWorktreePathContext   *tools.ManagedWorktreePathContext
 }
 
 type resolvedPath struct {
@@ -80,7 +81,11 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if resolved.symlink {
 		message = "ok; warning: edited through symlink, real path is " + resolved.real + "; use that path directly next time"
 	}
-	return editSuccessResult(c, message), nil
+	result := editSuccessResult(c, message)
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.WarnsFor(in.Path, resolved.real) {
+		result.ModelWarnings = []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()}
+	}
+	return result, nil
 }
 
 func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput) error {

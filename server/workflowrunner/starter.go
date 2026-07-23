@@ -1123,9 +1123,16 @@ func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution
 		return err
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:                            plan.ActiveSettings,
-		EnabledTools:                        workflowRuntimeEnabledTools(plan.EnabledTools),
-		Workdir:                             executionRoot.EffectiveRoot(),
+		Settings:               plan.ActiveSettings,
+		EnabledTools:           workflowRuntimeEnabledTools(plan.EnabledTools),
+		Workdir:                executionRoot.EffectiveRoot(),
+		ManagedWorktreeBaseDir: s.cfg.Settings.Worktrees.BaseDir,
+		CurrentWorktreeRoot: func() string {
+			if executionRoot.Managed == nil {
+				return ""
+			}
+			return executionRoot.Managed.Root
+		}(),
 		Sources:                             plan.Source.Sources,
 		Headless:                            true,
 		Client:                              client,

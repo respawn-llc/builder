@@ -37,6 +37,8 @@ func (w *RuntimeWiring) Close() error {
 }
 
 type RuntimeWiringOptions struct {
+	ManagedWorktreeBaseDir              string
+	CurrentWorktreeRoot                 string
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
@@ -86,6 +88,8 @@ func NewRuntimeWiringWithBackground(
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:            workspaceRoot,
+		ManagedWorktreeBaseDir:   opts.ManagedWorktreeBaseDir,
+		CurrentWorktreeRoot:      opts.CurrentWorktreeRoot,
 		OwnerSessionID:           store.Meta().SessionID,
 		Enabled:                  enabledTools,
 		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
