@@ -1131,6 +1131,30 @@ func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (
 	return result.RowsAffected()
 }
 
+const deleteTaskCurrentNode = `-- name: DeleteTaskCurrentNode :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = ?1
+  AND node_id = ?2
+  AND (
+      (transition_branch_key IS NULL AND ?3 IS NULL)
+      OR transition_branch_key = ?3
+  )
+`
+
+type DeleteTaskCurrentNodeParams struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey interface{}
+}
+
+func (q *Queries) DeleteTaskCurrentNode(ctx context.Context, arg DeleteTaskCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskLabelAssignment = `-- name: DeleteTaskLabelAssignment :execrows
 DELETE FROM task_label_assignments
 WHERE task_id = ?1
@@ -3558,6 +3582,40 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
+	return err
+}
+
+const insertTaskActiveFanout = `-- name: InsertTaskActiveFanout :exec
+INSERT INTO task_active_fanouts (task_id)
+VALUES (?1)
+`
+
+func (q *Queries) InsertTaskActiveFanout(ctx context.Context, taskID string) error {
+	_, err := q.db.ExecContext(ctx, insertTaskActiveFanout, taskID)
+	return err
+}
+
+const insertTaskActiveFanoutBranch = `-- name: InsertTaskActiveFanoutBranch :exec
+INSERT INTO task_active_fanout_branches (
+    task_id,
+    transition_branch_key,
+    arrival_state,
+    arrival_values_json
+) VALUES (
+    ?1,
+    ?2,
+    'pending',
+    NULL
+)
+`
+
+type InsertTaskActiveFanoutBranchParams struct {
+	TaskID              string
+	TransitionBranchKey string
+}
+
+func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTaskActiveFanoutBranchParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskActiveFanoutBranch, arg.TaskID, arg.TransitionBranchKey)
 	return err
 }
 

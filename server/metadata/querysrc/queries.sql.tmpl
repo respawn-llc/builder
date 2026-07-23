@@ -4711,6 +4711,32 @@ WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL;
 
+-- name: DeleteTaskCurrentNode :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  );
+
+-- name: InsertTaskActiveFanout :exec
+INSERT INTO task_active_fanouts (task_id)
+VALUES (sqlc.arg(task_id));
+
+-- name: InsertTaskActiveFanoutBranch :exec
+INSERT INTO task_active_fanout_branches (
+    task_id,
+    transition_branch_key,
+    arrival_state,
+    arrival_values_json
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(transition_branch_key),
+    'pending',
+    NULL
+);
+
 -- name: InsertTaskPendingApproval :exec
 INSERT INTO task_pending_approvals (
     id,

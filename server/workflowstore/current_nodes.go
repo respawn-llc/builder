@@ -160,6 +160,21 @@ func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNod
 	return q.InsertTaskCurrentNode(ctx, params)
 }
 
+func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {
+	if err := reference.Validate(); err != nil {
+		return 0, err
+	}
+	branchKey := sql.NullString{}
+	if value, present := reference.TransitionBranchKey(); present {
+		branchKey = sql.NullString{String: string(value), Valid: true}
+	}
+	return q.DeleteTaskCurrentNode(ctx, sqlitegen.DeleteTaskCurrentNodeParams{
+		TaskID:              string(reference.TaskID),
+		NodeID:              string(reference.NodeID),
+		TransitionBranchKey: branchKey,
+	})
+}
+
 func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.InsertTaskCurrentNodeParams, error) {
 	currentInputValuesJSON, err := json.Marshal(currentNode.CurrentInputValues)
 	if err != nil {
