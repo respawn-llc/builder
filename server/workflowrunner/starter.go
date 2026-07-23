@@ -638,30 +638,28 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			return store.EnsureDurable()
-		}); err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-		if compactAndContinueRequiresFreshContract(input, plan) {
-			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-				return store.ResetLockedContractForCompactionBoundary()
-			}); err != nil {
-				return launch.SessionPlan{}, nil, err
+			if err := store.EnsureDurable(); err != nil {
+				return err
 			}
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{
-				Mode:                                launch.ModeHeadless,
-				Intent:                              mustOpenWorkflowSessionIntent(plan.Descriptor.SessionID().String()),
-				SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+			if compactAndContinueRequiresFreshContract(input, plan) {
+				if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
+					return err
+				}
+				plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
+					Mode:                                launch.ModeHeadless,
+					Intent:                              mustOpenWorkflowSessionIntent(plan.Descriptor.SessionID().String()),
+					SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+				}, store)
+				if err != nil {
+					return err
+				}
+			}
+			overrides = workflowRunPromptOverrides(input.Node.SubagentRole)
+			plan, warnings, err = planner.ApplyRunPromptOverridesWithStore(plan, store, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+				AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
 			})
-			if err != nil {
-				return launch.SessionPlan{}, nil, err
-			}
-		}
-		overrides = workflowRunPromptOverrides(input.Node.SubagentRole)
-		plan, warnings, err = planner.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-			AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
-		})
-		if err != nil {
+			return err
+		}); err != nil {
 			return launch.SessionPlan{}, nil, err
 		}
 	}

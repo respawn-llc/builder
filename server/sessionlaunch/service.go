@@ -2,6 +2,7 @@ package sessionlaunch
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/auth"
@@ -32,6 +33,8 @@ type Service struct {
 	runtime       *sessionruntime.Authority
 	plans         *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
 }
+
+var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")
 
 type PlanResult struct {
 	Plan     launch.SessionPlan
@@ -183,16 +186,13 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		}
 		return s.finalizeLaunchPlan(
 			ctx,
-			func() (launch.SessionPlan, error) {
-				return planner.PlanSession(ctx, launch.SessionRequest{
+			func() (launch.SessionPlan, []string, error) {
+				return planner.PlanNewSessionWithPreparedOverrides(ctx, launch.SessionRequest{
 					Mode:                                launch.Mode(req.Mode),
 					Intent:                              req.Intent,
 					SkipContinuationAgentRoleValidation: roleOverride.Default,
 					PreparedPromptFacingTarget:          preparedPromptFacingTarget,
-				})
-			},
-			func(plan launch.SessionPlan) (launch.SessionPlan, []string, error) {
-				return planner.ApplyPreparedRunPromptOverrides(plan, req.Overrides, preparedOverrides)
+				}, req.Overrides, preparedOverrides)
 			},
 		)
 	})
@@ -207,6 +207,9 @@ func (s *Service) planExistingSession(
 	caller *subagentpolicy.Caller,
 	authState auth.State,
 ) (result PlanResult, resultErr error) {
+	if s.runtime == nil {
+		return PlanResult{}, ErrExistingSessionAuthorityRequired
+	}
 	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, planner.ContainerDir)
 	if err != nil {
 		return PlanResult{}, err
@@ -215,15 +218,7 @@ func (s *Service) planExistingSession(
 		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store)
 		return resultErr
 	}
-	if s.runtime != nil {
-		resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
-		return result, resultErr
-	}
-	store, err := session.MaterializeSessionDescriptor(planner.Config.PersistenceRoot, descriptor, planner.StoreOptions...)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	resultErr = callback(ctx, store)
+	resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
 	return result, resultErr
 }
 
@@ -286,15 +281,16 @@ func (s *Service) planExistingSessionWithStore(
 	}
 	return s.finalizeLaunchPlan(
 		ctx,
-		func() (launch.SessionPlan, error) {
-			return planner.PlanSessionWithStore(ctx, launch.SessionRequest{
+		func() (launch.SessionPlan, []string, error) {
+			plan, err := planner.PlanSessionWithStore(ctx, launch.SessionRequest{
 				Mode:                                launch.Mode(req.Mode),
 				Intent:                              req.Intent,
 				SkipContinuationAgentRoleValidation: roleOverride.Default,
 				PreparedPromptFacingTarget:          preparedPromptFacingTarget,
 			}, store)
-		},
-		func(plan launch.SessionPlan) (launch.SessionPlan, []string, error) {
+			if err != nil {
+				return launch.SessionPlan{}, nil, err
+			}
 			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{})
 		},
 	)
@@ -302,14 +298,9 @@ func (s *Service) planExistingSessionWithStore(
 
 func (s *Service) finalizeLaunchPlan(
 	ctx context.Context,
-	planSession func() (launch.SessionPlan, error),
-	applyOverrides func(launch.SessionPlan) (launch.SessionPlan, []string, error),
+	resolvePlan func() (launch.SessionPlan, []string, error),
 ) (PlanResult, error) {
-	plan, err := planSession()
-	if err != nil {
-		return PlanResult{}, err
-	}
-	plan, warnings, err := applyOverrides(plan)
+	plan, warnings, err := resolvePlan()
 	if err != nil {
 		return PlanResult{}, err
 	}

@@ -7,6 +7,8 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	serverstartup "core/server/startup"
 	patchtool "core/server/tools/patch"
 	"core/shared/client"
@@ -41,8 +43,9 @@ type appTestModelToolCall struct {
 }
 
 type appTestModelStep struct {
-	Calls []appTestModelToolCall
-	Final string
+	Calls              []appTestModelToolCall
+	Final              string
+	MalformedErrorText string
 }
 
 type appTestRuntimeSubmissionResult struct {
@@ -71,6 +74,20 @@ func newAppTestModelServer(t *testing.T, steps ...appTestModelStep) *httptest.Se
 func writeAppTestModelStep(t *testing.T, w http.ResponseWriter, step appTestModelStep) {
 	t.Helper()
 	if len(step.Calls) == 0 {
+		if step.MalformedErrorText != "" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			payload, err := json.Marshal(map[string]any{
+				"type":         "error",
+				"output_index": 0,
+				"text":         step.MalformedErrorText,
+			})
+			if err != nil {
+				t.Fatalf("marshal malformed model event: %v", err)
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+				t.Fatalf("write malformed model event: %v", err)
+			}
+		}
 		modelstub.WriteCompletedResponseStream(w, step.Final, 11, 7)
 		return
 	}
@@ -462,6 +479,75 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 		t.Fatalf("expected environment context to avoid process cwd %q leak, got %q", processCWD, envContent)
 	}
 
+}
+
+func TestRemoteInteractiveMalformedTextErrorPersistsAssistantWithoutLocalArtifact(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspace(t)
+	const userText = "persist this ordinary user turn"
+	const assistantText = "ordinary assistant response"
+	model := newAppTestModelServer(t, appTestModelStep{
+		Final:              assistantText,
+		MalformedErrorText: assistantText,
+	})
+	defer model.Close()
+
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		Model:                 "gpt-5",
+		OpenAIBaseURL:         model.URL,
+		OpenAIBaseURLExplicit: true,
+	}, apiKeyMemoryAuthHandler("test-key"))
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
+	plan, runtimePlan := prepareAppRuntimePlan(
+		t,
+		server,
+		sessionLaunchRequest{
+			Mode:   launchModeInteractive,
+			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		},
+		io.Discard,
+		"test malformed streamed user turn",
+	)
+	defer closeRuntimeLaunchPlan(t, runtimePlan)
+
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, userText)
+	if err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if submission.Message != assistantText {
+		t.Fatalf("assistant message = %q, want %q", submission.Message, assistantText)
+	}
+
+	store := openAuthoritativeWorkspaceSessionStore(t, workspace, model.URL, plan.SessionID)
+	records, err := sessiontest.CollectRecords(store)
+	if err != nil {
+		t.Fatalf("CollectRecords: %v", err)
+	}
+	var foundUser, foundAssistant bool
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			t.Fatalf("record payload: %v", err)
+		}
+		switch typed := payload.(type) {
+		case session.MessageRecord:
+			if typed.Role == session.MessageRoleUser && typed.Content != nil && *typed.Content == userText {
+				foundUser = true
+			}
+			if typed.Role == session.MessageRoleAssistant && typed.Content != nil && *typed.Content == assistantText {
+				foundAssistant = true
+			}
+		case session.LocalEntryRecord:
+			t.Fatalf("persisted unexpected local entry: %+v", typed)
+		}
+	}
+	if !foundUser {
+		t.Fatalf("persisted records did not contain user turn %q", userText)
+	}
+	if !foundAssistant {
+		t.Fatalf("persisted records did not contain assistant turn %q", assistantText)
+	}
 }
 
 func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {

@@ -121,6 +121,10 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		}
 		a.responseError = &responseStreamError{Raw: raw}
 	case "error":
+		if strings.TrimSpace(evt.Code) == "" && strings.TrimSpace(evt.Message) == "" && strings.TrimSpace(evt.Text) != "" {
+			a.consumeAssistantDelta(evt.OutputIndex, evt.Text)
+			return
+		}
 		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
 	}
 }

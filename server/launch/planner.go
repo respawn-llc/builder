@@ -109,10 +109,6 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 	return sessionPlanWithSnapshot(plan, store, p.ContainerDir)
 }
 
-func (p Planner) materializePlanStore(plan SessionPlan) (*session.Store, error) {
-	return session.MaterializeSessionDescriptor(p.Config.PersistenceRoot, plan.Descriptor, p.StoreOptions...)
-}
-
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
 }
@@ -270,6 +266,38 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		return SessionPlan{}, err
 	}
 	return p.planSessionWithStore(ctx, req, store)
+}
+
+// PlanNewSessionWithPreparedOverrides creates and plans a new Session, then
+// applies its prepared overrides through the same Store.
+func (p Planner) PlanNewSessionWithPreparedOverrides(
+	ctx context.Context,
+	req SessionRequest,
+	overrides serverapi.RunPromptOverrides,
+	prepared PreparedRunPromptOverrides,
+) (SessionPlan, []string, error) {
+	if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
+		return SessionPlan{}, nil, errors.New("new-session planning requires a create-new intent")
+	}
+	if p.ReloadConfig != nil {
+		cfg, err := p.ReloadConfig()
+		if err != nil {
+			return SessionPlan{}, nil, err
+		}
+		p.Config = cfg
+	}
+	store, err := p.openStore(ctx, req)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	if err := preparePlanStore(req, store); err != nil {
+		return SessionPlan{}, nil, err
+	}
+	plan, err := p.planSessionWithStore(ctx, req, store)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	return p.ApplyPreparedRunPromptOverridesWithStore(plan, store, overrides, prepared, RunPromptOverrideOptions{})
 }
 
 // PlanSessionWithStore plans an existing Session through its already-admitted
@@ -436,18 +464,6 @@ func persistedRoleProviderID(settings config.Settings) string {
 		return "openai"
 	}
 	return string(provider)
-}
-
-func (p Planner) ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
-	return p.ApplyRunPromptOverridesWithOptions(plan, overrides, authState, RunPromptOverrideOptions{})
-}
-
-func (p Planner) ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
-	store, err := p.materializePlanStore(plan)
-	if err != nil {
-		return SessionPlan{}, nil, err
-	}
-	return p.ApplyRunPromptOverridesWithStore(plan, store, overrides, authState, options)
 }
 
 // ApplyRunPromptOverridesWithStore applies overrides through an already-admitted
@@ -672,20 +688,6 @@ func applyPreparedConfigOverrides(settings config.Settings, source config.Source
 	return settings, source, enabledTools, nil
 }
 
-func (p Planner) ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides) (SessionPlan, []string, error) {
-	return p.ApplyPreparedRunPromptOverridesWithOptions(plan, overrides, prepared, RunPromptOverrideOptions{})
-}
-
-func (p Planner) ApplyPreparedRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
-	store, err := p.materializePlanStore(plan)
-	if err != nil {
-		return SessionPlan{}, nil, err
-	}
-	return p.ApplyPreparedRunPromptOverridesWithStore(plan, store, overrides, prepared, options)
-}
-
-// ApplyPreparedRunPromptOverridesWithStore applies prepared overrides through
-// an already-admitted Store. It never reconstructs a Store from the plan.
 func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
