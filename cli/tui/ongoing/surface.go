@@ -397,10 +397,16 @@ func (s *Surface) immutableScrollbackProduced() bool {
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
+	previousMutableBand := s.visiblePreviousMutableBand(frame.Size)
 	linesToErase := s.previousMutableBandHeightAtBottom(frame.Size)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
+	if s.terminalResize == TerminalResizeWidthRehydration &&
+		s.terminalHeightExpanded(frame.Size) &&
+		previousMutableBand != nil {
+		writeMutableRowsErase(&transaction, previousMutableBand.start, previousMutableBand.end)
+	}
 	writeMutableBandErase(&transaction, frame.Size.Height, linesToErase)
 	writeCursor(&transaction, Cursor{})
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {

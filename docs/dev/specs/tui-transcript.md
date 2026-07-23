@@ -148,7 +148,7 @@
 - Shell tool calls use shared syntax highlighting, faint styling, and shell syntax for the active operating system.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch and edit tools use `⇄` in Ongoing Mode, Detail Mode, and replay. Paths and neutral text use the foreground role. Source lines use shared syntax highlighting. Added and removed counts use their semantic colors. Diff backgrounds blend 20% of Success or Error over the active Detail Mode background.
-- Compaction summaries and manual compaction carryover use secondary text.
+- Compaction summaries and manual compaction carryover use secondary text in ongoing and collapsed Detail. Expanded compaction summaries use normal notice text.
 - Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
 - Active-goal continuation initialization uses a developer-context row with compact label `Goal nudge`. The ordinary active-goal continuation nudge reuses the same compact label; goal set, pause, resume, completion, and clear feedback keep their existing compact presentation.
@@ -157,12 +157,12 @@
 - Worktree-exit rows use full-strength foreground text.
 - `subagents` developer-context rows use the faint foreground system-notice style.
 - Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
-- Cache warnings and non-interrupting warnings use warning text.
+- Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
-- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected, but not the semantic style roles for the selected content.
-- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer symbols follow the row's Success or Error state. Compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
+- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected. Expanded compaction summary and reminder content uses the normal notice role; other selected content retains its semantic role.
+- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer symbols follow the row's Success or Error state. Compact compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
 - Kent determines status from typed facts, not display text.
 - Kent does not invent a semantic color for an unspecified symbol.
 - Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.

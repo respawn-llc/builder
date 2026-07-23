@@ -682,7 +682,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if isReasoningNotice(row) {
 		text = stripReasoningBoldDelimiters(text)
 	}
-	return noticeStyleRole(row), text
+	return noticeStyleRoleForMode(row, mode), text
 }
 
 func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
@@ -765,6 +765,26 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	}
 }
 
+func noticeStyleRoleForMode(row *clientui.TranscriptNoticeRow, mode Mode) StyleRole {
+	if mode == ModeDetailExpanded && isExpandedCompactionNotice(row) {
+		return StyleRoleNotice
+	}
+	return noticeStyleRole(row)
+}
+
+func isExpandedCompactionNotice(row *clientui.TranscriptNoticeRow) bool {
+	if row == nil || row.MessageType == nil {
+		return false
+	}
+	switch *row.MessageType {
+	case clientui.TranscriptMessageCompactionSummary,
+		clientui.TranscriptMessageCompactionSoonReminder:
+		return true
+	default:
+		return false
+	}
+}
+
 func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.Diagnostic == nil {
 		return false
@@ -805,6 +825,9 @@ func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 }
 
 func stripReasoningBoldDelimiters(text string) string {
+	// Codex/GPT reasoning traces are provider-formatted plaintext, not Markdown.
+	// Remove only their outer `**` delimiters; interior asterisks are literal.
+	// Do not remove or change this behavior without explicit user approval.
 	text = strings.TrimPrefix(text, "**")
 	return strings.TrimSuffix(text, "**")
 }

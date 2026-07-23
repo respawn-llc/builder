@@ -246,6 +246,17 @@ func TestScratchHydrationResetErasesExpandedBottomBand(t *testing.T) {
 		TerminalResize: TerminalResizeWidthRehydration,
 		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
 	})
+	stream, err := analyzer.NewStream(pty.MustDimensions(18, 80))
+	if err != nil {
+		t.Fatalf("new terminal stream: %v", err)
+	}
+	feedFrame := func(operation string) {
+		t.Helper()
+		if err := stream.Feed(output.Bytes()); err != nil {
+			t.Fatalf("%s terminal bytes: %v", operation, err)
+		}
+		output.Reset()
+	}
 	initial := FrameInput{
 		Size: Size{Width: 80, Height: 18},
 		Sections: []FrameSection{{
@@ -256,20 +267,24 @@ func TestScratchHydrationResetErasesExpandedBottomBand(t *testing.T) {
 	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage("IMMUTABLE"), initial); err != nil {
 		t.Fatalf("render legacy transcript and live band: %v", err)
 	}
-	output.Reset()
+	feedFrame("render direct-terminal transcript and live band")
+	if err := stream.Resize(pty.MustDimensions(28, 81)); err != nil {
+		t.Fatalf("resize terminal: %v", err)
+	}
 
 	expanded := initial
-	expanded.Size.Height = 28
+	expanded.Size = Size{Width: 81, Height: 28}
 	if _, err := surface.ResetForScratchHydration(RehydrateReasonWidthChange, expanded); err != nil {
 		t.Fatalf("reset after expansion: %v", err)
 	}
+	feedFrame("reset after expansion")
 
-	resetOutput := output.String()
-	if want := "\x1b[27;1H" + semanticOutputSequence() + "\x1b[2K"; !strings.Contains(resetOutput, want) {
-		t.Fatalf("scratch reset did not erase expanded bottom band: output=%q want_sequence=%q", resetOutput, want)
+	snapshot, err := stream.ScreenSnapshot()
+	if err != nil {
+		t.Fatalf("snapshot after scratch reset: %v", err)
 	}
-	if strings.Contains(resetOutput, "\x1b[17;1H"+semanticOutputSequence()+"\x1b[2K") {
-		t.Fatalf("scratch reset erased expanded immutable rows: %q", resetOutput)
+	if screenContains(snapshot, "LIVE_TOP") || screenContains(snapshot, "LIVE_BOTTOM") {
+		t.Fatalf("scratch reset retained pre-resize mutable rows: %q", snapshot.RenderText())
 	}
 }
 
