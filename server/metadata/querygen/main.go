@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,38 +21,81 @@ type taskLabelFilterTemplateData struct {
 }
 
 func main() {
-	input := flag.String("input", "", "metadata query template input file")
-	fragment := flag.String("fragment", "", "task label filter template fragment")
-	output := flag.String("output", "", "generated metadata query output file")
-	flag.Parse()
+	if err := runCommand(os.Args[1:]); err != nil {
+		exitWithError(err)
+	}
+}
 
+func runCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("command is required: render or annotate-sqlc")
+	}
+	switch args[0] {
+	case "render":
+		return renderQueriesCommand(args[1:])
+	case "annotate-sqlc":
+		return annotateSQLCCommand(args[1:])
+	default:
+		return fmt.Errorf("unknown command %q: expected render or annotate-sqlc", args[0])
+	}
+}
+
+func renderQueriesCommand(args []string) error {
+	fs := flag.NewFlagSet("render", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	input := fs.String("input", "", "metadata query template input file")
+	fragment := fs.String("fragment", "", "task label filter template fragment")
+	output := fs.String("output", "", "generated metadata query output file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("render does not accept positional arguments")
+	}
 	if strings.TrimSpace(*input) == "" {
-		exitWithError(errors.New("input is required"))
+		return errors.New("input is required")
 	}
 	if strings.TrimSpace(*fragment) == "" {
-		exitWithError(errors.New("fragment is required"))
+		return errors.New("fragment is required")
 	}
 	if strings.TrimSpace(*output) == "" {
-		exitWithError(errors.New("output is required"))
+		return errors.New("output is required")
 	}
 	source, err := os.ReadFile(*input)
 	if err != nil {
-		exitWithError(fmt.Errorf("read input: %w", err))
+		return fmt.Errorf("read input: %w", err)
 	}
 	filterSource, err := os.ReadFile(*fragment)
 	if err != nil {
-		exitWithError(fmt.Errorf("read fragment: %w", err))
+		return fmt.Errorf("read fragment: %w", err)
 	}
 	generated, err := generateQueries(source, filterSource)
 	if err != nil {
-		exitWithError(err)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(*output), 0o755); err != nil {
-		exitWithError(fmt.Errorf("create output dir: %w", err))
+		return fmt.Errorf("create output dir: %w", err)
 	}
 	if err := os.WriteFile(*output, generated, 0o644); err != nil {
-		exitWithError(fmt.Errorf("write output: %w", err))
+		return fmt.Errorf("write output: %w", err)
 	}
+	return nil
+}
+
+func annotateSQLCCommand(args []string) error {
+	fs := flag.NewFlagSet("annotate-sqlc", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	input := fs.String("input", "", "sqlc-generated Go source to annotate")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("annotate-sqlc does not accept positional arguments")
+	}
+	if strings.TrimSpace(*input) == "" {
+		return errors.New("input is required")
+	}
+	return annotateFile(*input)
 }
 
 func exitWithError(err error) {

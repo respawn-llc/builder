@@ -2,32 +2,13 @@ package main
 
 import (
 	"bytes"
-	"errors"
-	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
-	"strings"
 )
-
-func main() {
-	input := flag.String("input", "", "sqlc-generated Go source to annotate")
-	flag.Parse()
-	if strings.TrimSpace(*input) == "" {
-		exitWithError(errors.New("input is required"))
-	}
-	if err := annotateFile(*input); err != nil {
-		exitWithError(err)
-	}
-}
-
-func exitWithError(err error) {
-	_, _ = fmt.Fprintf(os.Stderr, "sqlcdiagnosticgen: %v\n", err)
-	os.Exit(1)
-}
 
 func annotateFile(path string) error {
 	source, err := os.ReadFile(path)
