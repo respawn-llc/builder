@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 func TestBuildTokenCountRequestForItemsUsesAutomaticToolChoice(t *testing.T) {
@@ -159,6 +160,43 @@ func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *tes
 	if !shouldCompact || client.countCalls != 0 {
 		t.Fatalf(
 			"fallback pre-submit decision=%t exact-count-calls=%d, want true and zero",
+			shouldCompact,
+			client.countCalls,
+		)
+	}
+}
+
+func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 1}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 2,
+	})
+	if err := engine.steer("image", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{
+			Role:       llm.RoleTool,
+			ToolCallID: textutil.Value("image-call"),
+			Name:       textutil.Value(string(toolspec.ToolViewImage)),
+			Content: textutil.Value(
+				`[{"type":"input_image","image_url":"data:image/png;base64,` +
+					strings.Repeat("A", 24_000) +
+					`"}]`,
+			),
+		}},
+	)); err != nil {
+		t.Fatalf("persist multimodal tool result: %v", err)
+	}
+	if usage := engine.ContextUsage(); usage.UsedTokens < 2 {
+		t.Fatalf("large local estimate = %+v, want at least compaction threshold", usage)
+	}
+	shouldCompact := engine.shouldAutoCompactWithContext(context.Background())
+	if shouldCompact || client.countCalls != 1 {
+		t.Fatalf(
+			"provider recheck compact=%t count-calls=%d, want false and one",
 			shouldCompact,
 			client.countCalls,
 		)
