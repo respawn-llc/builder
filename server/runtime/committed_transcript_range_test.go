@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
@@ -236,6 +237,70 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 		)
 	}
 	assertDurableTranscriptProjectionRangesContiguous(t, committed)
+}
+
+func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("final"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Reasoning: []llm.ReasoningEntry{{
+			Role: textutil.Value(string(transcript.EntryRoleReasoning)),
+			Text: "reasoning progress",
+		}},
+		Usage: llm.Usage{WindowTokens: 200_000},
+	}}}
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+		t.Fatalf("run step loop: %v", err)
+	}
+
+	var localEvents []Event
+	for index := range events {
+		event := events[index]
+		if event.Kind == EventLocalEntryAdded {
+			localEvents = append(localEvents, event)
+		}
+	}
+	if len(localEvents) != 1 {
+		t.Fatalf("reasoning local-entry events = %+v", localEvents)
+	}
+	localEvent := localEvents[0]
+	if !localEvent.CommittedTranscriptChanged ||
+		!localEvent.CommittedEntryStartSet ||
+		localEvent.LocalEntry == nil ||
+		localEvent.LocalEntry.Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("reasoning local-entry event = %+v", localEvent)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+	if err != nil {
+		t.Fatalf("read bounded reasoning records: %v", err)
+	}
+	var localRecords []session.LocalEntryRecord
+	for _, record := range window.Records {
+		entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
+		if ok {
+			localRecords = append(localRecords, entry)
+		}
+	}
+	if len(localRecords) != 1 || localRecords[0].Visibility != session.EntryVisibilityDetail {
+		t.Fatalf("persisted reasoning local entries = %+v", localRecords)
+	}
 }
 
 func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *testing.T) {
