@@ -130,7 +130,11 @@ func transcriptLiveRunFinishedMessages(evt runtime.Event) []clientui.TranscriptM
 		FinishedAt:    result.FinishedAt,
 	}
 	if result.ResultKind == runtime.LiveRunResultAssistantFinalAnswer {
-		projected.FinalAnswer = textutil.Pointer(result.AssistantMessage.Content)
+		if result.AssistantMessage.Content != nil {
+			projected.FinalAnswer = textutil.Pointer(result.AssistantMessage.Content)
+		} else {
+			projected.ResultKind = clientui.LiveRunResultNoFinalAnswer
+		}
 	}
 	if result.Status == runtime.RunStatusFailed && result.Error != nil {
 		failure := result.Error.Error()

@@ -87,3 +87,26 @@ func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestTranscriptProjectsMissingAssistantFinalTextAsNoFinalResult(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 22, 21, 25, 14, 0, time.UTC)
+	finishedAt := startedAt.Add(time.Second)
+
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventLiveRunFinished,
+		LiveRunResult: &runtime.LiveRunResult{
+			Status:     runtime.RunStatusCompleted,
+			ResultKind: runtime.LiveRunResultAssistantFinalAnswer,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+		},
+	})
+
+	if len(messages) != 1 || messages[0].Payload.LiveRunFinished == nil {
+		t.Fatalf("messages = %+v, want one live-run completion", messages)
+	}
+	projected := messages[0].Payload.LiveRunFinished
+	if projected.ResultKind != clientui.LiveRunResultNoFinalAnswer || projected.FinalAnswer != nil {
+		t.Fatalf("projected live run = %+v, want no-final result without fabricated answer", projected)
+	}
+}
