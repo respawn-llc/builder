@@ -28,7 +28,7 @@
 - One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
 - `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn. Pending steered user text becomes one user message, with submissions separated by blank lines.
 - Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
-- Runtime notices that are not model-visible remain in the transcript. Retried client requests receive the result of their original accepted operation and never create a second ordered operation.
+- Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client refreshes authoritative Session state. A later explicit user submission creates a new Runtime Command.
 - Input accepted before workflow completion becomes final supersedes that pending completion and continues the same Exact Execution Scope. Input submitted after that point, or while the scope is closing, receives a retryable rejection so the client restores its draft; it never reaches a successor Node or Session.
 - History replacement is atomic from the model's perspective: replacement content and its new context become the next ordered conversation state together. Persisted transcript order never changes.
 
