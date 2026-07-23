@@ -106,6 +106,17 @@ type Task struct {
 	MetadataJson                string
 }
 
+type TaskActiveFanout struct {
+	TaskID string
+}
+
+type TaskActiveFanoutBranch struct {
+	TaskID              string
+	TransitionBranchKey string
+	ArrivalState        string
+	ArrivalValuesJson   sql.NullString
+}
+
 type TaskComment struct {
 	ID              string
 	TaskID          string
@@ -114,6 +125,19 @@ type TaskComment struct {
 	AuthorID        string
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
+}
+
+type TaskCurrentNode struct {
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+	CurrentInputValuesJson string
+	PriorNodeValuesJson    string
+	SessionID              sql.NullString
+	SchedulingState        sql.NullString
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
 }
 
 type TaskLabelAssignment struct {
@@ -142,6 +166,26 @@ type TaskNodePlacementRecord struct {
 	ParallelBranchEdgeID      sql.NullString
 	CreatedAtUnixMs           int64
 	UpdatedAtUnixMs           int64
+}
+
+type TaskPendingApproval struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJson    string
+	MaterializedValuesJson    string
+	CreatedAtUnixMs           int64
+}
+
+type TaskPendingApprovalBranch struct {
+	ApprovalID                     string
+	TransitionBranchKey            string
+	TargetSnapshotJson             string
+	EffectiveEdgeConfigurationJson string
+	ContextSourceResolutionJson    string
 }
 
 type TaskRecord struct {

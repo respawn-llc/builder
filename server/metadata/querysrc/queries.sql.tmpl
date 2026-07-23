@@ -4568,3 +4568,62 @@ ORDER BY
         WHEN 'trigger' THEN 3
     END,
     name;
+
+-- name: ListTaskCurrentNodes :many
+SELECT
+    task_id,
+    node_id,
+    transition_branch_key,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+FROM task_current_nodes
+WHERE task_id = sqlc.arg(task_id)
+ORDER BY
+    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    transition_branch_key;
+
+-- name: GetTaskActiveFanout :one
+SELECT task_id
+FROM task_active_fanouts
+WHERE task_id = sqlc.arg(task_id);
+
+-- name: ListTaskActiveFanoutBranches :many
+SELECT
+    task_id,
+    transition_branch_key,
+    arrival_state,
+    arrival_values_json
+FROM task_active_fanout_branches
+WHERE task_id = sqlc.arg(task_id)
+ORDER BY transition_branch_key;
+
+-- name: ListTaskPendingApprovals :many
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE source_task_id = sqlc.arg(task_id)
+ORDER BY created_at_unix_ms, id;
+
+-- name: ListTaskPendingApprovalBranches :many
+SELECT
+    approval_id,
+    transition_branch_key,
+    target_snapshot_json,
+    effective_edge_configuration_json,
+    context_source_resolution_json
+FROM task_pending_approval_branches
+WHERE approval_id = sqlc.arg(approval_id)
+ORDER BY transition_branch_key;

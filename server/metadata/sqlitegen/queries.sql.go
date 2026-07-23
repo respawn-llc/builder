@@ -2152,6 +2152,19 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 	return i, err
 }
 
+const getTaskActiveFanout = `-- name: GetTaskActiveFanout :one
+SELECT task_id
+FROM task_active_fanouts
+WHERE task_id = ?1
+`
+
+func (q *Queries) GetTaskActiveFanout(ctx context.Context, taskID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getTaskActiveFanout, taskID)
+	var task_id string
+	err := row.Scan(&task_id)
+	return task_id, err
+}
+
 const getTaskByProjectShortID = `-- name: GetTaskByProjectShortID :one
 SELECT
     id,
@@ -6129,6 +6142,45 @@ func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) 
 	return items, nil
 }
 
+const listTaskActiveFanoutBranches = `-- name: ListTaskActiveFanoutBranches :many
+SELECT
+    task_id,
+    transition_branch_key,
+    arrival_state,
+    arrival_values_json
+FROM task_active_fanout_branches
+WHERE task_id = ?1
+ORDER BY transition_branch_key
+`
+
+func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID string) ([]TaskActiveFanoutBranch, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskActiveFanoutBranches, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskActiveFanoutBranch
+	for rows.Next() {
+		var i TaskActiveFanoutBranch
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.TransitionBranchKey,
+			&i.ArrivalState,
+			&i.ArrivalValuesJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskAssignedLabelIDsByTasks = `-- name: ListTaskAssignedLabelIDsByTasks :many
 SELECT tla.task_id, pl.id AS label_id
 FROM task_label_assignments tla
@@ -6350,6 +6402,59 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 	return items, nil
 }
 
+const listTaskCurrentNodes = `-- name: ListTaskCurrentNodes :many
+SELECT
+    task_id,
+    node_id,
+    transition_branch_key,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+FROM task_current_nodes
+WHERE task_id = ?1
+ORDER BY
+    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    transition_branch_key
+`
+
+func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]TaskCurrentNode, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskCurrentNodes, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskCurrentNode
+	for rows.Next() {
+		var i TaskCurrentNode
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.NodeID,
+			&i.TransitionBranchKey,
+			&i.CurrentInputValuesJson,
+			&i.PriorNodeValuesJson,
+			&i.SessionID,
+			&i.SchedulingState,
+			&i.InterruptionReason,
+			&i.InterruptionDetailJson,
+			&i.InterruptedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskNodePlacements = `-- name: ListTaskNodePlacements :many
 SELECT
     id,
@@ -6452,6 +6557,96 @@ func (q *Queries) ListTaskNodePlacementsByTasks(ctx context.Context, taskIds []s
 			&i.ParallelBranchEdgeID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskPendingApprovalBranches = `-- name: ListTaskPendingApprovalBranches :many
+SELECT
+    approval_id,
+    transition_branch_key,
+    target_snapshot_json,
+    effective_edge_configuration_json,
+    context_source_resolution_json
+FROM task_pending_approval_branches
+WHERE approval_id = ?1
+ORDER BY transition_branch_key
+`
+
+func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalID string) ([]TaskPendingApprovalBranch, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalBranches, approvalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskPendingApprovalBranch
+	for rows.Next() {
+		var i TaskPendingApprovalBranch
+		if err := rows.Scan(
+			&i.ApprovalID,
+			&i.TransitionBranchKey,
+			&i.TargetSnapshotJson,
+			&i.EffectiveEdgeConfigurationJson,
+			&i.ContextSourceResolutionJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskPendingApprovals = `-- name: ListTaskPendingApprovals :many
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE source_task_id = ?1
+ORDER BY created_at_unix_ms, id
+`
+
+func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) ([]TaskPendingApproval, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovals, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskPendingApproval
+	for rows.Next() {
+		var i TaskPendingApproval
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceTaskID,
+			&i.SourceNodeID,
+			&i.SourceTransitionBranchKey,
+			&i.SourceSessionID,
+			&i.WorkflowVersion,
+			&i.TransitionSnapshotJson,
+			&i.MaterializedValuesJson,
+			&i.CreatedAtUnixMs,
 		); err != nil {
 			return nil, err
 		}
