@@ -98,6 +98,10 @@ describe("questionPresentation", () => {
     await expectPendingAskHydrationFromFreshCache();
   });
 
+  it("does not look up pending asks when attention already supplies options", async () => {
+    await expectCompleteAttentionDoesNotLookupPendingAsks();
+  });
+
   it("anchors a settled freeform-only question without an option", () => {
     const attention = ordinaryAttention([], 0);
     expect(
@@ -459,6 +463,44 @@ async function expectPendingAskHydrationFromFreshCache(): Promise<void> {
     ]);
   });
   queryClient.clear();
+}
+
+async function expectCompleteAttentionDoesNotLookupPendingAsks(): Promise<void> {
+  const attention = ordinaryAttention(["one", "two"], 2);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        staleTime: 4_000,
+      },
+    },
+  });
+  const lookup = deferred<readonly PendingAsk[]>();
+  const requestedSessionIDs: string[] = [];
+  listPendingAsks = async (sessionID) => {
+    requestedSessionIDs.push(sessionID);
+    return lookup.promise;
+  };
+  questionAnswerMutation = recordingQuestionAnswerMutation([]);
+
+  const view = render(
+    questionBoxTree(attention, queryClient, () => {
+      return;
+    }),
+  );
+  try {
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio")[1]).toBeChecked();
+    });
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(requestedSessionIDs).toEqual([]);
+  } finally {
+    lookup.resolve([]);
+    view.unmount();
+    queryClient.clear();
+  }
 }
 
 function deferred<T>(): Readonly<{

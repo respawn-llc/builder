@@ -30,7 +30,11 @@ export function QuestionBox({
   taskId: string;
 }>) {
   const { t } = useTranslation();
-  const asks = usePendingAsks(attention.question?.kind === "approval" ? null : attention.sessionID);
+  const pendingAskSessionID =
+    attention.question?.kind === "approval" || attention.suggestions.length > 0
+      ? null
+      : attention.sessionID;
+  const asks = usePendingAsks(pendingAskSessionID);
   const pendingAsk = asks.data?.find((ask) => ask.askID === attention.askID);
   const pendingAskLookupSettled =
     asks.isSuccess && asks.isFetchedAfterMount && !asks.isFetching;
