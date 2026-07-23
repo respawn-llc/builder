@@ -165,3 +165,30 @@ func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
 		t.Fatalf("unsupported shell workflow request dispatched provider calls = %d", len(client.calls))
 	}
 }
+
+func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	client := &fakeClient{}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.Config{
+			RunID:          runID,
+			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CompletionMode: workflowruntime.CompletionMode("unknown"),
+			Controller:     &externallyCompletedWorkflowController{},
+		},
+		Config{
+			Model:        "gpt-5",
+			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		},
+	)
+
+	if _, err := engine.buildRequest(context.Background(), "step", true); err == nil {
+		t.Fatal("build workflow request with unresolved completion mode succeeded")
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("unresolved workflow completion mode dispatched provider calls = %d", len(client.calls))
+	}
+}
