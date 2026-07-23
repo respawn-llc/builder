@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
@@ -32,7 +34,7 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	if !errors.Is(err, ErrMissingProviderToolCallID) {
 		t.Fatalf("execute tool calls error = %v, want missing provider call ID", err)
 	}
-	if probe.called {
+	if probe.calls.Load() != 0 {
 		t.Fatal("missing provider call ID reached a local tool handler")
 	}
 }
@@ -114,13 +116,122 @@ func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
 	}
 }
 
-type toolExecutionProbe struct {
-	called bool
+func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
+	t.Run("uncommitted append", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		probe := &toolExecutionProbe{}
+		engine := mustNewTestEngine(
+			t,
+			store,
+			&fakeClient{},
+			tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: probe,
+			}),
+			Config{Model: "gpt-5"},
+		)
+		blocker := mustBlockTestEventLogAppends(t, store)
+
+		results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "uncommitted-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}})
+		if !errors.Is(err, errPersistToolCompletion) {
+			t.Fatalf("uncommitted tool completion error = %v", err)
+		}
+		if got := probe.calls.Load(); got != 1 {
+			t.Fatalf("uncommitted tool handler calls = %d, want one", got)
+		}
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("uncommitted tool results = %+v, want successful execution result", results)
+		}
+		if err := blocker.Restore(); err != nil {
+			t.Fatalf("restore event-log append blocker: %v", err)
+		}
+
+		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+		if err != nil {
+			t.Fatalf("read bounded uncommitted tool records: %v", err)
+		}
+		for _, record := range window.Records {
+			completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+			if ok && completion.CallID == "uncommitted-tool" {
+				t.Fatalf("uncommitted tool completion persisted: %+v", completion)
+			}
+		}
+	})
+
+	t.Run("committed observer failure", func(t *testing.T) {
+		observerErr := errors.New("tool completion observer failure")
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateTestSessionAt(
+			t,
+			t.TempDir(),
+			session.WithPersistenceObserver(gate),
+		)
+		probe := &toolExecutionProbe{}
+		engine := mustNewTestEngine(
+			t,
+			store,
+			&fakeClient{},
+			tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: probe,
+			}),
+			Config{Model: "gpt-5"},
+		)
+		gate.FailNext(observerErr)
+
+		results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "committed-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}})
+		if !errors.Is(err, errPersistToolCompletion) || !errors.Is(err, observerErr) {
+			t.Fatalf("committed tool completion error = %v", err)
+		}
+		if got := probe.calls.Load(); got != 1 {
+			t.Fatalf("committed tool handler calls = %d, want one", got)
+		}
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("committed tool results = %+v, want successful execution result", results)
+		}
+
+		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+		if err != nil {
+			t.Fatalf("read bounded committed tool records: %v", err)
+		}
+		completions := 0
+		for _, record := range window.Records {
+			completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+			if !ok || completion.CallID != "committed-tool" {
+				continue
+			}
+			completions++
+			if completion.Name != string(toolspec.ToolExecCommand) || completion.IsError {
+				t.Fatalf("committed tool completion = %+v", completion)
+			}
+		}
+		if completions != 1 {
+			t.Fatalf("committed tool completions = %d, want one", completions)
+		}
+	})
 }
 
-func (p *toolExecutionProbe) Call(context.Context, tools.Call) (tools.Result, error) {
+type toolExecutionProbe struct {
+	called bool
+	calls  atomic.Int32
+}
+
+func (p *toolExecutionProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {
 	p.called = true
-	return tools.Result{}, nil
+	p.calls.Add(1)
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+	}, nil
 }
 
 type webSearchExecutionProbe struct {
