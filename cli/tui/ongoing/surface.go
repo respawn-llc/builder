@@ -402,7 +402,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
-	if s.terminalResize == TerminalResizeWidthRehydration &&
+	if s.terminalResize.usesWidthRehydration() &&
 		s.terminalHeightExpanded(frame.Size) &&
 		previousMutableBand != nil {
 		writeMutableRowsErase(&transaction, previousMutableBand.start, previousMutableBand.end)
