@@ -147,7 +147,7 @@ type uiConversationFeatureState struct {
 	ask                                uiAskState
 	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
-	promptAttention                    *bellHooks
+	promptAttention                    promptAttentionSink
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }

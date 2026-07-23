@@ -86,9 +86,6 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 			return ManualMoveResult{}, err
 		}
 	}
-	if err := rejectManualMoveDuringActiveRunWithQueries(ctx, q, req.TaskID); err != nil {
-		return ManualMoveResult{}, err
-	}
 	if sourcePlacementRunID != "" {
 		projection, ok, err := pendingInterruptedRunAttentionProjection(ctx, q, sourcePlacementRunID)
 		if err != nil {
@@ -96,6 +93,13 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 		}
 		if ok {
 			resolvedInterruptedRunProjections = append(resolvedInterruptedRunProjections, projection)
+		}
+		if _, err := q.InterruptManualMoveSourceRun(ctx, sqlitegen.InterruptManualMoveSourceRunParams{
+			UpdatedAtUnixMs:     now,
+			InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
+			RunID:               string(sourcePlacementRunID),
+		}); err != nil {
+			return ManualMoveResult{}, err
 		}
 	}
 	if pendingApprovalTransitionID != "" {
@@ -264,9 +268,6 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 	if err != nil {
 		return preparedManualMove{}, err
 	}
-	if err := s.rejectManualMoveDuringActiveRun(ctx, req.TaskID); err != nil {
-		return preparedManualMove{}, err
-	}
 	def, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return preparedManualMove{}, err
@@ -376,24 +377,6 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 		outputValuesJSON:            outputValuesJSON,
 		autoApprovedExecutable:      autoApprovedExecutable,
 	}, nil
-}
-
-func (s *Store) rejectManualMoveDuringActiveRun(ctx context.Context, taskID workflow.TaskID) error {
-	return rejectManualMoveDuringActiveRunWithQueries(ctx, s.queries, taskID)
-}
-
-func rejectManualMoveDuringActiveRunWithQueries(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) error {
-	runs, err := q.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
-		TaskID:    string(taskID),
-		SessionID: "",
-	})
-	if err != nil {
-		return err
-	}
-	if len(runs) > 0 {
-		return ErrManualMoveDuringActiveRun
-	}
-	return nil
 }
 
 func terminalArchiveManualMoveContract(sourceNode workflow.Node, targetNode workflow.Node) (workflow.TransitionGroup, workflow.Edge, bool) {

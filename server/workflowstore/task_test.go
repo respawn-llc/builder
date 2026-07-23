@@ -44,7 +44,7 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].AutomationRequestedAt == nil {
+	if len(runs) != 1 || runs[0].AutomationRequestedAt != nil {
 		t.Fatalf("runs after start = %+v", runs)
 	}
 	transitions, err := store.ListTransitions(ctx, task.ID)

@@ -15,6 +15,7 @@ import (
 
 type settingsState struct {
 	Settings        Settings
+	Client          ClientSettings
 	PersistenceRoot string
 }
 
@@ -51,6 +52,17 @@ type fileKeyRegisteringSetting interface {
 	registerFileKeys(*fileKeyTree)
 }
 
+type settingsFileLayer uint8
+
+const (
+	settingsFileLayerGlobal settingsFileLayer = iota
+	settingsFileLayerWorkspace
+)
+
+type fileLayerApplicableSetting interface {
+	appliesToFileLayer(settingsFileLayer) bool
+}
+
 type defaultLineAppendingSetting interface {
 	appendDefaultLines(*[]defaultConfigLine, settingsState)
 }
@@ -64,7 +76,7 @@ type fileKeyTree struct {
 type settingsRegistry struct {
 	settings           []registrySetting
 	validators         []settingsValidator
-	fileKeys           *fileKeyTree
+	fileKeys           map[settingsFileLayer]*fileKeyTree
 	subagentRoleValues map[string]subagentRoleValueSetting
 }
 
@@ -101,6 +113,7 @@ type optionalStringSetting struct {
 type toolsSetting struct{}
 type skillsSetting struct{}
 type subagentsSetting struct{}
+type clientLifecycleSetting struct{}
 
 type subagentRoleApplicableSetting interface {
 	appliesToSubagentRole() bool
@@ -123,6 +136,11 @@ func (rootOnlySetting[T]) appliesToSubagentRole() bool {
 func settingAppliesToSubagentRole(setting registrySetting) bool {
 	scoped, ok := setting.(subagentRoleApplicableSetting)
 	return !ok || scoped.appliesToSubagentRole()
+}
+
+func settingAppliesToFileLayer(setting registrySetting, layer settingsFileLayer) bool {
+	scoped, ok := setting.(fileLayerApplicableSetting)
+	return !ok || scoped.appliesToFileLayer(layer)
 }
 
 func (s scalarSetting[T]) subagentRoleKey() string {
@@ -427,6 +445,7 @@ func newSettingsRegistry() settingsRegistry {
 			func(state *settingsState, value *string) { state.Settings.Shell.PostprocessHook = value },
 			func(state settingsState) *string { return state.Settings.Shell.PostprocessHook },
 			"KENT_SHELL_POSTPROCESS_HOOK"),
+		clientLifecycleSetting{},
 		newStringSetting("cache_warning_mode", CacheWarningMode(defaultCacheWarningMode),
 			func(state *settingsState, value CacheWarningMode) { state.Settings.CacheWarningMode = value },
 			func(state settingsState) CacheWarningMode { return state.Settings.CacheWarningMode },
@@ -742,11 +761,18 @@ func newSettingsRegistry() settingsRegistry {
 		},
 	}
 
-	registry.fileKeys = newFileKeyTree()
+	registry.fileKeys = map[settingsFileLayer]*fileKeyTree{
+		settingsFileLayerGlobal:    newFileKeyTree(),
+		settingsFileLayerWorkspace: newFileKeyTree(),
+	}
 	registry.subagentRoleValues = make(map[string]subagentRoleValueSetting)
 	for _, setting := range registry.settings {
 		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
-			fileKeySetting.registerFileKeys(registry.fileKeys)
+			for layer, tree := range registry.fileKeys {
+				if settingAppliesToFileLayer(setting, layer) {
+					fileKeySetting.registerFileKeys(tree)
+				}
+			}
 		}
 		if !settingAppliesToSubagentRole(setting) {
 			continue
@@ -761,7 +787,9 @@ func newSettingsRegistry() settingsRegistry {
 		}
 		registry.subagentRoleValues[key] = roleSetting
 	}
-	registerSubagentFileKeys(registry.fileKeys, registry.settings)
+	for _, tree := range registry.fileKeys {
+		registerSubagentFileKeys(tree, registry.settings)
+	}
 	return registry
 }
 
@@ -783,16 +811,51 @@ func (r settingsRegistry) defaultSourceMap() map[string]string {
 	return sources
 }
 
-func (r settingsRegistry) applyFile(raw settingsFile, settingsPath string, state *settingsState, sources map[string]string) error {
-	if err := validateSettingsFileKeys(raw, r.fileKeys); err != nil {
+func (r settingsRegistry) applyFile(raw settingsFile, settingsPath string, layer settingsFileLayer, state *settingsState, sources map[string]string) error {
+	for _, setting := range r.settings {
+		if settingAppliesToFileLayer(setting, layer) {
+			continue
+		}
+		keyed, ok := setting.(keyedRegistrySetting)
+		if !ok {
+			continue
+		}
+		key := keyed.registryKey()
+		_, present, err := lookupFileValue(raw, strings.Split(key, "."))
+		if err != nil {
+			return err
+		}
+		if present {
+			return &SettingsFileLayerError{
+				Key:          key,
+				SettingsPath: settingsPath,
+				Layer:        layer.String(),
+			}
+		}
+	}
+	if err := validateSettingsFileKeys(raw, r.fileKeys[layer]); err != nil {
 		return err
 	}
 	for _, setting := range r.settings {
+		if !settingAppliesToFileLayer(setting, layer) {
+			continue
+		}
 		if err := setting.applyFile(raw, settingsPath, state, sources); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (layer settingsFileLayer) String() string {
+	switch layer {
+	case settingsFileLayerGlobal:
+		return "global"
+	case settingsFileLayerWorkspace:
+		return "workspace"
+	default:
+		return "unknown"
+	}
 }
 
 func (r settingsRegistry) applyEnv(lookup envLookup, state *settingsState, sources map[string]string) error {
@@ -973,6 +1036,56 @@ func (s optionalStringSetting) appendDefaultLines(lines *[]defaultConfigLine, st
 		Path:  strings.Split(s.key, "."),
 		Value: *value,
 	})
+}
+
+func (clientLifecycleSetting) applyDefault(state *settingsState) {
+	state.Client.Hooks.lifecycleCommand = nil
+}
+
+func (clientLifecycleSetting) initSources(sources map[string]string) {
+	sources["hooks.client.lifecycle"] = "default"
+}
+
+func (clientLifecycleSetting) registryKey() string {
+	return "hooks.client.lifecycle"
+}
+
+func (clientLifecycleSetting) applyFile(raw settingsFile, _ string, state *settingsState, sources map[string]string) error {
+	command, ok, err := lookupFileStringArray(raw, []string{"hooks", "client", "lifecycle"})
+	if err != nil || !ok {
+		return err
+	}
+	if len(command) == 0 {
+		return errors.New("hooks.client.lifecycle cannot be empty; remove the setting to disable it")
+	}
+	for index, argument := range command {
+		if strings.TrimSpace(argument) == "" {
+			return fmt.Errorf("hooks.client.lifecycle argument %d cannot be blank", index)
+		}
+	}
+	state.Client.Hooks.lifecycleCommand = append([]string(nil), command...)
+	sources["hooks.client.lifecycle"] = "file"
+	return nil
+}
+
+func (clientLifecycleSetting) registerFileKeys(tree *fileKeyTree) {
+	tree.allowPath([]string{"hooks", "client", "lifecycle"})
+}
+
+func (clientLifecycleSetting) appendDefaultLines(lines *[]defaultConfigLine, _ settingsState) {
+	*lines = append(*lines, defaultConfigLine{
+		Path:      []string{"hooks", "client", "lifecycle"},
+		Value:     []string{"executable", "fixed-arg"},
+		Commented: true,
+	})
+}
+
+func (clientLifecycleSetting) appliesToSubagentRole() bool {
+	return false
+}
+
+func (clientLifecycleSetting) appliesToFileLayer(layer settingsFileLayer) bool {
+	return layer == settingsFileLayerGlobal
 }
 
 func newBoolSetting(
@@ -1594,6 +1707,26 @@ func lookupFileInt(raw settingsFile, path []string) (int, bool, error) {
 	return parsed, true, nil
 }
 
+func lookupFileStringArray(raw settingsFile, path []string) ([]string, bool, error) {
+	value, ok, err := lookupFileValue(raw, path)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, false, &SettingsKeyTypeError{Key: strings.Join(path, "."), ExpectedType: "array of strings"}
+	}
+	result := make([]string, len(values))
+	for index, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil, false, &SettingsKeyTypeError{Key: strings.Join(path, "."), ExpectedType: "array of strings"}
+		}
+		result[index] = text
+	}
+	return result, true, nil
+}
+
 func lookupFileTable(raw settingsFile, path []string) (settingsFile, bool, error) {
 	value, ok, err := lookupFileValue(raw, path)
 	if err != nil || !ok {
@@ -1670,6 +1803,12 @@ func renderTOMLValue(value any) string {
 		return strconv.FormatBool(v)
 	case int:
 		return strconv.Itoa(v)
+	case []string:
+		values := make([]string, len(v))
+		for index, item := range v {
+			values[index] = strconv.Quote(item)
+		}
+		return "[" + strings.Join(values, ", ") + "]"
 	case fmt.Stringer:
 		return strconv.Quote(v.String())
 	case ModelVerbosity:

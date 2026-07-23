@@ -81,6 +81,10 @@ export default defineConfig({
           link: '/server/',
         },
         {
+          label: 'Lifecycle Hooks',
+          link: '/lifecycle-hooks/',
+        },
+        {
           label: 'Configuration',
           link: '/config/',
         },

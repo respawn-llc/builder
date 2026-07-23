@@ -2,6 +2,7 @@ package patch
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"core/server/tools"
 	"core/shared/toolspec"
 	"encoding/json"
@@ -234,40 +235,7 @@ func TestOutsideWorkspaceAddFilesRequestApprovalBeforeMissingPathChecksPerFile(t
 
 func outsideNonTempDir(t *testing.T) string {
 	t.Helper()
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		bases = append(bases, home)
-	}
-	for _, base := range bases {
-		dir, err := os.MkdirTemp(base, "kent-patch-outside-*")
-		if err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
-				t.Fatalf("cleanup outside directory after Abs failure: %v", cleanupErr)
-			}
-			continue
-		}
-		if IsPathInTemporaryDir(abs) {
-			if err := os.RemoveAll(dir); err != nil {
-				t.Fatalf("cleanup temporary outside-directory candidate: %v", err)
-			}
-			continue
-		}
-		t.Cleanup(func() {
-			if err := os.RemoveAll(dir); err != nil {
-				t.Errorf("cleanup outside directory %q: %v", dir, err)
-			}
-		})
-		return abs
-	}
-	t.Skip("unable to create non-temporary outside directory for test")
-	panic("unreachable after testing.T.Skip")
+	return testsetup.NonTemporaryDirectory(t, "kent-patch-outside-", IsPathInTemporaryDir)
 }
 
 func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {

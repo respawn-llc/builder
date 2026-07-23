@@ -414,7 +414,7 @@ func assertNoForkTemporaryArtifacts(t *testing.T, sessionDir string) {
 	}
 	for _, entry := range entries {
 		switch entry.Name() {
-		case eventsFile, eventLogMigrationLockFile:
+		case eventsFile, eventLogPersistenceLockFile:
 		default:
 			t.Fatalf(
 				"fork replay left unexpected temporary disk artifact %q in %q",

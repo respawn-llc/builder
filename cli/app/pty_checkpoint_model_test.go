@@ -1,0 +1,434 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	checkpoint "core/internal/testharness/pty/analyzer"
+	"core/internal/testharness/pty/appfixture"
+	"core/shared/clientui"
+	"core/shared/transcript"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+type ptyCheckpointModel struct {
+	inner                    tea.Model
+	output                   *checkpoint.Writer
+	scenario                 *ptyCheckpointScenarioState
+	detailPageAppliedPending bool
+}
+
+type ptyCheckpointScenarioState struct {
+	mu                           sync.Mutex
+	targetFinalAssistantOrdinal  appfixture.ScriptFinalAssistantOrdinal
+	appliedFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal
+	targetFinalSequence          *uint64
+	scenarioComplete             bool
+	finalAppliedEmitted          bool
+	toolStartedEmitted           bool
+	finalApplied                 chan struct{}
+}
+
+func newPTYCheckpointScenarioState(
+	targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
+) *ptyCheckpointScenarioState {
+	if targetFinalAssistantOrdinal == 0 {
+		panic("create PTY checkpoint scenario state with invalid target final assistant ordinal")
+	}
+	return &ptyCheckpointScenarioState{
+		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
+		finalApplied:                make(chan struct{}),
+	}
+}
+
+func (state *ptyCheckpointScenarioState) markScenarioComplete() {
+	if state == nil {
+		panic("mark scenario complete on nil PTY checkpoint scenario state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.scenarioComplete {
+		panic("mark PTY checkpoint scenario complete more than once")
+	}
+	if state.appliedFinalAssistantOrdinal >= state.targetFinalAssistantOrdinal {
+		panic(fmt.Sprintf(
+			"mark PTY checkpoint scenario complete after target final was applied: applied_ordinal=%d target_ordinal=%d",
+			state.appliedFinalAssistantOrdinal,
+			state.targetFinalAssistantOrdinal,
+		))
+	}
+	state.scenarioComplete = true
+}
+
+func (state *ptyCheckpointScenarioState) recordAcceptedAssistantFinal(sequence uint64) bool {
+	if state == nil {
+		panic("record accepted assistant final on nil PTY checkpoint scenario state")
+	}
+	if sequence == 0 {
+		panic("record accepted assistant final with invalid transcript sequence")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.appliedFinalAssistantOrdinal++
+	if state.appliedFinalAssistantOrdinal != state.targetFinalAssistantOrdinal {
+		return false
+	}
+	sequenceCopy := sequence
+	state.targetFinalSequence = &sequenceCopy
+	return true
+}
+
+func (state *ptyCheckpointScenarioState) pendingTargetFinalSequence() (uint64, bool) {
+	if state == nil {
+		panic("read pending target final sequence on nil PTY checkpoint scenario state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.scenarioComplete ||
+		state.finalAppliedEmitted ||
+		state.targetFinalSequence == nil {
+		return 0, false
+	}
+	return *state.targetFinalSequence, true
+}
+
+func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint64) bool {
+	if state == nil {
+		panic("claim scenario final applied on nil PTY checkpoint scenario state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.finalAppliedEmitted ||
+		!state.scenarioComplete ||
+		state.targetFinalSequence == nil ||
+		*state.targetFinalSequence != sequence {
+		return false
+	}
+	state.finalAppliedEmitted = true
+	close(state.finalApplied)
+	return true
+}
+
+func (state *ptyCheckpointScenarioState) waitFinalApplied(ctx context.Context) error {
+	if state == nil {
+		panic("wait for PTY scenario final on nil state")
+	}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-state.finalApplied:
+		return nil
+	}
+}
+
+func (state *ptyCheckpointScenarioState) claimToolStarted() bool {
+	if state == nil {
+		panic("claim tool started on nil PTY checkpoint scenario state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.toolStartedEmitted {
+		return false
+	}
+	state.toolStartedEmitted = true
+	return true
+}
+
+func newPTYCheckpointModel(
+	inner tea.Model,
+	output *checkpoint.Writer,
+	scenario *ptyCheckpointScenarioState,
+) *ptyCheckpointModel {
+	if inner == nil {
+		panic("create PTY checkpoint model with nil inner model")
+	}
+	if output == nil {
+		panic("create PTY checkpoint model with nil checkpoint writer")
+	}
+	if scenario == nil {
+		panic("create PTY checkpoint model with nil scenario state")
+	}
+	return &ptyCheckpointModel{inner: inner, output: output, scenario: scenario}
+}
+
+func (model *ptyCheckpointModel) Init() tea.Cmd {
+	return model.inner.Init()
+}
+
+func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	promptReadyBefore := ptyCheckpointPromptReady(model.inner)
+	initialDetailLoad := initialDetailLoadCandidate(model.inner, msg)
+	toolStart := ongoingToolStartCandidate(model.inner, msg)
+	ongoingFinal := ongoingAssistantFinalCandidate(model.inner, msg)
+	queuedTargetFinal := ongoingTargetFinalDrainCandidate(model.inner, msg, model.scenario)
+	next, cmd := model.inner.Update(msg)
+	if next == nil {
+		panic(fmt.Sprintf("PTY checkpoint inner model returned nil: message_type=%T", msg))
+	}
+	model.inner = next
+	if initialDetailLoad.appliedBy(next) {
+		model.detailPageAppliedPending = true
+	}
+	if toolStart.acceptedBy(next) && model.scenario.claimToolStarted() {
+		if err := model.output.Emit(checkpoint.KindToolStarted, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY tool-started checkpoint: error=%v", err))
+		}
+	}
+	if !promptReadyBefore && ptyCheckpointPromptReady(next) {
+		if err := model.output.Emit(checkpoint.KindPromptReady, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY prompt-ready checkpoint: error=%v", err))
+		}
+	}
+	emitScenarioFinalApplied := false
+	if ongoingFinal.acceptedBy(next) &&
+		model.scenario.recordAcceptedAssistantFinal(ongoingFinal.acceptance.sequence) &&
+		ongoingFinal.terminalAppliedBy(next) {
+		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(ongoingFinal.acceptance.sequence)
+	}
+	if queuedTargetFinal.terminalAppliedBy(next) {
+		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(queuedTargetFinal.sequence)
+	}
+	if emitScenarioFinalApplied {
+		model.emitScenarioFinalApplied()
+	}
+	if isTerminalInputMessage(msg) {
+		if err := model.output.Emit(checkpoint.KindInputApplied, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY input-applied checkpoint: message_type=%T error=%v", msg, err))
+		}
+	}
+	return model, cmd
+}
+
+func ptyCheckpointPromptReady(model tea.Model) bool {
+	appModel, ok := model.(*uiModel)
+	return ok && appModel.askReadyForInteraction()
+}
+
+func (model *ptyCheckpointModel) emitScenarioFinalApplied() {
+	if err := model.output.Emit(checkpoint.KindScenarioFinalApplied, nil); err != nil {
+		panic(fmt.Sprintf("emit PTY scenario-final-applied checkpoint: error=%v", err))
+	}
+}
+
+type ptyOngoingAssistantFinalCandidate struct {
+	acceptance        ptyOngoingTranscriptAcceptanceCandidate
+	terminalImmediate bool
+}
+
+func ongoingAssistantFinalCandidate(model tea.Model, msg tea.Msg) ptyOngoingAssistantFinalCandidate {
+	event, ok := ptyCheckpointTranscriptEvent(msg)
+	if !ok ||
+		!isCommittedAssistantFinal(event.Message) {
+		return ptyOngoingAssistantFinalCandidate{}
+	}
+	acceptance := ongoingTranscriptAcceptanceCandidate(model, event)
+	if !acceptance.valid {
+		return ptyOngoingAssistantFinalCandidate{}
+	}
+	appModel, ok := model.(*uiModel)
+	if !ok {
+		return ptyOngoingAssistantFinalCandidate{}
+	}
+	return ptyOngoingAssistantFinalCandidate{
+		acceptance:        acceptance,
+		terminalImmediate: appModel.ongoingTranscript.normalOwned && appModel.nativeOngoingSurfaceActive(),
+	}
+}
+
+func (candidate ptyOngoingAssistantFinalCandidate) acceptedBy(model tea.Model) bool {
+	return candidate.acceptance.acceptedBy(model)
+}
+
+func (candidate ptyOngoingAssistantFinalCandidate) terminalAppliedBy(model tea.Model) bool {
+	if !candidate.terminalImmediate || !candidate.acceptedBy(model) {
+		return false
+	}
+	appModel := model.(*uiModel)
+	return appModel.ongoingTranscript.normalOwned && appModel.nativeOngoingSurfaceActive()
+}
+
+type ptyOngoingTranscriptAcceptanceCandidate struct {
+	sequence uint64
+	valid    bool
+}
+
+func ongoingTranscriptAcceptanceCandidate(
+	model tea.Model,
+	event ongoingTranscriptEvent,
+) ptyOngoingTranscriptAcceptanceCandidate {
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		event.Kind != ongoingTranscriptEventMessage ||
+		appModel.ongoingTranscript == nil ||
+		!appModel.ongoingTranscript.hydrated ||
+		event.Message.Sequence != appModel.ongoingTranscript.lastSequence+1 {
+		return ptyOngoingTranscriptAcceptanceCandidate{}
+	}
+	return ptyOngoingTranscriptAcceptanceCandidate{
+		sequence: event.Message.Sequence,
+		valid:    true,
+	}
+}
+
+func (candidate ptyOngoingTranscriptAcceptanceCandidate) acceptedBy(model tea.Model) bool {
+	if !candidate.valid {
+		return false
+	}
+	appModel, ok := model.(*uiModel)
+	return ok &&
+		!appModel.forcedLocalExit &&
+		appModel.ongoingTranscript != nil &&
+		appModel.ongoingTranscript.lastSequence == candidate.sequence
+}
+
+func ongoingToolStartCandidate(
+	model tea.Model,
+	msg tea.Msg,
+) ptyOngoingTranscriptAcceptanceCandidate {
+	event, ok := ptyCheckpointTranscriptEvent(msg)
+	if !ok || event.Message.Kind != clientui.TranscriptMessageToolStart {
+		return ptyOngoingTranscriptAcceptanceCandidate{}
+	}
+	return ongoingTranscriptAcceptanceCandidate(model, event)
+}
+
+func ptyCheckpointTranscriptEvent(msg tea.Msg) (ongoingTranscriptEvent, bool) {
+	dispatched, ok := msg.(uiDispatchedEventMsg)
+	if !ok {
+		return ongoingTranscriptEvent{}, false
+	}
+	return dispatched.event, true
+}
+
+func dispatchPTYCheckpointTranscriptEvent(event ongoingTranscriptEvent) uiDispatchedEventMsg {
+	return uiDispatchedEventMsg{event: event}
+}
+
+type ptyOngoingTargetFinalDrainCandidate struct {
+	sequence uint64
+	valid    bool
+}
+
+func ongoingTargetFinalDrainCandidate(
+	model tea.Model,
+	msg tea.Msg,
+	scenario *ptyCheckpointScenarioState,
+) ptyOngoingTargetFinalDrainCandidate {
+	ownership, ok := msg.(ongoingNormalBufferOwnedMsg)
+	if !ok || !ownership.owned {
+		return ptyOngoingTargetFinalDrainCandidate{}
+	}
+	targetSequence, ok := scenario.pendingTargetFinalSequence()
+	if !ok {
+		return ptyOngoingTargetFinalDrainCandidate{}
+	}
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		appModel.ongoingTranscript == nil ||
+		appModel.ongoingTranscript.normalOwned ||
+		appModel.ongoingTranscript.queueOverflowed ||
+		!appModel.nativeOngoingSurfaceActive() {
+		return ptyOngoingTargetFinalDrainCandidate{}
+	}
+	for _, message := range appModel.ongoingTranscript.queue {
+		if message.Sequence == targetSequence && isCommittedAssistantFinal(message) {
+			return ptyOngoingTargetFinalDrainCandidate{
+				sequence: targetSequence,
+				valid:    true,
+			}
+		}
+	}
+	return ptyOngoingTargetFinalDrainCandidate{}
+}
+
+func (candidate ptyOngoingTargetFinalDrainCandidate) terminalAppliedBy(model tea.Model) bool {
+	if !candidate.valid {
+		return false
+	}
+	appModel, ok := model.(*uiModel)
+	return ok &&
+		!appModel.forcedLocalExit &&
+		appModel.ongoingTranscript != nil &&
+		appModel.ongoingTranscript.normalOwned &&
+		appModel.nativeOngoingSurfaceActive() &&
+		!appModel.ongoingTranscript.queueOverflowed &&
+		len(appModel.ongoingTranscript.queue) == 0 &&
+		appModel.ongoingTranscript.lastSequence >= candidate.sequence
+}
+
+func isCommittedAssistantFinal(message clientui.TranscriptMessage) bool {
+	if message.Kind != clientui.TranscriptMessageCommittedRow ||
+		message.Payload.CommittedRow == nil ||
+		message.Payload.CommittedRow.Kind != clientui.TranscriptRowAssistant ||
+		message.Payload.CommittedRow.Assistant == nil {
+		return false
+	}
+	switch message.Payload.CommittedRow.Assistant.Phase {
+	case transcript.AssistantPhaseFinal:
+		return true
+	default:
+		return false
+	}
+}
+
+func (model *ptyCheckpointModel) View() string {
+	view := model.inner.View()
+	if !model.detailPageAppliedPending || view == "" {
+		return view
+	}
+	if err := model.output.QueueBeforeNextWrite(checkpoint.KindDetailInitialPageApplied, nil); err != nil {
+		panic(fmt.Sprintf("queue PTY detail-page-applied checkpoint: error=%v", err))
+	}
+	model.detailPageAppliedPending = false
+	return view
+}
+
+func (model *ptyCheckpointModel) appModel() (*uiModel, bool) {
+	inner, ok := model.inner.(*uiModel)
+	return inner, ok
+}
+
+func isTerminalInputMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg, customKeyMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+type ptyInitialDetailLoadCandidate struct {
+	message detailTranscriptLoadMsg
+	valid   bool
+}
+
+func initialDetailLoadCandidate(model tea.Model, msg tea.Msg) ptyInitialDetailLoadCandidate {
+	load, ok := msg.(detailTranscriptLoadMsg)
+	if !ok || load.err != nil {
+		return ptyInitialDetailLoadCandidate{}
+	}
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		appModel.pendingDetailTranscript == nil ||
+		appModel.pendingDetailTranscript.id != load.requestID ||
+		appModel.detailTranscript.loaded {
+		return ptyInitialDetailLoadCandidate{}
+	}
+	return ptyInitialDetailLoadCandidate{message: load, valid: true}
+}
+
+func (candidate ptyInitialDetailLoadCandidate) appliedBy(model tea.Model) bool {
+	if !candidate.valid {
+		return false
+	}
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		appModel.surface() != uiSurfaceTranscriptDetail ||
+		appModel.pendingDetailTranscript != nil ||
+		!appModel.detailTranscript.loaded {
+		return false
+	}
+	return appModel.detailTranscript.matchesPage(candidate.message.page)
+}

@@ -2,6 +2,7 @@ package readimage
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -562,34 +563,11 @@ func findCaseVariantExistingAlias(path string) (string, bool) {
 
 func outsideNonTempDir(t *testing.T) string {
 	t.Helper()
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		bases = append(bases, home)
-	}
-	for _, base := range bases {
-		dir, err := os.MkdirTemp(base, "kent-readimage-outside-*")
-		if err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		if patchtool.IsPathInTemporaryDir(abs) {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		t.Cleanup(func() {
-			_ = os.RemoveAll(dir)
-		})
-		return abs
-	}
-	t.Skip("unable to create non-temporary outside directory for test")
-	return ""
+	return testsetup.NonTemporaryDirectory(
+		t,
+		"kent-readimage-outside-",
+		patchtool.IsPathInTemporaryDir,
+	)
 }
 
 func caseAliasUsersSubstitution(canonical string, canonicalInfo os.FileInfo) (string, bool) {

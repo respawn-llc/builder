@@ -70,7 +70,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if err != nil || !receipt.Committed {

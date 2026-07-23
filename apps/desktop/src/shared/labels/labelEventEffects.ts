@@ -130,13 +130,6 @@ export function createProjectLabelEffects({
       if (event.action !== "labels_changed") {
         return;
       }
-      if (!registry.markDirty(taskID)) {
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.taskLabels(taskID),
-          exact: true,
-          refetchType: "none",
-        });
-      }
       await refreshMembership({
         kind: "task.labels_changed",
         projectID,
@@ -146,16 +139,6 @@ export function createProjectLabelEffects({
     },
     async refreshAfterSubscriptionBoundary() {
       authority.requestRefresh();
-      const dirtyTaskIDs = registry.markProjectDirty(projectID);
-      await Promise.all(
-        dirtyTaskIDs.map(async (taskID) => {
-          await queryClient.invalidateQueries({
-            queryKey: queryKeys.taskLabels(taskID),
-            exact: true,
-            refetchType: "none",
-          });
-        }),
-      );
       await refreshMembership({
         kind: "subscription.refresh",
         projectID,

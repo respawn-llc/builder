@@ -1,7 +1,7 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
+import { errorMessage, type TaskDetail, type TaskLabelAssignment } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
@@ -46,11 +46,7 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
   }
   const content = (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>
-      <TaskDetailAssignmentScope
-        initialLabelIDs={detail.data.labelIDs}
-        taskID={detail.data.id}
-        workflowID={detail.data.workflowID}
-      >
+      <TaskDetailAssignmentScope detail={detail.data}>
         <TaskDetailContent
           activity={activity}
           attention={attention}
@@ -85,22 +81,22 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
 
 function TaskDetailAssignmentScope({
   children,
-  initialLabelIDs,
-  taskID,
-  workflowID,
-}: Readonly<{
-  children: ReactNode;
-  initialLabelIDs: readonly string[];
-  taskID: string;
-  workflowID: string;
-}>) {
+  detail,
+}: Readonly<{ children: ReactNode; detail: TaskDetail }>) {
   const catalog = useProjectLabelCatalog();
+  const initialAssignment = useMemo<TaskLabelAssignment>(
+    () => ({
+      taskID: detail.id,
+      labelIDs: detail.labelIDs,
+    }),
+    [detail.id, detail.labelIDs],
+  );
   return (
     <TaskLabelAssignmentProvider
       catalog={catalog.data ?? null}
-      initialLabelIDs={initialLabelIDs}
-      taskID={taskID}
-      workflowID={workflowID}
+      initialAssignment={initialAssignment}
+      taskID={detail.id}
+      workflowID={detail.workflowID}
     >
       {children}
     </TaskLabelAssignmentProvider>

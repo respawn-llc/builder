@@ -476,7 +476,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
@@ -534,7 +534,7 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
@@ -586,7 +586,7 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
@@ -823,7 +823,7 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if receipt.Committed || !errors.Is(err, countErr) {

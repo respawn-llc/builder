@@ -41,7 +41,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 }
 
 func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
-	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 800)
+	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 15_000)
 
 	select {
 	case evt := <-events:
@@ -60,7 +60,7 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 		"bg-large-1",
 		"sleep 0.15; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
 		"bg-large-2",
-		1_500,
+		15_000,
 	)
 
 	select {

@@ -25,8 +25,16 @@ type Request struct {
 	OpenAIBaseURL         string
 	OpenAIBaseURLExplicit bool
 	LoadOptions           config.LoadOptions
+	InitialConfig         *InitialConfigSnapshot
 	LookupEnv             func(string) string
 	Now                   func() time.Time
+}
+
+type InitialConfigSnapshot struct {
+	Config           config.App
+	WorkspaceRoot    string
+	OpenAIBaseURL    string
+	UseOpenAIBaseURL bool
 }
 
 type ConfigPlan struct {
@@ -54,9 +62,20 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 		OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),
 		UseOpenAIBaseURL: req.OpenAIBaseURLExplicit,
 	}
-	cfg, err := loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
-	if err != nil {
-		return ConfigPlan{}, err
+	var cfg config.App
+	var err error
+	if req.InitialConfig == nil {
+		cfg, err = loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
+		if err != nil {
+			return ConfigPlan{}, err
+		}
+	} else {
+		if req.InitialConfig.WorkspaceRoot != bootstrapPlan.WorkspaceRoot ||
+			req.InitialConfig.OpenAIBaseURL != bootstrapPlan.OpenAIBaseURL ||
+			req.InitialConfig.UseOpenAIBaseURL != bootstrapPlan.UseOpenAIBaseURL {
+			return ConfigPlan{}, errors.New("initial config snapshot does not match bootstrap target")
+		}
+		cfg = req.InitialConfig.Config
 	}
 	bootstrapPlan, err = launch.ResolveBootstrapPlan(cfg.PersistenceRoot, launch.BootstrapRequest{
 		WorkspaceRoot:         strings.TrimSpace(req.WorkspaceRoot),
@@ -67,6 +86,12 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 	})
 	if err != nil {
 		return ConfigPlan{}, err
+	}
+	if req.InitialConfig != nil &&
+		bootstrapPlan.WorkspaceRoot == strings.TrimSpace(req.WorkspaceRoot) &&
+		bootstrapPlan.OpenAIBaseURL == strings.TrimSpace(req.OpenAIBaseURL) &&
+		bootstrapPlan.UseOpenAIBaseURL == req.OpenAIBaseURLExplicit {
+		return ConfigPlan{Config: cfg}, nil
 	}
 	cfg, err = loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
 	if err != nil {

@@ -7,11 +7,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -32,17 +34,19 @@ type sessionLaunchRequest struct {
 }
 
 type sessionLaunchPlan struct {
-	Mode                launchMode
-	SessionID           string
-	ActiveSettings      config.Settings
-	EnabledTools        []toolspec.ID
-	ConfiguredModelName string
-	SessionName         string
-	PromptHistory       []string
-	ModelContractLocked bool
-	StatusConfig        uiStatusConfig
-	ExecutionTarget     clientui.SessionExecutionTarget
-	Source              config.SourceReport
+	Mode                       launchMode
+	SessionID                  string
+	ActiveSettings             config.Settings
+	EnabledTools               []toolspec.ID
+	ConfiguredModelName        string
+	SessionTitle               *string
+	PromptHistory              []string
+	ModelContractLocked        bool
+	StatusConfig               uiStatusConfig
+	ExecutionTarget            clientui.SessionExecutionTarget
+	Source                     config.SourceReport
+	ClientLifecycleCommand     []string
+	ClientLifecycleOpeningKind lifecyclecontract.OpeningKind
 }
 
 type resolvedSessionPlanRequest struct {
@@ -50,29 +54,51 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Wiring      *runtimeWiring
-	close       func() error
-	detachClose func() error
+	Wiring           *runtimeWiring
+	stopEventStreams func()
+	close            func() error
+	detachClose      func() error
+	closeOnce        sync.Once
+	closeErr         error
+}
+
+func validateLaunchSessionTitle(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return nil, errors.New("session launch title cannot be blank")
+	}
+	title := *value
+	return &title, nil
 }
 
 func (p *runtimeLaunchPlan) Close() error {
-	if p == nil || p.close == nil {
-		return nil
-	}
-	return p.close()
+	return p.closeWithPolicy(false)
 }
 
 func (p *runtimeLaunchPlan) DetachOnlyClose() error {
+	return p.closeWithPolicy(true)
+}
+
+func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 	if p == nil {
 		return nil
 	}
-	if p.detachClose != nil {
-		return p.detachClose()
-	}
-	return p.Close()
+	p.closeOnce.Do(func() {
+		if p.stopEventStreams != nil {
+			p.stopEventStreams()
+		}
+		if detachOnly && p.detachClose != nil {
+			p.closeErr = p.detachClose()
+		} else if p.close != nil {
+			p.closeErr = p.close()
+		}
+	})
+	return p.closeErr
 }
 
-type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
+type sessionPickerRunner func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
 
 type sessionViewReader interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
@@ -112,8 +138,8 @@ type launchPlanner struct {
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 	return &launchPlanner{
 		server: server,
-		pickSession: func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-			return runSessionPickerFlow(loader, theme, header)
+		pickSession: func(ctx context.Context, loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+			return runSessionPickerFlow(ctx, loader, theme, header)
 		},
 	}
 }
@@ -155,13 +181,17 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	authState := launchPlannerAuthState(p.server)
+	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
 	return sessionLaunchPlan{
 		Mode:                req.Mode,
 		SessionID:           resp.Plan.SessionID,
 		ActiveSettings:      resp.Plan.ActiveSettings,
 		EnabledTools:        enabledTools,
 		ConfiguredModelName: resp.Plan.ConfiguredModelName,
-		SessionName:         resp.Plan.SessionName,
+		SessionTitle:        sessionTitle,
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
@@ -248,7 +278,7 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 	}
 	header := p.sessionPickerHeaderInfo(p.server.Config())
 	header.Notice = notice
-	return p.pickSession(loader, p.server.PresentationTheme(), header)
+	return p.pickSession(ctx, loader, p.server.PresentationTheme(), header)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

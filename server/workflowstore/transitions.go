@@ -161,6 +161,15 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 	if id == "" {
 		return CompleteRunResult{}, ErrTransitionIDRequired
 	}
+	// Serialize the pre-transaction approval read with its write so concurrent
+	// idempotent calls observe the committed result instead of racing a deferred
+	// SQLite lock upgrade.
+	select {
+	case s.approvalGate <- struct{}{}:
+		defer func() { <-s.approvalGate }()
+	case <-ctx.Done():
+		return CompleteRunResult{}, ctx.Err()
+	}
 	transition, err := s.queries.GetTransitionApprovalState(ctx, id)
 	if err != nil {
 		return CompleteRunResult{}, err

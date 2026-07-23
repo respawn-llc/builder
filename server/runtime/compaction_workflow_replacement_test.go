@@ -54,7 +54,7 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	if _, _, err := engine.compactNow(context.Background(), "compact", compactionModeManual, "", false); err != nil {
+	if _, _, err := engine.compactNow(context.Background(), "compact", compactionModeManual, compactionInstructionsInput{}, false); err != nil {
 		t.Fatalf("compact workflow context: %v", err)
 	}
 	workflowModes := 0
@@ -191,7 +191,7 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		context.Background(),
 		"compact",
 		compactionModeManual,
-		"",
+		compactionInstructionsInput{},
 		false,
 	)
 	if err != nil || !receipt.Committed {

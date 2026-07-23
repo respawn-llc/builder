@@ -16,6 +16,12 @@ import (
 	"core/shared/transcript"
 )
 
+func TestCompactionInstructionsInputRejectsPresentBlankValue(t *testing.T) {
+	if _, err := newCompactionInstructionsInput(" \t "); err == nil {
+		t.Fatal("present blank compaction instructions succeeded")
+	}
+}
+
 func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *testing.T) {
 	seedContent := "seed \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
@@ -35,7 +41,11 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 		}
 	}
 
-	instructions := compactionInstructions("keep API details")
+	instructionsInput, err := newCompactionInstructionsInput("keep API details")
+	if err != nil {
+		t.Fatalf("build compaction instructions input: %v", err)
+	}
+	instructions := compactionInstructions(instructionsInput)
 	input := eng.transcriptRuntimeState().SnapshotItems()
 	request, ok, err := eng.compactionCacheObservationRequest(context.Background(), llm.CompactionRequest{
 		Model: "gpt-5", Instructions: instructions, InputItems: input,

@@ -117,6 +117,20 @@ func TestProtocolErrorMapsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
+	source := errors.Join(
+		fmt.Errorf("delete target: %w", serverapi.ErrWorktreeBlocked),
+		errors.New("target has a live run"),
+	)
+	response := responseForError("worktree-blocked", source)
+	if response.Error == nil ||
+		response.Error.Code != protocol.ErrCodeWorktreeBlocked ||
+		response.Error.Message != source.Error() ||
+		len(response.Error.Data) != 0 {
+		t.Fatalf("worktree-blocked response = %+v, want code/message without data", response.Error)
+	}
+}
+
 func TestStreamCompleteParamsMapsTerminalErrors(t *testing.T) {
 	for _, err := range []error{nil, io.EOF, context.Canceled, context.DeadlineExceeded} {
 		params := streamCompleteParams(err)

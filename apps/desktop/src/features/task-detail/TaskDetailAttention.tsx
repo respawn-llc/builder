@@ -178,7 +178,9 @@ export function InterruptedRunBox({
       ) : null}
       <Button
         disabled={disabled || mutations.resume.isPending}
-        onClick={() => void mutations.resume.mutateAsync()}
+        onClick={() => {
+          mutations.resume.mutate();
+        }}
         variant="primary"
       >
         {t("board.resume")}

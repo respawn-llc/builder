@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"core/internal/testharness/filemode"
 	"core/server/llm"
@@ -25,6 +26,57 @@ import (
 type testPersistedEvent struct {
 	Kind   string
 	Record session.EventRecord
+}
+
+func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
+	t.Helper()
+	previous := generateRetryDelays
+	generateRetryDelays = append([]time.Duration(nil), delays...)
+	t.Cleanup(func() {
+		generateRetryDelays = previous
+	})
+}
+
+type blockingStepLifecycleSink struct {
+	endedStarted chan StepLifecycleSnapshot
+	releaseEnded chan struct{}
+}
+
+func newBlockingStepLifecycleSink() *blockingStepLifecycleSink {
+	return &blockingStepLifecycleSink{
+		endedStarted: make(chan StepLifecycleSnapshot, 1),
+		releaseEnded: make(chan struct{}),
+	}
+}
+
+func (s *blockingStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
+	return nil
+}
+
+func (s *blockingStepLifecycleSink) StepEnded(_ context.Context, snapshot StepLifecycleSnapshot) error {
+	s.endedStarted <- snapshot
+	<-s.releaseEnded
+	return nil
+}
+
+func fakeClientCallCount(client *fakeClient) int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return len(client.calls)
+}
+
+func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		eng.lifecycleWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for engine lifecycle tasks")
+	}
 }
 
 func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
@@ -178,6 +230,11 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("close test engine: %v", err)
+		}
+	})
 	return engine
 }
 

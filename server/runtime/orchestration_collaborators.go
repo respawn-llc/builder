@@ -44,6 +44,7 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
+	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -89,9 +90,8 @@ func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelectio
 }
 
 type stepLoopResult struct {
-	Message                    llm.Message
+	FinalAnswer                *llm.Message
 	ExecutedToolCall           bool
-	NoopFinalAnswer            bool
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
 }
@@ -151,7 +151,9 @@ type phaseProtocolEnforcer interface {
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
 		if e.liveRun == nil {
-			e.liveRun = newLiveRunCoordinator()
+			e.liveRun = newLiveRunCoordinator(func(result LiveRunResult) {
+				e.publishLiveRunFinished(result)
+			})
 		}
 		if e.stepLifecycle == nil {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}

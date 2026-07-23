@@ -1,0 +1,33 @@
+package app
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+func slashPickerContainsCommand(state slashCommandPickerState, name string) bool {
+	for _, command := range state.matches {
+		if command.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func slashPickerCommandNames(state slashCommandPickerState) []string {
+	names := make([]string, 0, len(state.matches))
+	for _, command := range state.matches {
+		names = append(names, command.Name)
+	}
+	return names
+}
+
+func stripANSIAndTrimRight(view string) string {
+	stripped := ansi.Strip(view)
+	lines := strings.Split(stripped, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.Join(lines, "\n")
+}

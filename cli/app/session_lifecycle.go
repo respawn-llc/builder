@@ -9,8 +9,10 @@ import (
 	"core/cli/app/commands"
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -62,6 +64,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
+	clientSettings := clientSettingsForInteractiveServer(server)
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -171,6 +174,13 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
+		plan.ClientLifecycleCommand = clientSettings.Hooks.LifecycleCommand()
+		switch intent.Kind() {
+		case serverapi.SessionLaunchIntentCreateNew:
+			plan.ClientLifecycleOpeningKind = lifecyclecontract.OpeningKindNew
+		case serverapi.SessionLaunchIntentOpenExisting:
+			plan.ClientLifecycleOpeningKind = lifecyclecontract.OpeningKindResumed
+		}
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
 		if err != nil {
@@ -273,6 +283,7 @@ func prepareSessionUIRun(
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
 	}
 	return runtimePlan, uiLoopRequest{
+		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,
@@ -280,7 +291,7 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
-		sessionName:                  plan.SessionName,
+		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,

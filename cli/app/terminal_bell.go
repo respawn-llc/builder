@@ -177,13 +177,10 @@ func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEv
 	if h == nil {
 		return
 	}
-	if evt.Type != clientui.AttentionNotificationEventPending || evt.Pending == nil {
+	if !tuiAcceptsAttentionNotification(evt) {
 		return
 	}
 	notification := evt.Pending
-	if !tuiSupportsAttentionNotification(*notification) {
-		return
-	}
 	body := ""
 	if projectedBody != nil {
 		body = strings.TrimSpace(*projectedBody)

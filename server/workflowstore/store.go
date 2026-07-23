@@ -27,6 +27,7 @@ type Store struct {
 	queries      *sqlitegen.Queries
 	roleResolver workflow.RoleResolver
 	now          func() time.Time
+	approvalGate chan struct{}
 	eventMu      sync.RWMutex
 	eventSink    WorkflowEventPublisher
 }
@@ -52,11 +53,12 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		return nil, errors.New("metadata store is required")
 	}
 	store := &Store{
-		metadata:  metadataStore,
-		db:        metadataStore.DB(),
-		queries:   metadataStore.Queries(),
-		now:       func() time.Time { return time.Now().UTC() },
-		eventSink: noopWorkflowEventPublisher{},
+		metadata:     metadataStore,
+		db:           metadataStore.DB(),
+		queries:      metadataStore.Queries(),
+		now:          func() time.Time { return time.Now().UTC() },
+		approvalGate: make(chan struct{}, 1),
+		eventSink:    noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {
 		opt(store)

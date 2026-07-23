@@ -608,10 +608,8 @@ const MAX_PRODUCTION_SRC_FILE_LINES: usize = 700;
 // time, paired with its line count then. Baseline files may shrink freely but must
 // never grow past their recorded count; a file not listed here must stay at or
 // under the limit.
-const OVERSIZED_SRC_FILE_BASELINE: &[(&str, usize)] = &[
-    ("tui-rs/crates/client-contracts/src/routes.rs", 709),
-    ("tui-rs/crates/rpc-client/src/api.rs", 1039),
-];
+const OVERSIZED_SRC_FILE_BASELINE: &[(&str, usize)] =
+    &[("tui-rs/crates/client-contracts/src/routes.rs", 709)];
 
 fn check_production_src_file_size(
     repo_root: &Path,

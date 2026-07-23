@@ -44,7 +44,7 @@ Starvation-proofing invariants (the demon this layer exists to kill; each become
 
 Also owned here: the single-flight frozen-mutation primitive as a typed `tui-runtime` contract (one in-flight mutation per key), first consumed by Platform D.
 
-Walking skeleton = compose the above with rpc-client: connect → subscribe → render streamed events as raw appended lines; keys produce a visible typed acknowledgement; explicitly non-product output. Soak scenario drives exactly this binary.
+Walking skeleton = exercise the local runtime and render loop without networking; keys produce a visible typed acknowledgement and the output remains explicitly non-product. Server connectivity begins with the dedicated network crate in Platform D.
 
 - [ ] Adversarial subagent review of this direction
 - [ ] Nikita grilling/ratification → ticket body

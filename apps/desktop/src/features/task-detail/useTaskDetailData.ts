@@ -112,7 +112,17 @@ export function usePendingAsks(sessionID: string | null) {
   });
 }
 
-export function useTaskMutations(taskID: string, onChanged?: () => void) {
+type TaskLifecycleAction = "interrupt" | "resume";
+
+type TaskMutationCallbacks = Readonly<{
+  onChanged?: (() => void) | undefined;
+  onActionError?: ((action: TaskLifecycleAction, error: unknown) => void) | undefined;
+}>;
+
+export function useTaskMutations(
+  taskID: string,
+  { onActionError, onChanged }: TaskMutationCallbacks = {},
+) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   async function refresh(): Promise<void> {
@@ -150,10 +160,16 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
     }),
     interrupt: useMutation({
       mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),
+      onError: (error) => {
+        onActionError?.("interrupt", error);
+      },
       onSuccess: refresh,
     }),
     resume: useMutation({
       mutationFn: async () => api.resumeTask(taskID),
+      onError: (error) => {
+        onActionError?.("resume", error);
+      },
       onSuccess: refresh,
     }),
     answerQuestion: useMutation({

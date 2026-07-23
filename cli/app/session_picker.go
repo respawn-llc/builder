@@ -533,7 +533,7 @@ func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
 	})
 }
 
-func runSessionPicker(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+func runSessionPicker(ctx context.Context, loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
 		Loader: loader,
 		Theme:  theme,
@@ -544,7 +544,7 @@ func runSessionPicker(loader sessionPageLoader, theme string, header sessionPick
 	if err := terminal.Enter(); err != nil {
 		return nil, err
 	}
-	finalModel, runErr := tea.NewProgram(lifecycle).Run()
+	finalModel, runErr := tea.NewProgram(lifecycle, tea.WithContext(ctx)).Run()
 	closeErr := terminal.Close()
 	if runErr != nil && closeErr != nil {
 		return nil, errors.Join(runErr, closeErr)

@@ -7,21 +7,17 @@ import { useManagedTaskLabelAssignment } from "./taskLabelAssignmentData";
 export function TaskLabelAssignmentProvider({
   catalog,
   children,
-  initialLabelIDs,
+  initialAssignment,
   taskID,
   workflowID,
 }: Readonly<{
   catalog: ProjectLabelCatalog | null;
   children: ReactNode;
-  initialLabelIDs?: readonly string[] | undefined;
+  initialAssignment: TaskLabelAssignment;
   taskID: string;
   workflowID: string;
 }>) {
   const availableLabelIDs = useMemo(() => catalog?.labels.map((label) => label.id) ?? [], [catalog]);
-  const initialAssignment = useMemo<TaskLabelAssignment | null>(
-    () => (initialLabelIDs === undefined ? null : { taskID, labelIDs: initialLabelIDs }),
-    [initialLabelIDs, taskID],
-  );
   const assignment = useManagedTaskLabelAssignment({
     availableLabelIDs,
     enabled: catalog !== null,

@@ -834,6 +834,9 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 }
 
 func (e *Engine) emitRaw(evt Event) error {
+	if evt.Kind == EventToolCallStarted && e.liveRun != nil {
+		e.liveRun.recordToolStart(evt.StepID)
+	}
 	revision, err := e.TranscriptRevision()
 	if err != nil {
 		return err
@@ -867,6 +870,21 @@ func (e *Engine) emitRaw(evt Event) error {
 		e.cfg.OnEvent(evt)
 	}
 	return nil
+}
+
+func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
+	if result.Status == RunStatusCompleted && result.ResultKind != LiveRunResultAssistantFinalAnswer {
+		return
+	}
+	if result.Status == RunStatusInterrupted || errors.Is(result.Error, context.Canceled) {
+		return
+	}
+	copyResult := result
+	e.emitRaw(Event{
+		Kind:          EventLiveRunFinished,
+		StepID:        result.StepID.String(),
+		LiveRunResult: &copyResult,
+	})
 }
 
 func eventShouldCarryContextUsage(evt Event) bool {

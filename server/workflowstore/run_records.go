@@ -45,6 +45,24 @@ func runRecordFromStartedRecoveryCandidate(row sqlitegen.ListStartedWorkflowRunR
 	}
 }
 
+func runRecordFromUnstartedRecoveryCandidate(row sqlitegen.ListUnstartedWorkflowRunRecoveryCandidatesRow) RunRecord {
+	return RunRecord{
+		ID:                      workflow.RunID(row.ID),
+		TaskID:                  workflow.TaskID(row.TaskID),
+		PlacementID:             workflow.PlacementID(row.PlacementID),
+		NodeID:                  workflow.NodeID(row.NodeID.String),
+		SessionID:               row.SessionID.String,
+		Generation:              row.RunGeneration,
+		StartedAt:               metadata.OptionalInt64(row.StartedAtUnixMs),
+		CompletedAt:             metadata.OptionalInt64(row.CompletedAtUnixMs),
+		InterruptedAt:           metadata.OptionalInt64(row.InterruptedAtUnixMs),
+		InterruptionReason:      metadata.OptionalString(row.InterruptionReason),
+		WaitingAskID:            metadata.OptionalString(row.WaitingAskID),
+		EffectiveCompletionMode: metadata.OptionalString(row.EffectiveCompletionMode),
+		InvalidCompletions:      row.InvalidCompletionCount,
+	}
+}
+
 func runRecordFromClaimedTaskRun(row sqlitegen.ClaimWorkflowRunRow) RunRecord {
 	return RunRecord{
 		ID:                      workflow.RunID(row.ID),

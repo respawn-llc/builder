@@ -164,8 +164,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
 		err = errors.Join(err, wrapped)
 	}
+	var publishLiveRunFinished func()
 	if options.EmitRunState {
-		s.engine.finishLiveRunStep(snapshot, status, err)
+		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
 	if !errors.Is(err, errPendingModelRecoveryClear) {
@@ -175,6 +176,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
 			err = errors.Join(err, startErr)
 		}
+	}
+	if publishLiveRunFinished != nil {
+		publishLiveRunFinished()
 	}
 	return err
 }

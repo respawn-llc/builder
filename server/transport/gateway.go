@@ -152,6 +152,7 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
+	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
@@ -412,6 +413,9 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
+	}
+	if errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		return protocol.ErrCodeWorktreeBlocked, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

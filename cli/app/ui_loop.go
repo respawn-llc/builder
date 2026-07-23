@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ type uiProgramComposition struct {
 }
 
 type uiLoopRequest struct {
+	ctx                          context.Context
 	wiring                       *runtimeWiring
 	active                       config.Settings
 	commandRegistry              *commands.Registry
@@ -31,7 +33,7 @@ type uiLoopRequest struct {
 	initialPromptHistoryRecorded bool
 	initialInput                 string
 	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
-	sessionName                  string
+	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
@@ -92,6 +94,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		rendererOutputGate,
 		terminalOutput,
 	)
+	programContext := request.ctx
+	if programContext == nil {
+		programContext = context.Background()
+	}
+	options = append(options, tea.WithContext(programContext))
 	tuiLogger, _ := newRollingTUILogger(request.statusConfig.PersistenceRoot)
 	uiLogger := newMultiUILogger(tuiLogger)
 	runtimeClient := request.wiring.runtimeClient
@@ -101,7 +108,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("runtime client is required")
 	}
-	if request.wiring.transcriptEvents == nil {
+	if request.wiring.eventDispatcher == nil || request.wiring.eventDispatcher.transcriptEvents == nil {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
@@ -117,8 +124,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		sessionID = runtimeClient.MainView().Session.SessionID
 	}
 
-	rawModel := NewProjectedUIModel(
-		runtimeClient,
+	uiOptions := []UIOption{
 		WithUILogger(uiLogger),
 		WithUIModelName(request.active.Model),
 		WithUIConfiguredModelName(request.configuredModelName),
@@ -136,16 +142,20 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
 		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
-		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
-		WithUIOngoingTranscriptEvents(request.wiring.transcriptEvents),
+		WithUIOngoingTranscriptEvents(request.wiring.eventDispatcher.transcriptEvents),
+		WithUIClientLifecycleIssues(request.wiring.lifecycleHookIssues, request.wiring.lifecycleHookDone),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
-	)
+	}
+	if request.sessionTitle != nil {
+		uiOptions = append(uiOptions, WithUISessionName(*request.sessionTitle))
+	}
+	rawModel := NewProjectedUIModel(runtimeClient, uiOptions...)
 	model, ok := rawModel.(*uiModel)
 	if !ok {
 		if tuiLogger != nil {

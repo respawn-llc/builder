@@ -10,7 +10,11 @@ import (
 	"core/shared/serverapi"
 )
 
-func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Request[SO], deps Dependencies[S, A, SO]) error {
+type failureSource interface {
+	Failures() <-chan error
+}
+
+func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Request[SO], deps Dependencies[S, A, SO]) (runErr error) {
 	if deps.NewAuthInteractor == nil {
 		return errors.New("auth interactor factory is required")
 	}
@@ -25,12 +29,50 @@ func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Req
 	if err != nil {
 		return err
 	}
-	defer func() { _ = server.Close() }()
+	defer func() {
+		closeErr := server.Close()
+		if closeErr == nil {
+			return
+		}
+		if runErr == nil || !errors.Is(closeErr, runErr) {
+			runErr = errors.Join(runErr, closeErr)
+		}
+	}()
 	options, err := SessionLifecycleOptionsFor(req)
 	if err != nil {
 		return err
 	}
-	return deps.RunSessionLifecycle(ctx, server, authInteractor, options)
+	lifecycleCtx, cancelLifecycle := context.WithCancelCause(ctx)
+	defer cancelLifecycle(nil)
+	stopFailureWatch := make(chan struct{})
+	failureWatchDone := make(chan struct{})
+	var failureCh <-chan error
+	if source, ok := any(server).(failureSource); ok {
+		failureCh = source.Failures()
+	}
+	if failureCh != nil {
+		go func() {
+			defer close(failureWatchDone)
+			select {
+			case failure := <-failureCh:
+				cancelLifecycle(failure)
+			case <-stopFailureWatch:
+			}
+		}()
+	} else {
+		close(failureWatchDone)
+	}
+	runErr = deps.RunSessionLifecycle(lifecycleCtx, server, authInteractor, options)
+	close(stopFailureWatch)
+	<-failureWatchDone
+	if cause := context.Cause(lifecycleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+		if runErr == nil || errors.Is(runErr, context.Canceled) {
+			runErr = cause
+		} else if !errors.Is(runErr, cause) {
+			runErr = errors.Join(runErr, cause)
+		}
+	}
+	return runErr
 }
 
 func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOptions, error) {

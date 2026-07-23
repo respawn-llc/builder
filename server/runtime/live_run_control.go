@@ -17,6 +17,7 @@ var ErrLiveRunNoFinalAnswer = errors.New("live run completed without a final ans
 
 type LiveRunResultKind string
 type LiveRunNoFinalAnswerReason string
+type liveStepToolStartCount uint8
 
 const (
 	LiveRunResultAssistantFinalAnswer LiveRunResultKind = "assistant_final_answer"
@@ -29,11 +30,18 @@ const (
 	LiveRunNoFinalAnswerReasonUnknown    LiveRunNoFinalAnswerReason = "unknown"
 )
 
+const (
+	liveStepToolStartsNone liveStepToolStartCount = iota
+	liveStepToolStartsOne
+	liveStepToolStartsMultiple
+)
+
 type LiveRunResult struct {
 	GroupID          runtimeids.LiveRunGroupID
 	RunID            runtimeids.RunID
 	StepID           runtimeids.StepID
 	Status           RunStatus
+	WorkPerformed    bool
 	ResultKind       LiveRunResultKind
 	NoFinalReason    LiveRunNoFinalAnswerReason
 	AssistantMessage llm.Message
@@ -55,12 +63,15 @@ type liveRunCoordinator struct {
 	current                     *liveRunGroup
 	stoppedQueueItems           map[runtimeids.QueueItemID]struct{}
 	stoppedPublishingQueueItems map[runtimeids.QueueItemID]struct{}
+	onCompleted                 func(LiveRunResult)
 }
 
 type liveRunGroup struct {
 	id               runtimeids.LiveRunGroupID
 	runID            runtimeids.RunID
 	stepID           runtimeids.StepID
+	stepToolStarts   liveStepToolStartCount
+	workPerformed    bool
 	goalLoop         bool
 	status           RunStatus
 	resultKind       LiveRunResultKind
@@ -82,8 +93,12 @@ type liveRunAdmission struct {
 	group *liveRunGroup
 }
 
-func newLiveRunCoordinator() *liveRunCoordinator {
-	return &liveRunCoordinator{}
+func newLiveRunCoordinator(onCompleted ...func(LiveRunResult)) *liveRunCoordinator {
+	coordinator := &liveRunCoordinator{}
+	if len(onCompleted) > 0 {
+		coordinator.onCompleted = onCompleted[0]
+	}
+	return coordinator
 }
 
 func (e *Engine) HasActiveLiveRunGroup() bool {
@@ -236,13 +251,19 @@ func (e *Engine) beginLiveRunStep(snapshot *RunSnapshot) {
 	e.liveRun.beginStep(snapshot)
 }
 
-func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err error) {
+func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err error) func() {
 	if e == nil || snapshot == nil {
-		return
+		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	stoppedQueueItems := e.liveRun.finishStep(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
+	stoppedQueueItems, result := e.liveRun.finishStepDeferred(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
 	e.failStoppedLiveRunQueueItems(stoppedQueueItems)
+	if result == nil {
+		return nil
+	}
+	return func() {
+		e.liveRun.publishCompleted(*result)
+	}
 }
 
 func (e *Engine) finishLiveRunGoalLoop() {
@@ -351,6 +372,7 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 	if c.current != nil {
 		c.current.runID = mustRunID(snapshot.RunID)
 		c.current.stepID = mustStepID(snapshot.StepID)
+		c.current.stepToolStarts = liveStepToolStartsNone
 		c.current.goalLoop = snapshot.GoalLoop
 		c.current.status = RunStatusRunning
 		c.current.resultKindSet = false
@@ -373,11 +395,19 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 }
 
 func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) map[runtimeids.QueueItemID]struct{} {
+	stoppedQueueItems, result := c.finishStepDeferred(snapshot, status, err, holdGoalLoop)
+	if result != nil {
+		c.publishCompleted(*result)
+	}
+	return stoppedQueueItems
+}
+
+func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) (map[runtimeids.QueueItemID]struct{}, *LiveRunResult) {
 	c.mu.Lock()
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	group.runID = mustRunID(snapshot.RunID)
 	group.stepID = mustStepID(snapshot.StepID)
@@ -385,6 +415,9 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 	group.status = status
 	group.err = err
 	group.finishedAt = snapshot.FinishedAt
+	if group.stepToolStarts == liveStepToolStartsMultiple {
+		group.workPerformed = true
+	}
 	if !group.resultKindSet {
 		group.resultKind = LiveRunResultNoFinalAnswer
 		group.resultKindSet = true
@@ -407,9 +440,10 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 		group.reservations = 0
 		c.current = nil
 		done = group.done
+		result := liveRunResultForGroup(group)
 		c.mu.Unlock()
 		close(done)
-		return stoppedQueueItems
+		return stoppedQueueItems, &result
 	}
 	group.goalLoopHolding = snapshot.GoalLoop && holdGoalLoop
 	if group.reservations == 0 && len(group.taggedQueueItems) == 0 && !group.goalLoopHolding {
@@ -419,8 +453,10 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 	c.mu.Unlock()
 	if done != nil {
 		close(done)
+		result := liveRunResultForGroup(group)
+		return nil, &result
 	}
-	return nil
+	return nil, nil
 }
 
 func (c *liveRunCoordinator) finishGoalLoop() {
@@ -439,6 +475,18 @@ func (c *liveRunCoordinator) finishGoalLoop() {
 	c.mu.Unlock()
 	if done != nil {
 		close(done)
+		c.publishCompleted(liveRunResultForGroup(group))
+	}
+}
+
+func (c *liveRunCoordinator) recordToolStart(stepID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current == nil || c.current.stepID != mustStepID(stepID) {
+		return
+	}
+	if c.current.stepToolStarts < liveStepToolStartsMultiple {
+		c.current.stepToolStarts++
 	}
 }
 
@@ -547,6 +595,7 @@ func (c *liveRunCoordinator) rollbackAdmission(admission liveRunAdmission) {
 	c.mu.Unlock()
 	if done != nil {
 		close(done)
+		c.publishCompleted(liveRunResultForGroup(group))
 	}
 }
 
@@ -576,6 +625,7 @@ func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]s
 	c.mu.Unlock()
 	if done != nil {
 		close(done)
+		c.publishCompleted(liveRunResultForGroup(group))
 	}
 }
 
@@ -610,6 +660,7 @@ func (c *liveRunCoordinator) interrupt() (bool, map[runtimeids.QueueItemID]struc
 	done := group.done
 	c.mu.Unlock()
 	close(done)
+	c.publishCompleted(liveRunResultForGroup(group))
 	return true, ids, goalLoop
 }
 
@@ -741,6 +792,7 @@ func (h *LiveRunWaitHandle) Wait() (LiveRunResult, error) {
 		RunID:            h.group.runID,
 		StepID:           h.group.stepID,
 		Status:           h.group.status,
+		WorkPerformed:    h.group.workPerformed,
 		ResultKind:       h.group.resultKind,
 		NoFinalReason:    h.group.noFinalReason,
 		AssistantMessage: h.group.assistantMessage,
@@ -748,6 +800,28 @@ func (h *LiveRunWaitHandle) Wait() (LiveRunResult, error) {
 		StartedAt:        h.group.startedAt,
 		FinishedAt:       h.group.finishedAt,
 	}, liveRunResultError(h.group)
+}
+
+func liveRunResultForGroup(group *liveRunGroup) LiveRunResult {
+	return LiveRunResult{
+		GroupID:          group.id,
+		RunID:            group.runID,
+		StepID:           group.stepID,
+		Status:           group.status,
+		WorkPerformed:    group.workPerformed,
+		ResultKind:       group.resultKind,
+		NoFinalReason:    group.noFinalReason,
+		AssistantMessage: group.assistantMessage,
+		Error:            group.err,
+		StartedAt:        group.startedAt,
+		FinishedAt:       group.finishedAt,
+	}
+}
+
+func (c *liveRunCoordinator) publishCompleted(result LiveRunResult) {
+	if c.onCompleted != nil {
+		c.onCompleted(result)
+	}
 }
 
 func liveRunNoFinalAnswerReason(kind ActiveKind) LiveRunNoFinalAnswerReason {

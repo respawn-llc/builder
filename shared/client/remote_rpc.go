@@ -36,6 +36,21 @@ type requestCanceledError struct {
 	message string
 }
 
+type worktreeBlockedError struct {
+	diagnostic *string
+}
+
+func (e worktreeBlockedError) Error() string {
+	if e.diagnostic == nil {
+		return serverapi.ErrWorktreeBlocked.Error()
+	}
+	return *e.diagnostic
+}
+
+func (e worktreeBlockedError) Unwrap() error {
+	return serverapi.ErrWorktreeBlocked
+}
+
 func (e requestCanceledError) normalized() bool {
 	message := strings.TrimSpace(e.message)
 	return message == "" || message == context.Canceled.Error()
@@ -386,7 +401,12 @@ func validateIdentityRoot(expectedRootID string, identity protocol.ServerIdentit
 
 func handshakeRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdentity, error) {
 	var resp protocol.HandshakeResponse
-	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &resp); err != nil {
+	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{
+		ProtocolVersion: protocol.Version,
+		ClientCapabilities: &protocol.ClientCapabilities{
+			TranscriptLiveRunFinished: true,
+		},
+	}, &resp); err != nil {
 		return protocol.ServerIdentity{}, err
 	}
 	return resp.Identity, nil
@@ -524,6 +544,10 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	if resp.Code == protocol.ErrCodeSubagentLaunchPolicy {
 		return protocol.DecodeSubagentLaunchPolicyError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorktreeBlocked {
+		diagnostic := resp.Message
+		return worktreeBlockedError{diagnostic: &diagnostic}
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,

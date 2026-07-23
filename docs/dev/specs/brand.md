@@ -1,23 +1,22 @@
-Authoritative branding guidelines.
+# Brand
 
-- The ASCII art of the banner is using the "Big money NW" font, diagonal gradient using primary and secondary colors.
-- UI direction is clean, elegant, effective, island-based, and productivity-focused.
-- Island-style rounded surfaces render over glass material with readable contrast in light/dark themes.
-- Theme supports dark, light, and config override; system/auto otherwise.
+- The ASCII banner uses the `Big Money NW` font and a diagonal gradient from Primary to Secondary.
+- The interface is clean, elegant, compact, and focused on productive work.
+- Rounded island surfaces use a glass material with readable contrast in light and dark themes.
+- Kent supports light, dark, and automatic themes. An explicit configuration overrides automatic system detection.
 
-Official color palette of the app: 
+## Color Palette
 
-- Primary: #3185fc;
-- Secondary: #f96824; On secondary: #12100e;
-- Warning: #ffe74c; On warning: #12100e;
-- Success: #12ba85; On success is on background;
-- Error: #dc2e3c; On error is on background;
-- Background: light mode #ffffff, dark mode #12100e;
-- On background light mode: #12100e, dark mode: #ffffff;
+- Primary: `#3185fc`
+- Secondary: `#f96824`; text on Secondary: `#12100e`
+- Warning: `#ffe74c`; text on Warning: `#12100e`
+- Success: `#12ba85`; text uses the active background contrast color
+- Error: `#dc2e3c`; text uses the active background contrast color
+- Background: light `#ffffff`; dark `#12100e`
+- Foreground: light `#12100e`; dark `#ffffff`
 
-Fonts:
+## Fonts
 
 - Main: Montserrat
 - Monospace: Monaspace Neon
-- Heading: Montserrat alternates.
-
+- Heading: Montserrat Alternates

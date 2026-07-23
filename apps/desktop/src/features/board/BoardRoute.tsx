@@ -392,11 +392,11 @@ function BoardContent({
   }
 
   function interruptTask(taskID: string): void {
-    void actions.interrupt.mutateAsync(taskID).catch(reportInterruptError);
+    void actions.interrupt.execute(taskID).catch(reportInterruptError);
   }
 
   function resumeTask(taskID: string): void {
-    void actions.resume.mutateAsync(taskID).catch(reportResumeError);
+    void actions.resume.execute(taskID).catch(reportResumeError);
   }
 
   function deleteTask(taskID: string): void {
@@ -598,6 +598,8 @@ function BoardContent({
             onRegisterColumnScrollport={dragAutoScroll.registerColumnScrollport}
             pendingCardMove={pendingCardMove}
             onResumeTask={resumeTask}
+            pendingInterruptTaskIDs={actions.interrupt.pendingTaskIDs}
+            pendingResumeTaskIDs={actions.resume.pendingTaskIDs}
             scrollportRef={scrollportRef}
           />
         </div>

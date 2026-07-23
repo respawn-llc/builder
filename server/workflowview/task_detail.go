@@ -167,7 +167,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		CurrentSessionIDs: make([]string, 0, len(currentExecutions)),
 		CurrentScripts:    make([]serverapi.WorkflowTaskCurrentScript, 0, len(currentExecutions)),
 		Status:            statusFact.Status,
-		Actions:           taskDetailActions(task, statusFact, len(currentExecutions) != 0),
+		Actions:           taskDetailActions(task, statusFact, currentExecutions),
 		LabelIDs:          labelIDsByTask[task.ID],
 		AttentionCount:    int(attentionCount),
 	}
@@ -369,11 +369,16 @@ func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.
 	return target, &path, nil
 }
 
-func taskDetailActions(task sqlitegen.TaskRecord, status workflowTaskStatusFact, hasLiveExecutions bool) serverapi.WorkflowTaskActions {
+func taskDetailActions(task sqlitegen.TaskRecord, status workflowTaskStatusFact, current []sessionruntime.TaskExecution) serverapi.WorkflowTaskActions {
 	active := !task.CanceledAtUnixMs.Valid && !status.Done
+	hasLiveExecutions := len(current) != 0
+	hasInterruptibleExecution := false
+	for _, execution := range current {
+		hasInterruptibleExecution = hasInterruptibleExecution || !execution.WaitingQuestion
+	}
 	return serverapi.WorkflowTaskActions{
 		CanStart:     active && !hasLiveExecutions && status.Status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
-		CanInterrupt: hasLiveExecutions,
+		CanInterrupt: active && hasInterruptibleExecution,
 		CanResume:    active && !hasLiveExecutions && status.Status.Kind == serverapi.WorkflowTaskStatusKindInterrupted,
 		CanCancel:    active,
 	}

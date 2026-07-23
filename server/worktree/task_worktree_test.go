@@ -917,25 +917,45 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 	}
 }
 
-func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
+func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testing.T) {
 	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
-	})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
-	}
+	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
-	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
 		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if _, err := os.Stat(taskWorktreeRoot(created.Worktree)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted task worktree root stat error = %v, want not exist", err)
+	}
+	taskAfterDelete, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after deletion: %v", err)
+	}
+	if !taskAfterDelete.ManagedWorktreeID.Valid || taskAfterDelete.ManagedWorktreeID.String != taskWorktreeID(created.Worktree) {
+		t.Fatalf("managed worktree id after deletion = %+v, want retained %q", taskAfterDelete.ManagedWorktreeID, taskWorktreeID(created.Worktree))
+	}
+
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID: task.ID,
+	})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if !restored.Created || taskWorktreeRoot(restored.Worktree) != taskWorktreeRoot(created.Worktree) {
+		t.Fatalf("restored worktree = %+v, want recreated worktree at %q", restored, taskWorktreeRoot(created.Worktree))
+	}
+	taskAfterRestore, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after restore: %v", err)
+	}
+	if !taskAfterRestore.ManagedWorktreeID.Valid || taskAfterRestore.ManagedWorktreeID.String != taskWorktreeID(created.Worktree) {
+		t.Fatalf("managed worktree id after restore = %+v, want retained %q", taskAfterRestore.ManagedWorktreeID, taskWorktreeID(created.Worktree))
 	}
 }
 

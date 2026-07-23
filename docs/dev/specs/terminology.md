@@ -1,6 +1,6 @@
 # Terminology
 
-Use these terms consistently in specs, code names, CLI/API contracts, and implementation work.
+Use these terms consistently in specs and product surfaces. These terms extend common English for Kent's domain.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ A short, human-facing, uppercase project prefix applied to new task short IDs. U
 
 ### Workflow Version
 
-A monotonic workflow definition counter incremented by persisted definition edits. Metadata-only changes and graph changes each increment it once, combined metadata+graph saves increment it once, and no-op saves do not increment it. It provides current-definition and pending-approval stale-warning data without immutable graph versioning.
+A monotonic counter for changes to a Workflow definition. A save that changes metadata, the graph, or both increments the counter once. A save that changes nothing does not increment it. Kent uses the value to identify the current definition and warn when a pending Approval refers to an older definition.
 
 ### Workflow
 
@@ -34,19 +34,19 @@ The target-selection provenance locked to a task when its first executable actio
 
 ### Execution Root
 
-The currently derived directory used as the working directory and relative-path base for a task's executable nodes. It is the task's current source workspace when the task uses no managed worktree and the current managed worktree root otherwise.
+The directory Kent uses as the working directory and relative-path base for a Task's executable Nodes. It is the Task's source workspace when the Task uses no managed worktree and the managed worktree root otherwise.
 
 ### Workflow Draft
 
-A workflow definition that can be saved while semantic validation reports graph or project-context errors. Drafts still satisfy hard storage invariants such as valid identifiers, references, enums, unique keys, and exactly one start node.
+A Workflow definition that users can save while validation reports graph or Project errors. A Workflow Draft must have valid identifiers, valid references, unique keys, supported values, and exactly one Start Node.
 
 ### Validation Context
 
-The purpose for validating a workflow graph, such as draft editing, task creation, or execution scheduling. Contexts can report the same errors while choosing different blocking behavior.
+The operation for which Kent validates a Workflow, such as editing a draft, creating a Task, or starting work. The same validation issue can be informative for one operation and blocking for another.
 
 ### Project Workflow Link
 
-An active project association with a reusable workflow definition. The link lets a project use a workflow without copying the workflow graph and is the task's project/workflow pairing source of truth.
+An active association that lets a Project use a reusable Workflow without copying it. Each Task belongs to one Project Workflow Link.
 
 ### Label
 
@@ -58,11 +58,11 @@ The subagent role associated with an executable node. UI surfaces may present th
 
 ### Node
 
-A workflow graph state. Agent, start, and terminal nodes can map to user-visible workflow states or Kanban columns/statuses. Join nodes are internal merge plumbing omitted from board columns and shown in workflow editor visuals as inspectable merge nodes.
+A state in a Workflow. Start, Agent, Script, and Terminal Nodes can appear as workflow states or board columns. A Join combines parallel branches and does not appear as a board column.
 
 ### Current Nodes
 
-The Node or Nodes a Task is in at this moment. A Task usually has one current Node and may have several only while parallel branches are active. Current Nodes are task-owned state with no independent entity IDs. An executable current Node stores only the state needed to execute or resume that work, including its optional Session binding; leaving the Node removes that current state.
+The Node or Nodes that contain a Task at this moment. A Task usually has one Current Node. It can have several Current Nodes only while parallel branches are active. Current Nodes belong to the Task and have no independent identity. Leaving a Node removes its current execution state.
 
 ### Node Group
 
@@ -82,7 +82,7 @@ A sink node where workflow automation stops.
 
 ### Edge
 
-A directed graph primitive from a source node to a target node. Kent UI surfaces call user-facing edges transition branches; graph libraries and persistence may use edge terminology at adapter and storage boundaries.
+A directed connection from one Node to another. In product surfaces, an Edge is presented as a Transition Branch.
 
 ### Transition
 
@@ -114,7 +114,7 @@ Requirements for Transition Parameters that must be present before a current Nod
 
 ### Parameter Binding
 
-A runtime mapping from a transition parameter key to the value made available to a target prompt or join aggregate.
+The association that makes a Transition Parameter available to a target prompt or Join.
 
 ### Transition Key
 
@@ -142,11 +142,11 @@ Per-Transition-Branch policy deciding which retained Session supplies context fo
 
 ### Exact Execution Scope
 
-The opaque immutable identity of one live agent or script execution for a Task's current Node and parallel branch when applicable. Resume creates a new scope after the previous scope has fully stopped. An Exact Execution Scope is the only execution-liveness authority; durable state, transcript events, timestamps, goals, and client state cannot prove that execution is live.
+The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
 
 ### Resource Generation
 
-The immutable generation of the live runtime resources used by an exact execution scope. Replacing or recreating those resources advances the resource generation so stale handles cannot operate on the replacement.
+The version of the live Session resources used by an Exact Execution Scope. Replacing those resources advances the Resource Generation. No stale handle can act on the replacement.
 
 ### Script Node
 
@@ -154,15 +154,15 @@ A workflow executable node that runs a local executable on the Kent server inste
 
 ### Session Contract
 
-The execution setup captured by a Kent session for one contract generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked within that generation. `compact_and_continue_session` starts a fresh target-node contract generation; ordinary compaction can lazily refresh system and reviewer prompt snapshots from current config/source truth within its generation. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
+The model, provider, generation settings, enabled tools, and native web-search mode that a Session uses for one contract generation. These values stay fixed until a product operation creates a new contract generation. `compact_and_continue_session` creates a fresh target-node generation. Ordinary compaction can refresh system and reviewer instructions within the existing contract generation. Developer context remains part of the transcript.
 
 ### Runtime Parameter Contract
 
-The current possible and required Transition Parameters for an executable current Node. It is derived from the latest Workflow definition when execution starts or resumes rather than retained as historical execution state.
+The possible and required Transition Parameters for an executable Current Node. Kent derives this contract from the latest Workflow definition when work starts or resumes. Kent does not retain an obsolete contract as execution history.
 
 ### Session
 
-Kent transcript/runtime artifact associated with an agent Node on a Task and, while parallel work is active, its Transition Branch Key. A Task may retain many Sessions because of loops, parallel branches, retries, or context-preservation choices. Script Nodes have no Session.
+A durable Kent conversation associated with an Agent Node on a Task and, during parallel work, its Transition Branch Key. A Task can retain many Sessions because of loops, parallel branches, retries, or Context-Preservation choices. Script Nodes have no Session.
 
 ### Node Transition
 
@@ -174,19 +174,19 @@ A non-agent fan-in Node that waits for the required current parallel branches be
 
 ### Task Interrupt
 
-A resumable stop operation for one Session or every Exact Execution Scope on a Task. It joins scope finalization and records interruption state on the affected current Nodes without deleting the Task, Session, or worktree.
+A resumable stop operation for one Session or every Exact Execution Scope on a Task. It waits for affected execution to stop and records the affected Current Nodes as interrupted. It does not delete the Task, Session, or worktree.
 
 ### Task Delete
 
-A server-authoritative operation exposed through a `can_delete` read-model fact. It revalidates task quiescence, removes reconstructible managed artifacts idempotently, preserves session artifacts, and deletes the durable task row last. Task Delete has no journal and does not substitute for whole-workflow deletion.
+An operation that removes a Task. Kent offers deletion only when the Task appears quiescent and checks that condition again before making changes. Deletion safely removes reconstructible managed artifacts, preserves Session artifacts, and removes the Task only after cleanup succeeds. Repeating cleanup for an already-absent managed artifact succeeds. Task Delete is separate from deleting a whole Workflow.
 
 ### Quiescence
 
-The task lifecycle condition in which no exact live execution, automatic intent, or runtime gate exists. Task Delete and whole-workflow deletion revalidate quiescence before mutation.
+The Task condition in which no work is executing, no automatic start is pending, and no conflicting lifecycle operation is in progress. Task Delete and whole-Workflow deletion require this condition.
 
 ### Question
 
-A user-blocking ask emitted by a Session through `ask_question`. Questions carry prompt text, optional suggestions/options, optional recommended option index, and schema-backed answer expectations.
+A user-blocking ask emitted by a Session through `ask_question`. Questions carry prompt text, optional suggestions or options, an optional recommended-option index, and structured answer requirements.
 
 ### Orchestrator
 
@@ -198,23 +198,19 @@ A workflow/task state where auto-execution stops because the task is done, inter
 
 ### Workflow Execution
 
-The server control plane that owns workflow lifecycle mutations, the context-aware global mutation permit, volatile automatic intent, admission, configured automatic capacity, task affinity, and immutable live snapshots. It is the only workflow lifecycle orchestration authority.
+The product authority that sequences Workflow lifecycle changes, starts eligible work within the configured capacity, prevents conflicting changes, keeps related work together when possible, and reports live state.
 
 ### Automatic Intent
 
-A typed in-memory request for Workflow Execution to start eligible workflow work automatically. Its membership and ordering are volatile and intentionally lost on restart; it is never reconstructed from durable state.
+A temporary request for Workflow Execution to start eligible work automatically. Automatic Intents are lost on restart and are not reconstructed from saved Task state.
 
 ### Immutable Live Snapshot
 
-One read-only, point-in-time projection of Exact Execution Scopes, Automatic Intents, and runtime gates. Workflow reads may combine it with durable facts and may become stale; mutations revalidate authoritative state before commit.
-
-### Scheduler
-
-An informal label for the automatic-admission responsibility inside Workflow Execution. Scheduler is not a separate lifecycle authority, durable queue, reconstruction worker, or owner of live execution.
+A read-only view of live Workflow activity at one point in time. The view can become stale. Each operation checks the authoritative live state again before it changes a Task.
 
 ### Task Comment
 
-A durable task-local note. Task comments are hard-deleted notes, not source-run artifacts, tombstones, or opaque metadata containers.
+A durable note on a Task. Deleting a Task Comment removes it completely.
 
 ## GUI
 
@@ -226,15 +222,15 @@ A transient or persistent global notification surfaced by the desktop app. Toast
 
 ### Streaming Message
 
-The in-progress assistant turn while the model is generating, modeled server-side as a single provisional message (`chatStore.streaming`) that grows as deltas arrive. It is held outside provider history and is never persisted; it is exposed to clients as a sibling of the committed transcript (the trailing message), not as a committed entry. Each completed model response resolves its active streaming message exactly once. An authoritative committed assistant-text row finalizes the streaming message and receives its stream UUID. A completed response without such a row discards an active streaming message with the typed `superseded` reason before the next model generation or before the response exits; this includes accepted tool-call-only ask, local-tool, and hosted-tool continuations, plus responses omitted from persistence by workflow preflight, external durable workflow completion, reasoning or no-op retry disposition, or final-answer-with-tools terminalization before final-text persistence. Established response side effects may precede supersession, but a subsequent assistant delta may not. A completed response with no active streaming message emits no stream terminal. Interrupts and abnormal execution termination also discard an active streaming message. "Ongoing"/"detail" are TUI render postures only and must never appear in server/shared domain naming; the server has no knowledge of how clients render the streaming message.
+The temporary assistant message shown while a response is arriving. A Streaming Message is not committed transcript history. Committed assistant text replaces and finalizes it exactly once. If a completed response has no committed assistant text, Kent removes the Streaming Message with the typed `superseded` reason before the next model generation or before the response exits. This includes Question-only and tool-only continuation, Workflow preflight, external Workflow completion, reasoning-only or no-op retry, and final-answer-with-tools termination before final text is committed. A completed response with no active Streaming Message emits no stream-terminal event. Kent also removes the Streaming Message after interruption or abnormal termination. No assistant text can arrive after Kent finalizes or removes the Streaming Message.
 
 ### Ongoing Mode
 
-Primary long-running TUI mode backed by normal-buffer terminal scrollback. Ongoing mode appends committed transcript history and live overlays without owning a scrollable viewport or rewriting emitted lines. This is a client-only render posture; the server is unaware of it.
+The primary long-running TUI transcript mode. Ongoing Mode writes committed history to terminal Scrollback and shows live content below it. It does not own a separate scrollable viewport. It never rewrites lines that it has emitted.
 
 ### Detail Mode
 
-Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling over stale bounded cursor pages. Server-backed page membership changes through initial mode-entry hydration, session-target replacement, and user-triggered adjacent-page loads. Runtime events never append to or reconcile the current detail page membership while it is open.
+The TUI mode for inspecting a bounded transcript page with selection, expansion, and line scrolling. The page changes when Detail Mode opens, when the selected Session changes, or when the user loads an adjacent page. Live events do not change the open page.
 
 ### Transcript Mode
 
@@ -246,7 +242,7 @@ Terminal buffer separate from normal scrollback. Kent avoids alternate screen fo
 
 ### Alternate Scroll
 
-Terminal mode `?1007`, which converts wheel input into cursor-key style events in alternate-screen contexts. Every alternate-screen surface enables alternate scroll while active and disables it on exit, so wheel input scrolls the surface through its cursor-key handlers. The only exceptions are ongoing mode, which never enables it, and the rollback/edit picker, which renders inside alt-screen but ignores mouse and keeps alternate scroll off.
+A terminal mode that converts wheel input into navigation events on Alternate Screen surfaces. Kent enables it only while a surface that supports wheel navigation is open. Ongoing Mode never enables it. The rollback editor ignores mouse input and also keeps it disabled.
 
 ### Mouse Capture
 
@@ -260,51 +256,79 @@ Terminal buffer with native scrollback. Ongoing mode renders committed history h
 
 Terminal-owned history of normal-buffer output. Kent does not replay, clear, or restyle committed ongoing scrollback after startup.
 
+### Immutable Area
+
+The Ongoing Mode content already emitted into Scrollback. Kent can append below it but cannot change, inspect, or compare it to decide later output.
+
+### Mutable Band
+
+The bottom part of Ongoing Mode that Kent can repaint. It contains unstable assistant output, live tool activity, prompts, pending messages, the composer, and the status line.
+
+### Logical Line
+
+One authored or rendered line that contains no line break created only by terminal width. The terminal can soft-wrap one Logical Line across several visible rows.
+
+### Promotion
+
+The act of appending stable Streaming Message lines from the Mutable Band into the Immutable Area.
+
+### Re-emission
+
+Appending content to the Immutable Area when equivalent content was already emitted there.
+
+### Reconciliation
+
+Comparing retained or received transcript data to emitted terminal content to decide what to render, suppress, reorder, or replace.
+
+### Scratch Rehydration
+
+Recovery that erases the Mutable Band, reopens the Session, and appends the active transcript segment below existing Scrollback. It does not inspect or change the Immutable Area.
+
 ## Runtime Steering And Goals
 
 ### Active Session Runtime
 
-The single shared runtime resource a Session registers while available. Every interactive client and any headless or workflow-controlled execution resolves the same resource as an equal control surface. Live execution exists only while the exact execution authority exposes a matching scope; a registered idle runtime is not a live execution.
+The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution.
 
 ### RuntimeActivity
 
-The server-owned live read model derived from the exact execution authority for whether a Session runtime is unavailable, establishing, registered idle, running, awaiting a live prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, workflow-controlled execution, compaction, shell, or background step. Running and waiting require matching Exact Execution Scope evidence. Clients project `RuntimeActivity`; durable state and client-local fallback booleans are not liveness sources.
+The authoritative live status of a Session. It reports whether the Session is unavailable, starting, idle, running, awaiting a live Question or Approval, finishing, or closing. It also identifies exclusive work such as a user turn, Goal continuation, Workflow execution, compaction, shell command, or background step. Running and waiting require a matching Exact Execution Scope. Saved state and client-local assumptions cannot make a Session appear active.
 
 ### Runtime Command
 
-The sole typed ordering authority for model-visible human input, agent-originated workflow completion intent, goals, and technical input within one exact agent execution scope. It owns ordering, acceptance, supersession, persistence effects, and retryable restoration. Prompt answers resolve their exact live waiter directly.
+The ordered operation through which model-visible human input, Workflow completion, Goals, and technical input enter an Exact Execution Scope. Runtime Commands determine acceptance, ordering, replacement by newer input, and whether rejected input returns to the user's draft. Answers to a live Question resolve that Question directly.
 
 ### Completion Fence
 
-The Workflow Execution boundary after which an actor-neutral completion intent may commit for an Exact Execution Scope or one unambiguous current idle executable Node on a Task. For an agent scope, accepted human steering before the fence supersedes completion and continues the same live execution; input arriving after the fence is rejected with a typed retryable result so the client restores its draft.
+The point at which Workflow completion can become final for an Exact Execution Scope or one unambiguous idle executable Current Node. Human input accepted before the Completion Fence replaces pending completion and continues the same execution. Input that arrives after the fence is rejected, and the client restores its draft.
 
 ### Runtime Gate
 
-A volatile exact-scope guard held while Workflow Execution performs an execution-affecting lifecycle transition. It blocks conflicting mutation, is included in immutable live snapshots, and is never persisted or reconstructed after restart.
+A temporary guard that blocks conflicting changes while Workflow Execution changes live execution state. A Runtime Gate is lost on restart.
 
 ### Append Certainty
 
-The Session Store result `{committed, error}` for a mutation. `committed=false` leaves retry ownership with the caller and applies no projection; `committed=true` consumes retry ownership and applies state exactly once even when a post-commit observer error is returned.
+The result that tells Kent whether a Session change became durable. If a change did not commit, Kent can retry it and must not show it as applied. If a change committed, Kent applies it exactly once and must not retry it, even when later notification fails.
 
 ### ReadModelVersion
 
-The single per-session epoch/generation/sequence for server-produced runtime UI facts. Runtime activity, main-view snapshots, interrupt responses, versioned runtime activity events carried on `SessionActivity`, and migrated prompt read-model stream events all use this version so clients can ignore stale payloads with one ordering rule. It is not the raw `SessionActivity` replay cursor, and response-only versions are ordering points rather than replayable session-stream positions.
+The increasing Session value that orders live status, prompts, main-view updates, and interruption results. Clients ignore updates older than the newest value they have accepted. A Read Model Version orders facts; it is not a transcript position.
 
 ### PendingModelRecovery
 
-A non-liveness session recovery marker used to repair model context after an interrupted or crashed provider-visible step. It may describe the step and outstanding tool-call IDs needed for reopen recovery, but it never marks the runtime active, blocks release, or drives UI busy state.
+Saved recovery information for a model-visible step that was interrupted or crashed. Pending Model Recovery can identify unfinished tool calls for later repair. It never proves that execution is live or makes a client show the Session as busy.
 
 ### DraftRecoveryBuffer
 
-An ordered persisted collection of inert local input entries recoverable after an early TUI exit. Each entry carries only its recovery category and original text; the collection carries no delivery state. Opening a session restores eligible entry text to the editable composer and never resumes or automatically replays prior work.
+An ordered collection of local input that the TUI preserves after an early exit. Opening the Session restores eligible text to the composer. It never sends or resumes that work automatically.
 
 ### DraftInputBuffer
 
-A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. Its category explains why the text was retained but carries no delivery state. The visible prompt text remains separate from these entries.
+One preserved text entry and its recovery category. Categories distinguish submitted text, queued text, pending or locked injected input, and reviewer input. A Draft Input has no delivery state and remains separate from the visible composer text.
 
 ### Forced Local Detach
 
-The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its client attachment without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up its attachment before shutdown.
+The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and detaches without force-closing the shared Active Session Runtime.
 
 ### Agent Step
 
@@ -328,11 +352,13 @@ The user-facing TUI action that injects a message to take effect after the curre
 
 ### Steer Queue
 
-The internal queue that holds step-end-drained submissions until the current step completes. It is the single submission path for (almost) every message that lands in the transcript — user steering, queued-message flushes, worktree reminders, workflow-step output, mode-change notices, and error messages — built from typed steering intents rather than ad-hoc appenders or direct transcript writes.
+The ordered set of Steer operations that wait for the current Agent Step to finish. User steering, drained Queue messages, worktree changes, Workflow output, mode changes, and errors use the same ordering behavior.
 
 ### Equal Full-Control Attach
 
-Every client attached to a session is an equal, full-control surface over the shared runtime: there is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization.
+Every client attached to a Session has the same control capabilities over the shared Active Session Runtime. Kent has no controller client, limited-control client, read-only attachment, or client lease.
+
+Client connection state is not Session state. A client connection or disconnection for any reason never starts, stops, pauses, cancels, closes, replays, restores, or otherwise changes a Session, Agent Turn, Goal, Queue, Steer, worktree operation, or accepted command. Only an accepted command changes server state. The server publishes every event without using subscriber count as a condition: zero connected clients do not suppress publication, and every connected client receives each applicable broadcast.
 
 ### Goal
 

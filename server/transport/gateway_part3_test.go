@@ -153,7 +153,17 @@ func dialGateway(t *testing.T, server *httptest.Server) *websocket.Conn {
 
 func handshakeGateway(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
-	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, nil)
+	handshakeGatewayWithCapabilities(t, conn, &protocol.ClientCapabilities{
+		TranscriptLiveRunFinished: true,
+	})
+}
+
+func handshakeGatewayWithCapabilities(t *testing.T, conn *websocket.Conn, capabilities *protocol.ClientCapabilities) {
+	t.Helper()
+	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{
+		ProtocolVersion:    protocol.Version,
+		ClientCapabilities: capabilities,
+	}, nil)
 }
 
 func callGateway(t *testing.T, conn *websocket.Conn, id string, method string, params any, out any) {

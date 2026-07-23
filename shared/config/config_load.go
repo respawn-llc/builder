@@ -20,6 +20,23 @@ func LoadGlobal(opts LoadOptions) (App, error) {
 	return load("", false, opts)
 }
 
+func LoadInteractive(workspaceRoot string, opts LoadOptions) (App, ClientSettings, error) {
+	trimmed := strings.TrimSpace(workspaceRoot)
+	if trimmed == "" {
+		return App{}, ClientSettings{}, errors.New("workspace root is required")
+	}
+	loaded, err := loadAll(trimmed, true, opts)
+	if err != nil {
+		return App{}, ClientSettings{}, err
+	}
+	return loaded.App, loaded.Client, nil
+}
+
+type loadedConfig struct {
+	App    App
+	Client ClientSettings
+}
+
 // ResolvePersistenceRoot resolves the config+data root using the production
 // precedence: an explicit flag, KENT_PERSISTENCE_ROOT, then ~/.kent.
 func ResolvePersistenceRoot(explicitRoot string) (string, error) {
@@ -31,16 +48,24 @@ func ResolvePersistenceRoot(explicitRoot string) (string, error) {
 }
 
 func load(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions) (App, error) {
+	loaded, err := loadAll(workspaceRoot, includeWorkspaceLayer, opts)
+	if err != nil {
+		return App{}, err
+	}
+	return loaded.App, nil
+}
+
+func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions) (loadedConfig, error) {
 	absWorkspace := ""
 	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
 	if trimmedWorkspaceRoot != "" {
 		resolved, err := filepath.Abs(trimmedWorkspaceRoot)
 		if err != nil {
-			return App{}, fmt.Errorf("resolve workspace root: %w", err)
+			return loadedConfig{}, fmt.Errorf("resolve workspace root: %w", err)
 		}
 		absWorkspace = resolved
 	} else if includeWorkspaceLayer {
-		return App{}, errors.New("workspace root is required")
+		return loadedConfig{}, errors.New("workspace root is required")
 	}
 
 	// The config+data root is controlled by the --persistence-root flag
@@ -51,49 +76,61 @@ func load(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions) (A
 	if configRoot != "" {
 		expanded, expandErr := expandTildePath(configRoot)
 		if expandErr != nil {
-			return App{}, fmt.Errorf("resolve persistence root: %w", expandErr)
+			return loadedConfig{}, fmt.Errorf("resolve persistence root: %w", expandErr)
 		}
 		configRoot = expanded
 	}
 
 	homeSettingsPath, err := resolveSettingsFilePathInRoot(configRoot)
 	if err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 	homeSettingsExists, err := settingsFileExists(homeSettingsPath)
 	if err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 
 	homeFileConfig := settingsFile{}
 	if homeSettingsExists {
 		homeFileConfig, err = readSettingsFile(homeSettingsPath)
 		if err != nil {
-			return App{}, err
+			return loadedConfig{}, err
 		}
 		if err := rejectRemovedPersistenceRootKey(homeFileConfig, homeSettingsPath); err != nil {
-			return App{}, err
+			return loadedConfig{}, err
 		}
 	}
 	workspaceSettingsPath := ""
 	workspaceSettingsExists := false
+	workspaceSettingsLayerEnabled := includeWorkspaceLayer
 	workspaceFileConfig := settingsFile{}
 	if includeWorkspaceLayer {
 		workspaceSettingsPath, err = resolveWorkspaceSettingsFilePath(absWorkspace)
 		if err != nil {
-			return App{}, err
+			return loadedConfig{}, err
 		}
 		workspaceSettingsExists, err = settingsFileExists(workspaceSettingsPath)
 		if err != nil {
-			return App{}, err
+			return loadedConfig{}, err
 		}
-		if workspaceSettingsExists {
+		if homeSettingsExists && workspaceSettingsExists {
+			homeInfo, err := os.Stat(homeSettingsPath)
+			if err != nil {
+				return loadedConfig{}, err
+			}
+			workspaceInfo, err := os.Stat(workspaceSettingsPath)
+			if err != nil {
+				return loadedConfig{}, err
+			}
+			workspaceSettingsLayerEnabled = !os.SameFile(homeInfo, workspaceInfo)
+		}
+		if workspaceSettingsLayerEnabled && workspaceSettingsExists {
 			workspaceFileConfig, err = readSettingsFile(workspaceSettingsPath)
 			if err != nil {
-				return App{}, err
+				return loadedConfig{}, err
 			}
 			if err := rejectRemovedPersistenceRootKey(workspaceFileConfig, workspaceSettingsPath); err != nil {
-				return App{}, err
+				return loadedConfig{}, err
 			}
 		}
 	}
@@ -103,67 +140,70 @@ func load(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions) (A
 	sources := configRegistry.defaultSourceMap()
 	sources["persistence_root"] = "default"
 
-	if err := configRegistry.applyFile(homeFileConfig, homeSettingsPath, &state, sources); err != nil {
-		return App{}, err
+	if err := configRegistry.applyFile(homeFileConfig, homeSettingsPath, settingsFileLayerGlobal, &state, sources); err != nil {
+		return loadedConfig{}, err
 	}
 	if err := appendSystemPromptFileFromConfig(homeFileConfig, homeSettingsPath, SystemPromptFileScopeHomeConfig, &state); err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
-	if includeWorkspaceLayer {
-		if err := configRegistry.applyFile(workspaceFileConfig, workspaceSettingsPath, &state, sources); err != nil {
-			return App{}, err
+	if workspaceSettingsLayerEnabled {
+		if err := configRegistry.applyFile(workspaceFileConfig, workspaceSettingsPath, settingsFileLayerWorkspace, &state, sources); err != nil {
+			return loadedConfig{}, err
 		}
 		if err := appendSystemPromptFileFromConfig(workspaceFileConfig, workspaceSettingsPath, SystemPromptFileScopeWorkspaceConfig, &state); err != nil {
-			return App{}, err
+			return loadedConfig{}, err
 		}
 	}
 	if err := configRegistry.applyEnv(os.LookupEnv, &state, sources); err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 	if err := configRegistry.applyCLI(opts, &state, sources); err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 	applyConfigRootPersistence(configRoot, configRootSource, &state, sources)
 	inheritReviewerDefaultsWithSources(&state.Settings, sources)
 
 	if err := configRegistry.validate(settingsState{Settings: state.Settings}, sources); err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 
 	absPersistenceRoot, err := preparePersistenceRoot(state.PersistenceRoot)
 	if err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 	if _, err := writeManagedRGConfigFileForSettingsPath(homeSettingsPath); err != nil {
-		return App{}, fmt.Errorf("write managed rg config: %w", err)
+		return loadedConfig{}, fmt.Errorf("write managed rg config: %w", err)
 	}
 	absWorktreeBaseDir, err := prepareWorktreeBaseDir(absPersistenceRoot, state.Settings.Worktrees.BaseDir)
 	if err != nil {
-		return App{}, err
+		return loadedConfig{}, err
 	}
 	state.Settings.Worktrees.BaseDir = absWorktreeBaseDir
 
 	settingsPath := homeSettingsPath
-	if workspaceSettingsExists {
+	if workspaceSettingsLayerEnabled && workspaceSettingsExists {
 		settingsPath = workspaceSettingsPath
 	}
 	settingsExists := homeSettingsExists || workspaceSettingsExists
-	return App{
-		AppName:         DefaultAppName,
-		WorkspaceRoot:   absWorkspace,
-		PersistenceRoot: absPersistenceRoot,
-		Settings:        state.Settings,
-		Source: SourceReport{
-			SettingsPath:                  settingsPath,
-			SettingsFileExists:            settingsExists,
-			CreatedDefaultConfig:          false,
-			HomeSettingsPath:              homeSettingsPath,
-			HomeSettingsFileExists:        homeSettingsExists,
-			WorkspaceSettingsPath:         workspaceSettingsPath,
-			WorkspaceSettingsFileExists:   workspaceSettingsExists,
-			WorkspaceSettingsLayerEnabled: includeWorkspaceLayer,
-			Sources:                       sources,
+	return loadedConfig{
+		App: App{
+			AppName:         DefaultAppName,
+			WorkspaceRoot:   absWorkspace,
+			PersistenceRoot: absPersistenceRoot,
+			Settings:        state.Settings,
+			Source: SourceReport{
+				SettingsPath:                  settingsPath,
+				SettingsFileExists:            settingsExists,
+				CreatedDefaultConfig:          false,
+				HomeSettingsPath:              homeSettingsPath,
+				HomeSettingsFileExists:        homeSettingsExists,
+				WorkspaceSettingsPath:         workspaceSettingsPath,
+				WorkspaceSettingsFileExists:   workspaceSettingsExists,
+				WorkspaceSettingsLayerEnabled: workspaceSettingsLayerEnabled,
+				Sources:                       sources,
+			},
 		},
+		Client: state.Client,
 	}, nil
 }
 
