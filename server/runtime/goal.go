@@ -10,7 +10,6 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -480,13 +479,13 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	if !transitioned {
 		return
 	}
-	msg := normalizeMessageForTranscript(llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    textutil.Value(llm.MessageTypeGoal),
-		Content:        textutil.Value(goalStatusPrompt(completed)),
-		CompactContent: textutil.Value(goalStatusCompactText(completed)),
-	}, e.transcriptWorkingDir())
-	if err := e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(completed))); err != nil {
+	msg, err := goalNoticeMessage(GoalNoticeStatus, &completed)
+	if err != nil {
+		reportErr(err)
+		return
+	}
+	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
 		reportErr(err)
 	}
 }

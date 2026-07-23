@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -222,5 +223,36 @@ func TestWorkflowObservedDurableCompletionCascadeCompletesActiveGoal(t *testing.
 	}
 	if goal := eng.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
 		t.Fatalf("goal after observed completion = %+v, want auto-completed", goal)
+	}
+}
+
+func TestWorkflowCascadePublishesStatusAfterCommittedNoticeObserverFailure(t *testing.T) {
+	t.Parallel()
+	observerErr := errors.New("goal completion notice observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x", session.WithPersistenceObserver(gate))
+	events := make([]Event, 0, 4)
+	controller := &fakeWorkflowController{}
+	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		OnEvent:      func(event Event) { events = append(events, event) },
+	})
+	if _, err := eng.SetGoal("finish with a failed observer", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	events = events[:0]
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.Goal != nil &&
+			snapshot.Meta.Goal.Status == session.GoalStatusComplete &&
+			snapshot.Meta.LastSequence == 2
+	}, observerErr)
+
+	eng.setWorkflowTerminalState(WorkflowCompletionSourceObserved)
+
+	if goal := eng.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
+		t.Fatalf("goal after workflow completion = %+v, want complete", goal)
+	}
+	if len(events) < 2 || events[0].Kind != EventConversationUpdated || events[1].Kind != EventGoalStatusUpdated {
+		t.Fatalf("events after committed completion notice observer failure = %+v, want notice then status", events)
 	}
 }
