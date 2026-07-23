@@ -95,7 +95,30 @@ type TerminalResizePolicy uint8
 const (
 	TerminalResizeSemanticPrompt TerminalResizePolicy = iota + 1
 	TerminalResizeWidthRehydration
+	TerminalResizeTmuxWidthRehydration
 )
+
+func (p TerminalResizePolicy) usesWidthRehydration() bool {
+	switch p {
+	case TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
+
+func (p TerminalResizePolicy) bottomAnchorsVerticalExpansion() bool {
+	switch p {
+	case TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
 
 type Surface struct {
 	writer             io.Writer
@@ -144,7 +167,7 @@ func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 		writer = io.Discard
 	}
 	switch options.TerminalResize {
-	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
 	default:
 		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", options.TerminalResize))
 	}
@@ -356,7 +379,7 @@ func (s *Surface) ObserveResize(size Size) Result {
 }
 
 func (s *Surface) observeResize(size Size) Result {
-	if s.terminalResize != TerminalResizeWidthRehydration {
+	if !s.terminalResize.usesWidthRehydration() {
 		return Result{}
 	}
 	if s.lastPaintedSize != nil &&
@@ -374,7 +397,7 @@ func (s *Surface) immutableScrollbackProduced() bool {
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
-	linesToErase := s.physicalPreviousBandHeight(frame.Size)
+	linesToErase := s.previousMutableBandHeightAtBottom(frame.Size)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())

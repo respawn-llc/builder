@@ -300,7 +300,11 @@ func completedAssistantTextReconcilesStream(streamed string, completed string) b
 }
 
 func reconciledCompletedAssistantText(streamed string, completed string) string {
-	if streamed != "" && streamed == strings.TrimLeftFunc(completed, unicode.IsSpace) {
+	// Streamed bytes are already visible to clients. A completed payload may
+	// normalize provisional whitespace, but it must never retract that prefix.
+	if streamed != "" &&
+		(streamed == strings.TrimLeftFunc(completed, unicode.IsSpace) ||
+			strings.TrimRightFunc(streamed, unicode.IsSpace) == completed) {
 		return streamed
 	}
 	return completed
