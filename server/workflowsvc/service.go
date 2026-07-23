@@ -1545,9 +1545,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 		memoReq.ApprovalCommentary = req.Approval.Commentary
 	}
 	_, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-			return s.answerWorkflowTaskQuestion(ctx, req)
-		})
+		err := s.answerWorkflowTaskQuestion(ctx, req)
 		return struct{}{}, err
 	})
 	return err
