@@ -439,18 +439,27 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
     completed_at_unix_ms = ?2,
+    interrupted_at_unix_ms = NULL,
+    interruption_reason = NULL,
+    interruption_detail_json = '{}',
     waiting_ask_id = NULL
 WHERE id = ?3
   AND run_generation = ?4
   AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS ?5
+  AND (
+      CAST(?6 AS TEXT) IS NULL
+      OR session_id = CAST(?6 AS TEXT)
+  )
 `
 
 type CompleteRunUpdateRunParams struct {
-	UpdatedAtUnixMs   int64
-	CompletedAtUnixMs sql.NullInt64
-	RunID             string
-	RunGeneration     int64
+	UpdatedAtUnixMs             int64
+	CompletedAtUnixMs           sql.NullInt64
+	RunID                       string
+	RunGeneration               int64
+	ExpectedInterruptedAtUnixMs sql.NullInt64
+	ExpectedSessionID           sql.NullString
 }
 
 func (q *Queries) CompleteRunUpdateRun(ctx context.Context, arg CompleteRunUpdateRunParams) (int64, error) {
@@ -459,6 +468,8 @@ func (q *Queries) CompleteRunUpdateRun(ctx context.Context, arg CompleteRunUpdat
 		arg.CompletedAtUnixMs,
 		arg.RunID,
 		arg.RunGeneration,
+		arg.ExpectedInterruptedAtUnixMs,
+		arg.ExpectedSessionID,
 	)
 	if err != nil {
 		return 0, err
@@ -9643,91 +9654,6 @@ func (q *Queries) ResolveActiveRunCompletionTargetByRunID(ctx context.Context, r
 	return items, nil
 }
 
-const resolveActiveRunCompletionTargetBySessionID = `-- name: ResolveActiveRunCompletionTargetBySessionID :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND r.session_id = ?1
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-func (q *Queries) ResolveActiveRunCompletionTargetBySessionID(ctx context.Context, sessionID sql.NullString) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetBySessionID, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const resolveActiveRunCompletionTargetByShortID = `-- name: ResolveActiveRunCompletionTargetByShortID :many
 SELECT
     r.id,
@@ -9856,6 +9782,90 @@ ORDER BY r.started_at_unix_ms DESC, (
 
 func (q *Queries) ResolveActiveRunCompletionTargetByTaskID(ctx context.Context, taskID string) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByTaskID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskRunRecord
+	for rows.Next() {
+		var i TaskRunRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.PlacementID,
+			&i.NodeID,
+			&i.SessionID,
+			&i.RunGeneration,
+			&i.WorkflowRevisionSeen,
+			&i.AutomationRequestedAtUnixMs,
+			&i.CreatedAtUnixMs,
+			&i.UpdatedAtUnixMs,
+			&i.StartedAtUnixMs,
+			&i.CompletedAtUnixMs,
+			&i.InterruptedAtUnixMs,
+			&i.InterruptionReason,
+			&i.InterruptionDetailJson,
+			&i.WaitingAskID,
+			&i.EffectiveCompletionMode,
+			&i.InvalidCompletionCount,
+			&i.RunStartSnapshotJson,
+			&i.MetadataJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveSessionRunCompletionTargets = `-- name: ResolveSessionRunCompletionTargets :many
+SELECT
+    r.id,
+    r.task_id,
+    r.placement_id,
+    r.node_id,
+    r.session_id,
+    r.run_generation,
+    r.workflow_revision_seen,
+    r.automation_requested_at_unix_ms,
+    r.created_at_unix_ms,
+    r.updated_at_unix_ms,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.interruption_reason,
+    r.interruption_detail_json,
+    r.waiting_ask_id,
+    r.effective_completion_mode,
+    r.invalid_completion_count,
+    r.run_start_snapshot_json,
+    r.metadata_json
+FROM task_run_records r
+JOIN task_records t ON t.id = r.task_id
+JOIN task_node_placements p ON p.id = r.placement_id
+JOIN workflow_nodes n ON n.id = r.node_id
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND trim(COALESCE(r.session_id, '')) != ''
+  AND t.canceled_at_unix_ms IS NULL
+  AND p.state = 'active'
+  AND n.kind = 'agent'
+  AND r.session_id = ?1
+ORDER BY r.started_at_unix_ms DESC, (
+    SELECT storage.rowid
+    FROM task_runs storage
+    WHERE storage.id = r.id
+) DESC
+`
+
+func (q *Queries) ResolveSessionRunCompletionTargets(ctx context.Context, sessionID sql.NullString) ([]TaskRunRecord, error) {
+	rows, err := q.db.QueryContext(ctx, resolveSessionRunCompletionTargets, sessionID)
 	if err != nil {
 		return nil, err
 	}

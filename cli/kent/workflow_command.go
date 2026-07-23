@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	workflowCommandTimeout              = 5 * time.Second
+	workflowCommandTimeout              = time.Minute
 	workflowCommandWorkflowListPageSize = serverapi.WorkflowListMaxPageSize
 )
 

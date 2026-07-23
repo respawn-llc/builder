@@ -49,9 +49,11 @@
 - User and assistant messages show at most the first 3 rendered lines when collapsed.
 - Tool calls show the same first input line used by ongoing previews.
 - Detail Mode shows only completed tool results. A tool row includes its typed input facts and output. It does not show a separate raw tool-call record.
+- A backgrounded shell invocation stays compact while Detail is collapsed. Expanding it reveals its full command input and any tool output committed by the server.
 - Ask-question entries show only the question when collapsed.
 - Known developer/context reminders use typed compact labels.
 - Expanding reveals full entry content verbatim.
+- Expanding preserves the current camera position so new entry content grows below its collapsed preview.
 - Detail compact labels use typed message and tool facts. They do not infer meaning from display text.
 - Unknown roles, unknown message types, and invalid/missing metadata remain visible and expandable when recoverable text exists.
 - Detail tool calls with error results stay collapsed by default but may show compact input plus structured error summary.
@@ -106,7 +108,7 @@
 - `interruption`: `O`
 - `error_feedback`: `O`
 - `compaction_soon_reminder`: `D`
-- `reviewer_feedback`: represented by reviewer transcript roles, effective `OC` or `O` depending on reviewer verbosity.
+- `reviewer_feedback`: represented by reviewer transcript roles. Verbose reviewer suggestions use `O` and render their complete suggestion list in ongoing scrollback. Reviewer status uses `OC` and its compact ongoing line must not use an ellipsis to imply hidden detail.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
@@ -125,7 +127,7 @@
 - assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - reviewer suggestions/status: `OC` or `O`
-- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning. Ongoing scrollback contains neither reasoning-summary rows nor assistant commentary/thinking rows.
+- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning. Detail keeps persisted reasoning traces faint, treats them as plaintext, and removes only literal `**` delimiters. A reasoning trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither reasoning-summary rows nor assistant commentary/thinking rows.
 - Kent decides which messages become transcript entries and which role they use.
 - The TUI decides how each role appears in Ongoing Mode and Detail Mode.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.
@@ -141,11 +143,12 @@
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and `manual_compaction_carryover` remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
 - Shell tool calls use shared syntax highlighting, faint styling, and shell syntax for the active operating system.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch and edit tools use `⇄` in Ongoing Mode, Detail Mode, and replay. Paths and neutral text use the foreground role. Source lines use shared syntax highlighting. Added and removed counts use their semantic colors. Diff backgrounds blend 20% of Success or Error over the active Detail Mode background.
-- Compaction summaries and manual compaction carryover use secondary text.
+- Compaction summaries and manual compaction carryover use secondary text in ongoing and collapsed Detail. Expanded compaction summaries use normal notice text.
 - Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
 - Active-goal continuation initialization uses a developer-context row with compact label `Goal nudge`. The ordinary active-goal continuation nudge reuses the same compact label; goal set, pause, resume, completion, and clear feedback keep their existing compact presentation.
@@ -154,15 +157,17 @@
 - Worktree-exit rows use full-strength foreground text.
 - `subagents` developer-context rows use the faint foreground system-notice style.
 - Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
-- Cache warnings and non-interrupting warnings use warning text.
-- Error rows use error text, including interruption rows.
+- Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
+- Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
-- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected, but not the semantic style roles for the selected content.
-- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer symbols follow the row's Success or Error state. Compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
+- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected. Expanded compaction summary and reminder content uses the normal notice role; other selected content retains its semantic role.
+- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer symbols follow the row's Success or Error state. Compact compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
 - Kent determines status from typed facts, not display text.
 - Kent does not invent a semantic color for an unspecified symbol.
 - Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.
+- A `web_search` preview in ongoing and collapsed Detail reads `Searched the web for "<query>"`, using its typed query. Its compact preview does not append result metadata. Expanded Detail shows the raw query and any committed output.
+- A `view_image` preview in ongoing and detail reads `Viewed image at <path>`, using its typed image path. The image path belongs only to typed image metadata until the client renders that preview.
 - A successful answered question in ongoing renders the full Markdown question followed by the selected option's full text and optional custom commentary from its typed condensed answer. The question uses the user text role; response text uses faint primary, and `│`/`└` continuation guides remain faint structural chrome. Unselected suggestions and numeric option summaries are omitted. Collapsed detail remains question-only.
 - A multiline shell invocation shows `N more line` or `N more lines` in its live pending row, committed ongoing row, and collapsed detail row, where `N` counts authored line boundaries hidden after the first line; terminal soft wraps do not count. Expanded detail does not add continuation metadata. Continuation metadata precedes and stacks with status metadata such as `backgrounded` or `exit N`. Ongoing uses the faint `  · value` suffix; collapsed detail preserves its existing aligned metadata layout and lens behavior. The command is ellipsized within the remaining emission-time width so the complete metadata remains visible whenever it fits. Successful foreground shell exit zero has no suffix; a typed non-zero exit renders `exit N` and error-colors the `$`.
 - Tool-call errors in ongoing and detail keep the failed tool input visible with an error-colored symbol. Patch/edit errors render the patch/edit input shape, including file path and diff add/remove lines when structured patch metadata exists, instead of replacing the row with only error text.

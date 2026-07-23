@@ -166,10 +166,11 @@ type WorktreeSelectorPreviewResponse struct {
 	Selector string                `json:"selector"`
 }
 
-type WorktreeEnterRequest struct {
+// WorktreeTransitionHeader is the shared execution identity for every
+// operation that may switch a Session's worktree target.
+type WorktreeTransitionHeader struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
-	Selector    string              `json:"selector"`
 	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
 }
 
@@ -178,14 +179,17 @@ type RuntimeStepOrigin struct {
 	StepID string `json:"step_id"`
 }
 
+type WorktreeEnterRequest struct {
+	WorktreeTransitionHeader
+	Selector string `json:"selector"`
+}
+
 type WorktreeLeaveRequest struct {
-	OperationID WorktreeOperationID `json:"operation_id"`
-	SessionID   string              `json:"session_id"`
+	WorktreeTransitionHeader
 }
 
 type WorktreeDeleteRequest struct {
-	OperationID         WorktreeOperationID       `json:"operation_id"`
-	SessionID           string                    `json:"session_id"`
+	WorktreeTransitionHeader
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
@@ -402,18 +406,15 @@ func (request WorktreeSelectorPreviewRequest) Validate() error {
 	return nil
 }
 
-func (request WorktreeEnterRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+func (header WorktreeTransitionHeader) Validate() error {
+	if err := header.OperationID.Validate(); err != nil {
 		return err
 	}
-	if err := (WorktreeSelectorPreviewRequest{
-		SessionID: request.SessionID,
-		Selector:  request.Selector,
-	}).Validate(); err != nil {
+	if err := validateRequiredSessionID(header.SessionID); err != nil {
 		return err
 	}
-	if request.Origin != nil {
-		return request.Origin.Validate()
+	if header.Origin != nil {
+		return header.Origin.Validate()
 	}
 	return nil
 }
@@ -425,22 +426,26 @@ func (origin RuntimeStepOrigin) Validate() error {
 	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
-func (request WorktreeLeaveRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+func (request WorktreeEnterRequest) Validate() error {
+	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
 		return err
 	}
-	return validateRequiredSessionID(request.SessionID)
+	if strings.TrimSpace(request.Selector) == "" {
+		return errors.New("selector is required")
+	}
+	return nil
+}
+
+func (request WorktreeLeaveRequest) Validate() error {
+	return request.WorktreeTransitionHeader.Validate()
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
 		return err
 	}
-	if err := (WorktreeSelectorPreviewRequest{
-		SessionID: request.SessionID,
-		Selector:  request.Selector,
-	}).Validate(); err != nil {
-		return err
+	if strings.TrimSpace(request.Selector) == "" {
+		return errors.New("selector is required")
 	}
 	return request.BranchCleanupPolicy.Validate()
 }

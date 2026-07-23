@@ -7,16 +7,43 @@ import (
 	"core/cli/tui/transcriptrender"
 )
 
-func (s *Surface) physicalPreviousBandHeight(target Size) int {
+type terminalRowRange struct {
+	start int
+	end   int
+}
+
+// previousMutableBandHeightAtBottom is the part of the previous band that
+// still occupies the target bottom edge. On expansion terminal reflow owns the
+// previous screen, while the logical band height remains unchanged so new rows
+// never become mutable-band padding.
+func (s *Surface) previousMutableBandHeightAtBottom(target Size) int {
 	if s.lastPaintedSize == nil || s.retainedBandHeight <= 0 {
 		return 0
 	}
-	previousHeight := min(s.retainedBandHeight, target.Height)
-	heightDelta := target.Height - s.lastPaintedSize.Height
-	if heightDelta > 0 {
-		previousHeight = min(target.Height, s.retainedBandHeight+heightDelta)
+	if target.Height >= s.lastPaintedSize.Height {
+		return min(s.retainedBandHeight, target.Height)
 	}
-	return previousHeight
+	previous := s.visiblePreviousMutableBand(target)
+	if previous == nil {
+		return 0
+	}
+	return previous.end - previous.start + 1
+}
+
+func (s *Surface) visiblePreviousMutableBand(target Size) *terminalRowRange {
+	if s.lastPaintedSize == nil || s.retainedBandHeight <= 0 {
+		return nil
+	}
+	start := s.lastPaintedSize.Height - s.retainedBandHeight + 1
+	end := min(s.lastPaintedSize.Height, target.Height)
+	if start > end {
+		return nil
+	}
+	return &terminalRowRange{start: start, end: end}
+}
+
+func (s *Surface) terminalHeightExpanded(target Size) bool {
+	return s.lastPaintedSize != nil && target.Height > s.lastPaintedSize.Height
 }
 
 func (s *Surface) validateRenderFrame(frame FrameInput, operation string) {
@@ -53,7 +80,7 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		liveLines = nil
 		frame.Cursor = Cursor{}
 	}
-	previousHeight := s.physicalPreviousBandHeight(frame.Size)
+	previousHeight := s.previousMutableBandHeightAtBottom(frame.Size)
 	contentHeight := len(liveLines)
 	releasableHeight := max(0, previousHeight-contentHeight)
 	releasedHeight := min(len(immutableRows), releasableHeight)
@@ -63,6 +90,20 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
+	if s.terminalHeightExpanded(frame.Size) {
+		previous := s.visiblePreviousMutableBand(frame.Size)
+		if s.terminalResize.usesWidthRehydration() && previous != nil {
+			writeMutableRowsErase(&transaction, previous.start, previous.end)
+		}
+		if s.terminalResize.bottomAnchorsVerticalExpansion() && s.immutableScrollbackProduced() {
+			writeImmutableRegionScrollForTerminalExpansion(
+				&transaction,
+				s.lastPaintedSize.Height,
+				frame.Size.Height,
+				previousHeight,
+			)
+		}
+	}
 	if nextHeight > previousHeight && s.immutableScrollbackProduced() {
 		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, previousHeight, nextHeight)
 	}
@@ -74,7 +115,13 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		nextHeight,
 		immutableRows,
 	)
-	writeRetainedMutableBand(&transaction, frame.Size.Height, nextHeight, liveLines)
+	writeRetainedMutableBand(
+		&transaction,
+		frame.Size.Height,
+		nextHeight,
+		liveLines,
+		s.terminalResize == TerminalResizeSemanticPrompt,
+	)
 	writeCursor(&transaction, frame.Cursor)
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
 		return Result{}, err

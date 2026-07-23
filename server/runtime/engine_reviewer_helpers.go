@@ -325,6 +325,11 @@ func reviewerToolPresentationText(meta *transcript.ToolCallMeta) string {
 	if detail := strings.TrimSpace(meta.PatchDetail); detail != "" {
 		lines = append(lines, detail)
 	}
+	if meta.RenderHint != nil {
+		if path := strings.TrimSpace(meta.RenderHint.Path); path != "" {
+			lines = append(lines, path)
+		}
+	}
 	if len(lines) == 0 {
 		return strings.TrimSpace(meta.ToolName)
 	}

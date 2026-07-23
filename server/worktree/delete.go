@@ -73,7 +73,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
 			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
-		}, nil)
+		}, req.WorktreeTransitionHeader.Origin)
 		if err != nil {
 			return serverapi.WorktreeDeleteResult{}, err
 		}

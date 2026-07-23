@@ -215,14 +215,23 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	operationID := NewWorktreeOperationID()
 	valid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session", Selector: "feature"},
-		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
-		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: &RuntimeStepOrigin{
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
 			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
-		}},
-		WorktreeLeaveRequest{OperationID: operationID, SessionID: "session"},
+		}}, Selector: "feature"},
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}},
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
+			RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+		}}},
 		WorktreeDeleteRequest{
-			OperationID:         operationID,
-			SessionID:           "session",
+			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"},
+			Selector:                 "feature",
+			BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
+		},
+		WorktreeDeleteRequest{
+			WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{
+				RunID: "018fdd67-89ab-4cde-8123-456789abc001", StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+			}},
 			Selector:            "feature",
 			BranchCleanupPolicy: WorktreeBranchCleanupModeRetain,
 		},
@@ -234,15 +243,150 @@ func TestWorktreeOperationRequestsRejectMissingRequiredFacts(t *testing.T) {
 	}
 	invalid := []interface{ Validate() error }{
 		WorktreeSelectorPreviewRequest{SessionID: "session"},
-		WorktreeEnterRequest{SessionID: "session", Selector: "feature"},
-		WorktreeEnterRequest{OperationID: operationID, SessionID: "session", Selector: "feature", Origin: &RuntimeStepOrigin{}},
-		WorktreeLeaveRequest{OperationID: operationID},
-		WorktreeDeleteRequest{OperationID: operationID, SessionID: "session", Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{SessionID: "session"}, Selector: "feature"},
+		WorktreeEnterRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: &RuntimeStepOrigin{}}, Selector: "feature"},
+		WorktreeLeaveRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID}},
+		WorktreeDeleteRequest{WorktreeTransitionHeader: WorktreeTransitionHeader{OperationID: operationID, SessionID: "session"}, Selector: "feature"},
 	}
 	for _, request := range invalid {
 		if err := request.Validate(); err == nil {
 			t.Fatalf("%T validated without required facts", request)
 		}
+	}
+}
+
+func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
+	operationID := NewWorktreeOperationID()
+	origin := &RuntimeStepOrigin{
+		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+	}
+	header := func(origin *RuntimeStepOrigin) WorktreeTransitionHeader {
+		return WorktreeTransitionHeader{OperationID: operationID, SessionID: "session", Origin: origin}
+	}
+	for _, testCase := range []struct {
+		name         string
+		request      any
+		decodeHeader func(*testing.T, []byte) WorktreeTransitionHeader
+		wantOrigin   bool
+	}{
+		{
+			name:    "enter external",
+			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(nil), Selector: "feature"},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeEnterRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode enter request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+		},
+		{
+			name:    "enter model",
+			request: WorktreeEnterRequest{WorktreeTransitionHeader: header(origin), Selector: "feature"},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeEnterRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode enter request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+			wantOrigin: true,
+		},
+		{
+			name:    "leave external",
+			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(nil)},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeLeaveRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode leave request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+		},
+		{
+			name:    "leave model",
+			request: WorktreeLeaveRequest{WorktreeTransitionHeader: header(origin)},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeLeaveRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode leave request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+			wantOrigin: true,
+		},
+		{
+			name: "delete external",
+			request: WorktreeDeleteRequest{
+				WorktreeTransitionHeader: header(nil),
+				Selector:                 "feature",
+				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
+			},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeDeleteRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode delete request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+		},
+		{
+			name: "delete model",
+			request: WorktreeDeleteRequest{
+				WorktreeTransitionHeader: header(origin),
+				Selector:                 "feature",
+				BranchCleanupPolicy:      WorktreeBranchCleanupModeRetain,
+			},
+			decodeHeader: func(t *testing.T, data []byte) WorktreeTransitionHeader {
+				t.Helper()
+				var request WorktreeDeleteRequest
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Fatalf("decode delete request: %v", err)
+				}
+				return request.WorktreeTransitionHeader
+			},
+			wantOrigin: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			data, err := json.Marshal(testCase.request)
+			if err != nil {
+				t.Fatalf("encode request: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatalf("decode request fields: %v", err)
+			}
+			if _, present := fields["worktree_transition_header"]; present {
+				t.Fatalf("wire payload nested the transition header: %s", data)
+			}
+			for _, name := range []string{"operation_id", "session_id"} {
+				if _, present := fields[name]; !present {
+					t.Fatalf("wire payload omitted %s: %s", name, data)
+				}
+			}
+			_, hasOrigin := fields["origin"]
+			if hasOrigin != testCase.wantOrigin {
+				t.Fatalf("wire origin present=%t, want %t: %s", hasOrigin, testCase.wantOrigin, data)
+			}
+			decoded := testCase.decodeHeader(t, data)
+			if decoded.OperationID != operationID || decoded.SessionID != "session" {
+				t.Fatalf("decoded header=%+v", decoded)
+			}
+			if testCase.wantOrigin {
+				if decoded.Origin == nil || *decoded.Origin != *origin {
+					t.Fatalf("decoded origin=%+v, want %+v", decoded.Origin, origin)
+				}
+			} else if decoded.Origin != nil {
+				t.Fatalf("decoded external origin=%+v", decoded.Origin)
+			}
+		})
 	}
 }
 

@@ -754,8 +754,10 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		OperationID:         operationID,
-		SessionID:           "session-1",
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: operationID,
+			SessionID:   "session-1",
+		},
 		Selector:            "wt-1",
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})

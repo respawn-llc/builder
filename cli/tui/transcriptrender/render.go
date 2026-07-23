@@ -95,7 +95,28 @@ func renderCommittedRow(
 			meta.SymbolStyleRole = &symbolRole
 			group = clientui.TranscriptRowTool
 		}
-		return Row{Group: group, Lines: renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)}
+		options := textBlockOptions{}
+		if isReviewerNotice(row.Notice) {
+			options.compactEllipsis = compactEllipsisNever
+		}
+		if noticeUsesMarkdown(row.Notice) {
+			return Row{
+				Group: group,
+				Lines: renderMarkdownTextBlock(
+					role,
+					text,
+					width,
+					mode,
+					meta,
+					options,
+					linkPresentation,
+				),
+			}
+		}
+		return Row{
+			Group: group,
+			Lines: renderTextBlockWithOptions(role, text, "", width, mode, meta, options),
+		}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
@@ -196,6 +217,79 @@ func renderUserAssistantTextBlock(
 }
 
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {
+	return renderTextBlockWithOptions(role, text, inlineMeta, width, mode, meta, textBlockOptions{})
+}
+
+type textBlockOptions struct {
+	compactEllipsis compactEllipsisPolicy
+}
+
+type compactEllipsisPolicy uint8
+
+const (
+	compactEllipsisWhenMultiline compactEllipsisPolicy = iota
+	compactEllipsisNever
+)
+
+type textBlockFormat uint8
+
+const (
+	textBlockPlain textBlockFormat = iota
+	textBlockMarkdown
+)
+
+type textBlockLayout uint8
+
+const (
+	textBlockLayoutCompact textBlockLayout = iota
+	textBlockLayoutFull
+)
+
+func renderTextBlockWithOptions(
+	role StyleRole,
+	text string,
+	inlineMeta string,
+	width int,
+	mode Mode,
+	meta toolMeta,
+	options textBlockOptions,
+) []Line {
+	return renderFormattedTextBlock(
+		role,
+		text,
+		inlineMeta,
+		width,
+		mode,
+		meta,
+		options,
+		MarkdownLinkLabelOnly,
+		textBlockPlain,
+	)
+}
+
+func renderMarkdownTextBlock(
+	role StyleRole,
+	text string,
+	width int,
+	mode Mode,
+	meta toolMeta,
+	options textBlockOptions,
+	linkPresentation MarkdownLinkPresentation,
+) []Line {
+	return renderFormattedTextBlock(role, text, "", width, mode, meta, options, linkPresentation, textBlockMarkdown)
+}
+
+func renderFormattedTextBlock(
+	role StyleRole,
+	text string,
+	inlineMeta string,
+	width int,
+	mode Mode,
+	meta toolMeta,
+	options textBlockOptions,
+	linkPresentation MarkdownLinkPresentation,
+	format textBlockFormat,
+) []Line {
 	text = safeTranscriptText(text)
 	inlineMeta = strings.TrimSpace(safeTranscriptText(inlineMeta))
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
@@ -204,12 +298,56 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	}
 	if modeUsesCompactTextBlock(mode) {
 		first := firstDisplayLine(text)
-		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefixWithMeta(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta, mode), width, false, mode, meta)
-		}
-		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta, mode), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode, meta)
+		return attachPrefixWithFirstLineMeta(
+			role,
+			formattedTextLines(role, first, width, mode, meta, format, textBlockLayoutCompact, linkPresentation),
+			width,
+			options.compactEllipsis == compactEllipsisWhenMultiline && len(strings.Split(text, "\n")) > 1,
+			inlineMeta,
+			mode,
+			meta,
+		)
 	}
-	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta, mode), width, false, mode, meta)
+	return attachPrefixWithMeta(
+		role,
+		formattedTextLines(role, text, width, mode, meta, format, textBlockLayoutFull, linkPresentation),
+		width,
+		false,
+		mode,
+		meta,
+	)
+}
+
+func formattedTextLines(
+	role StyleRole,
+	text string,
+	width int,
+	mode Mode,
+	meta toolMeta,
+	format textBlockFormat,
+	layout textBlockLayout,
+	linkPresentation MarkdownLinkPresentation,
+) []Line {
+	switch format {
+	case textBlockMarkdown:
+		return RenderMarkdownLinesWithLinkPresentation(
+			role,
+			text,
+			contentWidth(role, width),
+			linkPresentation,
+		)
+	case textBlockPlain:
+		switch layout {
+		case textBlockLayoutCompact:
+			return textLines(role, []string{text}, meta, mode)
+		case textBlockLayoutFull:
+			return textLines(role, wrapLines(text, contentWidth(role, width)), meta, mode)
+		default:
+			panic(fmt.Sprintf("render plain text block with invalid layout %d", layout))
+		}
+	default:
+		panic(fmt.Sprintf("render text block with invalid format %d", format))
+	}
 }
 
 func renderBackgroundedShell(command string, width int, mode Mode) Line {
@@ -346,7 +484,7 @@ func attachPrefixWithFirstLineMetaAndContinuation(
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
 			symbol := SemanticSpan(symbolText, symbolRole)
-			if mode != ModeDetailExpanded && roleSymbolFaint(role, symbolRole) {
+			if (mode != ModeDetailExpanded || roleAlwaysFaint(symbolRole)) && roleSymbolFaint(role, symbolRole) {
 				symbol.Style = symbol.Style.With(SpanAttributeFaint)
 			}
 			spans = append([]Span{contentRoleSpan(" ", role, mode)}, spans...)
@@ -475,10 +613,14 @@ func roleSpan(text string, role StyleRole) Span {
 
 func contentRoleSpan(text string, role StyleRole, mode Mode) Span {
 	span := SemanticSpan(text, role)
-	if mode != ModeDetailExpanded && roleDefaultFaint(role) {
+	if roleDefaultFaint(role) && (mode != ModeDetailExpanded || roleAlwaysFaint(role)) {
 		span.Style = span.Style.With(SpanAttributeFaint)
 	}
 	return span
+}
+
+func roleAlwaysFaint(role StyleRole) bool {
+	return role == StyleRoleNoticeForegroundFaint
 }
 
 func roleSymbol(role StyleRole) string {
@@ -537,7 +679,10 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
-	return noticeStyleRole(row), text
+	if isReasoningNotice(row) {
+		text = stripReasoningBoldDelimiters(text)
+	}
+	return noticeStyleRoleForMode(row, mode), text
 }
 
 func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
@@ -588,7 +733,10 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	if row.Severity == clientui.TranscriptNoticeWarning || row.Reason == clientui.TranscriptNoticeCacheWarning {
 		return StyleRoleWarning
 	}
-	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageReviewerFeedback || noticeDiagnosticHasReviewerRole(row) {
+	if isReasoningNotice(row) {
+		return StyleRoleNoticeForegroundFaint
+	}
+	if isReviewerNotice(row) {
 		return StyleRoleNoticeReviewer
 	}
 	if row.MessageType == nil {
@@ -617,11 +765,71 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	}
 }
 
+func noticeStyleRoleForMode(row *clientui.TranscriptNoticeRow, mode Mode) StyleRole {
+	if mode == ModeDetailExpanded && isExpandedCompactionNotice(row) {
+		return StyleRoleNotice
+	}
+	return noticeStyleRole(row)
+}
+
+func isExpandedCompactionNotice(row *clientui.TranscriptNoticeRow) bool {
+	if row == nil || row.MessageType == nil {
+		return false
+	}
+	switch *row.MessageType {
+	case clientui.TranscriptMessageCompactionSummary,
+		clientui.TranscriptMessageCompactionSoonReminder:
+		return true
+	default:
+		return false
+	}
+}
+
 func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.Diagnostic == nil {
 		return false
 	}
 	return transcript.IsReviewerEntryRole(strings.TrimSpace(string(row.Diagnostic.Code)))
+}
+
+func isReviewerNotice(row *clientui.TranscriptNoticeRow) bool {
+	return row != nil &&
+		((row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageReviewerFeedback) ||
+			noticeDiagnosticHasReviewerRole(row))
+}
+
+func isReasoningNotice(row *clientui.TranscriptNoticeRow) bool {
+	return row != nil &&
+		row.Diagnostic != nil &&
+		transcript.EntryRole(row.Diagnostic.Code) == transcript.EntryRoleReasoning
+}
+
+func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
+	if row == nil || row.MessageType == nil {
+		return false
+	}
+	switch *row.MessageType {
+	case clientui.TranscriptMessageAgentsMD,
+		clientui.TranscriptMessageSkills,
+		clientui.TranscriptMessageSubagents,
+		clientui.TranscriptMessageEnvironment,
+		clientui.TranscriptMessageCompactionSummary,
+		clientui.TranscriptMessageHeadlessMode,
+		clientui.TranscriptMessageHeadlessModeExit,
+		clientui.TranscriptMessageWorkflowMode,
+		clientui.TranscriptMessageActiveGoalContinuation:
+		return true
+	default:
+		return false
+	}
+}
+
+func stripReasoningBoldDelimiters(text string) string {
+	// Codex/GPT reasoning traces are provider-formatted plaintext, not Markdown.
+	// Remove only their outer `**` delimiters; interior asterisks are literal.
+	// Do not remove or change this behavior without explicit user approval.
+	text = strings.TrimPrefix(text, "**")
+	return strings.TrimSuffix(text, "**")
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {

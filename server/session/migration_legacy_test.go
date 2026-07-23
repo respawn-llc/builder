@@ -115,6 +115,79 @@ func TestMaterializeEventLogMigratesLegacySessionAfterLeadingBlankLine(t *testin
 	}
 }
 
+func TestMaterializeEventLogMigratesLegacyBackgroundNoticeWithoutPartialIdentity(t *testing.T) {
+	store := newSessionTestStore(t)
+	exitCode := 1
+	writeSessionFixtureEvents(t, store.Dir(), []legacyTestEvent{{
+		Seq:       1,
+		Timestamp: time.Now().UTC(),
+		Kind:      string(EventKindMessage),
+		StepID:    "step-1",
+		Payload: mustFixtureJSON(t, map[string]any{
+			"role":                 string(MessageRoleDeveloper),
+			"message_type":         string(MessageTypeBackgroundNotice),
+			"content":              "Background shell 4345 completed. Exit code: 1.",
+			"compact_content":      "Background shell 4345 failed (exit 1)",
+			"name":                 "4345",
+			"background_exit_code": exitCode,
+		}),
+	}})
+
+	eventLog := mustMaterializeSessionTestEventLog(t, store)
+	window, err := eventLog.ReadSegmentForward(0, nil)
+	if err != nil {
+		t.Fatalf("read migrated event log: %v", err)
+	}
+	if len(window.Records) != 1 {
+		t.Fatalf("migrated records = %d, want 1", len(window.Records))
+	}
+	message, ok := mustEventRecordPayload(window.Records[0]).(MessageRecord)
+	if !ok {
+		t.Fatalf("migrated payload = %#v", mustEventRecordPayload(window.Records[0]))
+	}
+	if message.MessageType == nil || *message.MessageType != MessageTypeBackgroundNotice ||
+		message.Content == nil || *message.Content != "Background shell 4345 completed. Exit code: 1." ||
+		message.CompactContent == nil || *message.CompactContent != "Background shell 4345 failed (exit 1)" ||
+		message.BackgroundExitCode == nil || *message.BackgroundExitCode != exitCode {
+		t.Fatalf("migrated background notice = %#v", message)
+	}
+	if message.Name != nil || message.BackgroundActivityID != nil {
+		t.Fatalf("migrated background identity = name=%#v activity=%#v", message.Name, message.BackgroundActivityID)
+	}
+}
+
+func TestMaterializeEventLogPreservesCompleteLegacyBackgroundNoticeIdentity(t *testing.T) {
+	store := newSessionTestStore(t)
+	writeSessionFixtureEvents(t, store.Dir(), []legacyTestEvent{{
+		Seq:       1,
+		Timestamp: time.Now().UTC(),
+		Kind:      string(EventKindMessage),
+		StepID:    "step-1",
+		Payload: mustFixtureJSON(t, map[string]any{
+			"role":                   string(MessageRoleDeveloper),
+			"message_type":           string(MessageTypeBackgroundNotice),
+			"content":                "Background shell 4345 completed.",
+			"name":                   "4345",
+			"background_activity_id": "b2a700e9-1d0b-42bb-86b9-d8912f0b4119",
+		}),
+	}})
+
+	eventLog := mustMaterializeSessionTestEventLog(t, store)
+	window, err := eventLog.ReadSegmentForward(0, nil)
+	if err != nil {
+		t.Fatalf("read migrated event log: %v", err)
+	}
+	message, ok := mustEventRecordPayload(window.Records[0]).(MessageRecord)
+	if !ok {
+		t.Fatalf("migrated payload = %#v", mustEventRecordPayload(window.Records[0]))
+	}
+	if message.Name == nil || *message.Name != "4345" ||
+		message.BackgroundActivityID == nil ||
+		*message.BackgroundActivityID != "b2a700e9-1d0b-42bb-86b9-d8912f0b4119" {
+		t.Fatalf("migrated background identity = name=%#v activity=%#v", message.Name, message.BackgroundActivityID)
+	}
+}
+
 func TestMaterializeEventLogMigratesLegacyToolCompletionWithoutSnapshot(t *testing.T) {
 	store := newSessionTestStore(t)
 	now := time.Now().UTC()

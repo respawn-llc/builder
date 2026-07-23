@@ -410,7 +410,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	if hostedStart == nil {
 		t.Fatal("expected explicit hosted tool start event")
 	}
-	if meta := decodeToolCallMeta(*hostedStart); meta == nil || meta.Command != "web search: invalid query" {
+	if meta := decodeToolCallMeta(*hostedStart); meta == nil || meta.Command != "web search" {
 		t.Fatalf("hosted tool start presentation = %+v, want typed query input", meta)
 	}
 
@@ -438,7 +438,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 		if output["error"] != tools.InvalidWebSearchQueryMessage {
 			t.Fatalf("expected persisted invalid query error, got %+v", output)
 		}
-		if completion.Presentation == nil || completion.Presentation.Command != "web search: invalid query" {
+		if completion.Presentation == nil || completion.Presentation.Command != "web search" {
 			t.Fatalf("persisted hosted presentation = %+v, want typed query input", completion.Presentation)
 		}
 	}

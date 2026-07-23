@@ -58,6 +58,26 @@ type CompleteRunRequest struct {
 	Actor              string
 	ExpectedGeneration int64
 	RequireGeneration  bool
+	Admission          CompletionAdmission
+}
+
+type CompletionAdmission struct {
+	idleSessionID *string
+}
+
+func NewIdleSessionCompletionAdmission(sessionID string) (CompletionAdmission, error) {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return CompletionAdmission{}, errors.New("session id is required")
+	}
+	return CompletionAdmission{idleSessionID: &trimmedSessionID}, nil
+}
+
+func (a CompletionAdmission) idleSession() (string, bool) {
+	if a.idleSessionID == nil {
+		return "", false
+	}
+	return *a.idleSessionID, true
 }
 
 type CompletionValidationIssue struct {
@@ -706,6 +726,14 @@ func prepareCompleteRunRequest(req CompleteRunRequest) (CompleteRunRequest, erro
 	if actor != "agent" && actor != "script" && actor != "user" && actor != "system" {
 		return CompleteRunRequest{}, fmt.Errorf("unsupported transition actor %q", actor)
 	}
+	if _, idleSessionCompletion := req.Admission.idleSession(); idleSessionCompletion {
+		if actor != "agent" {
+			return CompleteRunRequest{}, errors.New("idle session completion requires an agent actor")
+		}
+		if !req.RequireGeneration {
+			return CompleteRunRequest{}, errors.New("idle session completion requires an exact run generation")
+		}
+	}
 	if req.OutputValues == nil {
 		req.OutputValues = map[string]string{}
 	}
@@ -729,8 +757,12 @@ func (s *Store) prepareRunCompletion(ctx context.Context, req CompleteRunRequest
 	if run.CompletedAtUnixMs.Valid {
 		return preparedRunCompletion{}, ErrRunAlreadyCompleted
 	}
-	if run.InterruptedAtUnixMs.Valid {
+	idleSessionID, idleSessionCompletion := req.Admission.idleSession()
+	if !idleSessionCompletion && run.InterruptedAtUnixMs.Valid {
 		return preparedRunCompletion{}, errors.New("run already interrupted")
+	}
+	if idleSessionCompletion && !run.InterruptedAtUnixMs.Valid {
+		return preparedRunCompletion{}, errors.New("idle session completion requires an interrupted run")
 	}
 	if req.RequireGeneration && run.RunGeneration != req.ExpectedGeneration {
 		return preparedRunCompletion{}, fmt.Errorf("%w: got %d want %d", ErrStaleRunGeneration, req.ExpectedGeneration, run.RunGeneration)
@@ -738,6 +770,14 @@ func (s *Store) prepareRunCompletion(ctx context.Context, req CompleteRunRequest
 	snapshot := runStartSnapshot{}
 	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
 		return preparedRunCompletion{}, err
+	}
+	if idleSessionCompletion {
+		if snapshot.Node.Kind != workflow.NodeKindAgent {
+			return preparedRunCompletion{}, errors.New("idle session completion requires an agent node")
+		}
+		if !run.SessionID.Valid || strings.TrimSpace(run.SessionID.String) != idleSessionID {
+			return preparedRunCompletion{}, errors.New("idle session completion requires the matching retained session")
+		}
 	}
 	if snapshot.Node.Kind == workflow.NodeKindScript {
 		refreshed, err := s.liveScriptRunStartSnapshot(ctx, task, snapshot.Node.ID)
@@ -827,17 +867,33 @@ func (s *Store) completePreparedRun(ctx context.Context, req CompleteRunRequest,
 		appliedAt = sql.NullInt64{}
 	}
 	transitionID := prefixedID("transition")
+	result := CompleteRunResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: requiresApproval}
+	if run.InterruptedAtUnixMs.Valid {
+		projection, present, err := pendingInterruptedRunAttentionProjection(ctx, s.queries, workflow.RunID(run.ID))
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+		if present {
+			result.ResolvedInterruptedRunProjections = append(result.ResolvedInterruptedRunProjections, projection)
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	expectedSessionID := sql.NullString{}
+	if idleSessionID, idleSessionCompletion := req.Admission.idleSession(); idleSessionCompletion {
+		expectedSessionID = sql.NullString{String: idleSessionID, Valid: true}
+	}
 	updatedCount, err := q.CompleteRunUpdateRun(ctx, sqlitegen.CompleteRunUpdateRunParams{
-		UpdatedAtUnixMs:   now,
-		CompletedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
-		RunID:             run.ID,
-		RunGeneration:     run.RunGeneration,
+		UpdatedAtUnixMs:             now,
+		CompletedAtUnixMs:           sql.NullInt64{Int64: now, Valid: true},
+		RunID:                       run.ID,
+		RunGeneration:               run.RunGeneration,
+		ExpectedInterruptedAtUnixMs: run.InterruptedAtUnixMs,
+		ExpectedSessionID:           expectedSessionID,
 	})
 	if err != nil {
 		return CompleteRunResult{}, fmt.Errorf("complete run: %w", err)
@@ -856,7 +912,6 @@ func (s *Store) completePreparedRun(ctx context.Context, req CompleteRunRequest,
 	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: run.TaskID, SourceRunID: sql.NullString{String: run.ID, Valid: true}, SourcePlacementID: sql.NullString{String: run.PlacementID, Valid: true}, SourceNodeKey: string(snapshot.Node.Key), SourceNodeDisplayName: snapshot.Node.DisplayName, TransitionID: group.TransitionID, TransitionDisplayName: group.DisplayName, WorkflowRevisionSeen: snapshot.WorkflowRevisionSeen, Actor: req.Actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
 		return CompleteRunResult{}, fmt.Errorf("insert completion transition: %w", err)
 	}
-	result := CompleteRunResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: requiresApproval}
 	for _, edge := range group.Edges {
 		if requiresApproval {
 			resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)

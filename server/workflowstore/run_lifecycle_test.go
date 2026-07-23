@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,15 @@ func (f runLifecycleFixture) recordViolation(t *testing.T, req RecordProtocolVio
 		t.Fatalf("RecordProtocolViolation: %v", err)
 	}
 	return result
+}
+
+func idleSessionCompletionAdmission(t *testing.T, sessionID string) CompletionAdmission {
+	t.Helper()
+	admission, err := NewIdleSessionCompletionAdmission(sessionID)
+	if err != nil {
+		t.Fatalf("NewIdleSessionCompletionAdmission: %v", err)
+	}
+	return admission
 }
 
 func TestRecordProtocolViolationInterruptsAtCap(t *testing.T) {
@@ -474,6 +484,174 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 	reclaimed := claimRunFixture(t, f.ctx, f.store, f.started.RunID, resumed.Generation)
 	if err := f.store.AttachRunSession(f.ctx, f.started.RunID, reclaimed.Generation, sessionID); err != nil {
 		t.Fatalf("AttachRunSession same session after resume: %v", err)
+	}
+}
+
+func TestCompleteInterruptedRunFromIdleSessionSupersedesInterruption(t *testing.T) {
+	f := newRunLifecycleFixture(t)
+	claimed := f.claim(t)
+	sessionID := f.attachSession(t, claimed)
+	if err := f.store.InterruptRunGeneration(
+		f.ctx,
+		f.started.RunID,
+		claimed.Generation,
+		"workflow_runtime_failed",
+		`{"error":"provider unavailable"}`,
+	); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	completed, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{
+		RunID:              f.started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+		Admission:          idleSessionCompletionAdmission(t, sessionID),
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if len(completed.Result.ResolvedInterruptedRunProjections) != 1 {
+		t.Fatalf("resolved interrupted run projections = %+v, want one", completed.Result.ResolvedInterruptedRunProjections)
+	}
+	projection := completed.Result.ResolvedInterruptedRunProjections[0]
+	if projection.RunID != f.started.RunID || projection.SessionID != sessionID {
+		t.Fatalf("resolved interrupted run projection = %+v, want run %s session %s", projection, f.started.RunID, sessionID)
+	}
+	runs := f.runs(t)
+	if len(runs) != 1 || runs[0].CompletedAt == nil || runs[0].InterruptedAt != nil || runs[0].InterruptionReason != nil {
+		t.Fatalf("completed run = %+v, want completed non-interrupted source", runs)
+	}
+	persisted, err := f.store.queries.GetTaskRun(f.ctx, string(f.started.RunID))
+	if err != nil {
+		t.Fatalf("GetTaskRun: %v", err)
+	}
+	if persisted.InterruptionDetailJson != "{}" {
+		t.Fatalf("completed interruption detail = %q, want legacy empty object", persisted.InterruptionDetailJson)
+	}
+}
+
+func TestCompleteInterruptedRunFromIdleSessionHasOneCompletionAuthority(t *testing.T) {
+	f := newRunLifecycleFixture(t)
+	claimed := f.claim(t)
+	sessionID := f.attachSession(t, claimed)
+	if err := f.store.InterruptRunGeneration(
+		f.ctx,
+		f.started.RunID,
+		claimed.Generation,
+		"manual",
+		"{}",
+	); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	request := CompleteRunRequest{
+		RunID:              f.started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+		Admission:          idleSessionCompletionAdmission(t, sessionID),
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for range 2 {
+		go func() {
+			ready.Done()
+			<-start
+			_, err := f.store.CompleteRun(context.Background(), request)
+			results <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	successes := 0
+	rejections := 0
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case errors.Is(err, sql.ErrNoRows), errors.Is(err, ErrRunAlreadyCompleted):
+			rejections++
+		default:
+			t.Fatalf("concurrent idle completion error = %T %v, want stale completion rejection", err, err)
+		}
+	}
+	if successes != 1 || rejections != 1 {
+		t.Fatalf("concurrent idle completions successes=%d rejections=%d, want 1/1", successes, rejections)
+	}
+	transitions, err := f.store.ListTransitions(f.ctx, f.task.ID)
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	completionTransitions := 0
+	for _, transition := range transitions {
+		if transition.TransitionID == "done" {
+			completionTransitions++
+		}
+	}
+	if completionTransitions != 1 {
+		t.Fatalf("transitions after concurrent idle completion = %+v, want one done transition", transitions)
+	}
+}
+
+func TestCompleteInterruptedRunFromIdleSessionRejectsDifferentSession(t *testing.T) {
+	f := newRunLifecycleFixture(t)
+	claimed := f.claim(t)
+	f.attachSession(t, claimed)
+	if err := f.store.InterruptRunGeneration(
+		f.ctx,
+		f.started.RunID,
+		claimed.Generation,
+		"manual",
+		"{}",
+	); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	if _, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{
+		RunID:              f.started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+		Admission:          idleSessionCompletionAdmission(t, "session-other"),
+	}); err == nil {
+		t.Fatal("CompleteRun accepted a different retained session")
+	}
+	runs := f.runs(t)
+	if len(runs) != 1 || runs[0].CompletedAt != nil || runs[0].InterruptedAt == nil {
+		t.Fatalf("run after different-session completion = %+v, want interrupted source unchanged", runs)
+	}
+}
+
+func TestCompleteInterruptedScriptRunRejectsIdleSessionAdmission(t *testing.T) {
+	f := newScriptExecutionFixture(t, "scripts/run", []byte("#!/bin/sh\nexit 0\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
+	claimed := claimRunFixture(t, f.ctx, f.store, started.RunID, 0)
+	sessionID := "session-invalid-script-binding"
+	if err := f.store.InterruptRunGeneration(
+		f.ctx,
+		started.RunID,
+		claimed.Generation,
+		"manual",
+		"{}",
+	); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	if _, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{
+		RunID:              started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+		Admission:          idleSessionCompletionAdmission(t, sessionID),
+	}); err == nil {
+		t.Fatal("CompleteRun accepted idle session admission for a Script Node")
+	}
+	runs, err := f.store.ListRuns(f.ctx, f.task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].CompletedAt != nil || runs[0].InterruptedAt == nil {
+		t.Fatalf("script run after idle session completion = %+v, want interrupted source unchanged", runs)
 	}
 }
 

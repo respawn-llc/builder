@@ -110,6 +110,9 @@ func normalizeMessageRecord(message MessageRecord) (MessageRecord, error) {
 	if message.BackgroundActivityID, err = normalizeOptionalEventIdentity("background activity identity", message.BackgroundActivityID); err != nil {
 		return MessageRecord{}, err
 	}
+	if hasPartialBackgroundNoticeIdentity(message) {
+		return MessageRecord{}, errBackgroundNoticePartialIdentity
+	}
 	if message.Phase, err = normalizeOptionalMessagePhase(message.Phase); err != nil {
 		return MessageRecord{}, err
 	}
@@ -150,6 +153,12 @@ func normalizeMessageRecord(message MessageRecord) (MessageRecord, error) {
 		}
 	}
 	return message, nil
+}
+
+func hasPartialBackgroundNoticeIdentity(message MessageRecord) bool {
+	return message.MessageType != nil &&
+		*message.MessageType == MessageTypeBackgroundNotice &&
+		(message.Name == nil) != (message.BackgroundActivityID == nil)
 }
 
 func validateMessageRole(role MessageRole) error {

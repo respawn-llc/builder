@@ -160,6 +160,38 @@ func TestEventLogV1MessageSemanticFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEventLogV1RejectsBackgroundNoticeWithPartialIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		message  *string
+		activity *string
+	}{
+		{
+			name:    "process only",
+			message: stringPointer("4345"),
+		},
+		{
+			name:     "activity only",
+			activity: stringPointer("b2a700e9-1d0b-42bb-86b9-d8912f0b4119"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewEventRecord(1, nil, MessageRecord{
+				Role:                 MessageRoleDeveloper,
+				MessageType:          messageTypePointer(MessageTypeBackgroundNotice),
+				Content:              stringPointer("background completed"),
+				Name:                 test.message,
+				BackgroundActivityID: test.activity,
+			})
+			if err == nil {
+				t.Fatal("expected partial background identity rejection")
+			}
+		})
+	}
+}
+
 func TestEventLogV1MessageKeepsAbsentContentAbsent(t *testing.T) {
 	record, err := NewEventRecord(1, nil, MessageRecord{Role: MessageRoleAssistant})
 	if err != nil {

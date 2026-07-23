@@ -702,6 +702,12 @@ func decodeLegacyMessageV0(payload json.RawMessage) (MessageRecord, error) {
 		BackgroundActivityID: optionalLegacyString(legacy.BackgroundActivityID),
 		BackgroundExitCode:   cloneOptionalLegacyValue(legacy.BackgroundExitCode),
 	}
+	if hasPartialBackgroundNoticeIdentity(record) {
+		// Legacy background notices stored only a process identifier in name.
+		// V1 models background identity as an all-or-nothing activity/process pair.
+		record.Name = nil
+		record.BackgroundActivityID = nil
+	}
 	for _, call := range legacy.ToolCalls {
 		kind := ToolCallKindFunction
 		if call.Custom {

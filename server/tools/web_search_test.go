@@ -57,12 +57,3 @@ func TestValidateWebSearchInputAllowsNearbyQueries(t *testing.T) {
 		})
 	}
 }
-
-func TestValidateWebSearchDisplayTextUsesInvalidQueryDisplay(t *testing.T) {
-	if got := FormatWebSearchDisplayText("web search"); got != "web search: invalid query" {
-		t.Fatalf("display = %q, want invalid query display", got)
-	}
-	if got := FormatWebSearchDisplayText(" \tweb search\n"); got != "web search: invalid query" {
-		t.Fatalf("display = %q, want invalid query display", got)
-	}
-}

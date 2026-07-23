@@ -416,8 +416,10 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 
 func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+		},
 		Selector:            worktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}

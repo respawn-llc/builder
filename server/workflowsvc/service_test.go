@@ -1327,6 +1327,48 @@ func TestServiceCompleteWorkflowTaskMapsMissingActiveTarget(t *testing.T) {
 	}
 }
 
+func TestServiceCompleteWorkflowTaskFromInterruptedAgentSessionAppliesCurrentTransition(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	sessionID := "session-interactive-continuation"
+	claimed := claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, sessionID)
+	if err := service.store.InterruptRunGeneration(
+		ctx,
+		workflow.RunID(started.RunID),
+		claimed.Generation,
+		workflowattention.InterruptionReasonUserInterrupt,
+		"{}",
+	); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	completed, err := service.CompleteWorkflowTask(ctx, serverapi.WorkflowTaskCompleteRequest{
+		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
+		AgentSessionID: sessionID,
+		Commentary:     "continued from the TUI",
+		OutputValues:   map[string]string{"prior_summary": "plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWorkflowTask: %v", err)
+	}
+	if completed.TaskID != task.Task.ID || completed.RunID != started.RunID || completed.State != "applied" {
+		t.Fatalf("complete response = %+v", completed)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 2 ||
+		runs[0].CompletedAt == nil ||
+		runs[0].InterruptedAt != nil ||
+		runs[1].StartedAt != nil {
+		t.Fatalf("runs after interactive continuation completion = %+v", runs)
+	}
+}
+
 func TestServiceCompleteWorkflowTaskRejectsAgentCrossSessionSelector(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)

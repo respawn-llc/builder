@@ -95,7 +95,30 @@ type TerminalResizePolicy uint8
 const (
 	TerminalResizeSemanticPrompt TerminalResizePolicy = iota + 1
 	TerminalResizeWidthRehydration
+	TerminalResizeTmuxWidthRehydration
 )
+
+func (p TerminalResizePolicy) usesWidthRehydration() bool {
+	switch p {
+	case TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
+
+func (p TerminalResizePolicy) bottomAnchorsVerticalExpansion() bool {
+	switch p {
+	case TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
 
 type Surface struct {
 	writer             io.Writer
@@ -144,7 +167,7 @@ func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 		writer = io.Discard
 	}
 	switch options.TerminalResize {
-	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
 	default:
 		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", options.TerminalResize))
 	}
@@ -356,7 +379,7 @@ func (s *Surface) ObserveResize(size Size) Result {
 }
 
 func (s *Surface) observeResize(size Size) Result {
-	if s.terminalResize != TerminalResizeWidthRehydration {
+	if !s.terminalResize.usesWidthRehydration() {
 		return Result{}
 	}
 	if s.lastPaintedSize != nil &&
@@ -374,10 +397,16 @@ func (s *Surface) immutableScrollbackProduced() bool {
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
-	linesToErase := s.physicalPreviousBandHeight(frame.Size)
+	previousMutableBand := s.visiblePreviousMutableBand(frame.Size)
+	linesToErase := s.previousMutableBandHeightAtBottom(frame.Size)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
+	if s.terminalResize.usesWidthRehydration() &&
+		s.terminalHeightExpanded(frame.Size) &&
+		previousMutableBand != nil {
+		writeMutableRowsErase(&transaction, previousMutableBand.start, previousMutableBand.end)
+	}
 	writeMutableBandErase(&transaction, frame.Size.Height, linesToErase)
 	writeCursor(&transaction, Cursor{})
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
@@ -449,9 +478,13 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // ongoingRenderMode selects the renderer mode for a committed row in the
 // ongoing surface. O rows render their full ongoing preview; OC rows render
 // the collapsed/short ongoing form per tui-transcript.md visibility rules.
-// Answered questions are the typed multi-line exception. D and X rows never
-// reach this path.
+// Verbose supervisor suggestions are an O-row exception: their complete
+// typed suggestion list belongs in native scrollback. Answered questions are
+// the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if isVerboseReviewerSuggestionsRow(row) {
+		return transcriptrender.ModeOngoingFull
+	}
 	switch row.Visibility {
 	case clientui.EntryVisibilityOngoingCollapsed:
 		return transcriptrender.ModeOngoingCollapsed
@@ -460,6 +493,13 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	default:
 		panic(fmt.Sprintf("ongoing render received non-ongoing visibility %q", row.Visibility))
 	}
+}
+
+func isVerboseReviewerSuggestionsRow(row clientui.TranscriptCommittedRow) bool {
+	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
+		return false
+	}
+	return transcript.EntryRole(row.Notice.Diagnostic.Code) == transcript.EntryRoleReviewerSuggestions
 }
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {

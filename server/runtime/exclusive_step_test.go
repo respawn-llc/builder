@@ -12,6 +12,8 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type stubExclusiveStepLifecycle struct {
@@ -747,12 +749,16 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	steps := &stubExclusiveStepLifecycle{}
 	steps.setBusy(true)
 	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
+	backgroundActivityID := uuid.NewString()
 
 	scheduler.QueueDeveloperNotice(llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:        textutil.Value("1000"),
-		Content:     textutil.Value("Background shell 1000 completed."),
+		BackgroundActivityID: textutil.Value(
+			backgroundActivityID,
+		),
+		Content: textutil.Value("Background shell 1000 completed."),
 	})
 
 	if steps.calls() != 0 {
@@ -794,7 +800,8 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	for _, msg := range requestMessages(request) {
 		if msg.Role == llm.RoleDeveloper &&
 			msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice &&
-			msg.Name != nil && *msg.Name == "1000" {
+			msg.Name != nil && *msg.Name == "1000" &&
+			msg.BackgroundActivityID != nil && *msg.BackgroundActivityID == backgroundActivityID {
 			foundNotice = true
 			break
 		}

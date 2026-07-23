@@ -25,9 +25,11 @@ func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(
 	result := make(chan error, 1)
 	go func() {
 		_, err := env.service.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-			Selector:    "main",
+			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+				OperationID: serverapi.NewWorktreeOperationID(),
+				SessionID:   env.session.Meta().SessionID,
+			},
+			Selector: "main",
 		})
 		result <- err
 	}()
@@ -59,9 +61,11 @@ func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 		{selector: filepath.Base(validRoot), kind: serverapi.WorktreeSelectorErrorKindAmbiguous},
 	} {
 		_, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
-			Selector:    testCase.selector,
+			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+				OperationID: serverapi.NewWorktreeOperationID(),
+				SessionID:   env.session.Meta().SessionID,
+			},
+			Selector: testCase.selector,
 		})
 		var selectorErr *serverapi.WorktreeSelectorError
 		if !errors.As(err, &selectorErr) || selectorErr.Kind != testCase.kind {
@@ -74,18 +78,70 @@ func TestModelStepEnterRejectsInactiveExactExecution(t *testing.T) {
 	env := newServiceTestEnv(t)
 	createExternalWorktree(t, env, "feature/model-step-enter")
 	ack, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
-		OperationID: serverapi.NewWorktreeOperationID(),
-		SessionID:   env.session.Meta().SessionID,
-		Selector:    "feature/model-step-enter",
-		Origin: &serverapi.RuntimeStepOrigin{
-			RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
-			StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+			Origin: &serverapi.RuntimeStepOrigin{
+				RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
+				StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+			},
 		},
+		Selector: "feature/model-step-enter",
 	})
 	var immediate *serverapi.WorktreeImmediateTransitionError
 	if !errors.As(err, &immediate) || immediate.Kind != serverapi.WorktreeImmediateTransitionOriginInactive ||
 		ack != (serverapi.WorktreeScheduledAcknowledgement{}) {
 		t.Fatalf("ack=%+v err=%v", ack, err)
+	}
+}
+
+func TestModelStepLeaveAndCurrentDeleteRejectInactiveExactExecution(t *testing.T) {
+	origin := &serverapi.RuntimeStepOrigin{
+		RunID:  "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID: "018fdd67-89ab-4cde-8123-456789abc002",
+	}
+	for _, operation := range []struct {
+		name string
+		run  func(*serviceTestEnv) error
+	}{
+		{
+			name: "leave",
+			run: func(env *serviceTestEnv) error {
+				_, err := env.service.LeaveWorktree(env.ctx, serverapi.WorktreeLeaveRequest{
+					WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+						OperationID: serverapi.NewWorktreeOperationID(),
+						SessionID:   env.session.Meta().SessionID,
+						Origin:      origin,
+					},
+				})
+				return err
+			},
+		},
+		{
+			name: "delete_current",
+			run: func(env *serviceTestEnv) error {
+				created := mustCreateWorktree(t, env, "feature/model-step-delete")
+				updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+				_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+					WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+						OperationID: serverapi.NewWorktreeOperationID(),
+						SessionID:   env.session.Meta().SessionID,
+						Origin:      origin,
+					},
+					Selector:            created.WorktreeID,
+					BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+				})
+				return err
+			},
+		},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			err := operation.run(newServiceTestEnv(t))
+			var immediate *serverapi.WorktreeImmediateTransitionError
+			if !errors.As(err, &immediate) || immediate.Kind != serverapi.WorktreeImmediateTransitionOriginInactive {
+				t.Fatalf("error=%v, want inactive model-step origin", err)
+			}
+		})
 	}
 }
 

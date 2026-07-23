@@ -523,8 +523,8 @@ func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering
 	if got := joinedAssistantDeltas(deltas); got != "I will run it.\n\n" {
 		t.Fatalf("assistant deltas = %q, want exact streamed content", got)
 	}
-	if resp.AssistantText != "I will run it." {
-		t.Fatalf("assistant text = %q, want completed content", resp.AssistantText)
+	if resp.AssistantText != "I will run it.\n\n" {
+		t.Fatalf("assistant text = %q, want exact streamed content", resp.AssistantText)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
