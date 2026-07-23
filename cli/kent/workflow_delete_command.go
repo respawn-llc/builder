@@ -26,13 +26,14 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		workflowID := selector.PersistedID()
+		workflowDisplayID := selector.String()
 		preview, err := remote.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if preview.Impact.WorkflowID != workflowID {
-			fmt.Fprintf(stderr, "workflow deletion preview identity %q does not match requested workflow %q\n", preview.Impact.WorkflowID, workflowID)
+			fmt.Fprintf(stderr, "workflow deletion preview identity %q does not match requested workflow %q\n", preview.Impact.WorkflowID, workflowDisplayID)
 			return 1
 		}
 		previewOutput, err := workflowDeleteResponseForCLI(serverapi.WorkflowDeleteResponse{Impact: preview.Impact})
@@ -64,11 +65,11 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		if resp.Impact.WorkflowID != workflowID {
-			fmt.Fprintf(stderr, "workflow deletion result identity %q does not match requested workflow %q\n", resp.Impact.WorkflowID, workflowID)
+			fmt.Fprintf(stderr, "workflow deletion result identity %q does not match requested workflow %q\n", resp.Impact.WorkflowID, workflowDisplayID)
 			return 1
 		}
 		if resp.Deleted == (len(resp.Blockers) > 0) {
-			fmt.Fprintf(stderr, "workflow deletion returned inconsistent result: deleted=%t blockers=%d workflow=%q\n", resp.Deleted, len(resp.Blockers), workflowID)
+			fmt.Fprintf(stderr, "workflow deletion returned inconsistent result: deleted=%t blockers=%d workflow=%q\n", resp.Deleted, len(resp.Blockers), workflowDisplayID)
 			return 1
 		}
 		output, err := workflowDeleteResponseForCLI(resp)

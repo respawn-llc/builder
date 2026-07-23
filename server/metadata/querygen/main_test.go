@@ -70,14 +70,24 @@ func (q *Queries) list(ctx context.Context, value string) ([]string, error) {
 	}
 	return items, nil
 }
+
+func (q *Queries) switchExecute(ctx context.Context, execute bool) error {
+	switch {
+	case execute:
+		_, err := q.db.ExecContext(ctx, switchQuery)
+		return err
+	default:
+		return nil
+	}
+}
 `)
 	annotated, err := annotateSource(source)
 	if err != nil {
 		t.Fatalf("annotate source: %v", err)
 	}
 	diagnosticCalls := countDiagnosticCalls(t, annotated)
-	if diagnosticCalls != 6 {
-		t.Fatalf("diagnostic call count = %d, want 6", diagnosticCalls)
+	if diagnosticCalls != 7 {
+		t.Fatalf("diagnostic call count = %d, want 7", diagnosticCalls)
 	}
 	repeated, err := annotateSource(annotated)
 	if err != nil {

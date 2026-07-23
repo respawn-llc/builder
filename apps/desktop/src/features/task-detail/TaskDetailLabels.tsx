@@ -15,14 +15,14 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
     () => new Map(catalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
     [catalog.data?.labels],
   );
-  const selectedLabelIDs = assignment.snapshot?.visibleLabelIDs ?? [];
+  const selectedLabelIDs = assignment.snapshot.visibleLabelIDs;
   const visibleLabels = selectedLabelIDs.flatMap((labelID) => {
     const name = labelNamesByID.get(labelID);
     return name === undefined ? [] : [{ id: labelID, name }];
   });
-  const pendingLabelIDs = new Set(assignment.snapshot?.pendingLabelIDs ?? []);
-  const triggerDisabled = disabled || assignment.snapshot?.closed === true;
-  const triggerLoading = catalog.isPending || assignment.snapshot === null;
+  const pendingLabelIDs = new Set(assignment.snapshot.pendingLabelIDs);
+  const triggerDisabled = disabled || assignment.snapshot.closed;
+  const triggerLoading = catalog.isPending;
   return (
     <TaskPropertyLine
       label={t("labels.filter")}
@@ -33,7 +33,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
               kind: "assignment",
               selectedLabelIDs,
               onSelectionChange(labelID, selected) {
-                assignment.controller?.setDesired(labelID, selected);
+                assignment.controller.setDesired(labelID, selected);
               },
             }}
             trigger={
@@ -75,7 +75,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
 function AssignmentFailures() {
   const { t } = useTranslation();
   const assignment = useTaskLabelAssignment();
-  const failures = assignment.snapshot?.failures ?? [];
+  const failures = assignment.snapshot.failures;
   if (failures.length === 0) {
     return null;
   }
@@ -86,7 +86,7 @@ function AssignmentFailures() {
           error={failure.error}
           key={failure.labelID}
           onRetry={() => {
-            assignment.controller?.retry(failure.labelID);
+            assignment.controller.retry(failure.labelID);
           }}
           title={t("labels.assignmentFailed")}
         />

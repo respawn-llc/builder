@@ -147,7 +147,9 @@ func annotateNestedBlocks(statement ast.Stmt, queryResults map[string]queryCall)
 	case *ast.SelectStmt:
 		annotateBlock(statement.Body, queryResults)
 	case *ast.CaseClause:
-		annotateBlock(&ast.BlockStmt{List: statement.Body}, queryResults)
+		block := &ast.BlockStmt{List: statement.Body}
+		annotateBlock(block, queryResults)
+		statement.Body = block.List
 	}
 }
 
