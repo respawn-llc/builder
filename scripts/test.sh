@@ -30,7 +30,8 @@ Environment:
   KENT_TEST_TIMEOUT_SECONDS
             Server test wall-clock cap in seconds. Defaults to 180.
   KENT_TEST_GO_PACKAGE_PARALLELISM
-            Maximum Go test packages to execute concurrently. Defaults to 4.
+            Maximum Go test packages to execute concurrently. Defaults to the detected CPU count,
+            capped at 18, and falls back to 4 when CPU detection is unavailable.
   KENT_TEST_TUI_TIMEOUT_SECONDS
             TUI test wall-clock cap in seconds. Defaults to 600.
   -h, --help
