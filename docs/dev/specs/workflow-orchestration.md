@@ -151,6 +151,11 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
+- When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
+- When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
+- Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
+- `compact_and_continue_session` uses the reassignment instructions because it delivers another executable Node assignment.
+- When Kent compacts the current Node assignment's context, it reinjects the compaction-reminder instructions for that same assignment.
 - Prompt explains task identity, node role/assignee, selected completion behavior, question behavior, handoff/transition mechanics, task comments, and why ordinary final answers are invalid when the selected mode does not accept them.
 - Agent Sessions created by Workflow Execution begin at subagent depth `0`. Delegation from a Workflow agent follows the global subagent-depth policy.
 - Ordinary final response text cannot bypass the selected completion mode.
