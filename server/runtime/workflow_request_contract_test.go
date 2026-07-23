@@ -53,3 +53,26 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		}
 	}
 }
+
+func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		Config{
+			Model:        "gpt-5",
+			EnabledTools: []toolspec.ID{toolspec.ToolCompleteNode},
+		},
+	)
+
+	request, err := engine.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("build non-workflow request: %v", err)
+	}
+	if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("non-workflow tool choice mode = %q, want automatic", request.ToolChoiceMode)
+	}
+	if len(request.Tools) != 0 {
+		t.Fatalf("non-workflow request advertised workflow-only tools: %+v", request.Tools)
+	}
+}
