@@ -12,6 +12,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/session"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -126,7 +127,9 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	sessionID := plan.Descriptor.SessionID()
 	workdir := headlessRuntimeWorkdir(plan)
 	var currentWorktreeRoot *string
-	if plan.WorktreeReminder != nil && strings.TrimSpace(plan.WorktreeReminder.WorktreePath) != "" {
+	if plan.WorktreeReminder != nil &&
+		plan.WorktreeReminder.Mode == session.WorktreeReminderModeEnter &&
+		strings.TrimSpace(plan.WorktreeReminder.WorktreePath) != "" {
 		root := plan.WorktreeReminder.WorktreePath
 		currentWorktreeRoot = &root
 	}
