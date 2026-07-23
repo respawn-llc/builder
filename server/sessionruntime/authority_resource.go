@@ -51,33 +51,6 @@ type AgentResourceLifecycle interface {
 	ResourceDraining(context.Context, AgentResourceDescriptor) error
 }
 
-type AgentResourceLifecycleFuncs struct {
-	Ready    func(context.Context, AgentResourceDescriptor, *runtime.Engine, AgentResourceRetainer) error
-	Draining func(context.Context, AgentResourceDescriptor) error
-}
-
-func (f AgentResourceLifecycleFuncs) ResourceReady(
-	ctx context.Context,
-	resource AgentResourceDescriptor,
-	engine *runtime.Engine,
-	retain AgentResourceRetainer,
-) error {
-	if f.Ready == nil {
-		return nil
-	}
-	return f.Ready(ctx, resource, engine, retain)
-}
-
-func (f AgentResourceLifecycleFuncs) ResourceDraining(
-	ctx context.Context,
-	resource AgentResourceDescriptor,
-) error {
-	if f.Draining == nil {
-		return nil
-	}
-	return f.Draining(ctx, resource)
-}
-
 type AgentResourceStepLifecycle interface {
 	StepBegan(context.Context, AgentResourceDescriptor, ExecutionScope, runtime.StepLifecycleSnapshot) error
 	StepEnded(context.Context, AgentResourceDescriptor, ExecutionScope, runtime.StepLifecycleSnapshot) error

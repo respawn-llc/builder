@@ -44,24 +44,8 @@ func (e *IrreconcilableRecoveryDetail) Error() string {
 	if e == nil {
 		return "irreconcilable session recovery state"
 	}
-	suffix := ""
-	if e.Suffix != nil {
-		suffix = fmt.Sprintf(
-			" suffix_start_offset=%d suffix_end_offset=%d suffix_event_count=%d suffix_first_sequence=%d suffix_last_sequence=%d suffix_sha256=%q",
-			e.Suffix.StartOffset,
-			e.Suffix.EndOffset,
-			e.Suffix.EventCount,
-			e.Suffix.FirstSequence,
-			e.Suffix.LastSequence,
-			e.Suffix.SHA256,
-		)
-	}
-	cause := ""
-	if e.cause != nil {
-		cause = fmt.Sprintf(" cause=%q", e.cause.Error())
-	}
-	return fmt.Sprintf(
-		"irreconcilable session recovery: session_id=%q operation=%q conflict=%q recovery_path=%q events_path=%q current_metadata_sha256=%q pre_metadata_sha256=%q post_metadata_sha256=%q phase=%q%s%s",
+	format := "irreconcilable session recovery: session_id=%q operation=%q conflict=%q recovery_path=%q events_path=%q current_metadata_sha256=%q pre_metadata_sha256=%q post_metadata_sha256=%q phase=%q"
+	args := []any{
 		e.SessionID,
 		e.Operation,
 		e.Conflict,
@@ -71,9 +55,23 @@ func (e *IrreconcilableRecoveryDetail) Error() string {
 		e.PreMetadataSHA256,
 		e.PostMetadataSHA256,
 		e.Phase,
-		suffix,
-		cause,
-	)
+	}
+	if e.Suffix != nil {
+		format += " suffix_start_offset=%d suffix_end_offset=%d suffix_event_count=%d suffix_first_sequence=%d suffix_last_sequence=%d suffix_sha256=%q"
+		args = append(args,
+			e.Suffix.StartOffset,
+			e.Suffix.EndOffset,
+			e.Suffix.EventCount,
+			e.Suffix.FirstSequence,
+			e.Suffix.LastSequence,
+			e.Suffix.SHA256,
+		)
+	}
+	if e.cause != nil {
+		format += " cause=%q"
+		args = append(args, e.cause.Error())
+	}
+	return fmt.Sprintf(format, args...)
 }
 
 func (e *IrreconcilableRecoveryDetail) Unwrap() []error {

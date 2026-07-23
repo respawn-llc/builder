@@ -77,30 +77,11 @@ func TestPlanExistingWorkflowSessionSerializesReplacementOnCurrentResource(t *te
 	if err != nil {
 		t.Fatalf("create runtime plan: %v", err)
 	}
-	replacementReady := make(chan struct{})
-	releaseReplacementReady := make(chan struct{})
-	var releaseReplacementReadyOnce sync.Once
-	blockReplacementReady := false
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: persistenceRoot,
 		StoreOptions:    storeOptions,
-		ResourceLifecycle: sessionruntime.AgentResourceLifecycleFuncs{
-			Ready: func(ctx context.Context, _ sessionruntime.AgentResourceDescriptor, _ *runtime.Engine, _ sessionruntime.AgentResourceRetainer) error {
-				if !blockReplacementReady {
-					return nil
-				}
-				close(replacementReady)
-				select {
-				case <-releaseReplacementReady:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-		},
 	})
 	t.Cleanup(func() {
-		releaseReplacementReadyOnce.Do(func() { close(releaseReplacementReady) })
 		if closeErr := authority.Close(context.Background()); closeErr != nil {
 			t.Errorf("close authority: %v", closeErr)
 		}
@@ -135,6 +116,26 @@ func TestPlanExistingWorkflowSessionSerializesReplacementOnCurrentResource(t *te
 		},
 	}
 
+	planningPersisted, releasePlanningPersistence := persistenceGate.BlockNext()
+	t.Cleanup(releasePlanningPersistence)
+	planned := make(chan error, 1)
+	go func() {
+		_, _, planErr := starter.planSession(ctx, input)
+		planned <- planErr
+	}()
+	select {
+	case <-planningPersisted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("workflow planning mutation did not reach persistence gate")
+	}
+	if _, err := authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		sessionruntime.SessionStartBlockMaintenance,
+	); !errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
+		t.Fatalf("workflow planning admission = %v, want ErrSessionStartAdmissionBusy", err)
+	}
+
 	replacementRelease := make(chan struct{})
 	var releaseReplacement sync.Once
 	t.Cleanup(func() { releaseReplacement.Do(func() { close(replacementRelease) }) })
@@ -146,7 +147,6 @@ func TestPlanExistingWorkflowSessionSerializesReplacementOnCurrentResource(t *te
 	if err != nil {
 		t.Fatalf("new open session descriptor: %v", err)
 	}
-	blockReplacementReady = true
 	replaced := make(chan replacementResult, 1)
 	go func() {
 		handle, startErr := authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
@@ -164,33 +164,10 @@ func TestPlanExistingWorkflowSessionSerializesReplacementOnCurrentResource(t *te
 		})
 		replaced <- replacementResult{handle: handle, err: startErr}
 	}()
-	select {
-	case <-replacementReady:
-	case result := <-replaced:
-		t.Fatalf("replacement completed before entering its ready lifecycle: handle=%v error=%v", result.handle, result.err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("replacement did not enter its ready lifecycle")
-	}
-	if _, err := authority.TryBlockSessionStarts(
-		context.Background(),
-		[]runtimeids.SessionID{sessionID},
-		sessionruntime.SessionStartBlockMaintenance,
-	); !errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
-		t.Fatalf("replacement admission = %v, want ErrSessionStartAdmissionBusy", err)
-	}
-
-	planningPersisted, releasePlanningPersistence := persistenceGate.BlockNext()
-	t.Cleanup(releasePlanningPersistence)
-	planned := make(chan error, 1)
-	go func() {
-		_, _, planErr := starter.planSession(ctx, input)
-		planned <- planErr
-	}()
-	releaseReplacementReadyOnce.Do(func() { close(releaseReplacementReady) })
-	select {
-	case <-planningPersisted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("workflow planning mutation did not reach persistence after replacement admission cleared")
+	if err := authority.WithRuntime(ctx, initial.Resource(), func(context.Context, *runtime.Engine) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("current resource was unavailable while workflow planning owned the session: %v", err)
 	}
 
 	releasePlanningPersistence()

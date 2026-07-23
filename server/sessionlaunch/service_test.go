@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -131,7 +129,7 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}
 }
 
-func TestServiceOpenExistingPlanningWaitsForRuntimeActivationAdmission(t *testing.T) {
+func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "sessions")
@@ -149,29 +147,14 @@ func TestServiceOpenExistingPlanningWaitsForRuntimeActivationAdmission(t *testin
 		t.Fatalf("create session: %v", err)
 	}
 	sessionID := mustSessionLaunchIntentID(t, store.Meta().SessionID)
-	activationReady := make(chan struct{})
-	releaseActivationReady := make(chan struct{})
-	var releaseActivationReadyOnce sync.Once
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: root,
 		StoreOptions: []session.StoreOption{
 			session.WithPersistenceObserver(persistenceGate),
 			session.WithPersistedSessionResolver(persistence),
 		},
-		ResourceLifecycle: sessionruntime.AgentResourceLifecycleFuncs{
-			Ready: func(ctx context.Context, _ sessionruntime.AgentResourceDescriptor, _ *runtime.Engine, _ sessionruntime.AgentResourceRetainer) error {
-				close(activationReady)
-				select {
-				case <-releaseActivationReady:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-		},
 	})
 	t.Cleanup(func() {
-		releaseActivationReadyOnce.Do(func() { close(releaseActivationReady) })
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close runtime authority: %v", err)
 		}
@@ -208,6 +191,30 @@ func TestServiceOpenExistingPlanningWaitsForRuntimeActivationAdmission(t *testin
 		t.Fatalf("create runtime plan: %v", err)
 	}
 
+	planningPersisted, releasePlanningPersistence := persistenceGate.BlockNext()
+	t.Cleanup(releasePlanningPersistence)
+	planned := make(chan error, 1)
+	go func() {
+		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+			ClientRequestID: "planning-runtime-collision",
+			Mode:            serverapi.SessionLaunchModeInteractive,
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		})
+		planned <- planErr
+	}()
+	select {
+	case <-planningPersisted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("planning mutation did not reach persistence gate")
+	}
+	if _, err := authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		sessionruntime.SessionStartBlockMaintenance,
+	); !errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
+		t.Fatalf("planning admission = %v, want ErrSessionStartAdmissionBusy", err)
+	}
+
 	runnerRelease := make(chan struct{})
 	t.Cleanup(func() { close(runnerRelease) })
 	startDescriptor, err := session.NewOpenSessionDescriptor(sessionID)
@@ -235,38 +242,6 @@ func TestServiceOpenExistingPlanningWaitsForRuntimeActivationAdmission(t *testin
 		})
 		started <- startResult{handle: handle, err: startErr}
 	}()
-	select {
-	case <-activationReady:
-	case result := <-started:
-		t.Fatalf("runtime activation completed before entering its ready lifecycle: handle=%v error=%v", result.handle, result.err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("runtime activation did not enter its ready lifecycle")
-	}
-	if _, err := authority.TryBlockSessionStarts(
-		context.Background(),
-		[]runtimeids.SessionID{sessionID},
-		sessionruntime.SessionStartBlockMaintenance,
-	); !errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
-		t.Fatalf("runtime activation admission = %v, want ErrSessionStartAdmissionBusy", err)
-	}
-
-	planningPersisted, releasePlanningPersistence := persistenceGate.BlockNext()
-	t.Cleanup(releasePlanningPersistence)
-	planned := make(chan error, 1)
-	go func() {
-		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "planning-runtime-collision",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
-		})
-		planned <- planErr
-	}()
-	releaseActivationReadyOnce.Do(func() { close(releaseActivationReady) })
-	select {
-	case <-planningPersisted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("planning mutation did not reach persistence after runtime admission cleared")
-	}
 
 	releasePlanningPersistence()
 	var planErr error
