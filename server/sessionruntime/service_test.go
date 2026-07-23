@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,6 +31,37 @@ import (
 
 type sessionRuntimeTestLLMClient struct {
 	responses []llm.Response
+}
+
+var sessionRuntimeMetadataTemplatePath string
+
+func TestMain(m *testing.M) {
+	templateRoot, err := os.MkdirTemp("", "kent-sessionruntime-metadata-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create metadata template root: %v\n", err)
+		os.Exit(1)
+	}
+	template, err := metadata.Open(templateRoot)
+	if err != nil {
+		_ = os.RemoveAll(templateRoot)
+		fmt.Fprintf(os.Stderr, "open metadata template: %v\n", err)
+		os.Exit(1)
+	}
+	if err := template.Close(); err != nil {
+		_ = os.RemoveAll(templateRoot)
+		fmt.Fprintf(os.Stderr, "close metadata template: %v\n", err)
+		os.Exit(1)
+	}
+	sessionRuntimeMetadataTemplatePath = filepath.Join(templateRoot, "db", "main.sqlite3")
+
+	exitCode := m.Run()
+	if err := os.RemoveAll(templateRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "remove metadata template root: %v\n", err)
+		if exitCode == 0 {
+			exitCode = 1
+		}
+	}
+	os.Exit(exitCode)
 }
 
 func (c *sessionRuntimeTestLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
@@ -411,10 +445,7 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	metadataStore, err := metadata.Open(appCfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
+	metadataStore := openSessionRuntimeTestMetadata(t, appCfg.PersistenceRoot)
 	t.Cleanup(func() { _ = metadataStore.Close() })
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), appCfg.WorkspaceRoot)
 	if err != nil {
@@ -439,4 +470,30 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 	})
 	api := NewAPI(metadataStore, nil, authority, APIOptions{})
 	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, api: api, authority: authority}
+}
+
+func openSessionRuntimeTestMetadata(t *testing.T, persistenceRoot string) *metadata.Store {
+	t.Helper()
+	databasePath := filepath.Join(persistenceRoot, "db", "main.sqlite3")
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
+		t.Fatalf("create metadata database directory: %v", err)
+	}
+	template, err := os.Open(sessionRuntimeMetadataTemplatePath)
+	if err != nil {
+		t.Fatalf("open metadata database template: %v", err)
+	}
+	database, err := os.OpenFile(databasePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = template.Close()
+		t.Fatalf("create metadata database from template: %v", err)
+	}
+	_, copyErr := io.Copy(database, template)
+	if err := errors.Join(copyErr, database.Sync(), database.Close(), template.Close()); err != nil {
+		t.Fatalf("copy metadata database template: %v", err)
+	}
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("open copied metadata database: %v", err)
+	}
+	return store
 }

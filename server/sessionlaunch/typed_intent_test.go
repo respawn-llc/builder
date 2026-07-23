@@ -7,6 +7,7 @@ import (
 	"core/server/launch"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -15,6 +16,7 @@ import (
 
 func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 	containerDir := t.TempDir()
+	persistenceRoot := t.TempDir()
 	persistence := sessiontest.NewPersistence()
 	target, err := session.Create(
 		containerDir,
@@ -31,16 +33,25 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		t.Fatalf("parse target session ID: %v", err)
 	}
 
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: persistenceRoot,
+		StoreOptions:    persistence.Options(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
 	service := NewService(launch.Planner{
 		Config: config.App{
 			WorkspaceRoot:   "/tmp/workspace-a",
-			PersistenceRoot: t.TempDir(),
+			PersistenceRoot: persistenceRoot,
 			Settings:        config.Settings{Model: "gpt-5"},
 		},
 		ContainerDir:      containerDir,
 		StoreOptions:      persistence.Options(),
 		PersistedSessions: persistence,
-	})
+	}).WithRuntimeAuthority(authority)
 
 	createRequest := serverapi.SessionPlanRequest{
 		ClientRequestID: "same-request-id",

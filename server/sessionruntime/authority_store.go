@@ -264,6 +264,9 @@ func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.Ses
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
