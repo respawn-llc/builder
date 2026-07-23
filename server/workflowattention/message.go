@@ -12,21 +12,29 @@ func InterruptedRunMessage(reason *string, detailJSON *string) string {
 	if reason != nil && strings.TrimSpace(*reason) != "" {
 		message += ": " + strings.TrimSpace(*reason)
 	}
-	if detail := interruptionErrorDetail(detailJSON); detail != "" {
-		message += ": " + detail
+	if detail := interruptionErrorDetail(detailJSON); detail != nil {
+		message += ": " + *detail
 	}
 	return message
 }
 
-func interruptionErrorDetail(detailJSON *string) string {
-	if detailJSON == nil || strings.TrimSpace(*detailJSON) == "" {
-		return ""
+func interruptionErrorDetail(detailJSON *string) *string {
+	if detailJSON == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*detailJSON)
+	if trimmed == "" {
+		return nil
 	}
 	var detail struct {
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(*detailJSON), &detail); err != nil {
-		return ""
+	if err := json.Unmarshal([]byte(trimmed), &detail); err != nil {
+		return nil
 	}
-	return strings.TrimSpace(detail.Error)
+	errorDetail := strings.TrimSpace(detail.Error)
+	if errorDetail == "" {
+		return nil
+	}
+	return &errorDetail
 }

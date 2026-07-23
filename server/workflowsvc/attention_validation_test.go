@@ -9,49 +9,58 @@ import (
 
 func TestServiceRejectsMalformedAttentionAndActivityReadModelOutput(t *testing.T) {
 	t.Run("global attention", func(t *testing.T) {
-		ctx, service, _ := newWorkflowServiceTestContext(t)
-		service.readModels.Attention = malformedWorkflowAttentionReadModel{
-			global: serverapi.WorkflowAttentionListResponse{
-				Items: []serverapi.WorkflowAttentionItem{{Kind: "validation_blocker"}},
+		service := &Service{
+			readModels: ReadModels{
+				Attention: malformedWorkflowAttentionReadModel{
+					global: serverapi.WorkflowAttentionListResponse{
+						Items: []serverapi.WorkflowAttentionItem{{Kind: "validation_blocker"}},
+					},
+				},
 			},
 		}
-		if _, err := service.ListWorkflowAttention(ctx, serverapi.WorkflowAttentionListRequest{}); err == nil {
+		if _, err := service.ListWorkflowAttention(t.Context(), serverapi.WorkflowAttentionListRequest{}); err == nil {
 			t.Fatal("ListWorkflowAttention accepted malformed read-model output")
 		}
 	})
 
 	t.Run("task attention task mismatch", func(t *testing.T) {
-		ctx, service, _ := newWorkflowServiceTestContext(t)
-		service.readModels.Attention = malformedWorkflowAttentionReadModel{
-			task: serverapi.WorkflowTaskAttentionListResponse{
-				Items: []serverapi.WorkflowAttentionItem{workflowAttentionItemForServiceTest("task-other")},
+		service := &Service{
+			readModels: ReadModels{
+				Attention: malformedWorkflowAttentionReadModel{
+					task: serverapi.WorkflowTaskAttentionListResponse{
+						Items: []serverapi.WorkflowAttentionItem{workflowAttentionItemForServiceTest("task-other")},
+					},
+				},
 			},
 		}
-		if _, err := service.ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: "task-requested"}); err == nil {
+		if _, err := service.ListWorkflowTaskAttention(t.Context(), serverapi.WorkflowTaskAttentionListRequest{TaskID: "task-requested"}); err == nil {
 			t.Fatal("ListWorkflowTaskAttention accepted an item for another task")
 		}
 	})
 
 	t.Run("activity nesting", func(t *testing.T) {
-		ctx, service, _ := newWorkflowServiceTestContext(t)
-		service.readModels.Activity = malformedWorkflowActivityReadModel{
-			response: serverapi.WorkflowTaskActivityListResponse{
-				Items: []serverapi.WorkflowTaskActivityItem{{
-					Type:   "comment",
-					TaskID: "task-requested",
-					Attention: &serverapi.WorkflowAttentionItem{
-						ProjectID:   "project-1",
-						Kind:        "interrupted_run",
-						TaskID:      "task-requested",
-						TaskShortID: "KENT-1",
-						TaskTitle:   "Task",
-						WorkflowID:  workflowIDPointerForServiceTest(),
-						RunID:       workflowAttentionStringForServiceTest("run-1"),
+		service := &Service{
+			readModels: ReadModels{
+				Activity: malformedWorkflowActivityReadModel{
+					response: serverapi.WorkflowTaskActivityListResponse{
+						Items: []serverapi.WorkflowTaskActivityItem{{
+							Type:   "comment",
+							TaskID: "task-requested",
+							Attention: &serverapi.WorkflowAttentionItem{
+								ProjectID:   "project-1",
+								Kind:        "interrupted_run",
+								TaskID:      "task-requested",
+								TaskShortID: "KENT-1",
+								TaskTitle:   "Task",
+								WorkflowID:  workflowIDPointerForServiceTest(),
+								RunID:       workflowAttentionStringForServiceTest("run-1"),
+							},
+						}},
 					},
-				}},
+				},
 			},
 		}
-		if _, err := service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: "task-requested"}); err == nil {
+		if _, err := service.ListWorkflowTaskActivity(t.Context(), serverapi.WorkflowTaskActivityListRequest{TaskID: "task-requested"}); err == nil {
 			t.Fatal("ListWorkflowTaskActivity accepted incoherent nested attention")
 		}
 	})

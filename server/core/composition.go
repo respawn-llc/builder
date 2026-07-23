@@ -593,8 +593,11 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) []
 }
 
 func legacyOptionalRecommendedOptionIndex(index int) *int {
-	if index < 1 {
+	if index == 0 {
 		return nil
+	}
+	if index < 0 {
+		panic(fmt.Sprintf("legacy recommended option index must be non-negative: %d", index))
 	}
 	return &index
 }
