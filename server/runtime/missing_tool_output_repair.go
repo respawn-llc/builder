@@ -3,7 +3,6 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -34,7 +33,7 @@ var missingToolOutputInterruptedOutput = json.RawMessage(`{"error":"Tool executi
 type danglingToolCall struct {
 	callID string
 	name   string
-	stepID string
+	stepID *string
 }
 
 // repairMissingToolOutputsByAppending closes any tool calls in the live
@@ -66,13 +65,14 @@ func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error)
 	if len(dangling) == 0 {
 		return 0, nil
 	}
+	for _, call := range dangling {
+		if call.stepID == nil {
+			return 0, fmt.Errorf("repair dangling tool call %q: step id is required", call.callID)
+		}
+	}
 	repaired := 0
 	for _, call := range dangling {
-		callStepID := strings.TrimSpace(call.stepID)
-		if callStepID == "" {
-			return repaired, fmt.Errorf("repair dangling tool call %q: step id is required", call.callID)
-		}
-		if err := e.steer(callStepID, steerToolCompletionIntent(tools.Result{
+		if err := e.steer(*call.stepID, steerToolCompletionIntent(tools.Result{
 			CallID:  call.callID,
 			Name:    toolspec.ID(call.name),
 			IsError: true,

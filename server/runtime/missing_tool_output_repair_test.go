@@ -254,6 +254,39 @@ func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 	t.Fatal("missing synthetic completion")
 }
 
+func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, chatStoreTestStepID, llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "owned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append owned dangling tool call: %v", err)
+	}
+	legacyMessage, err := sessionMessageRecordFromLLM(llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	})
+	if err != nil {
+		t.Fatalf("adapt unowned dangling tool call: %v", err)
+	}
+	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecord(nil, legacyMessage); err != nil {
+		t.Fatalf("append unowned dangling tool call: %v", err)
+	}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	repaired, err := eng.repairMissingToolOutputsByAppending(chatStoreTestStepID)
+	if err == nil {
+		t.Fatal("repair accepted a dangling tool call with no recoverable step identity")
+	}
+	if repaired != 0 {
+		t.Fatalf("repair count = %d, want no partial repair", repaired)
+	}
+	items := eng.transcriptRuntimeState().SnapshotItems()
+	if repairRequestHasToolOutput(items, "owned") || repairRequestHasToolOutput(items, "unowned") {
+		t.Fatal("repair appended output before validating every dangling call identity")
+	}
+}
+
 func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{

@@ -638,8 +638,13 @@ func (s *chatStore) danglingToolCalls() []danglingToolCall {
 			continue
 		}
 		name, _ := textutil.OptionalTrimmed(item.Name)
+		stepID, hasStepID := s.assistantToolCallStepIDs[callID]
+		var ownedStepID *string
+		if hasStepID {
+			ownedStepID = textutil.Value(stepID)
+		}
 		seen[callID] = struct{}{}
-		out = append(out, danglingToolCall{callID: callID, name: name, stepID: s.assistantToolCallStepIDs[callID]})
+		out = append(out, danglingToolCall{callID: callID, name: name, stepID: ownedStepID})
 	}
 	return out
 }
@@ -723,7 +728,7 @@ func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
 				continue
 			}
 			if stepID != "" {
-				if existing := s.assistantToolCallStepIDs[callID]; existing != "" && existing != stepID {
+				if existing, present := s.assistantToolCallStepIDs[callID]; present && existing != stepID {
 					panic(fmt.Sprintf("assistant tool call %q changed step identity from %q to %q", callID, existing, stepID))
 				}
 				s.assistantToolCallStepIDs[callID] = stepID
@@ -765,7 +770,10 @@ func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID string, items 
 			continue
 		}
 		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
-		if !present || s.assistantToolCallStepIDs[callID] != "" {
+		if !present {
+			continue
+		}
+		if _, owned := s.assistantToolCallStepIDs[callID]; owned {
 			continue
 		}
 		s.assistantToolCallStepIDs[callID] = stepID
