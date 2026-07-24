@@ -85,6 +85,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 		t.Fatalf("run local lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 3)
+	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
 	events := lifecycleEventsByCategory(t, records)
 	for _, category := range []lifecyclecontract.Category{
 		lifecyclecontract.CategorySessionStart,
@@ -188,6 +189,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
 	}
 	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 2)
+	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
 	events := lifecycleEventsByCategory(t, records)
 	for _, category := range []lifecyclecontract.Category{
 		lifecyclecontract.CategorySessionStart,
@@ -244,7 +246,9 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
-	events := lifecycleEventsByCategory(t, appfixture.WaitForLifecycleHookRecords(t, recordPath, 2))
+	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 2)
+	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
+	events := lifecycleEventsByCategory(t, records)
 	if _, ok := events[lifecyclecontract.CategoryTaskComplete]; !ok {
 		t.Fatalf("runtime did not complete after hook failure: %+v", events)
 	}
@@ -284,6 +288,24 @@ func lifecycleEventsByCategory(
 		events[event.Category] = event
 	}
 	return events
+}
+
+func requireLifecycleCategoryCount(
+	t *testing.T,
+	records []appfixture.LifecycleHookRecord,
+	category lifecyclecontract.Category,
+	want int,
+) {
+	t.Helper()
+	got := 0
+	for _, event := range appfixture.DecodeLifecycleHookEvents(t, records) {
+		if event.Category == category {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("lifecycle category %q count = %d, want %d", category, got, want)
+	}
 }
 
 func waitForLifecycleServerReady(

@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -74,6 +76,43 @@ func TestClientLifecycleProxyEmitsInputRequiredForEachHydratedPendingPrompt(t *t
 	if summaries[lifecyclecontract.InputKindQuestion] != question.Question ||
 		summaries[lifecyclecontract.InputKindApproval] != approval.Question {
 		t.Fatalf("hydrated input-required summaries = %+v", summaries)
+	}
+}
+
+func TestTurnQueueHooksEmitFocusedTaskCompletionWithoutNotificationEligibility(t *testing.T) {
+	proxy, recordPath := newRecordingClientLifecycleProxy(t, true)
+	ringer := &countRinger{}
+	hooks := newTurnQueueHooks(
+		newBellHooks(ringer, nil, func() bool { return true }),
+		proxy,
+	)
+	message := testAssistantFinalLiveRunMessage(2, "completed without notification eligibility", true)
+
+	hooks.OnTranscriptMessage(message)
+
+	if _, err := os.Stat(recordPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completion hook record before queue drain: %v", err)
+	}
+	hooks.OnTurnQueueDrained()
+
+	event := appfixture.DecodeLifecycleHookEvents(
+		t,
+		appfixture.WaitForLifecycleHookRecords(t, recordPath, 1),
+	)[0]
+	var details lifecyclecontract.TaskCompleteDetails
+	if err := json.Unmarshal(event.Details, &details); err != nil {
+		t.Fatalf("decode lifecycle completion details: %v", err)
+	}
+	result := *message.Payload.LiveRunFinished
+	if event.Category != lifecyclecontract.CategoryTaskComplete ||
+		!event.OccurredAt.Equal(result.FinishedAt) ||
+		!event.Focused ||
+		details.FinalAnswer != *result.FinalAnswer ||
+		details.WorkPerformed != result.WorkPerformed {
+		t.Fatalf("turn-queue completion lifecycle event = %+v details=%+v", event, details)
+	}
+	if ringer.total() != 0 {
+		t.Fatalf("focused zero-tool completion emitted %d terminal notifications", ringer.total())
 	}
 }
 

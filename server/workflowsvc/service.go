@@ -103,6 +103,7 @@ type taskRuntimeRunCancelRequester interface {
 
 type workflowRunScheduler interface {
 	StartExplicitRuns(context.Context, []workflow.RunID) error
+	QueueExplicitRuns([]workflow.RunID) error
 	EnsureTaskQuiescent(context.Context, workflow.TaskID) error
 }
 
@@ -1065,6 +1066,13 @@ func (s *Service) startExplicitRuns(ctx context.Context, runIDs []workflow.RunID
 	return s.schedulerWake.StartExplicitRuns(ctx, runIDs)
 }
 
+func (s *Service) queueExplicitRuns(runIDs []workflow.RunID) error {
+	if s == nil || s.schedulerWake == nil || len(runIDs) == 0 {
+		return nil
+	}
+	return s.schedulerWake.QueueExplicitRuns(runIDs)
+}
+
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	return s.resumeWorkflowTask(ctx, req)
 }
@@ -1073,16 +1081,37 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	var queueFailureInterrupted []workflowstore.RunRecord
 	resumed, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ResumeTaskRunsResult, error) {
-		return s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+		resumed, err := s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+		if err != nil {
+			return workflowstore.ResumeTaskRunsResult{}, err
+		}
+		if err := s.queueExplicitRuns(runIDsFromRecords(resumed.Runs)); err != nil {
+			refs := make([]workflowstore.ExactRunRef, 0, len(resumed.Runs))
+			for _, run := range resumed.Runs {
+				refs = append(refs, workflowstore.ExactRunRef{
+					TaskID:     run.TaskID,
+					RunID:      run.ID,
+					Generation: run.Generation,
+				})
+			}
+			var interruptErr error
+			queueFailureInterrupted, interruptErr = s.store.InterruptExactRuns(
+				ctx,
+				refs,
+				workflowexecution.ReasonSchedulerExplicitQueueFailed,
+				"{}",
+			)
+			return workflowstore.ResumeTaskRunsResult{}, errors.Join(err, interruptErr)
+		}
+		return resumed, nil
 	})
 	if err != nil {
+		s.publishPendingInterruptedRuns(ctx, runIDsFromRecords(queueFailureInterrupted))
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(ctx, resumed.TaskAttentionResolution)
-	if err := s.startExplicitRuns(ctx, runIDsFromRecords(resumed.Runs)); err != nil {
-		return serverapi.WorkflowTaskResumeResponse{}, err
-	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
 	}
@@ -1388,7 +1417,14 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 		ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
 		ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
 	})
-	for _, runID := range result.InterruptedRunIDs {
+	s.publishPendingInterruptedRuns(ctx, result.InterruptedRunIDs)
+}
+
+func (s *Service) publishPendingInterruptedRuns(ctx context.Context, runIDs []workflow.RunID) {
+	if s == nil || s.attentionFinalizer == nil {
+		return
+	}
+	for _, runID := range runIDs {
 		if runID == "" {
 			continue
 		}

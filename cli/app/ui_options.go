@@ -180,7 +180,7 @@ func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
 	}
 }
 
-func WithUITurnQueueHook(hook *bellHooks) UIOption {
+func WithUITurnQueueHook(hook turnQueueHook) UIOption {
 	return func(m *uiModelConstruction) {
 		m.turnQueueHook = hook
 	}

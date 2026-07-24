@@ -302,18 +302,24 @@
 - Hook commands run independently. Kent does not guarantee their launch, execution, or completion order.
 - At most 64 hook commands can run at once for one TUI Session. Kent silently drops a new event when all slots are in use.
 - Every invocation has a 30-second timeout, inherits the controlling TUI's current directory and environment, receives one ordinary JSON object on stdin, ignores stdout, and retains at most 4 KiB of stderr for diagnostics.
-- Kent attempts the configured command once for each accepted event. It does not retry, acknowledge, save, reconstruct, or deduplicate hook delivery.
+- Kent attempts the configured command once for each scheduled event. It does not retry, acknowledge, save, or reconstruct hook delivery.
+- For every assistant-final live-run result admitted by one controlling TUI attachment, Kent submits exactly one `task.complete` to the hook dispatcher after local queued prompt processing is fully idle.
+- Repeated transcript delivery is not a second admitted turn and must not submit another `task.complete` within the attachment.
+- Every admitted assistant-final turn submits its own `task.complete`, including multiple turns completed during one queued prompt drain.
+- `task.complete` uses the same capacity, launch, timeout, and failure semantics as the other lifecycle categories.
+- Terminal focus, notification method, terminal-notification eligibility, and tool-call count must not gate `task.complete`. Focus only populates the lifecycle payload.
 - Launch failures, non-zero exits, and timeouts are delivered losslessly to one structured diagnostic log and appear as transient TUI errors while the Session remains attached.
 - Hook failures never create `task.error` and never change Session behavior.
 - Closing the Session stops new hooks, requests cancellation of active direct commands, and returns without waiting. Kent does not guarantee termination of descendant processes.
-- A transcript-stream gap can miss or repeat hooks. Kent does not guarantee exactly-once lifecycle delivery.
+- A transcript-stream gap can miss lifecycle events. Repeated delivery after a gap can repeat lifecycle categories other than `task.complete`.
+- Kent does not persist pending or delivered `task.complete` state across controlling TUI attachments or process restarts.
 - One optional command is configured only in the controlling TUI client's global TOML as `[hooks.client] lifecycle = ["executable", "fixed-arg", ...]`. Workspace config, environment variables, CLI flags, subagent roles, and servers cannot set or override it. Empty arrays and blank arguments are invalid.
 - Configuration changes require restarting the controlling TUI.
 - Every local or remote controlling TUI runs its own local hook command.
 - Desktop, unattended headless, subagent, and server-only operation do not run this hook.
 - The supported categories are:
   - `session.start` after a successful new or resumed session open;
-  - `task.complete` when a live-run result ends with an assistant final answer;
+  - `task.complete` once for each admitted live-run result that ends with an assistant final answer, after local queued prompt processing is fully idle;
   - `task.error` only when the live-run result is an actual runtime failure;
   - `input.required` for each observed pending question or approval;
   - `resource.limit` for every compaction-start event, including manual compaction.
@@ -322,7 +328,7 @@
 - Payload context carries available Session ID and title, optional Workflow Task ID, client focus, timestamp, opening kind, final answer with `work_performed`, runtime diagnostic, input kind and summary, or compaction mode.
 - Payloads exclude runtime, Agent Step, prompt, Approval, and transcript-stream identifiers.
 - Lifecycle payloads use ordinary JSON with source values unchanged. They have no lifecycle-specific text limit or truncation metadata.
-- Native terminal bell/OSC notification policy remains independent and unchanged; it does not share lifecycle-hook state or `work_performed` calculation.
+- Native terminal bell/OSC notifications and `task.complete` share only the authoritative local queue-idle boundary. Notification focus, method, tool threshold, preview consolidation, and state remain independent from lifecycle-hook scheduling and `work_performed`.
 
 ## Reviewer
 

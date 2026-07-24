@@ -14,6 +14,7 @@ import (
 
 const (
 	ReasonSchedulerRuntimeStartFailed    = "workflow_runtime_start_failed"
+	ReasonSchedulerExplicitQueueFailed   = "workflow_explicit_queue_failed"
 	ReasonSchedulerPendingAskUnavailable = "workflow_pending_ask_unavailable"
 	ReasonSchedulerStartupOrphanedRun    = "workflow_startup_orphaned_run"
 	ReasonSchedulerStartupUnstartedRun   = "workflow_startup_unstarted_run"
@@ -42,6 +43,7 @@ type SchedulerService struct {
 	loopWG      sync.WaitGroup
 	processWG   sync.WaitGroup
 	wake        chan struct{}
+	explicit    []workflow.RunID
 }
 
 const (
@@ -208,8 +210,10 @@ func (s *SchedulerService) EnsureTaskQuiescent(ctx context.Context, taskID workf
 			return ErrTaskExecutionNotQuiescent
 		}
 	}
+	explicitRunIDs := append([]workflow.RunID(nil), s.explicit...)
 	s.mu.Unlock()
-	for _, runID := range s.automaticIntents.PendingRunIDs() {
+	pendingRunIDs := append(explicitRunIDs, s.automaticIntents.PendingRunIDs()...)
+	for _, runID := range pendingRunIDs {
 		run, err := s.store.GetRun(ctx, runID)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
@@ -273,6 +277,30 @@ func (s *SchedulerService) StartExplicitRuns(ctx context.Context, runIDs []workf
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *SchedulerService) QueueExplicitRuns(runIDs []workflow.RunID) error {
+	if s == nil {
+		return errors.New("workflow scheduler is required")
+	}
+	queued := append([]workflow.RunID(nil), runIDs...)
+	for index, runID := range queued {
+		if runID == "" {
+			return fmt.Errorf("explicit workflow start run id at index %d is blank", index)
+		}
+	}
+	if len(queued) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return ErrSchedulerStopped
+	}
+	s.explicit = append(s.explicit, queued...)
+	s.mu.Unlock()
+	s.Notify()
 	return nil
 }
 
@@ -366,6 +394,9 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 	case <-s.processGate:
 	}
 	defer func() { s.processGate <- struct{}{} }()
+	if err := s.processExplicitRuns(ctx); err != nil {
+		return err
+	}
 	for {
 		s.mu.Lock()
 		if s.stopped {
@@ -385,32 +416,80 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 		if len(runIDs) == 0 {
 			return nil
 		}
-		for index, runID := range runIDs {
-			run, err := s.store.GetRun(ctx, runID)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					s.automaticIntents.Resolve(runID)
-					continue
-				}
-				s.automaticIntents.ReturnFront(runIDs[index:])
-				return err
-			}
-			if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					s.automaticIntents.Resolve(runID)
-					continue
-				}
-				retry := runIDs[index+1:]
-				if errors.Is(err, ErrSchedulerClaimFailed) {
-					retry = runIDs[index:]
-				}
-				if !errors.Is(err, ErrSchedulerStopped) {
-					s.automaticIntents.ReturnFront(retry)
-				}
-				return err
-			}
+		if err := s.startRunBatch(
+			ctx,
+			runIDs,
+			func(runID workflow.RunID) { s.automaticIntents.Resolve(runID) },
+			s.automaticIntents.ReturnFront,
+		); err != nil {
+			return err
 		}
 	}
+}
+
+func (s *SchedulerService) processExplicitRuns(ctx context.Context) error {
+	s.mu.Lock()
+	starterAvailable := s.starter != nil
+	s.mu.Unlock()
+	if !starterAvailable {
+		return nil
+	}
+	return s.startRunBatch(ctx, s.takeExplicitRuns(), nil, s.returnExplicitRuns)
+}
+
+func (s *SchedulerService) startRunBatch(
+	ctx context.Context,
+	runIDs []workflow.RunID,
+	resolveMissing func(workflow.RunID),
+	returnFront func([]workflow.RunID),
+) error {
+	for index, runID := range runIDs {
+		run, err := s.store.GetRun(ctx, runID)
+		if errors.Is(err, sql.ErrNoRows) {
+			if resolveMissing != nil {
+				resolveMissing(runID)
+			}
+			continue
+		}
+		if err != nil {
+			returnFront(runIDs[index:])
+			return err
+		}
+		if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if resolveMissing != nil {
+					resolveMissing(runID)
+				}
+				continue
+			}
+			retry := runIDs[index+1:]
+			if errors.Is(err, ErrSchedulerClaimFailed) {
+				retry = runIDs[index:]
+			}
+			if !errors.Is(err, ErrSchedulerStopped) {
+				returnFront(retry)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SchedulerService) takeExplicitRuns() []workflow.RunID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	runIDs := s.explicit
+	s.explicit = nil
+	return runIDs
+}
+
+func (s *SchedulerService) returnExplicitRuns(runIDs []workflow.RunID) {
+	if len(runIDs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.explicit = append(append([]workflow.RunID(nil), runIDs...), s.explicit...)
+	s.mu.Unlock()
 }
 
 func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore.RunnableRunRecord) error {
