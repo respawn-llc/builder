@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
 	"core/shared/serverapi"
 )
 
@@ -17,9 +18,10 @@ type TaskList struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
 	projector   *TaskProjector
+	lifecycle   *TaskLifecycleProjection
 }
 
-func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector) (*TaskList, error) {
+func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskList, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -29,11 +31,16 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
+	lifecycle, err := NewTaskLifecycleProjection(metadataStore, authority)
+	if err != nil {
+		return nil, err
+	}
 	return &TaskList{
 		metadata:    metadataStore,
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
 		projector:   projector,
+		lifecycle:   lifecycle,
 	}, nil
 }
 
@@ -169,6 +176,13 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	pageTaskIDs := make([]string, 0, len(pageItems))
 	for _, row := range pageItems {
 		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
+	}
+	pageStatuses := make(map[string]workflowTaskStatusFact, len(pageItems))
+	for _, row := range pageItems {
+		pageStatuses[row.item.TaskID] = workflowTaskStatusFact{Status: row.item.Status}
+	}
+	if _, err := l.lifecycle.Project(ctx, pageTaskIDs, pageStatuses); err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
 	if err != nil {

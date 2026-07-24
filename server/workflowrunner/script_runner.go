@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"core/server/sessionruntime"
@@ -25,16 +26,60 @@ const (
 	scriptAttentionFinalizeLimit = 5 * time.Second
 )
 
-func (s *Starter) startScriptWorkflowRun(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) error {
+type preparedScriptWorkflowRun struct {
+	prepared  *sessionruntime.PreparedScriptExecution
+	committed atomic.Bool
+}
+
+func (p *preparedScriptWorkflowRun) Admission() workflowexecution.RunAdmission {
+	return workflowexecution.RunAdmission{}
+}
+
+func (p *preparedScriptWorkflowRun) Commit() error {
+	if p == nil || p.prepared == nil {
+		return errors.New("prepared workflow script is uninitialized")
+	}
+	if err := p.prepared.Commit(); err != nil {
+		return err
+	}
+	p.committed.Store(true)
+	return nil
+}
+
+func (p *preparedScriptWorkflowRun) Abort(ctx context.Context) error {
+	if p == nil || p.prepared == nil {
+		return nil
+	}
+	if err := p.prepared.Abort(); err != nil {
+		return err
+	}
+	_, err := p.prepared.Handle().Wait(ctx)
+	return err
+}
+
+func (p *preparedScriptWorkflowRun) Compensate(ctx context.Context) error {
+	if p == nil || p.prepared == nil {
+		return nil
+	}
+	if p.committed.Load() {
+		return p.prepared.Handle().Stop(ctx)
+	}
+	return p.prepared.Abort()
+}
+
+func (s *Starter) prepareScriptWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowexecution.PreparedWorkflowRun, error) {
 	scriptReq, resolvedPath, err := workflowScriptExecutionRequest(req, input)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	scriptReq.Finalize = func(ctx context.Context, _ sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
 		return s.finalizeWorkflowScript(ctx, req, input, workflowScriptResultFromExecution(resolvedPath, result), runErr)
 	}
-	_, err = s.runtimeAuthority.StartScriptExecution(context.Background(), scriptReq)
-	return err
+	prepared, err := s.runtimeAuthority.PrepareScriptExecution(ctx, scriptReq)
+	if err != nil {
+		return nil, err
+	}
+	return &preparedScriptWorkflowRun{prepared: prepared}, nil
 }
 
 func (s *Starter) finalizeWorkflowScript(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {

@@ -2,17 +2,13 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"os/exec"
 	"reflect"
 	"testing"
-	"time"
 
-	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -92,12 +88,8 @@ func TestTaskDetailSelectorsConvergeOnCompleteCoreDetail(t *testing.T) {
 	}
 }
 
-func TestTaskDetailUsesLiveScriptTargetsForInterruptPrecedence(t *testing.T) {
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
-	}
-	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+func TestTaskDetailUsesLiveAgentTargetForInterruptPrecedence(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
@@ -114,45 +106,9 @@ func TestTaskDetailUsesLiveScriptTargetsForInterruptPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), authority)
-	if err != nil {
-		t.Fatalf("NewTaskDetail: %v", err)
-	}
-	cancellationGrace := 50 * time.Millisecond
-	handle, err := authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &sessionruntime.WorkflowExecutionRef{
-			TaskID:     task.ID,
-			RunID:      started.RunID,
-			Generation: claimed.Generation,
-		},
-		Command: sessionruntime.ScriptCommand{
-			Path:              sleepPath,
-			Args:              []string{"30"},
-			CancellationGrace: &cancellationGrace,
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	t.Cleanup(func() {
-		if handle != nil {
-			if err := handle.Stop(context.Background()); err != nil {
-				t.Errorf("stop script: %v", err)
-			}
-		}
-	})
+	admitted, handle := startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, started.RunID)
 
-	live, err := detail.GetTask(ctx, string(task.ID))
+	live, err := view.detail(t).GetTask(ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask live: %v", err)
 	}
@@ -160,23 +116,29 @@ func TestTaskDetailUsesLiveScriptTargetsForInterruptPrecedence(t *testing.T) {
 		t.Fatalf("live actions = %+v, want interrupt precedence", live.Actions)
 	}
 	if live.Status.Kind != serverapi.WorkflowTaskStatusKindRunning ||
-		len(live.CurrentSessionIDs) != 0 || len(live.CurrentScripts) != 1 ||
-		live.CurrentScripts[0].RunID != string(started.RunID) ||
-		live.CurrentScripts[0].Path != sleepPath {
+		len(live.CurrentSessionIDs) != 1 ||
+		live.CurrentSessionIDs[0] != admitted.SessionID ||
+		len(live.CurrentScripts) != 0 {
 		t.Fatalf("live targets = sessions %v scripts %+v", live.CurrentSessionIDs, live.CurrentScripts)
 	}
 
 	if err := handle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop script: %v", err)
+		t.Fatalf("stop Agent execution: %v", err)
 	}
-	handle = nil
-	stopped, err := detail.GetTask(ctx, string(task.ID))
+	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, admitted.Generation, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	stopped, err := view.detail(t).GetTask(ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask stopped: %v", err)
 	}
-	if stopped.Actions.CanInterrupt || stopped.Actions.CanStart ||
-		stopped.Status.Kind == serverapi.WorkflowTaskStatusKindRunning ||
-		len(stopped.CurrentScripts) != 0 || stopped.CurrentScripts == nil {
+	if stopped.Actions.CanInterrupt ||
+		!stopped.Actions.CanResume ||
+		stopped.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
+		len(stopped.CurrentSessionIDs) != 1 ||
+		stopped.CurrentSessionIDs[0] != admitted.SessionID ||
+		len(stopped.CurrentScripts) != 0 ||
+		stopped.CurrentScripts == nil {
 		t.Fatalf("stopped detail = %+v", stopped)
 	}
 }
@@ -267,28 +229,6 @@ func TestTaskDetailDoesNotOfferInterruptWhileScriptCompletionFinalizerIsBlocked(
 	}
 }
 
-func TestCurrentTaskExecutionsRequireExactDurableGeneration(t *testing.T) {
-	taskID := "task-1"
-	matched := sessionruntime.TaskExecution{
-		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: workflow.TaskID(taskID), RunID: "run-matched", Generation: 2},
-		Script: &sessionruntime.TaskScriptExecutionTarget{Path: "/bin/true"},
-	}
-	staleGeneration := sessionruntime.TaskExecution{
-		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: workflow.TaskID(taskID), RunID: "run-stale", Generation: 1},
-		Script: &sessionruntime.TaskScriptExecutionTarget{Path: "/bin/true"},
-	}
-	current, err := currentTaskExecutions(taskID, []sqlitegen.ListWorkflowTaskCurrentRunFactsRow{
-		{ID: "run-matched", RunGeneration: 2},
-		{ID: "run-stale", RunGeneration: 2},
-	}, []sessionruntime.TaskExecution{staleGeneration, matched})
-	if err != nil {
-		t.Fatalf("currentTaskExecutions: %v", err)
-	}
-	if !reflect.DeepEqual(current, []sessionruntime.TaskExecution{matched}) {
-		t.Fatalf("current executions = %+v, want exact generation match %+v", current, matched)
-	}
-}
-
 func TestTaskDetailStatusCombinesDurableFactsWithExactLiveExecutions(t *testing.T) {
 	live := sessionruntime.TaskExecution{
 		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: "task-1", RunID: "run-live", Generation: 2},
@@ -302,25 +242,17 @@ func TestTaskDetailStatusCombinesDurableFactsWithExactLiveExecutions(t *testing.
 		wantStatus serverapi.WorkflowTaskStatus
 	}{
 		{
-			name:    "stale durable running becomes active",
-			durable: statusForTest(serverapi.WorkflowTaskStatusKindRunning, []string{"run-stale"}, nil),
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				nil,
-			),
+			name:       "script lifecycle retains durable running",
+			durable:    statusForTest(serverapi.WorkflowTaskStatusKindRunning, []string{"run-stale"}, nil),
+			wantStatus: statusForTest(serverapi.WorkflowTaskStatusKindRunning, []string{"run-stale"}, nil),
 		},
 		{
-			name:    "stale durable queued becomes active",
-			durable: statusForTest(serverapi.WorkflowTaskStatusKindQueued, []string{"run-queued"}, nil),
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				nil,
-			),
+			name:       "queued remains an explicit lifecycle state",
+			durable:    statusForTest(serverapi.WorkflowTaskStatusKindQueued, []string{"run-queued"}, nil),
+			wantStatus: statusForTest(serverapi.WorkflowTaskStatusKindQueued, []string{"run-queued"}, nil),
 		},
 		{
-			name: "stale durable question removes question attention",
+			name: "waiting question remains an explicit lifecycle state",
 			durable: statusForTest(
 				serverapi.WorkflowTaskStatusKindWaitingQuestion,
 				[]string{"run-question"},
@@ -330,9 +262,12 @@ func TestTaskDetailStatusCombinesDurableFactsWithExactLiveExecutions(t *testing.
 				},
 			),
 			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted},
+				serverapi.WorkflowTaskStatusKindWaitingQuestion,
+				[]string{"run-question"},
+				[]serverapi.WorkflowTaskAttentionKind{
+					serverapi.WorkflowTaskAttentionKindInterrupted,
+					serverapi.WorkflowTaskAttentionKindQuestion,
+				},
 			),
 		},
 		{
@@ -395,28 +330,6 @@ func TestTaskDetailStatusCombinesDurableFactsWithExactLiveExecutions(t *testing.
 				t.Fatalf("status fact = %+v, want status %+v done=%t", got, test.wantStatus, test.done)
 			}
 		})
-	}
-}
-
-func TestCurrentTaskExecutionsRequiresDurableAndLiveQuestionEvidence(t *testing.T) {
-	execution := sessionruntime.TaskExecution{
-		Ref:             sessionruntime.WorkflowExecutionRef{TaskID: "task-1", RunID: "run-1", Generation: 1},
-		Agent:           &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
-		WaitingQuestion: true,
-	}
-	for _, durableWaiting := range []bool{false, true} {
-		rows := []sqlitegen.ListWorkflowTaskCurrentRunFactsRow{{
-			ID:            "run-1",
-			RunGeneration: 1,
-			WaitingAskID:  sql.NullString{String: "ask-1", Valid: durableWaiting},
-		}}
-		current, err := currentTaskExecutions("task-1", rows, []sessionruntime.TaskExecution{execution})
-		if err != nil {
-			t.Fatalf("currentTaskExecutions durableWaiting=%t: %v", durableWaiting, err)
-		}
-		if len(current) != 1 || current[0].WaitingQuestion != durableWaiting {
-			t.Fatalf("current executions durableWaiting=%t = %+v", durableWaiting, current)
-		}
 	}
 }
 

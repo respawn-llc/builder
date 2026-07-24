@@ -19,15 +19,26 @@ var (
 type SchedulerStore interface {
 	GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
 	ClaimRun(context.Context, workflow.RunID, int64) (workflowstore.RunnableRunRecord, error)
+	AdmitRun(context.Context, workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error)
+	ListTaskResumeCandidates(context.Context, workflow.TaskID) ([]workflowstore.RunRecord, error)
+	AdmitTaskResume(context.Context, workflow.TaskID, []workflowstore.RunAdmission) (workflowstore.ResumeTaskRunsResult, error)
 	InterruptRun(context.Context, workflow.RunID, string, string) error
 	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error
+	InterruptExactRuns(context.Context, []workflowstore.ExactRunRef, string, string) ([]workflowstore.RunRecord, error)
 	ReconcileStartedRuns(context.Context, string) ([]workflowstore.RunRecord, error)
 	ReconcileUnstartedRuns(context.Context, string) ([]workflowstore.RunRecord, error)
 	ListWaitingAskRuns(context.Context) ([]workflowstore.RunRecord, error)
 }
 
 type SchedulerRuntimeStarter interface {
-	StartWorkflowRun(context.Context, SchedulerStartRunRequest) error
+	PrepareWorkflowRun(context.Context, SchedulerPrepareRunRequest) (PreparedWorkflowRun, error)
+}
+
+type PreparedWorkflowRun interface {
+	Admission() RunAdmission
+	Commit() error
+	Abort(context.Context) error
+	Compensate(context.Context) error
 }
 
 type SchedulerPendingAskResolver interface {
@@ -48,6 +59,28 @@ type SchedulerStartRunRequest struct {
 	PlacementID workflow.PlacementID
 	NodeID      workflow.NodeID
 	Generation  int64
+}
+
+type SchedulerPrepareRunRequest struct {
+	RunID            workflow.RunID
+	TaskID           workflow.TaskID
+	PlacementID      workflow.PlacementID
+	NodeID           workflow.NodeID
+	Admission        RunAdmissionKind
+	SourceGeneration int64
+	Generation       int64
+}
+
+type RunAdmissionKind uint8
+
+const (
+	RunAdmissionInitial RunAdmissionKind = iota + 1
+	RunAdmissionResume
+)
+
+type RunAdmission struct {
+	SessionID               *string
+	EffectiveCompletionMode *string
 }
 
 type SchedulerConfig struct {

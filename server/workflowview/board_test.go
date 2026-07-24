@@ -16,23 +16,36 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestBoardBatchesCurrentRunFactLoadingForMultipleTasks(t *testing.T) {
+func TestTaskLifecycleProjectionBatchesExecutablePlacementLoadingForMultipleTasks(t *testing.T) {
 	ctx, metadataStore, _, _ := newWorkflowViewTestContextStore(t)
 	db := &workflowViewQueryCountingDB{DBTX: metadataStore.DB()}
-	board := &Board{
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	lifecycle := &TaskLifecycleProjection{
 		queries:   sqlitegen.New(db),
-		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		authority: authority,
+	}
+	taskIDs := []string{"task-1", "task-2", "task-3"}
+	statuses := make(map[string]workflowTaskStatusFact, len(taskIDs))
+	for _, taskID := range taskIDs {
+		statuses[taskID] = workflowTaskStatusFact{
+			Status: statusForTest(serverapi.WorkflowTaskStatusKindBacklog, nil, nil),
+		}
 	}
 
-	current, err := board.liveExecutionsByTask(ctx, []string{"task-1", "task-2", "task-3"})
+	current, err := lifecycle.Project(ctx, taskIDs, statuses)
 	if err != nil {
-		t.Fatalf("liveExecutionsByTask: %v", err)
+		t.Fatalf("Project: %v", err)
 	}
 	if len(current) != 3 {
-		t.Fatalf("current executions = %+v, want one entry per task", current)
+		t.Fatalf("lifecycle projections = %+v, want one entry per task", current)
 	}
 	if db.queryCount != 1 {
-		t.Fatalf("current run fact queries = %d, want one batched query", db.queryCount)
+		t.Fatalf("executable placement queries = %d, want one batched query", db.queryCount)
 	}
 }
 
@@ -180,7 +193,7 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 }
 
 func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t *testing.T) {
-	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	sourceWorkspace, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -189,19 +202,8 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	definitions, err := NewDefinitionProjection(workflowStore)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	projector := NewTaskProjector()
-	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
-	if err != nil {
-		t.Fatalf("NewBoard: %v", err)
-	}
-	detailView, err := NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
-	if err != nil {
-		t.Fatalf("NewTaskDetail: %v", err)
-	}
+	boardView := view.board(t)
+	detailView := view.detail(t)
 
 	type orderedTask struct {
 		id              string
@@ -313,9 +315,7 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	if err != nil {
 		t.Fatalf("StartTask running: %v", err)
 	}
-	if _, err := workflowStore.ClaimRun(ctx, runningStarted.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun running: %v", err)
-	}
+	_, _ = startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, runningStarted.RunID)
 	agentColumn := workflowViewColumnByKey(t, board, "agent")
 	activePage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
@@ -327,22 +327,29 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	if err != nil {
 		t.Fatalf("ListNodeCards active: %v", err)
 	}
-	for _, taskID := range []string{string(queuedTask.ID), string(runningTask.ID)} {
-		card := requireBoardCard(t, activePage.Cards, taskID)
-		detail, err := detailView.GetTask(ctx, taskID)
+	for _, expected := range []struct {
+		taskID       string
+		status       serverapi.WorkflowTaskStatusKind
+		canInterrupt bool
+	}{
+		{taskID: string(queuedTask.ID), status: serverapi.WorkflowTaskStatusKindQueued},
+		{taskID: string(runningTask.ID), status: serverapi.WorkflowTaskStatusKindRunning, canInterrupt: true},
+	} {
+		card := requireBoardCard(t, activePage.Cards, expected.taskID)
+		detail, err := detailView.GetTask(ctx, expected.taskID)
 		if err != nil {
-			t.Fatalf("GetTask %s: %v", taskID, err)
+			t.Fatalf("GetTask %s: %v", expected.taskID, err)
 		}
-		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-			len(detail.Status.RunIDs) != 0 ||
-			detail.Actions.CanInterrupt {
-			t.Fatalf("detail for %s = %+v, want non-interruptible active state without exact live authority", taskID, detail)
+		if detail.Status.Kind != expected.status ||
+			detail.Actions.CanInterrupt != expected.canInterrupt {
+			t.Fatalf("detail for %s = %+v, want status %q interrupt=%t", expected.taskID, detail, expected.status, expected.canInterrupt)
 		}
-		if !reflect.DeepEqual(card.Status, detail.Status) || card.Actions.CanInterrupt {
-			t.Fatalf("card for %s = %+v, want exact-live detail status %+v", taskID, card, detail.Status)
+		if !reflect.DeepEqual(card.Status, detail.Status) ||
+			card.Actions.CanInterrupt != expected.canInterrupt {
+			t.Fatalf("card for %s = %+v, want exact-live detail status %+v", expected.taskID, card, detail.Status)
 		}
 		if card.SourceWorkspace.WorkspaceID != sourceWorkspace.WorkspaceID || !reflect.DeepEqual(card.SourceWorkspace, detail.SourceWorkspace) {
-			t.Fatalf("card source workspace for %s = %+v, want detail %+v", taskID, card.SourceWorkspace, detail.SourceWorkspace)
+			t.Fatalf("card source workspace for %s = %+v, want detail %+v", expected.taskID, card.SourceWorkspace, detail.SourceWorkspace)
 		}
 	}
 

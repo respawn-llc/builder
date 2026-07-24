@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"core/server/auth"
@@ -151,6 +152,7 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 }
 
 type connectionState struct {
+	mu                    sync.RWMutex
 	handshakeDone         bool
 	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
@@ -160,6 +162,60 @@ type connectionState struct {
 	attachedSession       string
 	runtimeOwnerID        string
 	ownedRuntimes         map[serverapi.SessionRuntimeAttachment]struct{}
+}
+
+func (s *connectionState) handshakeComplete() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.handshakeDone
+}
+
+func (s *connectionState) completeHandshake(capabilities *protocol.ClientCapabilities) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if capabilities != nil {
+		s.clientCapabilities = *capabilities
+	}
+	s.handshakeDone = true
+}
+
+func (s *connectionState) setNoAuthAccepted(accepted bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noAuthAccepted = accepted
+}
+
+func (s *connectionState) acceptedNoAuth() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.noAuthAccepted
+}
+
+func (s *connectionState) attach(projectID, workspaceID, workspaceRoot, sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attachedProject = projectID
+	s.attachedWorkspaceID = workspaceID
+	s.attachedWorkspaceRoot = workspaceRoot
+	s.attachedSession = sessionID
+}
+
+func (s *connectionState) attachment() (projectID, workspaceID, workspaceRoot, sessionID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.attachedProject, s.attachedWorkspaceID, s.attachedWorkspaceRoot, s.attachedSession
+}
+
+func (s *connectionState) ownerID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.runtimeOwnerID
+}
+
+func (s *connectionState) capabilities() protocol.ClientCapabilities {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.clientCapabilities
 }
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
@@ -227,36 +283,188 @@ func (g *Gateway) Handler() http.Handler {
 	return rpcwire.NewWebSocketTransport().Handler(g.handleConn)
 }
 
-func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
-	defer func() { _ = conn.Close() }()
-	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
+const gatewayUnaryWorkerCount = 8
+
+const gatewayConnectionLaneQueueCapacity = gatewayUnaryWorkerCount
+
+type gatewayRequestHandoff struct {
+	priorConnectionOperation <-chan struct{}
+	priorAuthMutation        <-chan struct{}
+}
+
+func (h gatewayRequestHandoff) wait(ctx context.Context) bool {
+	for _, operation := range []<-chan struct{}{h.priorConnectionOperation, h.priorAuthMutation} {
+		if operation == nil {
+			continue
+		}
 		select {
+		case <-operation:
 		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+type queuedGatewayConnectionRequest struct {
+	request   protocol.Request
+	completed chan struct{}
+}
+
+type gatewayConnectionLane struct {
+	requests          chan queuedGatewayConnectionRequest
+	priorOperation    <-chan struct{}
+	priorAuthMutation <-chan struct{}
+}
+
+func newGatewayConnectionLane() *gatewayConnectionLane {
+	return &gatewayConnectionLane{
+		requests: make(chan queuedGatewayConnectionRequest, gatewayConnectionLaneQueueCapacity),
+	}
+}
+
+func (l *gatewayConnectionLane) enqueue(ctx context.Context, request protocol.Request) bool {
+	completed := make(chan struct{})
+	l.priorOperation = completed
+	if gatewayRouteMutatesConnectionAuth(request.Method) {
+		l.priorAuthMutation = completed
+	}
+	select {
+	case l.requests <- queuedGatewayConnectionRequest{request: request, completed: completed}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (l *gatewayConnectionLane) directRouteHandoff(method string) gatewayRequestHandoff {
+	handoff := gatewayRequestHandoff{priorConnectionOperation: l.priorOperation}
+	if gatewayRouteRequiresAuthMutationBarrier(method) {
+		handoff.priorAuthMutation = l.priorAuthMutation
+	}
+	return handoff
+}
+
+func (l *gatewayConnectionLane) authMutationHandoff() gatewayRequestHandoff {
+	return gatewayRequestHandoff{priorAuthMutation: l.priorAuthMutation}
+}
+
+type queuedGatewayStatelessRequest struct {
+	request protocol.Request
+	handoff gatewayRequestHandoff
+}
+
+type serializedGatewayConn struct {
+	rpcwire.Conn
+	sendMu sync.Mutex
+}
+
+func (c *serializedGatewayConn) Send(ctx context.Context, frame rpcwire.Frame) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return c.Conn.Send(ctx, frame)
+}
+
+func (g *Gateway) handleConn(ctx context.Context, rawConn rpcwire.Conn) {
+	conn := &serializedGatewayConn{Conn: rawConn}
+	connCtx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		select {
+		case <-connCtx.Done():
 		case <-conn.Closed():
 		}
 		cancel()
 	}()
 	state := &connectionState{runtimeOwnerID: uuid.NewString()}
-	defer g.cleanupConnectionRuntimes(state)
+	defer func() {
+		cancel()
+		workers.Wait()
+		g.cleanupConnectionRuntimes(state)
+		_ = conn.Close()
+	}()
+	for !state.handshakeComplete() {
+		req, err := receiveRequest(connCtx, conn)
+		if err != nil {
+			return
+		}
+		resp := g.dispatch(connCtx, state, req)
+		if !sendResponse(connCtx, conn, resp) {
+			return
+		}
+	}
+	statelessRequests := make(chan queuedGatewayStatelessRequest, gatewayUnaryWorkerCount)
+	for range gatewayUnaryWorkerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for queued := range statelessRequests {
+				if !queued.handoff.wait(connCtx) {
+					return
+				}
+				resp := g.dispatch(connCtx, state, queued.request)
+				if !sendResponse(connCtx, conn, resp) {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+	connectionLane := newGatewayConnectionLane()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for queued := range connectionLane.requests {
+			resp := g.dispatch(connCtx, state, queued.request)
+			sent := sendResponse(connCtx, conn, resp)
+			close(queued.completed)
+			if !sent {
+				cancel()
+				return
+			}
+		}
+	}()
+	defer close(connectionLane.requests)
+	defer close(statelessRequests)
 	for {
 		req, err := receiveRequest(connCtx, conn)
 		if err != nil {
 			return
 		}
 		if handler, route, ok := gatewayProgressHandlerForMethod(req.Method); ok {
+			if !connectionLane.directRouteHandoff(req.Method).wait(connCtx) {
+				return
+			}
 			if !handler(g, conn, connCtx, state, route, req) {
 				return
 			}
 			continue
 		}
 		if _, ok := gatewaySubscriptionMethods[strings.TrimSpace(req.Method)]; ok {
+			if !connectionLane.directRouteHandoff(req.Method).wait(connCtx) {
+				return
+			}
 			g.serveSubscription(conn, connCtx, state, req)
 			return
 		}
-		resp := g.dispatch(connCtx, state, req)
-		if !sendResponse(connCtx, conn, resp) {
+		if gatewayRouteRequiresConnectionLane(req.Method) {
+			if !connectionLane.enqueue(connCtx, req) {
+				return
+			}
+			continue
+		}
+		queued := queuedGatewayStatelessRequest{
+			request: req,
+			handoff: gatewayRequestHandoff{},
+		}
+		if gatewayRouteRequiresAuthMutationBarrier(req.Method) {
+			queued.handoff = connectionLane.authMutationHandoff()
+		}
+		select {
+		case statelessRequests <- queued:
+		case <-connCtx.Done():
 			return
 		}
 	}
@@ -273,7 +481,7 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 	if client == nil {
 		return
 	}
-	ownerID := strings.TrimSpace(state.runtimeOwnerID)
+	ownerID := strings.TrimSpace(state.ownerID())
 	for _, attachment := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
@@ -291,7 +499,7 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if err := req.Validate(); err != nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, err.Error())
 	}
-	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
+	if req.Method != protocol.MethodHandshake && !state.handshakeComplete() {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)

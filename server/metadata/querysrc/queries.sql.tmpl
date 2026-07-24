@@ -1389,59 +1389,29 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
--- name: ListWorkflowTaskCurrentRunFacts :many
-SELECT
-    r.id,
-    r.run_generation,
-    r.waiting_ask_id
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.task_id = sqlc.arg(task_id)
-  AND r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND p.state = 'active'
-ORDER BY r.id ASC;
-
--- name: ListWorkflowTaskCurrentRunFactsByTasks :many
-SELECT
-    r.task_id,
-    r.id,
-    r.run_generation,
-    r.waiting_ask_id
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.task_id IN (sqlc.slice('task_ids'))
-  AND r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND p.state = 'active'
-ORDER BY r.task_id ASC, r.id ASC;
-
--- name: ListWorkflowTaskRunActionFactsByTasks :many
+-- name: ListWorkflowTaskExecutablePlacementFactsByTasks :many
 SELECT
     p.task_id,
-    CAST(MAX(CASE
-        WHEN r.started_at_unix_ms IS NOT NULL
-         AND r.interrupted_at_unix_ms IS NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_running,
-    CAST(MAX(CASE
-        WHEN r.interrupted_at_unix_ms IS NOT NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_interrupted,
-    CAST(MAX(CASE
-        WHEN r.waiting_ask_id IS NOT NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_waiting_question
+    p.id AS placement_id,
+    p.node_id,
+    n.kind AS node_kind,
+    p.state AS placement_state,
+    r.id AS run_id,
+    r.session_id,
+    r.run_generation,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.waiting_ask_id
 FROM task_node_placements p
-LEFT JOIN task_runs r
-    ON r.placement_id = p.id
-   AND r.completed_at_unix_ms IS NULL
+JOIN workflow_nodes n ON n.id = p.node_id
+LEFT JOIN task_run_records r
+  ON r.placement_id = p.id
+ AND r.completed_at_unix_ms IS NULL
 WHERE p.task_id IN (sqlc.slice('task_ids'))
-  AND p.state IN ('active', 'waiting_approval')
-GROUP BY p.task_id
-ORDER BY p.task_id ASC;
+  AND p.state = 'active'
+  AND n.kind IN ('agent', 'script')
+ORDER BY p.task_id ASC, p.id ASC, r.id ASC;
 
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
@@ -2387,6 +2357,8 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     started_at_unix_ms = sqlc.narg(started_at_unix_ms),
+    session_id = COALESCE(sqlc.narg(session_id), session_id),
+    effective_completion_mode = COALESCE(sqlc.narg(effective_completion_mode), effective_completion_mode),
     invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE task_runs.id = sqlc.arg(id)
@@ -4161,20 +4133,33 @@ ORDER BY r.interrupted_at_unix_ms DESC, (
     WHERE storage.id = r.id
 ) DESC;
 
--- name: ResumeTaskRun :execrows
+-- name: AdmitResumedTaskRun :execrows
 UPDATE task_runs
 SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
-    started_at_unix_ms = NULL,
+    started_at_unix_ms = sqlc.arg(started_at_unix_ms),
     interrupted_at_unix_ms = NULL,
     interruption_reason = NULL,
     interruption_detail_json = '{}',
     waiting_ask_id = NULL,
+    session_id = COALESCE(sqlc.narg(session_id), session_id),
+    effective_completion_mode = COALESCE(sqlc.narg(effective_completion_mode), effective_completion_mode),
     invalid_completion_count = 0,
     run_generation = run_generation + 1
-WHERE id = sqlc.arg(run_id)
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NOT NULL;
+WHERE task_runs.id = sqlc.arg(run_id)
+  AND task_runs.run_generation = sqlc.arg(expected_generation)
+  AND task_runs.completed_at_unix_ms IS NULL
+  AND task_runs.interrupted_at_unix_ms IS NOT NULL
+  AND EXISTS (
+      SELECT 1
+      FROM tasks t
+      JOIN task_node_placements p ON p.id = task_runs.placement_id
+      JOIN workflow_nodes n ON n.id = p.node_id
+      WHERE t.id = p.task_id
+        AND t.canceled_at_unix_ms IS NULL
+        AND p.state = 'active'
+        AND n.kind IN ('agent', 'script')
+  );
 
 -- name: GetRunTransitionContext :one
 SELECT

@@ -70,8 +70,11 @@ func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectio
 		return metadata.Binding{}, err
 	}
 	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
-	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
-		activeProjectID = strings.TrimSpace(state.attachedProject)
+	if state != nil {
+		attachedProject, _, _, _ := state.attachment()
+		if strings.TrimSpace(attachedProject) != "" {
+			activeProjectID = strings.TrimSpace(attachedProject)
+		}
 	}
 	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
 		return metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
@@ -84,11 +87,12 @@ func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connec
 	if err != nil {
 		return nil, err
 	}
+	_, workspaceID, workspaceRoot, _ := state.attachment()
 	var launchClient apicontract.SessionLaunchService
-	if strings.TrimSpace(state.attachedWorkspaceID) == "" {
-		launchClient, err = g.deps.SessionLaunchClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+	if strings.TrimSpace(workspaceID) == "" {
+		launchClient, err = g.deps.SessionLaunchClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 	} else {
-		launchClient, err = g.deps.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
+		launchClient, err = g.deps.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	if err != nil {
 		return nil, err
@@ -101,11 +105,12 @@ func (g *Gateway) runPromptClientForState(ctx context.Context, state *connection
 	if err != nil {
 		return nil, err
 	}
+	_, workspaceID, workspaceRoot, _ := state.attachment()
 	var runClient apicontract.RunPromptService
-	if strings.TrimSpace(state.attachedWorkspaceID) == "" {
-		runClient, err = g.deps.RunPromptClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+	if strings.TrimSpace(workspaceID) == "" {
+		runClient, err = g.deps.RunPromptClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 	} else {
-		runClient, err = g.deps.RunPromptClientForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
+		runClient, err = g.deps.RunPromptClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	if err != nil {
 		return nil, err

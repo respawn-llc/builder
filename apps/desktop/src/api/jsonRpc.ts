@@ -18,13 +18,22 @@ import {
   subscriptionCompleteMethod,
   waitForSubscriptionEnd,
 } from "./jsonRpcSocket";
-import type { RpcCallOptions, RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
+import type {
+  LongRunningRpcMethod,
+  RpcEventHandler,
+  RpcSubscription,
+  RpcTransport,
+} from "./transport";
 
 const socketOpenTimeoutMs = 10_000;
-const rpcRequestTimeoutMs = 30_000;
+const rpcRequestTimeoutMs = 5_000;
 const subscriptionReconnectBaseMs = 500;
 const subscriptionReconnectMaxMs = 5_000;
 const textFrameSchema = z.string();
+const ordinaryCallPolicy = { timeoutMs: rpcRequestTimeoutMs };
+const longRunningCallPolicy = { timeoutMs: null };
+
+type RpcCallPolicy = typeof ordinaryCallPolicy | typeof longRunningCallPolicy;
 
 type PendingRequest = Readonly<{
   method: string;
@@ -51,9 +60,14 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#expectedRootId = expectedRootId;
   }
 
-  async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
+  async call(method: string, params: JsonValue): Promise<unknown> {
     const socket = await this.#open();
-    return this.#send(socket, method, params, options);
+    return this.#send(socket, method, params, ordinaryCallPolicy);
+  }
+
+  async callLongRunning(method: LongRunningRpcMethod, params: JsonValue): Promise<unknown> {
+    const socket = await this.#open();
+    return this.#send(socket, method, params, longRunningCallPolicy);
   }
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
@@ -109,7 +123,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     socket: WebSocket,
     method: string,
     params: JsonValue,
-    options?: RpcCallOptions,
+    policy: RpcCallPolicy = ordinaryCallPolicy,
   ): Promise<unknown> {
     if (socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new TransportError("WebSocket is not open."));
@@ -118,7 +132,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#nextID += 1;
     const frame = JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params });
     return new Promise((resolve, reject) => {
-      const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
+      const { timeoutMs } = policy;
       const timeout =
         timeoutMs === null
           ? null

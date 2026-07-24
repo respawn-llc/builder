@@ -1,5 +1,11 @@
 import { createJsonRpcTransport } from "./jsonRpc";
-import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
+import {
+  ProtocolMismatchError,
+  RpcError,
+  ServerRootMismatchError,
+  TransportError,
+  decodeWorkflowLabelError,
+} from "./errors";
 import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { z } from "zod";
 
@@ -234,10 +240,10 @@ describe("JsonRpcWebSocketTransport", () => {
     await expect(readiness).resolves.toEqual({});
   });
 
-  it("keeps no-timeout control calls pending past the generic request deadline", async () => {
+  it("keeps approved long-running control calls pending past the ordinary request deadline", async () => {
     vi.useFakeTimers();
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const mutation = transport.call("workflow.task.start", { task_id: "task-1" }, { timeoutMs: null });
+    const mutation = transport.callLongRunning("workflow.task.start", { task_id: "task-1" });
     let settled = false;
     mutation.then(
       () => {
@@ -260,6 +266,73 @@ describe("JsonRpcWebSocketTransport", () => {
     ack(socket, 1);
 
     await expect(mutation).resolves.toEqual({});
+  });
+
+  it("times out ordinary control calls after exactly five seconds", async () => {
+    vi.useFakeTimers();
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const request = transport.call("workflow.task.resume", { task_id: "task-1" });
+    let settled = false;
+    const observed = request.then(
+      () => ({ kind: "resolved" as const }),
+      (error: unknown) => ({
+        kind: "rejected" as const,
+        error: error instanceof Error ? error : new Error("unexpected rejection"),
+      }),
+    );
+    void observed.then(() => {
+      settled = true;
+    });
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    for (let attempt = 0; attempt < 10 && socket.sent.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(socket.sent).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const outcome = await observed;
+    expect(outcome.kind).toBe("rejected");
+    if (outcome.kind !== "rejected") {
+      throw new Error("request unexpectedly resolved");
+    }
+    expect(outcome.error).toBeInstanceOf(TransportError);
+    expect(outcome.error.message).toBe("workflow.task.resume request timed out.");
+  });
+
+  it("ignores a stale null timeout argument on ordinary control calls", async () => {
+    vi.useFakeTimers();
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const callWithStaleTimeout: (
+      method: string,
+      params: { task_id: string },
+      staleOptions: { timeoutMs: null },
+    ) => Promise<unknown> = transport.call.bind(transport);
+    const request = callWithStaleTimeout("workflow.task.resume", { task_id: "task-1" }, { timeoutMs: null });
+    const outcome = request.then(
+      () => ({ kind: "resolved" as const }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await outcome;
+    expect(result.kind).toBe("rejected");
+    if (result.kind !== "rejected" || !(result.error instanceof Error)) {
+      throw new Error("request unexpectedly resolved or rejected without an error");
+    }
+    expect(result.error.message).toBe("workflow.task.resume request timed out.");
   });
 
   it("installs subscription event listener before subscribe ack can race with first event", async () => {

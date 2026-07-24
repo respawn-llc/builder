@@ -13,7 +13,7 @@ import (
 )
 
 func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
@@ -30,9 +30,7 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
+	_, _ = startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, started.RunID)
 
 	projectID, workflowIDString := binding.ProjectID, string(workflowID)
 	backlogResp, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
@@ -82,14 +80,6 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 
 	backlog := createTask("Backlog")
-	active := createTask("Active")
-	activeStarted, err := workflowStore.StartTask(ctx, active.ID)
-	if err != nil {
-		t.Fatalf("StartTask active: %v", err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM task_runs WHERE id = ?`, string(activeStarted.RunID)); err != nil {
-		t.Fatalf("create active placement fixture: %v", err)
-	}
 	queued := createTask("Queued")
 	if _, err := workflowStore.StartTask(ctx, queued.ID); err != nil {
 		t.Fatalf("StartTask queued: %v", err)
@@ -99,17 +89,15 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask running: %v", err)
 	}
-	if _, err := workflowStore.ClaimRun(ctx, runningStarted.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun running: %v", err)
-	}
+	_, _ = startWorkflowViewAgentRun(t, store, workflowStore, view, binding, runningStarted.RunID)
 	interrupted := createTask("Interrupted")
 	interruptedStarted, err := workflowStore.StartTask(ctx, interrupted.ID)
 	if err != nil {
 		t.Fatalf("StartTask interrupted: %v", err)
 	}
-	interruptedClaimed, err := workflowStore.ClaimRun(ctx, interruptedStarted.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun interrupted: %v", err)
+	interruptedClaimed, interruptedHandle := startWorkflowViewAgentRun(t, store, workflowStore, view, binding, interruptedStarted.RunID)
+	if err := interruptedHandle.Stop(ctx); err != nil {
+		t.Fatalf("stop interrupted Agent execution: %v", err)
 	}
 	if err := workflowStore.InterruptRunGeneration(ctx, interruptedStarted.RunID, interruptedClaimed.Generation, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
@@ -119,10 +107,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask question: %v", err)
 	}
-	questionClaimed, err := workflowStore.ClaimRun(ctx, questionStarted.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun question: %v", err)
-	}
+	questionClaimed, _ := startWorkflowViewAgentRun(t, store, workflowStore, view, binding, questionStarted.RunID)
 	if err := workflowStore.SetRunWaitingAsk(ctx, questionStarted.RunID, questionClaimed.Generation, "ask-list"); err != nil {
 		t.Fatalf("SetRunWaitingAsk: %v", err)
 	}
@@ -167,7 +152,6 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 	wantByStatus := map[serverapi.WorkflowTaskStatusKind]string{
 		serverapi.WorkflowTaskStatusKindBacklog:         string(backlog.ID),
-		serverapi.WorkflowTaskStatusKindActive:          string(active.ID),
 		serverapi.WorkflowTaskStatusKindQueued:          string(queued.ID),
 		serverapi.WorkflowTaskStatusKindRunning:         string(running.ID),
 		serverapi.WorkflowTaskStatusKindInterrupted:     string(interrupted.ID),
@@ -187,12 +171,19 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 			t.Fatalf("list item = %+v, unexpected status/task pairing", item)
 		}
 	}
-	for _, taskID := range []workflow.TaskID{queued.ID, running.ID, question.ID} {
-		detail := mustTaskDetail(t, view, ctx, string(taskID))
-		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-			len(detail.Status.RunIDs) != 0 ||
-			detail.Actions.CanInterrupt {
-			t.Fatalf("detail for durable-only task %s = %+v, want non-interruptible active state", taskID, detail)
+	for _, expected := range []struct {
+		taskID       workflow.TaskID
+		status       serverapi.WorkflowTaskStatusKind
+		canInterrupt bool
+	}{
+		{taskID: queued.ID, status: serverapi.WorkflowTaskStatusKindQueued},
+		{taskID: running.ID, status: serverapi.WorkflowTaskStatusKindRunning, canInterrupt: true},
+		{taskID: question.ID, status: serverapi.WorkflowTaskStatusKindWaitingQuestion},
+	} {
+		detail := mustTaskDetail(t, view, ctx, string(expected.taskID))
+		if detail.Status.Kind != expected.status ||
+			detail.Actions.CanInterrupt != expected.canInterrupt {
+			t.Fatalf("detail for task %s = %+v, want status %q interrupt=%t", expected.taskID, detail, expected.status, expected.canInterrupt)
 		}
 	}
 
@@ -298,14 +289,6 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	}
 
 	backlog := createTask("Backlog")
-	active := createTask("Active")
-	activeStarted, err := workflowStore.StartTask(ctx, active.ID)
-	if err != nil {
-		t.Fatalf("StartTask active: %v", err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM task_runs WHERE id = ?`, string(activeStarted.RunID)); err != nil {
-		t.Fatalf("create active placement fixture: %v", err)
-	}
 	queued := createTask("Queued")
 	if _, err := workflowStore.StartTask(ctx, queued.ID); err != nil {
 		t.Fatalf("StartTask queued: %v", err)
@@ -315,9 +298,7 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask running: %v", err)
 	}
-	if _, err := workflowStore.ClaimRun(ctx, runningStarted.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun running: %v", err)
-	}
+	_, _ = startWorkflowViewAgentRun(t, store, workflowStore, view, binding, runningStarted.RunID)
 	done := createTask("Done")
 	doneStarted, err := workflowStore.StartTask(ctx, done.ID)
 	if err != nil {
@@ -375,11 +356,10 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		{name: "ascending", direction: serverapi.WorkflowTaskListSortDirectionAsc, want: []serverapi.WorkflowTaskStatusKind{
 			serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindRunning,
 			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog,
-			serverapi.WorkflowTaskStatusKindActive,
 		}},
 		{name: "descending", direction: serverapi.WorkflowTaskListSortDirectionDesc, want: []serverapi.WorkflowTaskStatusKind{
-			serverapi.WorkflowTaskStatusKindActive, serverapi.WorkflowTaskStatusKindBacklog,
-			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindRunning,
+			serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindQueued,
+			serverapi.WorkflowTaskStatusKindRunning,
 			serverapi.WorkflowTaskStatusKindDone,
 		}},
 	} {
@@ -579,10 +559,7 @@ func TestTaskListProjectScopeFiltersSortsAndBoundsAcrossLinkedWorkflows(t *testi
 	if err != nil {
 		t.Fatalf("StartTask zulu: %v", err)
 	}
-	zuluClaimed, err := workflowStore.ClaimRun(ctx, zuluStarted.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun zulu: %v", err)
-	}
+	zuluClaimed, _ := startWorkflowViewAgentRun(t, store, workflowStore, view, binding, zuluStarted.RunID)
 	if err := workflowStore.SetRunWaitingAsk(ctx, zuluStarted.RunID, zuluClaimed.Generation, "ask-project-wide"); err != nil {
 		t.Fatalf("SetRunWaitingAsk zulu: %v", err)
 	}

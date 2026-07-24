@@ -2,8 +2,8 @@ package workflowview
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"os/exec"
 	"reflect"
 	"sort"
 	"strconv"
@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"core/server/sessionruntime"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -711,13 +713,183 @@ func TestBoardProjectsManualMoveTargetsFromServerPermissions(t *testing.T) {
 	}
 }
 
-func TestBoardDoesNotOfferInterruptForDurableStartedRunWithoutExactExecution(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+func TestLostExactAgentExecutionBecomesResumableInterruptionAcrossReadModels(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	sessionID := runtimeids.NewSessionID()
+	now := time.Now().UTC().UnixMilli()
+	if err := metadataStore.Queries().UpsertSession(ctx, sqlitegen.UpsertSessionParams{
+		ID:                 sessionID.String(),
+		ProjectID:          binding.ProjectID,
+		WorkspaceID:        sql.NullString{String: binding.WorkspaceID, Valid: true},
+		ArtifactRelpath:    "sessions/" + sessionID.String(),
+		Name:               "",
+		FirstPromptPreview: "",
+		InputDraft:         "",
+		CreatedAtUnixMs:    now,
+		UpdatedAtUnixMs:    now,
+		CwdRelpath:         ".",
+		ContinuationJson:   "{}",
+		LockedJson:         "{}",
+		UsageStateJson:     "{}",
+		MetadataJson:       "{}",
+	}); err != nil {
+		t.Fatalf("retain Agent Session: %v", err)
+	}
+	starter := &workflowViewSchedulerStarter{sessionID: sessionID.String()}
+	scheduler, err := workflowexecution.NewSchedulerService(
+		workflowStore,
+		starter,
+		workflowexecution.NewMutationPermit(),
+		workflowexecution.SchedulerConfig{Concurrency: 1},
+	)
+	if err != nil {
+		t.Fatalf("NewSchedulerService: %v", err)
+	}
+	t.Cleanup(func() { _ = scheduler.Close() })
+	if err := scheduler.RegisterAutomaticStarts([]workflow.RunID{started.RunID}); err != nil {
+		t.Fatalf("RegisterAutomaticStarts: %v", err)
+	}
+	if err := scheduler.Process(ctx); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	requests := starter.requests
+	if len(requests) != 1 {
+		t.Fatalf("runtime requests = %+v, want one", requests)
+	}
+	scheduler.RuntimeFinished(requests[0].RunID, requests[0].Generation)
+
+	runs, err := workflowStore.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 ||
+		runs[0].InterruptedAt == nil ||
+		runs[0].InterruptionReason == nil ||
+		*runs[0].InterruptionReason != workflowexecution.ReasonSchedulerExecutionLost {
+		t.Fatalf("lost execution run = %+v, want resumable interruption", runs)
+	}
+	detail, err := view.detail(t).GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
+		detail.Actions.CanInterrupt ||
+		!detail.Actions.CanResume ||
+		detail.AttentionCount != 1 {
+		t.Fatalf("task detail after execution loss = %+v", detail)
+	}
+	workflowIDString := string(workflowID)
+	taskList, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &binding.ProjectID,
+		WorkflowID:  &workflowIDString,
+	})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(taskList.Tasks) != 1 ||
+		taskList.Tasks[0].TaskID != string(task.ID) ||
+		taskList.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted {
+		t.Fatalf("task list after execution loss = %+v", taskList.Tasks)
+	}
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	activeColumn := workflowViewColumnByKey(t, board, "agent")
+	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
+	if err != nil {
+		t.Fatalf("ListBoardNodeCards: %v", err)
+	}
+	if len(activePage.Cards) != 1 ||
+		activePage.Cards[0].TaskID != string(task.ID) ||
+		activePage.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
+		activePage.Cards[0].Actions.CanInterrupt ||
+		!activePage.Cards[0].Actions.CanResume {
+		t.Fatalf("board card after execution loss = %+v", activePage.Cards)
+	}
+	attention, err := view.taskAttention(t).ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
+	if err != nil {
+		t.Fatalf("ListTaskAttention: %v", err)
+	}
+	if len(attention.Items) != 1 ||
+		attention.Items[0].Kind != "interrupted_run" ||
+		attention.Items[0].RunID == nil ||
+		*attention.Items[0].RunID != string(started.RunID) ||
+		attention.Items[0].DetailJSON == nil {
+		t.Fatalf("interruption attention after execution loss = %+v", attention.Items)
+	}
+}
+
+type workflowViewSchedulerStarter struct {
+	sessionID string
+	requests  []workflowexecution.SchedulerStartRunRequest
+}
+
+func (s *workflowViewSchedulerStarter) PrepareWorkflowRun(
+	_ context.Context,
+	req workflowexecution.SchedulerPrepareRunRequest,
+) (workflowexecution.PreparedWorkflowRun, error) {
+	return workflowViewPreparedRun{
+		starter: s,
+		request: workflowexecution.SchedulerStartRunRequest{
+			RunID:       req.RunID,
+			TaskID:      req.TaskID,
+			PlacementID: req.PlacementID,
+			NodeID:      req.NodeID,
+			Generation:  req.Generation,
+		},
+	}, nil
+}
+
+type workflowViewPreparedRun struct {
+	starter *workflowViewSchedulerStarter
+	request workflowexecution.SchedulerStartRunRequest
+}
+
+func (p workflowViewPreparedRun) Admission() workflowexecution.RunAdmission {
+	return workflowexecution.RunAdmission{SessionID: &p.starter.sessionID}
+}
+
+func (p workflowViewPreparedRun) Commit() error {
+	p.starter.requests = append(p.starter.requests, p.request)
+	return nil
+}
+
+func (workflowViewPreparedRun) Abort(context.Context) error {
+	return nil
+}
+
+func (workflowViewPreparedRun) Compensate(context.Context) error {
+	return nil
+}
+
+func TestTaskDetailRejectsStartedAgentRunWithoutRetainedSession(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Missing retained Session",
+		Body:      "Body",
+	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -729,34 +901,39 @@ func TestBoardDoesNotOfferInterruptForDurableStartedRunWithoutExactExecution(t *
 		t.Fatalf("ClaimRun: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
-	if err != nil {
-		t.Fatalf("GetBoard: %v", err)
-	}
-	activeColumn := workflowViewColumnByKey(t, board, "agent")
-	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
-	if err != nil {
-		t.Fatalf("ListBoardNodeCards active: %v", err)
-	}
-	if len(activePage.Cards) != 1 {
-		t.Fatalf("node cards = %+v, want one active card", activePage.Cards)
-	}
-	if activePage.Cards[0].Status.Kind == "running" || activePage.Cards[0].Actions.CanInterrupt {
-		t.Fatalf("durable-only card status/actions = %+v/%+v, want no running or interrupt authority", activePage.Cards[0].Status, activePage.Cards[0].Actions)
-	}
-	if got := activePage.Cards[0].Actions.ManualMoveTargetNodeIDs; len(got) != 1 {
-		t.Fatalf("manual move targets = %+v, want idle task targets", got)
-	}
+	_, err = view.detail(t).GetTask(ctx, string(task.ID))
+	requireWorkflowTaskIntegrityError(
+		t,
+		err,
+		serverapi.WorkflowTaskIntegrityReasonAgentSessionMissing,
+		string(task.ID),
+		string(started.RunID),
+	)
 }
 
-func TestBoardOffersInterruptOnlyWhileExactScriptExecutionIsActive(t *testing.T) {
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
+func requireWorkflowTaskIntegrityError(
+	t *testing.T,
+	err error,
+	reason serverapi.WorkflowTaskIntegrityReason,
+	taskID string,
+	runID string,
+) *serverapi.WorkflowTaskIntegrityError {
+	t.Helper()
+	var integrityErr *serverapi.WorkflowTaskIntegrityError
+	if !errors.As(err, &integrityErr) {
+		t.Fatalf("projection error = %T %v, want WorkflowTaskIntegrityError", err, err)
 	}
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	if integrityErr.Reason != reason ||
+		integrityErr.TaskID != taskID ||
+		integrityErr.RunID == nil ||
+		*integrityErr.RunID != runID {
+		t.Fatalf("integrity error = %+v", integrityErr)
+	}
+	return integrityErr
+}
+
+func TestBoardOffersInterruptOnlyWhileExactAgentExecutionIsActive(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
@@ -769,40 +946,24 @@ func TestBoardOffersInterruptOnlyWhileExactScriptExecutionIsActive(t *testing.T)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	cancellationGrace := 50 * time.Millisecond
-	handle, err := view.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &sessionruntime.WorkflowExecutionRef{TaskID: task.ID, RunID: started.RunID, Generation: claimed.Generation},
-		Command: sessionruntime.ScriptCommand{
-			Path:              sleepPath,
-			Args:              []string{"30"},
-			CancellationGrace: &cancellationGrace,
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	t.Cleanup(func() {
-		if handle != nil {
-			_ = handle.Stop(context.Background())
-		}
-	})
+	admitted, handle := startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, started.RunID)
 
 	card := workflowViewBoardCardForTask(t, ctx, view, binding.ProjectID, workflowID, "agent", string(task.ID))
 	if card.Status.Kind != serverapi.WorkflowTaskStatusKindRunning || !card.Actions.CanInterrupt {
-		t.Fatalf("live script card = %+v, want running with Interrupt", card)
+		t.Fatalf("live Agent card = %+v, want running with Interrupt", card)
 	}
 
 	if err := handle.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop script: %v", err)
+		t.Fatalf("Stop Agent execution: %v", err)
 	}
-	handle = nil
+	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, admitted.Generation, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
 	card = workflowViewBoardCardForTask(t, ctx, view, binding.ProjectID, workflowID, "agent", string(task.ID))
-	if card.Status.Kind == serverapi.WorkflowTaskStatusKindRunning || card.Actions.CanInterrupt {
-		t.Fatalf("stopped script card = %+v, want no running or Interrupt", card)
+	if card.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
+		card.Actions.CanInterrupt ||
+		!card.Actions.CanResume {
+		t.Fatalf("interrupted Agent card = %+v, want Resume without Interrupt", card)
 	}
 }
 

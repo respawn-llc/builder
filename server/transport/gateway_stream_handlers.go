@@ -22,7 +22,7 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if err := req.Validate(); err != nil {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, err.Error()))
 	}
-	if !state.handshakeDone {
+	if !state.handshakeComplete() {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
@@ -78,7 +78,7 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, err.Error()))
 		return
 	}
-	if !state.handshakeDone {
+	if !state.handshakeComplete() {
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 		return
 	}
@@ -111,7 +111,7 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
 	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
-	if !state.clientCapabilities.TranscriptLiveRunFinished {
+	if !state.capabilities().TranscriptLiveRunFinished {
 		subscribe = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 			subscription, err := g.deps.SessionTranscriptClient().SubscribeSessionTranscript(ctx, req)
 			if err != nil {

@@ -12,6 +12,9 @@
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
 - Text input is plain multiline Markdown. Raw HTML is unavailable. Links allow only safe protocols and open externally. Code is styled distinctly.
 - Desktop uses localized user-facing text, accessible controls, standard compact loading, error, and empty states, and motion that respects reduced-motion preference. macOS, Linux, and browser presentation use a contrast fade for readable top chrome; Windows uses progressive blur without a darkening fade.
+- Ordinary Desktop unary server calls time out after exactly five seconds.
+- Only a call explicitly typed as long-running may use a different timeout or no timeout. An absent timeout override never disables the ordinary five-second timeout.
+- One in-flight unary call never prevents a later independent call from being dispatched or completed.
 - Cards are reserved for board Task cards. Navigation, browsing, and selection collections use list rows.
 
 ## Home And Navigation
@@ -55,6 +58,8 @@
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
 - Closing Execution Target selection leaves the Task unchanged. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
+- Recoverable execution loss appears as the ordinary interrupted Task card with its existing interruption details and Resume action. Desktop adds no repair card or separate recovery surface.
+- If the server returns a typed non-resumable Workflow lifecycle contract failure instead of a card page, the existing card-list error boundary shows client-localized safe-load guidance and Retry. Desktop renders no inert card and adds no diagnostics-copy or reporting surface.
 - Agent and Script drop targets exist only for actual Workflow edges. Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
@@ -90,7 +95,10 @@
 - Visible values copy by selecting the value itself, with clipboard feedback that identifies the copied value on success and includes the error on failure. Short commit display copies the complete commit. Actions that copy deliberately hidden content remain explicit controls.
 - Source URL is read-only. Valid web, secure web, and mail links use their host as the label and open externally; other values are plain source text.
 - Core Task Detail, Task attention, and comments load independently. Attention has its own loading and retry state and never blocks core detail. Opening from Inbox focuses its requested attention item once available. Live server changes update open Task Detail without replacing unsaved title or body edits or collapsing the surface.
-- A non-attention Task Detail failure uses the standard error state; reopening or refreshing Task Detail is its recovery path. Deleted comments are hidden.
+- Recoverable execution loss appears in Task Detail as the ordinary interrupted Run with its existing interruption cause and Resume control.
+- A non-attention Task Detail failure uses the standard error state with Retry.
+- A typed non-resumable Workflow lifecycle contract failure uses client-localized safe-load guidance in that same standard error state. Desktop adds no separate repair, diagnostics-copy, or reporting surface.
+- Deleted comments are hidden.
 
 ## Inbox, Questions, Approvals, And Notifications
 

@@ -37,13 +37,22 @@ export {
   ProtocolMismatchError,
   RpcError,
   WorkflowLabelError,
+  WorkflowTaskIntegrityError,
   decodeWorkflowLabelError,
+  decodeWorkflowTaskIntegrityError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,
   errorMessage,
 } from "./errors";
-export type { WorkflowLabelErrorReason } from "./errors";
+export type {
+  WorkflowLabelErrorReason,
+  WorkflowTaskIntegrityActionFacts,
+  WorkflowTaskIntegrityDurableFacts,
+  WorkflowTaskIntegrityExactFacts,
+  WorkflowTaskIntegrityNodeKind,
+  WorkflowTaskIntegrityReason,
+} from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";

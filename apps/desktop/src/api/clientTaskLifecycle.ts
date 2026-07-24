@@ -24,14 +24,13 @@ export async function startTask(
   return parseRpcResponse(
     "workflow.task.start",
     taskStartResponseSchema,
-    await transport.call(
+    await transport.callLongRunning(
       "workflow.task.start",
       compactJsonObject({
         task_id: taskID,
         setup_operation_id: setupOperationID.toJSONValue(),
         execution_target: executionTargetPayload(executionTarget),
       }),
-      { timeoutMs: null },
     ),
   );
 }
@@ -40,7 +39,7 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
   const response = parseRpcResponse(
     "workflow.task.move",
     taskMoveResponseSchema,
-    await transport.call(
+    await transport.callLongRunning(
       "workflow.task.move",
       compactJsonObject({
         task_id: input.taskID,
@@ -51,7 +50,6 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
       }),
-      { timeoutMs: null },
     ),
   );
   return response;
@@ -66,14 +64,13 @@ export async function approveTransition(
   return parseRpcResponse(
     "workflow.task.approve",
     taskApproveResponseSchema,
-    await transport.call(
+    await transport.callLongRunning(
       "workflow.task.approve",
       compactJsonObject({
         task_transition_id: taskTransitionID,
         setup_operation_id: setupOperationID.toJSONValue(),
         execution_target: executionTargetPayload(executionTarget),
       }),
-      { timeoutMs: null },
     ),
   );
 }

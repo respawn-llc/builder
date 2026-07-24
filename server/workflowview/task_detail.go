@@ -13,7 +13,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -21,7 +20,7 @@ import (
 type TaskDetail struct {
 	queries   *sqlitegen.Queries
 	projector *TaskProjector
-	authority *sessionruntime.Authority
+	lifecycle *TaskLifecycleProjection
 }
 
 func NewTaskDetail(metadataStore *metadata.Store, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskDetail, error) {
@@ -34,10 +33,14 @@ func NewTaskDetail(metadataStore *metadata.Store, projector *TaskProjector, auth
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
+	lifecycle, err := NewTaskLifecycleProjection(metadataStore, authority)
+	if err != nil {
+		return nil, err
+	}
 	return &TaskDetail{
 		queries:   metadataStore.Queries(),
 		projector: projector,
-		authority: authority,
+		lifecycle: lifecycle,
 	}, nil
 }
 
@@ -108,10 +111,6 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	currentRunFacts, err := d.queries.ListWorkflowTaskCurrentRunFacts(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
 	projectState, err := d.queries.GetProjectKeyState(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -132,14 +131,16 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	snapshot, err := d.authority.CurrentTaskExecutionSnapshot(workflow.TaskID(task.ID))
+	lifecycleByTaskID, err := d.lifecycle.Project(
+		ctx,
+		[]string{task.ID},
+		map[string]workflowTaskStatusFact{task.ID: statusFact},
+	)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	currentExecutions, err := currentTaskExecutions(task.ID, currentRunFacts, snapshot.Executions)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
+	lifecycle := lifecycleByTaskID[task.ID]
+	currentExecutions := lifecycle.CurrentExecutions
 	statusFact = taskDetailStatusFact(statusFact, currentExecutions)
 	attentionCount, err := d.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
 	if err != nil {
@@ -164,10 +165,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		SourceWorkspace:   sourceWorkspace,
 		ExecutionTarget:   executionTarget,
 		WorktreePath:      worktreePath,
-		CurrentSessionIDs: make([]string, 0, len(currentExecutions)),
+		CurrentSessionIDs: make([]string, 0, len(currentExecutions)+len(lifecycle.InterruptedSessionIDs)),
 		CurrentScripts:    make([]serverapi.WorkflowTaskCurrentScript, 0, len(currentExecutions)),
 		Status:            statusFact.Status,
-		Actions:           taskDetailActions(task, statusFact, currentExecutions),
+		Actions:           taskDetailActions(task, statusFact, lifecycle.RunActions),
 		LabelIDs:          labelIDsByTask[task.ID],
 		AttentionCount:    int(attentionCount),
 	}
@@ -184,36 +185,15 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q live execution %q has no target", task.ID, execution.Ref.RunID)
 		}
 	}
+	for _, sessionID := range lifecycle.InterruptedSessionIDs {
+		detail.CurrentSessionIDs = append(detail.CurrentSessionIDs, sessionID)
+	}
+	detail.CurrentSessionIDs = sortedUniqueStrings(detail.CurrentSessionIDs)
 	sort.Strings(detail.CurrentSessionIDs)
+	if err := d.lifecycle.ValidateActions(statusFact, lifecycle, detail.Actions); err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
 	return detail, nil
-}
-
-func currentTaskExecutions(taskID string, rows []sqlitegen.ListWorkflowTaskCurrentRunFactsRow, executions []sessionruntime.TaskExecution) ([]sessionruntime.TaskExecution, error) {
-	type durableRunFact struct {
-		waitingQuestion bool
-	}
-	durable := make(map[sessionruntime.WorkflowExecutionRef]durableRunFact, len(rows))
-	for _, row := range rows {
-		ref := sessionruntime.WorkflowExecutionRef{
-			TaskID:     workflow.TaskID(taskID),
-			RunID:      workflow.RunID(row.ID),
-			Generation: row.RunGeneration,
-		}
-		if _, exists := durable[ref]; exists {
-			return nil, fmt.Errorf("task %q has duplicate current run %q generation %d", taskID, row.ID, row.RunGeneration)
-		}
-		durable[ref] = durableRunFact{waitingQuestion: row.WaitingAskID.Valid}
-	}
-	current := make([]sessionruntime.TaskExecution, 0, len(executions))
-	for _, execution := range executions {
-		fact, exists := durable[execution.Ref]
-		if !exists {
-			continue
-		}
-		execution.WaitingQuestion = execution.WaitingQuestion && fact.waitingQuestion
-		current = append(current, execution)
-	}
-	return current, nil
 }
 
 func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionruntime.TaskExecution) workflowTaskStatusFact {
@@ -230,7 +210,12 @@ func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionrunti
 	switch {
 	case hasWaitingQuestion:
 		return workflowTaskStatusFact{
-			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindWaitingQuestion, liveRunIDs, true),
+			Status: taskDetailStatus(
+				durable.Status,
+				serverapi.WorkflowTaskStatusKindWaitingQuestion,
+				sortedUniqueStrings(durable.Status.RunIDs, liveRunIDs),
+				true,
+			),
 		}
 	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingApproval:
 		durable.Status.RunIDs = sortedUniqueStrings(durable.Status.RunIDs, liveRunIDs)
@@ -238,12 +223,6 @@ func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionrunti
 	case len(current) != 0:
 		return workflowTaskStatusFact{
 			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindRunning, liveRunIDs, false),
-		}
-	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindRunning ||
-		durable.Status.Kind == serverapi.WorkflowTaskStatusKindQueued ||
-		durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion:
-		return workflowTaskStatusFact{
-			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindActive, nil, false),
 		}
 	default:
 		return durable
@@ -369,17 +348,12 @@ func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.
 	return target, &path, nil
 }
 
-func taskDetailActions(task sqlitegen.TaskRecord, status workflowTaskStatusFact, current []sessionruntime.TaskExecution) serverapi.WorkflowTaskActions {
+func taskDetailActions(task sqlitegen.TaskRecord, status workflowTaskStatusFact, runActions taskRunActionFacts) serverapi.WorkflowTaskActions {
 	active := !task.CanceledAtUnixMs.Valid && !status.Done
-	hasLiveExecutions := len(current) != 0
-	hasInterruptibleExecution := false
-	for _, execution := range current {
-		hasInterruptibleExecution = hasInterruptibleExecution || !execution.WaitingQuestion
-	}
 	return serverapi.WorkflowTaskActions{
-		CanStart:     active && !hasLiveExecutions && status.Status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
-		CanInterrupt: active && hasInterruptibleExecution,
-		CanResume:    active && !hasLiveExecutions && status.Status.Kind == serverapi.WorkflowTaskStatusKindInterrupted,
+		CanStart:     active && !runActions.HasRunning && !runActions.HasWaitingQuestion && status.Status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
+		CanInterrupt: active && runActions.HasRunning,
+		CanResume:    active && runActions.HasInterrupted,
 		CanCancel:    active,
 	}
 }

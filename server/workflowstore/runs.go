@@ -13,8 +13,27 @@ import (
 )
 
 func (s *Store) ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (RunnableRunRecord, error) {
+	return s.AdmitRun(ctx, RunAdmission{RunID: runID, ExpectedGeneration: expectedGeneration})
+}
+
+func (s *Store) AdmitRun(ctx context.Context, admission RunAdmission) (RunnableRunRecord, error) {
 	now := s.now().UnixMilli()
-	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{ID: string(runID), ExpectedGeneration: expectedGeneration, UpdatedAtUnixMs: now, StartedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}})
+	sessionID := sql.NullString{}
+	if admission.SessionID != nil {
+		sessionID = nullableString(*admission.SessionID)
+	}
+	effectiveMode := sql.NullString{}
+	if admission.EffectiveCompletionMode != nil {
+		effectiveMode = nullableString(*admission.EffectiveCompletionMode)
+	}
+	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{
+		ID:                      string(admission.RunID),
+		ExpectedGeneration:      admission.ExpectedGeneration,
+		UpdatedAtUnixMs:         now,
+		StartedAtUnixMs:         sql.NullInt64{Int64: now, Valid: true},
+		SessionID:               sessionID,
+		EffectiveCompletionMode: effectiveMode,
+	})
 	if err != nil {
 		return RunnableRunRecord{}, err
 	}
@@ -316,35 +335,69 @@ func (s *Store) ListWaitingAskRuns(ctx context.Context) ([]RunRecord, error) {
 	return out, nil
 }
 
-func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) (ResumeTaskRunsResult, error) {
+func (s *Store) ListTaskResumeCandidates(ctx context.Context, taskID workflow.TaskID) ([]RunRecord, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
-		return ResumeTaskRunsResult{}, errors.New("task id is required")
+		return nil, errors.New("task id is required")
 	}
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
-		return ResumeTaskRunsResult{}, err
+		return nil, err
 	}
 	if task.CanceledAtUnixMs.Valid {
-		return ResumeTaskRunsResult{}, ErrTaskCanceled
+		return nil, ErrTaskCanceled
 	}
 	candidates, err := s.queries.ListResumeTaskRunCandidates(ctx, string(taskID))
 	if err != nil {
-		return ResumeTaskRunsResult{}, err
+		return nil, err
 	}
 	if len(candidates) == 0 {
-		return ResumeTaskRunsResult{}, errors.New("task has no interrupted workflow run to resume")
+		return nil, errors.New("task has no interrupted workflow run to resume")
 	}
+	runs := make([]RunRecord, 0, len(candidates))
 	for _, candidate := range candidates {
 		snapshot := runStartSnapshot{}
 		if err := workflow.UnmarshalString(candidate.RunStartSnapshotJson, &snapshot); err != nil {
-			return ResumeTaskRunsResult{}, err
+			return nil, err
 		}
 		if snapshot.Node.Kind != workflow.NodeKindAgent {
+			run, err := s.GetRun(ctx, workflow.RunID(candidate.ID))
+			if err != nil {
+				return nil, err
+			}
+			runs = append(runs, run)
 			continue
 		}
 		if err := s.validateRunnableRole(snapshot.Node.SubagentRole); err != nil {
-			return ResumeTaskRunsResult{}, err
+			return nil, err
 		}
+		run, err := s.GetRun(ctx, workflow.RunID(candidate.ID))
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+func (s *Store) AdmitTaskResume(ctx context.Context, taskID workflow.TaskID, admissions []RunAdmission) (ResumeTaskRunsResult, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return ResumeTaskRunsResult{}, errors.New("task id is required")
+	}
+	if len(admissions) == 0 {
+		return ResumeTaskRunsResult{}, errors.New("at least one workflow run admission is required")
+	}
+	seen := make(map[workflow.RunID]struct{}, len(admissions))
+	for _, admission := range admissions {
+		if strings.TrimSpace(string(admission.RunID)) == "" {
+			return ResumeTaskRunsResult{}, errors.New("workflow run admission id is required")
+		}
+		if admission.ExpectedGeneration < 0 {
+			return ResumeTaskRunsResult{}, errors.New("workflow run admission generation is invalid")
+		}
+		if _, exists := seen[admission.RunID]; exists {
+			return ResumeTaskRunsResult{}, fmt.Errorf("workflow run admission %q is duplicated", admission.RunID)
+		}
+		seen[admission.RunID] = struct{}{}
 	}
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -353,27 +406,91 @@ func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) (Res
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	task, err := q.GetTask(ctx, string(taskID))
+	if err != nil {
+		return ResumeTaskRunsResult{}, fmt.Errorf("admit workflow task resume %s: load task: %w", taskID, err)
+	}
+	if task.CanceledAtUnixMs.Valid {
+		return ResumeTaskRunsResult{}, ErrTaskCanceled
+	}
+	candidates, err := q.ListResumeTaskRunCandidates(ctx, string(taskID))
+	if err != nil {
+		return ResumeTaskRunsResult{}, fmt.Errorf("admit workflow task resume %s: reload candidates: %w", taskID, err)
+	}
+	if len(candidates) != len(admissions) {
+		return ResumeTaskRunsResult{}, fmt.Errorf(
+			"admit workflow task resume %s: candidate count changed: got %d want %d: %w",
+			taskID,
+			len(candidates),
+			len(admissions),
+			sql.ErrNoRows,
+		)
+	}
+	for _, candidate := range candidates {
+		if _, exists := seen[workflow.RunID(candidate.ID)]; !exists {
+			return ResumeTaskRunsResult{}, fmt.Errorf(
+				"admit workflow task resume %s: candidate run %s was not prepared: %w",
+				taskID,
+				candidate.ID,
+				sql.ErrNoRows,
+			)
+		}
+	}
 	resolution, err := taskAttentionResolution(ctx, q, string(taskID))
 	if err != nil {
-		return ResumeTaskRunsResult{}, err
+		return ResumeTaskRunsResult{}, fmt.Errorf("admit workflow task resume %s: capture attention resolution: %w", taskID, err)
 	}
-	resumed := make([]RunRecord, 0, len(candidates))
-	for _, candidate := range candidates {
-		updated, err := q.ResumeTaskRun(ctx, sqlitegen.ResumeTaskRunParams{UpdatedAtUnixMs: now, RunID: candidate.ID})
+	resumed := make([]RunRecord, 0, len(admissions))
+	for _, admission := range admissions {
+		sessionID := sql.NullString{}
+		if admission.SessionID != nil {
+			sessionID = nullableString(*admission.SessionID)
+		}
+		effectiveMode := sql.NullString{}
+		if admission.EffectiveCompletionMode != nil {
+			effectiveMode = nullableString(*admission.EffectiveCompletionMode)
+		}
+		updated, err := q.AdmitResumedTaskRun(ctx, sqlitegen.AdmitResumedTaskRunParams{
+			UpdatedAtUnixMs:         now,
+			StartedAtUnixMs:         sql.NullInt64{Int64: now, Valid: true},
+			SessionID:               sessionID,
+			EffectiveCompletionMode: effectiveMode,
+			RunID:                   string(admission.RunID),
+			ExpectedGeneration:      admission.ExpectedGeneration,
+		})
 		if err != nil {
-			return ResumeTaskRunsResult{}, err
+			return ResumeTaskRunsResult{}, fmt.Errorf(
+				"admit workflow task resume %s run %s generation %d: update: %w",
+				taskID,
+				admission.RunID,
+				admission.ExpectedGeneration,
+				err,
+			)
 		}
 		if updated != 1 {
-			return ResumeTaskRunsResult{}, sql.ErrNoRows
+			return ResumeTaskRunsResult{}, fmt.Errorf(
+				"admit workflow task resume %s run %s generation %d: updated %d rows: %w",
+				taskID,
+				admission.RunID,
+				admission.ExpectedGeneration,
+				updated,
+				sql.ErrNoRows,
+			)
 		}
-		run, err := q.GetTaskRun(ctx, candidate.ID)
+		run, err := q.GetTaskRun(ctx, string(admission.RunID))
 		if err != nil {
-			return ResumeTaskRunsResult{}, err
+			return ResumeTaskRunsResult{}, fmt.Errorf(
+				"admit workflow task resume %s run %s generation %d: reload admitted run: %w",
+				taskID,
+				admission.RunID,
+				admission.ExpectedGeneration,
+				err,
+			)
 		}
 		resumed = append(resumed, runRecordFromTaskRun(run))
 	}
 	if err := tx.Commit(); err != nil {
-		return ResumeTaskRunsResult{}, err
+		return ResumeTaskRunsResult{}, fmt.Errorf("admit workflow task resume %s: commit: %w", taskID, err)
 	}
 	return ResumeTaskRunsResult{
 		Runs: resumed,

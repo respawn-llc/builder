@@ -17,6 +17,46 @@ import (
 	"core/server/workflowstore"
 )
 
+func TestPreparedScriptWorkflowRunCompensationRetiresFailedCommit(t *testing.T) {
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	ref := sessionruntime.WorkflowExecutionRef{
+		TaskID:     "task-script-compensation",
+		RunID:      "run-script-compensation",
+		Generation: 1,
+	}
+	preparedExecution, err := authority.PrepareScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &ref,
+		Command:  sessionruntime.ScriptCommand{Path: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatalf("PrepareScriptExecution: %v", err)
+	}
+	prepared := &preparedScriptWorkflowRun{prepared: preparedExecution}
+
+	commitErr := prepared.Commit()
+	if commitErr == nil {
+		t.Fatal("committing a directory as an executable unexpectedly succeeded")
+	}
+	if err := prepared.Compensate(context.Background()); err != nil {
+		t.Fatalf("Compensate failed script commit: %v", err)
+	}
+	snapshot, err := authority.CurrentTaskExecutionSnapshot(ref.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 0 {
+		t.Fatalf("compensated failed script remains live: %+v", snapshot.Executions)
+	}
+	if _, waitErr := preparedExecution.Handle().Wait(context.Background()); !errors.Is(waitErr, commitErr) {
+		t.Fatalf("execution result error = %v, want original commit failure %v", waitErr, commitErr)
+	}
+}
+
 func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture uses POSIX shebang")

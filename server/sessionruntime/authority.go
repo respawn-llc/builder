@@ -133,7 +133,9 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 			return errors.New("execution handle does not belong to this authority")
 		}
 		execution := exact.execution
-		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
+		if execution.authority != a ||
+			execution.finalizing ||
+			a.byScope[execution.scope.ID()] != execution {
 			return ErrExecutionNoLongerLive
 		}
 		if workflowRef, ok := execution.scope.Workflow(); ok && a.byWorkflow[workflowRef] != execution {

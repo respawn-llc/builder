@@ -142,7 +142,7 @@ Per-Transition-Branch policy deciding which retained Session supplies context fo
 
 ### Exact Execution Scope
 
-The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
+The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Kent retains the scope while it prepares durable admission or compensates a failed admission commit. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
 
 ### Resource Generation
 

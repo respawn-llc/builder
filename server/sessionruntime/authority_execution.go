@@ -54,6 +54,7 @@ type execution struct {
 	prompts  executionPromptStore
 
 	closeResource bool
+	finalizing    bool
 }
 
 type executionHandle struct {
@@ -140,10 +141,14 @@ func (e *execution) stopError() error {
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
-	e.retire()
+	e.beginFinalization()
 
 	authority := e.authority
 	workflowRef, hasWorkflow := e.scope.Workflow()
+	if hasWorkflow && authority.executionFinalized != nil {
+		authority.executionFinalized.ExecutionFinalized(workflowRef)
+	}
+	e.retire()
 	executionErr := errors.Join(runErr, drainErr)
 	var closeErr error
 	if e.resource != nil {
@@ -170,10 +175,16 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.runErr = errors.Join(executionErr, cleanupErr, closeErr)
 	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
 	e.resultMu.Unlock()
-	if hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(workflowRef)
-	}
 	close(e.done)
+}
+
+func (e *execution) beginFinalization() {
+	authority := e.authority
+	authority.mu.Lock()
+	if authority.byScope[e.scope.ID()] == e {
+		e.finalizing = true
+	}
+	authority.mu.Unlock()
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {

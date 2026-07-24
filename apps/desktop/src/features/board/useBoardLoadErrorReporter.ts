@@ -1,8 +1,8 @@
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
 import { useStatusController } from "@/app-facade";
+import { workflowTaskReadError } from "@/shared/workflow-task-read-error";
 
 export function useBoardLoadErrorReporter(): (error: unknown) => void {
   const { t } = useTranslation();
@@ -10,7 +10,7 @@ export function useBoardLoadErrorReporter(): (error: unknown) => void {
   return useCallback(
     (error: unknown) => {
       push({
-        body: errorMessage(error),
+        body: workflowTaskReadError(error, t).body,
         durationMs: Infinity,
         id: "board-load-error",
         title: t("board.loadFailed"),
