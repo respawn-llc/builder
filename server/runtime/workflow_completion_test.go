@@ -181,6 +181,7 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 			TaskBody:        "Task body.",
 			WorkflowID:      "workflow-1",
 			WorkflowShortID: "workflow-1",
+			WorkflowName:    "Release preparation",
 			NodeID:          "node-1",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",
@@ -392,10 +393,28 @@ func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
 	}
 }
 
-func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
+func TestAcceptedLiveWorkflowSteeringKeepsConfiguredToolChoice(t *testing.T) {
+	for _, test := range []struct {
+		name                   string
+		useAutomaticToolChoice bool
+		want                   llm.ToolChoiceMode
+	}{
+		{name: "required", want: llm.ToolChoiceModeRequired},
+		{name: "automatic", useAutomaticToolChoice: true, want: llm.ToolChoiceModeAutomatic},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testAcceptedLiveWorkflowSteeringToolChoice(t, test.useAutomaticToolChoice, test.want)
+		})
+	}
+}
+
+func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolChoice bool, want llm.ToolChoiceMode) {
+	t.Helper()
 	store := mustCreateTestSession(t)
 	client := newWorkflowSteeringClient()
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{
+	workflowConfig := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
+	workflowConfig.UseAutomaticToolChoice = useAutomaticToolChoice
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowConfig, Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
 	})
 	submitDone := make(chan error, 1)
@@ -424,8 +443,8 @@ func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
 		t.Fatalf("requests = %+v, want initial and steered turns", requests)
 	}
 	for i, request := range requests {
-		if request.ToolChoiceMode != llm.ToolChoiceModeRequired {
-			t.Fatalf("request %d tool choice mode = %q, want required", i, request.ToolChoiceMode)
+		if request.ToolChoiceMode != want {
+			t.Fatalf("request %d tool choice mode = %q, want %q", i, request.ToolChoiceMode, want)
 		}
 	}
 	foundSteer := false

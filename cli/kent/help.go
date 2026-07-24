@@ -161,6 +161,7 @@ var (
 	worktreeDeleteUsage     = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
 	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
 	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
+	workflowDeleteUsage     = leafCommandUsage(config.Command+" workflow delete <workflow> [--confirm] [--json]", "Preview or permanently delete a workflow.", "", "Without `--confirm`, the command reports the deletion impact and makes no changes.")
 	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
 	workflowNodeUsage       = leafCommandUsage(config.Command+" workflow node <add|update> ...", "Add or change workflow nodes.")
 	workflowNodeAddUsage    = leafCommandUsage(config.Command+" workflow node add <workflow> --key <key> --kind <kind> [flags]", "Add a node to a workflow.")
@@ -187,7 +188,7 @@ var (
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
 	taskLabelCreateUsage    = leafCommandUsage(config.Command+" task label create [--project <project>] [--json] <name>", "Create a Project label.")
-	taskLabelListUsage      = leafCommandUsage(config.Command+" task label list [--project <project>] [--json]", "List labels in a Project catalog.")
+	taskLabelListUsage      = leafCommandUsage(config.Command+" task label list [--project <project>] [--name <name>] [--json]", "List labels in a Project catalog.")
 	taskLabelRenameUsage    = leafCommandUsage(config.Command+" task label rename --label <name-or-uuid> [--project <project>] [--json] <new-name>", "Rename a Project label.")
 	taskLabelDeleteUsage    = leafCommandUsage(config.Command+" task label delete --label <name-or-uuid> [--project <project>] [--json]", "Delete a Project label.")
 	taskLabelAddUsage       = leafCommandUsage(config.Command+" task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]", "Assign existing Project labels to a task.")

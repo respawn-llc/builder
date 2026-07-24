@@ -110,7 +110,8 @@
 - `auto` resolves when an executable current Node starts or resumes after Session planning and tool availability are known: shell-unavailable agent execution uses `unstructured_output`; Workflows with any literal `continue_session` branch use `shell_command`; all other agent execution uses structured output when provider capabilities support it and dynamic tool mode otherwise. `compact_and_continue_session` does not trigger shell fallback. A Node-level `auto` override applies this policy even when the global config is a fixed mode.
 - Resume resolves the latest completion mode and Runtime Parameter Contract from the current Workflow definition. A live Exact Execution Scope keeps the completion contract already advertised for that scope until it stops.
 - Forced `structured_output` fails fast with an actionable error when unsupported. Forced `tool` always uses dynamic tool mode. Forced `shell_command` fails execution start when the resolved runtime shell tool is unavailable.
-- In `shell_command` and `tool` modes, each model response must call at least one available tool. This requirement does not add, remove, or reorder tools.
+- `[workflow].use_required_tool_calls` defaults to `true`. When enabled, each model response in `shell_command` and `tool` modes must call at least one available tool. This requirement does not add, remove, or reorder tools.
+- When `[workflow].use_required_tool_calls` is `false`, model requests in `shell_command` and `tool` modes use automatic tool selection. The selected completion mode still rejects ordinary assistant final answers.
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
 - Manual interruption releases the specialized Exact Execution Scope.
 - If the retained Workflow Session still belongs to the interrupted Current Node, a later ordinary interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
@@ -150,6 +151,11 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
+- When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
+- When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
+- Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
+- `compact_and_continue_session` uses the reassignment instructions because it delivers another executable Node assignment.
+- When Kent compacts the current Node assignment's context, it reinjects the compaction-reminder instructions for that same assignment.
 - Prompt explains task identity, node role/assignee, selected completion behavior, question behavior, handoff/transition mechanics, task comments, and why ordinary final answers are invalid when the selected mode does not accept them.
 - Agent Sessions created by Workflow Execution begin at subagent depth `0`. Delegation from a Workflow agent follows the global subagent-depth policy.
 - Ordinary final response text cannot bypass the selected completion mode.
@@ -405,6 +411,7 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
+- `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.
 - Label selectors use repeatable `--label <name-or-uuid>`. Canonical UUID v4 text selects by identity; every other value is trimmed and matched against the complete Project label name with the label catalog's case-insensitive Unicode comparison. Label selector values are literal and are never comma-split.

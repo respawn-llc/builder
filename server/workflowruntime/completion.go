@@ -66,6 +66,7 @@ type Config struct {
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
 	MaxInvalidCompletionAttempts int
+	UseAutomaticToolChoice       bool
 	Controller                   Controller
 	TaskCommentCounter           TaskCommentCounter
 	Instructions                 TaskInstructions
@@ -82,6 +83,7 @@ type TaskInstructions struct {
 	TaskBody        string
 	WorkflowID      string
 	WorkflowShortID string
+	WorkflowName    string
 	NodeID          string
 	NodeKey         string
 	NodeDisplayName string

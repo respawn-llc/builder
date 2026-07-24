@@ -117,7 +117,7 @@ var allowedSmallPackages = map[string]string{
 	"server/bootstrap":                            "composition support boundary shared by core and startup; merging into startup creates a cycle",
 	"server/attentionnotify":                      "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",
 	"server/metadata/lifecyclegen":                "repo-owned generator command for the narrow SQLite lifecycle generated seam",
-	"server/metadata/querygen":                    "repo-owned generator command that centralizes reusable metadata SQL template fragments before sqlc generation",
+	"server/metadata/querygen":                    "repo-owned metadata query generation command that renders reusable SQL templates and annotates sqlc output with failure diagnostics",
 	"server/metadata/sqlitelifecyclegen":          "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",
 	"server/projectview":                          "cohesive project read-model service owner with substantial service tests",
 	"server/runlog":                               "shared run-logging and runtime-event formatting helpers extracted from runprompt so sessionruntime and workflowrunner consume them without the runprompt import cycle",

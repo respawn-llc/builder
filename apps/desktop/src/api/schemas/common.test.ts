@@ -167,7 +167,7 @@ describe("attentionItemSchema", () => {
     ).toThrow();
   });
 
-  it("accepts every server-projected approval target", () => {
+  it("does not duplicate the server-owned workflow graph node limit", () => {
     const targets = Array.from({ length: 201 }, (_, index) => ({
       display_name: `Target ${String(index)}`,
     }));
@@ -182,7 +182,7 @@ describe("attentionItemSchema", () => {
       throw new Error("approval target item did not decode as an approval");
     }
 
-    expect(item.approvalSnapshot.targets).toHaveLength(201);
+    expect(item.approvalSnapshot.targets).toHaveLength(targets.length);
   });
 });
 

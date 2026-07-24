@@ -16,7 +16,7 @@ import (
 
 // BuildWorkflowRuntimeConfig builds the runtime contract shared by live workflow
 // execution and persisted workflow request inspection.
-func BuildWorkflowRuntimeConfig(input workflowstore.RunStartContext, completionMode workflowruntime.CompletionMode, maxInvalidCompletionAttempts int, controller workflowruntime.Controller, taskCommentCounter workflowruntime.TaskCommentCounter) (*workflowruntime.Config, error) {
+func BuildWorkflowRuntimeConfig(input workflowstore.RunStartContext, completionMode workflowruntime.CompletionMode, maxInvalidCompletionAttempts int, useRequiredToolCalls bool, controller workflowruntime.Controller, taskCommentCounter workflowruntime.TaskCommentCounter) (*workflowruntime.Config, error) {
 	instructions, err := BuildWorkflowTaskInstructions(input)
 	if err != nil {
 		return nil, err
@@ -26,6 +26,7 @@ func BuildWorkflowRuntimeConfig(input workflowstore.RunStartContext, completionM
 		Contract:                     workflowCompletionContractForRun(input.Run, input),
 		CompletionMode:               completionMode,
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,
+		UseAutomaticToolChoice:       !useRequiredToolCalls,
 		Controller:                   controller,
 		TaskCommentCounter:           taskCommentCounter,
 		Instructions:                 instructions,
@@ -82,6 +83,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		input,
 		mode,
 		plan.ActiveSettings.Workflow.MaxInvalidCompletionAttempts,
+		plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 		workflowruntime.StoreController{Store: store},
 		store,
 	)

@@ -179,7 +179,7 @@ type WorkflowNodeContextArgs struct {
 	TaskTitle            string
 	TaskBody             string
 	WorkflowId           string
-	WorkflowShortId      string
+	WorkflowName         string
 	NodeId               string
 	NodeKey              string
 	NodeDisplayName      string
@@ -190,6 +190,14 @@ type WorkflowNodeContextArgs struct {
 	Transitions          []WorkflowTransition
 	NodePrompt           string
 }
+
+type WorkflowTaskPromptKind uint8
+
+const (
+	WorkflowTaskPromptInitialAssignment WorkflowTaskPromptKind = iota
+	WorkflowTaskPromptReassignment
+	WorkflowTaskPromptCompactionReminder
+)
 
 type WorkflowOutputField struct {
 	Name        string
@@ -287,6 +295,8 @@ var (
 	HeadlessModePrompt                               = mustPrompt("headless_mode_prompt.md")
 	HeadlessModeExitPrompt                           = mustPrompt("headless_mode_exit_prompt.md")
 	WorkflowTaskInstructionsPrompt                   = mustPrompt("workflow/workflow_task_instructions.md")
+	WorkflowTaskReassignmentPrompt                   = mustPrompt("workflow/workflow_task_reassignment.md")
+	WorkflowTaskCompactionReminderPrompt             = mustPrompt("workflow/workflow_task_compaction_reminder.md")
 	WorkflowNudgePrompt                              = mustPrompt("workflow/nudge.md")
 	WorkflowToolCompletionInstructionsPrompt         = mustPrompt("workflow/tool_completion_instructions.md")
 	WorkflowStructuredCompletionInstructionsPrompt   = mustPrompt("workflow/structured_completion_instructions.md")
@@ -491,8 +501,25 @@ func RenderWorktreeModeExitPrompt(branch, cwd, worktreePath, workspaceRoot strin
 	})
 }
 
-func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
-	return renderNamedTemplate("workflow task instructions", WorkflowTaskInstructionsPrompt, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+func RenderWorkflowTaskInstructions(kind WorkflowTaskPromptKind, args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
+	name, text, err := workflowTaskPromptTemplate(kind)
+	if err != nil {
+		return "", err
+	}
+	return renderNamedTemplate(name, text, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+}
+
+func workflowTaskPromptTemplate(kind WorkflowTaskPromptKind) (string, string, error) {
+	switch kind {
+	case WorkflowTaskPromptInitialAssignment:
+		return "workflow task initial assignment", WorkflowTaskInstructionsPrompt, nil
+	case WorkflowTaskPromptReassignment:
+		return "workflow task reassignment", WorkflowTaskReassignmentPrompt, nil
+	case WorkflowTaskPromptCompactionReminder:
+		return "workflow task compaction reminder", WorkflowTaskCompactionReminderPrompt, nil
+	default:
+		return "", "", fmt.Errorf("render workflow task instructions: unknown prompt kind %d", kind)
+	}
 }
 
 func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalText, goalReminder string) (string, error) {

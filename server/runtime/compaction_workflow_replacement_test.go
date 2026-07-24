@@ -78,74 +78,109 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	}
 }
 
-func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
-	client := &fakeCompactionClient{
-		compactionResponses: []llm.CompactionResponse{
-			remoteCompactionReplacement(1_000, 100, 200_000),
-		},
-		responses: []llm.Response{
-			commentaryResponse("", llm.ToolCall{
-				ID:   "complete",
-				Name: string(toolspec.ToolCompleteNode),
-				Input: mustJSON(map[string]any{
-					"transition": "done",
-					"summary":    "done",
-				}),
-			}),
-		},
-	}
-	engine := mustNewWorkflowTestEngine(
-		t,
-		mustCreateTestSession(t),
-		client,
-		&workflowruntime.Config{
-			RunID: runID,
-			Contract: workflowruntime.CompletionContract{
-				RunID: runID,
-				Transitions: []workflowruntime.CompletionTransition{{
-					ID:         "done",
-					Parameters: []workflow.Parameter{{Key: "summary"}},
-				}},
+func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing.T) {
+	tests := []struct {
+		name          string
+		existingRunID workflow.RunID
+		compact       func(context.Context, *Engine) error
+	}{
+		{
+			name:          "same assignment reminder",
+			existingRunID: "workflow-run",
+			compact: func(ctx context.Context, engine *Engine) error {
+				return engine.CompactContext(ctx, "")
 			},
-			CompletionMode: workflowruntime.CompletionModeTool,
-			Controller:     &externallyCompletedWorkflowController{},
 		},
-		Config{Model: "gpt-5"},
-	)
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist compaction input: %v", err)
+		{
+			name:          "compact and continue reassignment",
+			existingRunID: "previous-workflow-run",
+			compact: func(ctx context.Context, engine *Engine) error {
+				return engine.CompactContextForWorkflowContinuation(ctx)
+			},
+		},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runID := workflow.RunID("workflow-run")
+			client := &fakeCompactionClient{
+				compactionResponses: []llm.CompactionResponse{
+					remoteCompactionReplacement(1_000, 100, 200_000),
+				},
+				responses: []llm.Response{
+					commentaryResponse("", llm.ToolCall{
+						ID:   "complete",
+						Name: string(toolspec.ToolCompleteNode),
+						Input: mustJSON(map[string]any{
+							"transition": "done",
+							"summary":    "done",
+						}),
+					}),
+				},
+			}
+			engine := mustNewWorkflowTestEngine(
+				t,
+				mustCreateTestSession(t),
+				client,
+				&workflowruntime.Config{
+					RunID: runID,
+					Contract: workflowruntime.CompletionContract{
+						RunID: runID,
+						Transitions: []workflowruntime.CompletionTransition{{
+							ID:         "done",
+							Parameters: []workflow.Parameter{{Key: "summary"}},
+						}},
+					},
+					CompletionMode: workflowruntime.CompletionModeTool,
+					Controller:     &externallyCompletedWorkflowController{},
+				},
+				Config{Model: "gpt-5"},
+			)
+			if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+				steeringPriorityNormal,
+				steeringMessageEventNone,
+				true,
+				[]llm.Message{
+					{
+						Role:        llm.RoleDeveloper,
+						MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+						SourcePath:  textutil.Value(string(test.existingRunID)),
+						Content:     textutil.Value("existing workflow instructions"),
+					},
+					{Role: llm.RoleUser, Content: textutil.Value("input")},
+				},
+			)); err != nil {
+				t.Fatalf("persist compaction input: %v", err)
+			}
 
-	if err := engine.CompactContext(context.Background(), ""); err != nil {
-		t.Fatalf("compact workflow context: %v", err)
-	}
-	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("submit workflow turn: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("post-compaction model calls = %d, want one", len(client.calls))
-	}
+			if err := test.compact(context.Background(), engine); err != nil {
+				t.Fatalf("compact workflow context: %v", err)
+			}
+			if got := engine.LastCompactionWorkflowRunID(); got != string(runID) {
+				t.Fatalf("compaction workflow run ID = %q, want %q", got, runID)
+			}
+			if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+				t.Fatalf("submit workflow turn: %v", err)
+			}
+			if len(client.calls) != 1 {
+				t.Fatalf("post-compaction model calls = %d, want one", len(client.calls))
+			}
 
-	workflowModes := 0
-	for _, item := range client.calls[0].Items {
-		if item.Type != llm.ResponseItemTypeMessage ||
-			item.MessageType == nil ||
-			*item.MessageType != llm.MessageTypeWorkflowMode {
-			continue
-		}
-		if item.SourcePath == nil || *item.SourcePath != string(runID) {
-			t.Fatalf("workflow request mode item = %+v, want source identity %q", item, runID)
-		}
-		workflowModes++
-	}
-	if workflowModes != 1 {
-		t.Fatalf("post-compaction workflow-mode-items = %d, want one", workflowModes)
+			workflowModes := 0
+			for _, item := range client.calls[0].Items {
+				if item.Type != llm.ResponseItemTypeMessage ||
+					item.MessageType == nil ||
+					*item.MessageType != llm.MessageTypeWorkflowMode {
+					continue
+				}
+				if item.SourcePath == nil || *item.SourcePath != string(runID) {
+					t.Fatalf("workflow request mode item = %+v, want source identity %q", item, runID)
+				}
+				workflowModes++
+			}
+			if workflowModes != 1 {
+				t.Fatalf("post-compaction workflow-mode-items = %d, want one", workflowModes)
+			}
+		})
 	}
 }
 

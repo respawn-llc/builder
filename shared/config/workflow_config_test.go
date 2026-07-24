@@ -19,6 +19,9 @@ func TestLoadWorkflowConfigDefaults(t *testing.T) {
 	if cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 5 {
 		t.Fatalf("max invalid completion attempts = %d, want 5", cfg.Settings.Workflow.MaxInvalidCompletionAttempts)
 	}
+	if !cfg.Settings.Workflow.UseRequiredToolCalls {
+		t.Fatal("workflow required tool calls = false, want default true")
+	}
 	if cfg.Settings.Workflow.Subagents {
 		t.Fatal("workflow subagents = true, want default false")
 	}
@@ -33,6 +36,7 @@ func TestDefaultSettingsTOMLRendersWorkflowDefaults(t *testing.T) {
 		"completion_mode = \"auto\"",
 		"concurrency = 5",
 		"max_invalid_completion_attempts = 5",
+		"use_required_tool_calls = true",
 		"subagents = false",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -70,13 +74,21 @@ func TestLoadWorkflowConfigFromFile(t *testing.T) {
 completion_mode = "shell_command"
 concurrency = 7
 max_invalid_completion_attempts = 6
+use_required_tool_calls = false
 subagents = true
 `, LoadOptions{})
-	if cfg.Settings.Workflow.CompletionMode != WorkflowCompletionModeShellCommand || cfg.Settings.Workflow.Concurrency != 7 || cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 6 || !cfg.Settings.Workflow.Subagents {
+	if cfg.Settings.Workflow.CompletionMode != WorkflowCompletionModeShellCommand ||
+		cfg.Settings.Workflow.Concurrency != 7 ||
+		cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 6 ||
+		cfg.Settings.Workflow.UseRequiredToolCalls ||
+		!cfg.Settings.Workflow.Subagents {
 		t.Fatalf("workflow settings = %+v", cfg.Settings.Workflow)
 	}
 	if got := cfg.Source.Sources["workflow.completion_mode"]; got != "file" {
 		t.Fatalf("workflow.completion_mode source = %q, want file", got)
+	}
+	if got := cfg.Source.Sources["workflow.use_required_tool_calls"]; got != "file" {
+		t.Fatalf("workflow.use_required_tool_calls source = %q, want file", got)
 	}
 }
 

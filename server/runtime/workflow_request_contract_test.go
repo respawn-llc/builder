@@ -60,6 +60,53 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 	}
 }
 
+func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
+	for _, mode := range []workflowruntime.CompletionMode{
+		workflowruntime.CompletionModeTool,
+		workflowruntime.CompletionModeShellCommand,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			runID := workflow.RunID("workflow-run")
+			client := &fakeClient{caps: llm.ProviderCapabilities{
+				ProviderID:           "provider-without-required-choice",
+				SupportsResponsesAPI: false,
+			}}
+			engine := mustNewWorkflowTestEngine(
+				t,
+				mustCreateTestSession(t),
+				client,
+				&workflowruntime.Config{
+					RunID:                  runID,
+					Contract:               workflowruntime.CompletionContract{RunID: runID},
+					CompletionMode:         mode,
+					UseAutomaticToolChoice: true,
+					Controller:             &externallyCompletedWorkflowController{},
+				},
+				Config{
+					Model:        "gpt-5",
+					EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+				},
+			)
+
+			request, err := engine.buildRequest(context.Background(), "step", true)
+			if err != nil {
+				t.Fatalf("build workflow request: %v", err)
+			}
+			if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+				t.Fatalf("workflow tool choice mode = %q, want automatic", request.ToolChoiceMode)
+			}
+
+			countRequest, err := engine.buildRequestWithoutPromptRefresh(context.Background())
+			if err != nil {
+				t.Fatalf("build workflow token-count request: %v", err)
+			}
+			if countRequest.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+				t.Fatalf("workflow token-count tool choice mode = %q, want automatic", countRequest.ToolChoiceMode)
+			}
+		})
+	}
+}
+
 func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
 	engine := mustNewExecTestEngine(
 		t,

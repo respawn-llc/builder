@@ -24,6 +24,16 @@ func workflowRecordsForCLI(records []serverapi.WorkflowRecord) ([]serverapi.Work
 	return projected, nil
 }
 
+func workflowDeleteResponseForCLI(response serverapi.WorkflowDeleteResponse) (serverapi.WorkflowDeleteResponse, error) {
+	workflowID, err := workflowIDForCLI(response.Impact.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowDeleteResponse{}, err
+	}
+	projected := response
+	projected.Impact.WorkflowID = workflowID
+	return projected, nil
+}
+
 func workflowTaskSummaryForCLI(summary serverapi.WorkflowTaskSummary) (serverapi.WorkflowTaskSummary, error) {
 	workflowID, err := workflowIDForCLI(summary.WorkflowID)
 	if err != nil {

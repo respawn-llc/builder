@@ -1,3 +1,1 @@
-Command rejected: `{{command}}`
-
-This command targets the session that is running it. Live controls steer, stop, or wait for another active session, so targeting the caller's own `KENT_SESSION_ID` is invalid.
+This command targets the session that is running it - **you**, which makes no sense. If you are confused, please ask the user for help. Do not try to stop yourself (this will kill you) or instruct yourself (this will just make you confused) anymore.

@@ -27,6 +27,7 @@ const (
 	defaultWorkflowCompletionMode        = WorkflowCompletionModeAuto
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
+	defaultWorkflowUseRequiredToolCalls  = true
 	defaultWorkflowSubagents             = false
 	defaultMaxSubagentDepth              = 2
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100

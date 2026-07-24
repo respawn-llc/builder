@@ -7,7 +7,8 @@ usage() {
 Usage: ./scripts/import_gh.sh <ref> [<ref> ...]
 
 Imports GitHub issues into the Kent Task workflow linked as the default for the
-current working directory.
+current working directory. Priority, effort, Bug/Feature issue type, and
+repository labels are assigned to each task; missing Project labels are created.
 
 Each <ref> is one of:
   - an issue number             e.g. 418
@@ -29,6 +30,121 @@ require_command() {
 	if ! command -v "$1" >/dev/null 2>&1; then
 		fail "$1 is required."
 	fi
+}
+
+ensure_project_label() {
+	local requested_name="$1"
+	local lookup_json existing_id
+	lookup_json="$("$kent_bin" task label list --project . --name "$requested_name" --json)"
+	if ! jq -e '
+		.catalog.labels
+		| type == "array"
+			and length <= 1
+			and all(
+				.[];
+				type == "object"
+					and (.id | type == "string")
+					and (.id | length > 0)
+					and (.name | type == "string")
+					and (.name | length > 0)
+			)
+	' <<<"$lookup_json" >/dev/null; then
+		fail "Kent returned an invalid Project label lookup response."
+	fi
+	existing_id="$(jq -r '.catalog.labels[0].id // empty' <<<"$lookup_json")"
+	if [ -n "$existing_id" ]; then
+		printf '%s\n' "$existing_id"
+		return
+	fi
+
+	local create_json created_label created_id created_name
+	create_json="$("$kent_bin" task label create "$requested_name" --project . --json)"
+	if ! created_label="$(
+		jq -ce '
+			.label
+			| select(
+				type == "object"
+				and (.id | type == "string")
+				and (.id | length > 0)
+				and (.name | type == "string")
+				and (.name | length > 0)
+			)
+		' <<<"$create_json"
+	)"; then
+		fail "Kent created label '$requested_name', but returned an invalid label response."
+	fi
+	created_id="$(jq -r '.id' <<<"$created_label")"
+	created_name="$(jq -r '.name' <<<"$created_label")"
+
+	echo "Created missing Kent label '$created_name'." >&2
+	printf '%s\n' "$created_id"
+}
+
+issue_field_option() {
+	local field_name="$1"
+	local field_file="$2"
+	local value
+	if ! value="$(
+		jq -r --arg field "$field_name" '
+			[.[] | select(.issue_field_name == $field)] as $matches
+			| if ($matches | length) == 0 then
+				""
+			elif
+				($matches | length) == 1
+				and $matches[0].data_type == "single_select"
+				and ($matches[0].single_select_option.name | type) == "string"
+				and ($matches[0].single_select_option.name | length) > 0
+			then
+				$matches[0].single_select_option.name
+			else
+				error("expected zero or one assigned single-select value")
+			end
+		' "$field_file"
+	)"; then
+		fail "GitHub returned an invalid '$field_name' issue field value for GH #$number in $repo."
+	fi
+	printf '%s\n' "$value"
+}
+
+priority_label() {
+	case "$1" in
+	"")
+		;;
+	Urgent)
+		printf '%s\n' "P0"
+		;;
+	High)
+		printf '%s\n' "P1"
+		;;
+	Medium)
+		printf '%s\n' "P2"
+		;;
+	Low)
+		printf '%s\n' "P3"
+		;;
+	*)
+		fail "Unsupported GitHub Priority '$1' on GH #$number in $repo."
+		;;
+	esac
+}
+
+effort_label() {
+	case "$1" in
+	"")
+		;;
+	Low)
+		printf '%s\n' "Small"
+		;;
+	Medium)
+		printf '%s\n' "Medium"
+		;;
+	High)
+		printf '%s\n' "Large"
+		;;
+	*)
+		fail "Unsupported GitHub Effort '$1' on GH #$number in $repo."
+		;;
+	esac
 }
 
 is_decimal_number() {
@@ -122,6 +238,7 @@ import_issue() {
 	parse_issue_ref "$ref"
 
 	local issue_file="$tmpdir/issue.json"
+	local issue_fields_file="$tmpdir/issue-fields.json"
 	local comments_file="$tmpdir/comments.json"
 	local body_file="$tmpdir/body.md"
 
@@ -131,6 +248,61 @@ import_issue() {
 		echo "Skipping GH #$number in $repo: it is a pull request, not an issue." >&2
 		return 0
 	fi
+
+	gh api "repos/$repo/issues/$number/issue-field-values" >"$issue_fields_file"
+	if ! jq -e 'type == "array"' "$issue_fields_file" >/dev/null; then
+		fail "GitHub returned invalid issue field values for GH #$number in $repo."
+	fi
+
+	local priority effort issue_type
+	priority="$(issue_field_option "Priority" "$issue_fields_file")"
+	effort="$(issue_field_option "Effort" "$issue_fields_file")"
+	issue_type="$(jq -r '.type.name // ""' "$issue_file")"
+
+	local -a requested_labels=()
+	local mapped_label repository_label existing_label duplicate
+	mapped_label="$(priority_label "$priority")"
+	if [ -n "$mapped_label" ]; then
+		requested_labels+=("$mapped_label")
+	fi
+	mapped_label="$(effort_label "$effort")"
+	if [ -n "$mapped_label" ]; then
+		requested_labels+=("$mapped_label")
+	fi
+	case "$issue_type" in
+	Bug | Feature)
+		requested_labels+=("$issue_type")
+		;;
+	esac
+	while IFS= read -r repository_label; do
+		[ -n "$repository_label" ] || continue
+		duplicate=0
+		for existing_label in "${requested_labels[@]}"; do
+			if [ "$repository_label" = "$existing_label" ]; then
+				duplicate=1
+				break
+			fi
+		done
+		if [ "$duplicate" -eq 0 ]; then
+			requested_labels+=("$repository_label")
+		fi
+	done < <(jq -r '.labels[]? | .name // empty' "$issue_file")
+
+	local -a task_label_ids=()
+	local requested_label resolved_label_id existing_label_id
+	for requested_label in "${requested_labels[@]}"; do
+		resolved_label_id="$(ensure_project_label "$requested_label")"
+		duplicate=0
+		for existing_label_id in "${task_label_ids[@]}"; do
+			if [ "$resolved_label_id" = "$existing_label_id" ]; then
+				duplicate=1
+				break
+			fi
+		done
+		if [ "$duplicate" -eq 0 ]; then
+			task_label_ids+=("$resolved_label_id")
+		fi
+	done
 
 	local title issue_body issue_url import_date
 	title="$(jq -r '.title // ""' "$issue_file")"
@@ -146,8 +318,14 @@ import_issue() {
 	} >"$body_file"
 
 	local task_title create_json task_ref task_id
+	local -a create_args
 	task_title="GH #$number: $title"
-	create_json="$("$kent_bin" task create --project . --title "$task_title" --body-file "$body_file" --source-url "$issue_url" --json)"
+	create_args=(task create --project . --title "$task_title" --body-file "$body_file" --source-url "$issue_url")
+	for resolved_label_id in "${task_label_ids[@]}"; do
+		create_args+=(--label "$resolved_label_id")
+	done
+	create_args+=(--json)
+	create_json="$("$kent_bin" "${create_args[@]}")"
 
 	task_ref="$(jq -r '.summary.short_id // ""' <<<"$create_json")"
 	task_id="$(jq -r '.summary.task_id // .summary.id // ""' <<<"$create_json")"
