@@ -773,9 +773,9 @@ func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID string, items 
 		if !present {
 			continue
 		}
-		if _, owned := s.assistantToolCallStepIDs[callID]; owned {
-			continue
-		}
+		// Replacement items are born at the compaction boundary, which is also
+		// the only ownership fact available when the active segment is restored.
+		// Rebase live ownership to the same Step so restart cannot change it.
 		s.assistantToolCallStepIDs[callID] = stepID
 	}
 }

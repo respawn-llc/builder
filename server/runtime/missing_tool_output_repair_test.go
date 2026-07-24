@@ -230,7 +230,8 @@ func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 	if _, err := eng.repairMissingToolOutputsByAppending(nil); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	stepID := repairCompletionStepID(t, store, "missing")
+	record, _ := repairCompletionRecord(t, store, "missing")
+	stepID := record.StepID()
 	if stepID == nil || *stepID != chatStoreTestStepID {
 		t.Fatalf("repair step id = %v, want original call step %q", stepID, chatStoreTestStepID)
 	}
@@ -253,7 +254,8 @@ func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T
 	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value(chatStoreTestStepID)); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	stepID := repairCompletionStepID(t, store, "unowned")
+	record, _ := repairCompletionRecord(t, store, "unowned")
+	stepID := record.StepID()
 	if stepID == nil || *stepID != chatStoreTestStepID {
 		t.Fatalf("repair step id = %v, want repair step %q", stepID, chatStoreTestStepID)
 	}
@@ -292,7 +294,11 @@ func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T
 	}
 }
 
-func repairCompletionStepID(t *testing.T, store *session.Store, callID string) *string {
+func repairCompletionRecord(
+	t *testing.T,
+	store *session.Store,
+	callID string,
+) (session.EventRecord, storedToolCompletion) {
 	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
@@ -308,11 +314,11 @@ func repairCompletionStepID(t *testing.T, store *session.Store, callID string) *
 			t.Fatalf("restore completion: %v", err)
 		}
 		if stored.CallID == callID {
-			return record.StepID()
+			return record, stored
 		}
 	}
 	t.Fatalf("missing synthetic completion for call %q", callID)
-	return nil
+	return session.EventRecord{}, storedToolCompletion{}
 }
 
 func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
@@ -355,28 +361,10 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step")); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-	if err != nil {
-		t.Fatalf("read bounded repair records: %v", err)
+	_, completion := repairCompletionRecord(t, store, "missing")
+	if completion.Presentation == nil || !completion.Presentation.IsShell || completion.Presentation.Command == "" {
+		t.Fatalf("synthetic completion presentation = %+v, want typed shell presentation", completion.Presentation)
 	}
-	for _, record := range window.Records {
-		payload, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
-		if !ok {
-			continue
-		}
-		completion, err := storedToolCompletionFromSessionRecord(payload)
-		if err != nil {
-			t.Fatalf("restore completion: %v", err)
-		}
-		if completion.CallID != "missing" {
-			continue
-		}
-		if completion.Presentation == nil || !completion.Presentation.IsShell || completion.Presentation.Command == "" {
-			t.Fatalf("synthetic completion presentation = %+v, want typed shell presentation", completion.Presentation)
-		}
-		return
-	}
-	t.Fatal("missing synthetic completion")
 }
 
 func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {

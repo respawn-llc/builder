@@ -83,6 +83,41 @@ func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
 	}
 }
 
+func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
+	const replacementStepID = "22222222-2222-4222-8222-222222222222"
+	message := llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    "call-rebased",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}},
+	}
+	items := llm.ItemsFromMessages([]llm.Message{message})
+
+	live := newChatStoreWithCWD(t.TempDir())
+	live.appendMessage(chatStoreTestStepID, message)
+	live.replaceHistory(replacementStepID, items)
+
+	reopened := newChatStoreWithCWD(t.TempDir())
+	reopened.replaceHistory(replacementStepID, items)
+
+	for name, chat := range map[string]*chatStore{"live": live, "reopened": reopened} {
+		dangling := chat.danglingToolCalls()
+		if len(dangling) != 1 {
+			t.Fatalf("%s dangling calls = %+v, want one", name, dangling)
+		}
+		if dangling[0].stepID == nil || *dangling[0].stepID != replacementStepID {
+			t.Fatalf(
+				"%s dangling call step = %v, want replacement step %q",
+				name,
+				dangling[0].stepID,
+				replacementStepID,
+			)
+		}
+	}
+}
+
 func assertHistoryReplacementTail(t *testing.T, items []llm.ResponseItem) {
 	t.Helper()
 	if len(items) != 3 {
