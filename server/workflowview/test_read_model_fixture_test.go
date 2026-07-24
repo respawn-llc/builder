@@ -45,10 +45,7 @@ func newWorkflowViewTestFixture(metadataStore *metadata.Store, workflowStore *wo
 		roleResolver: roleResolver,
 		transcripts:  transcripts,
 		prompts:      prompts,
-		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-			PersistenceRoot: metadataStore.PersistenceRoot(),
-			StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
-		}),
+		authority:    sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
 	}, nil
 }
 
@@ -68,7 +65,7 @@ func (f *workflowViewTestFixture) tasks(t *testing.T) *TaskList {
 	t.Helper()
 	if f.taskList == nil {
 		var err error
-		f.taskList, err = NewTaskList(f.metadata, f.definitions, f.projector, f.authority)
+		f.taskList, err = NewTaskList(f.metadata, f.definitions, f.projector)
 		if err != nil {
 			t.Fatalf("NewTaskList: %v", err)
 		}

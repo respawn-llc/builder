@@ -6,7 +6,6 @@ import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
-import { workflowTaskReadError } from "@/shared/workflow-task-read-error";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
@@ -43,18 +42,7 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
   if (detail.isError) {
-    const readError = workflowTaskReadError(detail.error, t);
-    return (
-      <ErrorState
-        body={readError.body}
-        onRetry={() => {
-          void detail.refetch();
-        }}
-        retryLabel={t("app.retry")}
-        reveal={false}
-        title={readError.title}
-      />
-    );
+    return <ErrorState body={errorMessage(detail.error)} reveal={false} title={t("states.error")} />;
   }
   const content = (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>

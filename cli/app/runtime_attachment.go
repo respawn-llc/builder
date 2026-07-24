@@ -128,7 +128,7 @@ func prepareSharedRuntimeWiring(
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	notificationHooks := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
+	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
 				return sessionName
@@ -139,16 +139,12 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(*plan.SessionTitle)
 	}, terminalFocus.FocusedForAttention)
-	var queueHook turnQueueHook = notificationHooks
-	if lifecycleProxy != nil {
-		queueHook = newTurnQueueHooks(notificationHooks, lifecycleProxy)
-	}
 	wiring := &runtimeWiring{
 		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
 		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       notificationHooks,
-		turnQueueHook:         queueHook,
+		promptAttention:       turnQueueHook,
+		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,
 		worktrees:             clients.Worktrees,

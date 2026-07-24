@@ -234,11 +234,7 @@ class BootstrapErrorTransport implements RpcTransport {
   }
 
   async call(): Promise<unknown> {
-    return this.#fail();
-  }
-
-  async callLongRunning(): Promise<unknown> {
-    return this.#fail();
+    throw this.#error;
   }
 
   subscribe(_method: string, _params: JsonValue, handler: RpcEventHandler): RpcSubscription {
@@ -248,10 +244,6 @@ class BootstrapErrorTransport implements RpcTransport {
         return;
       },
     };
-  }
-
-  async #fail(): Promise<never> {
-    throw this.#error;
   }
 }
 

@@ -55,9 +55,6 @@ func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (ma
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for ref, execution := range a.byWorkflow {
-		if execution.finalizing {
-			continue
-		}
 		if _, exists := wanted[ref.TaskID]; !exists {
 			continue
 		}

@@ -88,9 +88,7 @@ func TestRuntimeAttachmentUsesTranscriptBellHook(t *testing.T) {
 	if plan.Wiring.eventDispatcher == nil || plan.Wiring.eventDispatcher.transcriptEvents == nil {
 		t.Fatal("runtime wiring omitted the transcript event dispatcher")
 	}
-	promptHook, promptOK := plan.Wiring.promptAttention.(*bellHooks)
-	turnHook, turnOK := plan.Wiring.turnQueueHook.(*bellHooks)
-	if !promptOK || !turnOK || promptHook != turnHook {
+	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.turnQueueHook {
 		t.Fatal("runtime wiring did not make the bell hook authoritative for prompt activation")
 	}
 	plan.Close()
@@ -128,9 +126,7 @@ func TestRuntimeAttachmentKeepsPromptActivationIndependentFromLifecycleHooks(t *
 	}
 	t.Cleanup(stop)
 
-	promptHook, promptOK := wiring.promptAttention.(*bellHooks)
-	turnHooks, turnOK := wiring.turnQueueHook.(*turnQueueHooks)
-	if !promptOK || !turnOK || turnHooks.notifications != promptHook {
+	if wiring.promptAttention == nil || wiring.promptAttention != wiring.turnQueueHook {
 		t.Fatal("lifecycle hooks changed native prompt-activation ownership")
 	}
 }

@@ -155,23 +155,10 @@ describe("task lifecycle client", () => {
     });
     await client.approveTransition("transition-3", undefined, { mode: "none", customRef: null });
 
-    expect(transport.calls).toEqual([]);
-    expect(transport.longRunningCalls.map((call) => call.params)).toMatchObject([
+    expect(transport.calls.map((call) => call.params)).toMatchObject([
       { execution_target: { mode: "default_branch" } },
       { execution_target: { mode: "custom_ref", custom_ref: "release/v2" } },
       { execution_target: { mode: "none" } },
-    ]);
-  });
-
-  it("keeps workflow task resume on the long-running transport lane", async () => {
-    const transport = new FakeRpcTransport([{ method: "workflow.task.resume", result: {} }]);
-    const client = new ApiClient(transport);
-
-    await client.resumeTask("task-1");
-
-    expect(transport.calls).toEqual([]);
-    expect(transport.longRunningCalls).toEqual([
-      { method: "workflow.task.resume", params: { task_id: "task-1" } },
     ]);
   });
 });

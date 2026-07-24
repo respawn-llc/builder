@@ -483,18 +483,16 @@ export type WorkflowPickerItem = Readonly<{
   validationErrors: readonly WorkflowValidationError[];
 }>;
 
-export const taskStatusKinds = [
-  "canceled",
-  "done",
-  "waiting_question",
-  "waiting_approval",
-  "interrupted",
-  "running",
-  "queued",
-  "backlog",
-  "active",
-] as const;
-export type TaskStatusKind = (typeof taskStatusKinds)[number];
+export type TaskStatusKind =
+  | "canceled"
+  | "done"
+  | "waiting_question"
+  | "waiting_approval"
+  | "interrupted"
+  | "running"
+  | "queued"
+  | "backlog"
+  | "active";
 
 export type TaskStatus = Readonly<{
   kind: TaskStatusKind;

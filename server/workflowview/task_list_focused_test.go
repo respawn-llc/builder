@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
@@ -27,7 +26,7 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	taskList, err := NewTaskList(metadataStore, definitions, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	taskList, err := NewTaskList(metadataStore, definitions, projector)
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
 	}
@@ -204,7 +203,7 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	taskList, err := NewTaskList(metadataStore, definitions, NewTaskProjector(), sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	taskList, err := NewTaskList(metadataStore, definitions, NewTaskProjector())
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
 	}

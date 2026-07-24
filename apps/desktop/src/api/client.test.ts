@@ -70,7 +70,8 @@ describe("ApiClient", () => {
       },
     });
 
-    const startCall = transport.longRunningCalls.find((call) => call.method === "workflow.task.start");
+    const startCall = transport.calls.find((call) => call.method === "workflow.task.start");
+    expect(startCall?.options).toEqual({ timeoutMs: null });
     expect(startTaskParamsSchema.parse(startCall?.params).task_id).toBe("task-1");
   });
 

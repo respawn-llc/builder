@@ -95,7 +95,8 @@ describe("worktree setup API", () => {
       ["workflow.task.approve", approveSetupID],
       ["workflow.task.move", moveSetupID],
     ] as const) {
-      const call = transport.longRunningCalls.find((entry) => entry.method === method);
+      const call = transport.calls.find((entry) => entry.method === method);
+      expect(call?.options).toEqual({ timeoutMs: null });
       expect(parseSetupMutationParams(call?.params).setupOperationID.toJSONValue()).toBe(
         expectedSetupID.toJSONValue(),
       );

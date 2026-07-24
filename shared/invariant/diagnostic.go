@@ -13,7 +13,6 @@ const (
 	ScopeBackgroundEvent      Scope = "background_event"
 	ScopeSessionPersistence   Scope = "session_persistence"
 	ScopeWorkflowExecution    Scope = "workflow_execution"
-	ScopeWorkflowProjection   Scope = "workflow_projection"
 )
 
 type Field string
@@ -49,14 +48,6 @@ const (
 	FieldProposedStepID           Field = "proposed_step_id"
 	FieldProcessID                Field = "process_id"
 	FieldBackgroundState          Field = "background_state"
-	FieldTaskID                   Field = "task_id"
-	FieldNodeID                   Field = "node_id"
-	FieldNodeKind                 Field = "node_kind"
-	FieldRunID                    Field = "run_id"
-	FieldGeneration               Field = "generation"
-	FieldDurableLifecycle         Field = "durable_lifecycle"
-	FieldExactExecution           Field = "exact_execution"
-	FieldActionProjection         Field = "action_projection"
 )
 
 type Diagnostic struct {

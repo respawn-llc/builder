@@ -170,41 +170,48 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements queued to running before claim: %v", err)
 	}
-	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
-		len(queuedToRunningBefore.Status.RunIDs) != 1 ||
+	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		len(queuedToRunningBefore.Status.RunIDs) != 0 ||
 		queuedToRunningBefore.Actions.CanInterrupt {
-		t.Fatalf("queued task detail before admission = %+v, want explicit queued state", queuedToRunningBefore)
+		t.Fatalf("queued task detail before claim = %+v, want non-interruptible active state without live authority", queuedToRunningBefore)
 	}
-	_, _ = startWorkflowViewAgentRun(t, store, workflowStore, view, binding, queuedToRunningStarted.RunID)
+	if _, err := workflowStore.ClaimRun(ctx, queuedToRunningStarted.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun queued to running: %v", err)
+	}
 	queuedToRunningAfter := mustTaskDetail(t, view, ctx, string(queuedToRunning.ID))
 	queuedToRunningPlacementsAfter, err := workflowStore.ListPlacements(ctx, queuedToRunning.ID)
 	if err != nil {
 		t.Fatalf("ListPlacements queued to running after claim: %v", err)
 	}
-	if queuedToRunningAfter.Status.Kind != serverapi.WorkflowTaskStatusKindRunning ||
-		!queuedToRunningAfter.Actions.CanInterrupt ||
+	if queuedToRunningAfter.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
 		!reflect.DeepEqual(queuedToRunningBefore.Status.NodeIDs, queuedToRunningAfter.Status.NodeIDs) ||
 		!reflect.DeepEqual(queuedToRunningPlacementsBefore, queuedToRunningPlacementsAfter) {
-		t.Fatalf("exact admission changed placement facts unexpectedly: before=%+v/%+v after=%+v/%+v", queuedToRunningBefore.Status, queuedToRunningPlacementsBefore, queuedToRunningAfter.Status, queuedToRunningPlacementsAfter)
+		t.Fatalf("durable claim changed exact-live detail or placement facts: before=%+v/%+v after=%+v/%+v", queuedToRunningBefore.Status, queuedToRunningPlacementsBefore, queuedToRunningAfter.Status, queuedToRunningPlacementsAfter)
 	}
 	active := createTask("Active")
-	if _, err := workflowStore.StartTask(ctx, active.ID); err != nil {
+	activeStarted, err := workflowStore.StartTask(ctx, active.ID)
+	if err != nil {
 		t.Fatalf("StartTask active: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM task_runs WHERE id = ?`, string(activeStarted.RunID)); err != nil {
+		t.Fatalf("create active placement fixture: %v", err)
 	}
 	running := createTask("Running")
 	runningStarted, err := workflowStore.StartTask(ctx, running.ID)
 	if err != nil {
 		t.Fatalf("StartTask running: %v", err)
 	}
-	_, _ = startWorkflowViewAgentRun(t, store, workflowStore, view, binding, runningStarted.RunID)
+	if _, err := workflowStore.ClaimRun(ctx, runningStarted.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun running: %v", err)
+	}
 	interrupted := createTask("Interrupted")
 	interruptedStarted, err := workflowStore.StartTask(ctx, interrupted.ID)
 	if err != nil {
 		t.Fatalf("StartTask interrupted: %v", err)
 	}
-	interruptedClaimed, interruptedHandle := startWorkflowViewAgentRun(t, store, workflowStore, view, binding, interruptedStarted.RunID)
-	if err := interruptedHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop interrupted Agent execution: %v", err)
+	interruptedClaimed, err := workflowStore.ClaimRun(ctx, interruptedStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun interrupted: %v", err)
 	}
 	if err := workflowStore.InterruptRunGeneration(ctx, interruptedStarted.RunID, interruptedClaimed.Generation, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
@@ -214,7 +221,10 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask question: %v", err)
 	}
-	questionClaimed, _ := startWorkflowViewAgentRun(t, store, workflowStore, view, binding, questionStarted.RunID)
+	questionClaimed, err := workflowStore.ClaimRun(ctx, questionStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun question: %v", err)
+	}
 	if err := workflowStore.SetRunWaitingAsk(ctx, questionStarted.RunID, questionClaimed.Generation, "ask-status"); err != nil {
 		t.Fatalf("SetRunWaitingAsk: %v", err)
 	}
@@ -265,16 +275,15 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 		}
 	}
 	wantBoard := map[string]serverapi.WorkflowTaskStatusKind{
-		string(backlog.ID):         serverapi.WorkflowTaskStatusKindBacklog,
-		string(active.ID):          serverapi.WorkflowTaskStatusKindQueued,
-		string(queued.ID):          serverapi.WorkflowTaskStatusKindQueued,
-		string(queuedToRunning.ID): serverapi.WorkflowTaskStatusKindRunning,
-		string(running.ID):         serverapi.WorkflowTaskStatusKindRunning,
-		string(interrupted.ID):     serverapi.WorkflowTaskStatusKindInterrupted,
-		string(question.ID):        serverapi.WorkflowTaskStatusKindWaitingQuestion,
-		string(done.ID):            serverapi.WorkflowTaskStatusKindDone,
-		string(approval.ID):        serverapi.WorkflowTaskStatusKindWaitingApproval,
-		string(canceled.ID):        serverapi.WorkflowTaskStatusKindCanceled,
+		string(backlog.ID):     serverapi.WorkflowTaskStatusKindBacklog,
+		string(active.ID):      serverapi.WorkflowTaskStatusKindActive,
+		string(queued.ID):      serverapi.WorkflowTaskStatusKindActive,
+		string(running.ID):     serverapi.WorkflowTaskStatusKindActive,
+		string(interrupted.ID): serverapi.WorkflowTaskStatusKindInterrupted,
+		string(question.ID):    serverapi.WorkflowTaskStatusKindActive,
+		string(done.ID):        serverapi.WorkflowTaskStatusKindDone,
+		string(approval.ID):    serverapi.WorkflowTaskStatusKindWaitingApproval,
+		string(canceled.ID):    serverapi.WorkflowTaskStatusKindCanceled,
 	}
 	for taskID, wantKind := range wantBoard {
 		detail, err := view.detail(t).GetTask(ctx, taskID)
@@ -298,17 +307,14 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 }
 
 func TestDurableFanoutBoardUsesExactLiveStatusAndRetainsResume(t *testing.T) {
-	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
-	fixture := createWorkflowViewFanoutStatusFixture(t, ctx, metadataStore, workflowStore, view, binding)
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	fixture := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, binding)
 
 	detail := mustTaskDetail(t, view, ctx, string(fixture.task.ID))
-	if detail.Status.Kind != fixture.status.Kind ||
-		detail.Status.NativeState != fixture.status.NativeState ||
-		!reflect.DeepEqual(detail.Status.RunIDs, fixture.status.RunIDs) ||
-		!reflect.DeepEqual(detail.Status.AttentionTypes, fixture.status.AttentionTypes) ||
-		!detail.Actions.CanInterrupt ||
-		!detail.Actions.CanResume {
-		t.Fatalf("detail = %+v, want exact running authority plus durable Resume", detail)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		len(detail.Status.RunIDs) != 0 ||
+		!reflect.DeepEqual(detail.Status.AttentionTypes, []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted}) {
+		t.Fatalf("detail status = %+v, want durable attention without unproven liveness", detail.Status)
 	}
 
 	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
@@ -342,8 +348,8 @@ func TestDurableFanoutBoardUsesExactLiveStatusAndRetainsResume(t *testing.T) {
 		if !reflect.DeepEqual(card.Status, detail.Status) {
 			t.Fatalf("board status = %+v, want exact-live status %+v", card.Status, detail.Status)
 		}
-		if !card.Actions.CanInterrupt || !card.Actions.CanResume {
-			t.Fatalf("fanout board actions = %+v, want exact Interrupt plus durable Resume", card.Actions)
+		if card.Actions.CanInterrupt || !card.Actions.CanResume {
+			t.Fatalf("fanout board actions = %+v, want resume without interrupt for durable-only state", card.Actions)
 		}
 	}
 	workflowIDString := string(fixture.workflowID)
@@ -369,20 +375,12 @@ func TestDurableFanoutBoardUsesExactLiveStatusAndRetainsResume(t *testing.T) {
 }
 
 type workflowViewFanoutStatusFixture struct {
-	workflowID        workflow.WorkflowID
-	task              workflowstore.TaskRecord
-	status            serverapi.WorkflowTaskStatus
-	questionSessionID string
+	workflowID workflow.WorkflowID
+	task       workflowstore.TaskRecord
+	status     serverapi.WorkflowTaskStatus
 }
 
-func createWorkflowViewFanoutStatusFixture(
-	t *testing.T,
-	ctx context.Context,
-	metadataStore *metadata.Store,
-	workflowStore *workflowstore.Store,
-	view *workflowViewTestFixture,
-	binding metadata.Binding,
-) workflowViewFanoutStatusFixture {
+func createWorkflowViewFanoutStatusFixture(t *testing.T, ctx context.Context, workflowStore *workflowstore.Store, binding metadata.Binding) workflowViewFanoutStatusFixture {
 	t.Helper()
 	workflowID := createWorkflowViewFanoutWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -425,24 +423,28 @@ func createWorkflowViewFanoutStatusFixture(
 	if !ok {
 		t.Fatalf("missing impl_c run in %+v", runs)
 	}
-	questionClaimed, _ := startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, questionRun.ID)
+	questionClaimed, err := workflowStore.ClaimRun(ctx, questionRun.ID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun question: %v", err)
+	}
 	if err := workflowStore.SetRunWaitingAsk(ctx, questionRun.ID, questionClaimed.Generation, "ask-fanout"); err != nil {
 		t.Fatalf("SetRunWaitingAsk: %v", err)
 	}
-	interruptedClaimed, interruptedHandle := startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, interruptedRun.ID)
-	if err := interruptedHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop interrupted Agent execution: %v", err)
+	interruptedClaimed, err := workflowStore.ClaimRun(ctx, interruptedRun.ID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun interrupted: %v", err)
 	}
 	if err := workflowStore.InterruptRunGeneration(ctx, interruptedRun.ID, interruptedClaimed.Generation, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
-	_, _ = startWorkflowViewAgentRun(t, metadataStore, workflowStore, view, binding, runningRun.ID)
+	if _, err := workflowStore.ClaimRun(ctx, runningRun.ID, 0); err != nil {
+		t.Fatalf("ClaimRun running: %v", err)
+	}
 	runIDs := []string{string(questionRun.ID), string(interruptedRun.ID), string(runningRun.ID)}
 	sort.Strings(runIDs)
 	return workflowViewFanoutStatusFixture{
-		workflowID:        workflowID,
-		task:              task,
-		questionSessionID: questionClaimed.SessionID,
+		workflowID: workflowID,
+		task:       task,
 		status: serverapi.WorkflowTaskStatus{
 			Kind:        serverapi.WorkflowTaskStatusKindWaitingQuestion,
 			NativeState: "waiting_ask",
@@ -521,9 +523,8 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
-		len(detail.Status.RunIDs) != 1 {
-		t.Fatalf("status = %+v, want explicit waiting Question state", detail.Status)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive || len(detail.Status.RunIDs) != 0 {
+		t.Fatalf("status = %+v, want active without exact live pending-question evidence", detail.Status)
 	}
 	if detail.AttentionCount != 1 {
 		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)

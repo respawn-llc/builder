@@ -5,24 +5,18 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/session"
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 )
 
 func newWorkflowViewTestStore(t testing.TB) (*metadata.Store, *workflowstore.Store, metadata.Binding) {
@@ -70,88 +64,6 @@ func newWorkflowViewTestContextFixture(t *testing.T) (context.Context, *metadata
 	t.Helper()
 	store, workflowStore, binding, view := newWorkflowViewTestFixtureWithStore(t)
 	return context.Background(), store, workflowStore, binding, view
-}
-
-type workflowViewNeverLLMClient struct{}
-
-func (workflowViewNeverLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("workflow view test execution must not invoke the model")
-}
-
-func startWorkflowViewAgentRun(
-	t *testing.T,
-	metadataStore *metadata.Store,
-	workflowStore *workflowstore.Store,
-	view *workflowViewTestFixture,
-	binding metadata.Binding,
-	runID workflow.RunID,
-) (workflowstore.RunnableRunRecord, sessionruntime.ExecutionHandle) {
-	t.Helper()
-	run, err := workflowStore.GetRun(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("GetRun %s: %v", runID, err)
-	}
-	sessionID := runtimeids.NewSessionID()
-	containerDir := filepath.Join(metadataStore.PersistenceRoot(), "projects", binding.ProjectID, "sessions")
-	descriptor, err := session.NewCreateSessionDescriptor(
-		sessionID,
-		containerDir,
-		filepath.Base(containerDir),
-		binding.CanonicalRoot,
-		sessioncontract.SessionCategoryMain,
-	)
-	if err != nil {
-		t.Fatalf("NewCreateSessionDescriptor: %v", err)
-	}
-	appConfig, err := config.Load(binding.CanonicalRoot, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	appConfig.Settings.Reviewer.Frequency = "off"
-	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: appConfig.Settings,
-		Workdir:  binding.CanonicalRoot,
-		Client:   workflowViewNeverLLMClient{},
-	})
-	if err != nil {
-		t.Fatalf("NewAgentRuntimePlan: %v", err)
-	}
-	executionStarted := make(chan struct{})
-	handle, err := view.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
-		Descriptor: descriptor,
-		Runtime:    &plan,
-		Workflow: &sessionruntime.WorkflowExecutionRef{
-			TaskID:     run.TaskID,
-			RunID:      run.ID,
-			Generation: run.Generation + 1,
-		},
-		Resource: sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			close(executionStarted)
-			<-ctx.Done()
-			return context.Cause(ctx)
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
-	}
-	<-executionStarted
-	sessionIDString := sessionID.String()
-	admitted, err := workflowStore.AdmitRun(context.Background(), workflowstore.RunAdmission{
-		RunID:              runID,
-		ExpectedGeneration: run.Generation,
-		SessionID:          &sessionIDString,
-	})
-	if err != nil {
-		_ = handle.Stop(context.Background())
-		t.Fatalf("AdmitRun %s: %v", runID, err)
-	}
-	t.Cleanup(func() {
-		if err := handle.Stop(context.Background()); err != nil {
-			t.Errorf("stop workflow view Agent execution: %v", err)
-		}
-	})
-	return admitted, handle
 }
 
 func runWorkflowViewGit(t *testing.T, dir string, args ...string) string {

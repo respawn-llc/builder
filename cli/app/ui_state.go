@@ -168,7 +168,7 @@ type uiSessionTransitionFeatureState struct {
 type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
-	turnQueueHook               turnQueueHook
+	turnQueueHook               *bellHooks
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository

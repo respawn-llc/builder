@@ -392,8 +392,6 @@ export const englishResources = {
       loading: "Loading",
       empty: "Empty",
       error: "Error",
-      workflowTaskContractError:
-        "Kent couldn't safely load task {{taskID}} because its saved workflow state is incomplete. Restart Kent, then try again.",
     },
     form: {
       required: "Required",

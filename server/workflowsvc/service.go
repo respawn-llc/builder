@@ -103,7 +103,6 @@ type taskRuntimeRunCancelRequester interface {
 
 type workflowRunScheduler interface {
 	StartExplicitRuns(context.Context, []workflow.RunID) error
-	ResumeTaskRuns(context.Context, workflow.TaskID) (workflowstore.ResumeTaskRunsResult, error)
 	EnsureTaskQuiescent(context.Context, workflow.TaskID) error
 }
 
@@ -1074,14 +1073,16 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	if s.schedulerWake == nil {
-		return serverapi.WorkflowTaskResumeResponse{}, errors.New("workflow scheduler is required")
-	}
-	resumed, err := s.schedulerWake.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+	resumed, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ResumeTaskRunsResult, error) {
+		return s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(ctx, resumed.TaskAttentionResolution)
+	if err := s.startExplicitRuns(ctx, runIDsFromRecords(resumed.Runs)); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
 	}

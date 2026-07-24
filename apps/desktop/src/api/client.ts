@@ -550,10 +550,7 @@ export class ApiClient implements ApiService {
   }
 
   async resumeTask(taskID: string): Promise<void> {
-    await this.#transport.callLongRunning(
-      "workflow.task.resume",
-      compactJsonObject({ task_id: taskID }),
-    );
+    await this.#transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
   async approveTransition(

@@ -39,7 +39,10 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if params.ProtocolVersion != protocol.Version {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
 		}
-		state.completeHandshake(params.ClientCapabilities)
+		if params.ClientCapabilities != nil {
+			state.clientCapabilities = *params.ClientCapabilities
+		}
+		state.handshakeDone = true
 		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
 	},
 	protocol.MethodAuthGetBootstrapStatus: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
@@ -83,7 +86,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			resp, err := bootstrapClient.CompleteAuthBootstrap(ctx, params)
 			if err == nil {
-				state.setNoAuthAccepted(resp.NoAuthSelected)
+				state.noAuthAccepted = resp.NoAuthSelected
 			}
 			return resp, err
 		})
@@ -96,7 +99,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			}
 			resp, err := bootstrapClient.AcknowledgeNoAuth(ctx, params)
 			if err == nil {
-				state.setNoAuthAccepted(resp.NoAuthSelected)
+				state.noAuthAccepted = resp.NoAuthSelected
 			}
 			return resp, err
 		})
@@ -138,7 +141,10 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if err != nil {
 				return protocol.AttachResponse{}, err
 			}
-			state.attach(params.ProjectID, attachedWorkspaceID, attachedRoot, "")
+			state.attachedProject = params.ProjectID
+			state.attachedWorkspaceID = attachedWorkspaceID
+			state.attachedWorkspaceRoot = attachedRoot
+			state.attachedSession = ""
 			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
 		})
 	},
@@ -151,7 +157,10 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if err != nil {
 				return protocol.AttachResponse{}, err
 			}
-			state.attach(binding.ProjectID, binding.WorkspaceID, binding.CanonicalRoot, params.SessionID)
+			state.attachedProject = binding.ProjectID
+			state.attachedWorkspaceID = binding.WorkspaceID
+			state.attachedWorkspaceRoot = binding.CanonicalRoot
+			state.attachedSession = params.SessionID
 			return protocol.SessionAttachResponse(
 				binding.ProjectID,
 				binding.WorkspaceID,
@@ -257,7 +266,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorktreeDelete:                                gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.DeleteWorktree),
 	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-			params.OwnerID = state.ownerID()
+			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
 			if err != nil {
 				return serverapi.SessionRuntimeActivateResponse{}, err
@@ -271,7 +280,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodSessionRuntimeRelease: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-			params.OwnerID = state.ownerID()
+			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
 			if err == nil && (resp.Released || params.DropOwner) {
 				state.removeOwnedRuntime(params.Attachment)

@@ -53,7 +53,6 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 
 func installWorkflowServiceScheduler(t *testing.T, service *Service, notifier *recordingSchedulerNotifier) {
 	t.Helper()
-	notifier.store = service.store
 	service.schedulerWake = notifier
 	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(notifier, workflowexecution.NewFatalSignal())
 	if err != nil {
@@ -2048,7 +2047,7 @@ func TestWorkflowMutationPermitSerializesConcurrentTaskStarts(t *testing.T) {
 	}
 }
 
-func TestInterruptRejectsDurablyAdmittedRunUntilExactExecutionScopeRegisters(t *testing.T) {
+func TestInterruptRejectsClaimedRunUntilExactExecutionScopeRegisters(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
 	runtime := newClaimScopeRaceRuntime()
@@ -2434,15 +2433,10 @@ func TestServiceDeleteWorkflowRollbackPublishesNoAttentionResolution(t *testing.
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	taskID := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID).Task.ID
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
-	claimed := claimAndAttachWorkflowServiceRun(
-		t,
-		ctx,
-		service,
-		metadataStore,
-		binding,
-		started.RunID,
-		runtimeids.NewSessionID().String(),
-	)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
 	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "workflow_runtime_failed", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
@@ -2548,7 +2542,6 @@ func TestServiceResumeTaskResolvesCapturedInterruptionWithFreshFinalizer(t *test
 	}
 	publisher := &recordingWorkflowAttentionPublisher{}
 	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
-	installWorkflowServiceScheduler(t, service, &recordingSchedulerNotifier{})
 
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID}); err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)
@@ -2567,7 +2560,6 @@ type recordingSchedulerNotifier struct {
 	automatic       [][]workflow.RunID
 	explicit        [][]workflow.RunID
 	registrationErr error
-	store           *workflowstore.Store
 }
 
 func (n *recordingSchedulerNotifier) RegisterAutomaticStarts(runIDs []workflow.RunID) error {
@@ -2580,33 +2572,6 @@ func (n *recordingSchedulerNotifier) StartExplicitRuns(_ context.Context, runIDs
 	n.count++
 	n.explicit = append(n.explicit, append([]workflow.RunID(nil), runIDs...))
 	return nil
-}
-
-func (n *recordingSchedulerNotifier) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) (workflowstore.ResumeTaskRunsResult, error) {
-	n.count++
-	if n.store == nil {
-		return workflowstore.ResumeTaskRunsResult{}, errors.New("recording scheduler store is required")
-	}
-	candidates, err := n.store.ListTaskResumeCandidates(ctx, taskID)
-	if err != nil {
-		return workflowstore.ResumeTaskRunsResult{}, err
-	}
-	admissions := make([]workflowstore.RunAdmission, 0, len(candidates))
-	for _, candidate := range candidates {
-		admission := workflowstore.RunAdmission{
-			RunID:              candidate.ID,
-			ExpectedGeneration: candidate.Generation,
-		}
-		if sessionID := strings.TrimSpace(candidate.SessionID); sessionID != "" {
-			admission.SessionID = &sessionID
-		}
-		if candidate.EffectiveCompletionMode != nil {
-			mode := *candidate.EffectiveCompletionMode
-			admission.EffectiveCompletionMode = &mode
-		}
-		admissions = append(admissions, admission)
-	}
-	return n.store.AdmitTaskResume(ctx, taskID, admissions)
 }
 
 func (n *recordingSchedulerNotifier) EnsureTaskQuiescent(context.Context, workflow.TaskID) error {
@@ -2740,40 +2705,21 @@ func newClaimScopeRaceRuntime() *claimScopeRaceRuntime {
 	}
 }
 
-func (r *claimScopeRaceRuntime) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
-	startReq := workflowexecution.SchedulerStartRunRequest{
-		RunID:       req.RunID,
-		TaskID:      req.TaskID,
-		PlacementID: req.PlacementID,
-		NodeID:      req.NodeID,
-		Generation:  req.Generation,
-	}
-	r.entered <- startReq
+func (r *claimScopeRaceRuntime) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
+	r.entered <- req
 	select {
 	case <-ctx.Done():
-		return nil, context.Cause(ctx)
+		return context.Cause(ctx)
 	case <-r.release:
 	}
 	r.mu.Lock()
 	r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
 		ScopeID:    runtimeids.NewExecutionScopeID(),
-		TaskID:     startReq.TaskID,
-		RunID:      startReq.RunID,
-		Generation: startReq.Generation,
+		TaskID:     req.TaskID,
+		RunID:      req.RunID,
+		Generation: req.Generation,
 	}}}
 	r.mu.Unlock()
-	return claimScopeRacePreparedRun{}, nil
-}
-
-type claimScopeRacePreparedRun struct{}
-
-func (claimScopeRacePreparedRun) Admission() workflowexecution.RunAdmission {
-	return workflowexecution.RunAdmission{}
-}
-func (claimScopeRacePreparedRun) Commit() error               { return nil }
-func (claimScopeRacePreparedRun) Activate()                   {}
-func (claimScopeRacePreparedRun) Abort(context.Context) error { return nil }
-func (claimScopeRacePreparedRun) Compensate(context.Context) error {
 	return nil
 }
 
@@ -3435,7 +3381,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
-	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector, authority)
+	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}

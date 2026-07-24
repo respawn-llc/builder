@@ -301,13 +301,6 @@ type RunnableRunRecord struct {
 	WorkflowRevisionSeen int64
 }
 
-type RunAdmission struct {
-	RunID                   workflow.RunID
-	ExpectedGeneration      int64
-	SessionID               *string
-	EffectiveCompletionMode *string
-}
-
 type RunStartContext struct {
 	Run                            RunRecord
 	Task                           TaskRecord

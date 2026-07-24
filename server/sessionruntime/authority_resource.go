@@ -454,9 +454,7 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 		return RuntimeAttachment{}, errors.New("runtime owner id is required")
 	}
 	gate := a.gateFor(request.SessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return RuntimeAttachment{}, err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if len(gate.blocks) != 0 {
 		return RuntimeAttachment{}, sessionStartsBlockedError(request.SessionID)
@@ -499,9 +497,7 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 	}
 	sessionID := request.Resource.SessionID()
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return RuntimeReleaseResult{}, err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 
 	a.mu.Lock()
@@ -566,9 +562,7 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	}
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 
 	resource.mu.Lock()
@@ -640,9 +634,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		}
 	}
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return nil, err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)

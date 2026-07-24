@@ -822,10 +822,10 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
 		len(detail.Status.NodeIDs) != 3 ||
-		len(detail.Status.RunIDs) != 3 ||
+		len(detail.Status.RunIDs) != 0 ||
 		detail.Actions.CanInterrupt {
-		t.Fatalf("detail = %+v, want three explicitly queued branch nodes after %s", detail, split.Result.TransitionID)
+		t.Fatalf("detail = %+v, want three non-interruptible active branch nodes without live execution after %s", detail, split.Result.TransitionID)
 	}
 }

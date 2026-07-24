@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next";
 
 import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
+import { errorMessage } from "@/api";
 import { useProjectLabelCatalog } from "@/shared/labels";
-import { workflowTaskReadError } from "@/shared/workflow-task-read-error";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
@@ -122,14 +122,13 @@ export function BoardColumnDataOwner({
       void fetchNextPage();
     }
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, paginationEnabled]);
-  const cardsErrorMessage = useMemo(() => workflowTaskReadError(error, t).body, [error, t]);
   const initialBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
       cardsQuery.data === undefined
         ? isError
           ? {
               state: "error",
-              message: cardsErrorMessage,
+              message: errorMessage(error),
               retryLabel: t("app.retry"),
               onRetry: retryInitial,
             }
@@ -138,31 +137,31 @@ export function BoardColumnDataOwner({
               label: t("states.loading"),
             }
         : undefined,
-    [cardsErrorMessage, cardsQuery.data, isError, retryInitial, t],
+    [cardsQuery.data, error, isError, retryInitial, t],
   );
   const previousBoundary = useMemo(
     () =>
       directionalBoundary({
-        errorMessage: cardsErrorMessage,
+        error,
         failed: isFetchPreviousPageError,
         loading: isFetchingPreviousPage,
         loadingLabel: t("app.loadingMore"),
         onRetry: loadNewer,
         retryLabel: t("app.retry"),
       }),
-    [cardsErrorMessage, isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
+    [error, isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
   );
   const nextBoundary = useMemo(
     () =>
       directionalBoundary({
-        errorMessage: cardsErrorMessage,
+        error,
         failed: isFetchNextPageError,
         loading: isFetchingNextPage,
         loadingLabel: t("app.loadingMore"),
         onRetry: loadOlder,
         retryLabel: t("app.retry"),
       }),
-    [cardsErrorMessage, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
+    [error, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
   );
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
@@ -261,7 +260,7 @@ export function BoardColumnDataOwner({
 
 function directionalBoundary(
   input: Readonly<{
-    errorMessage: string;
+    error: unknown;
     failed: boolean;
     loading: boolean;
     loadingLabel: string;
@@ -272,7 +271,7 @@ function directionalBoundary(
   if (input.failed) {
     return {
       state: "error",
-      message: input.errorMessage,
+      message: errorMessage(input.error),
       retryLabel: input.retryLabel,
       onRetry: input.onRetry,
     };

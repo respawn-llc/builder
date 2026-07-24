@@ -1,7 +1,7 @@
 import {
   ConnectionStore,
   type JsonValue,
-  type LongRunningRpcMethod,
+  type RpcCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
   type RpcTransport,
@@ -14,13 +14,9 @@ export type FakeRoute = Readonly<{
   handler?: (params: JsonValue, callIndex: number) => unknown;
 }>;
 
-type RecordedCall =
-  | Readonly<{ method: string; params: JsonValue; kind: "ordinary" }>
-  | Readonly<{ method: LongRunningRpcMethod; params: JsonValue; kind: "long-running" }>;
-
 export class FakeRpcTransport implements RpcTransport {
   readonly connection = new ConnectionStore();
-  #calls: RecordedCall[] = [];
+  readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
   #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
@@ -32,41 +28,21 @@ export class FakeRpcTransport implements RpcTransport {
     this.connection.set("connected");
   }
 
-  async call(method: string, params: JsonValue): Promise<unknown> {
-    return this.#call({ method, params, kind: "ordinary" });
-  }
-
-  async callLongRunning(method: LongRunningRpcMethod, params: JsonValue): Promise<unknown> {
-    return this.#call({ method, params, kind: "long-running" });
-  }
-
-  async #call(call: RecordedCall): Promise<unknown> {
-    this.#calls.push(call);
-    const route = this.#routes.get(call.method);
+  async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
+    this.calls.push(options === undefined ? { method, params } : { method, params, options });
+    const route = this.#routes.get(method);
     if (route === undefined) {
-      throw new Error(`Missing fake route: ${call.method}`);
+      throw new Error(`Missing fake route: ${method}`);
     }
     if (route.error !== undefined) {
       throw route.error;
     }
-    const callIndex = this.#callCounts.get(call.method) ?? 0;
-    this.#callCounts.set(call.method, callIndex + 1);
+    const callIndex = this.#callCounts.get(method) ?? 0;
+    this.#callCounts.set(method, callIndex + 1);
     if (route.handler !== undefined) {
-      return route.handler(call.params, callIndex);
+      return route.handler(params, callIndex);
     }
     return route.result;
-  }
-
-  get calls(): readonly Readonly<{ method: string; params: JsonValue }>[] {
-    return this.#calls.flatMap((call) =>
-      call.kind === "ordinary" ? [{ method: call.method, params: call.params }] : [],
-    );
-  }
-
-  get longRunningCalls(): readonly Readonly<{ method: LongRunningRpcMethod; params: JsonValue }>[] {
-    return this.#calls.flatMap((call) =>
-      call.kind === "long-running" ? [{ method: call.method, params: call.params }] : [],
-    );
   }
 
   get subscriptions(): Readonly<{ method: string; params: JsonValue }>[] {

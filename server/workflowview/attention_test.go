@@ -9,10 +9,6 @@ import (
 
 func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing.T) {
 	ctx, metadataStore, workflowStore, firstProject := newWorkflowViewTestContextStore(t)
-	view, err := newWorkflowViewTestFixture(metadataStore, workflowStore, nil, nil)
-	if err != nil {
-		t.Fatalf("newWorkflowViewTestFixture: %v", err)
-	}
 	secondProject, err := metadataStore.CreateProjectForWorkspace(t.Context(), t.TempDir(), "Second attention project")
 	if err != nil {
 		t.Fatalf("CreateProjectForWorkspace: %v", err)
@@ -60,20 +56,8 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
 
-	fanout := createWorkflowViewFanoutStatusFixture(t, ctx, metadataStore, workflowStore, view, firstProject)
-	attention, err := NewAttention(
-		metadataStore.Queries(),
-		NewTaskProjector(),
-		staticTranscriptProvider{entries: map[string][]PendingQuestionTranscriptEntry{
-			fanout.questionSessionID: transcriptEntriesWithAskOptions(
-				"ask-fanout",
-				"Choose a branch.",
-				[]string{"Continue"},
-				1,
-			),
-		}},
-		nil,
-	)
+	fanout := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, firstProject)
+	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}

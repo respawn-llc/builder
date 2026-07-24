@@ -12,15 +12,12 @@ export type RpcSubscription = Readonly<{
   close(): void;
 }>;
 
-export type LongRunningRpcMethod =
-  | "workflow.task.approve"
-  | "workflow.task.move"
-  | "workflow.task.resume"
-  | "workflow.task.start";
+export type RpcCallOptions = Readonly<{
+  timeoutMs?: number | null;
+}>;
 
 export type RpcTransport = Readonly<{
   connection: ConnectionStore;
-  call(method: string, params: JsonValue): Promise<unknown>;
-  callLongRunning(method: LongRunningRpcMethod, params: JsonValue): Promise<unknown>;
+  call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown>;
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription;
 }>;

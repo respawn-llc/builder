@@ -29,47 +29,8 @@ type sessionAdmissionBlock struct {
 }
 
 type sessionAdmissionGate struct {
-	mu     contextMutex
+	mu     sync.Mutex
 	blocks map[*sessionAdmissionBlock]struct{}
-}
-
-type contextMutex struct {
-	token chan struct{}
-}
-
-func newContextMutex() contextMutex {
-	token := make(chan struct{}, 1)
-	token <- struct{}{}
-	return contextMutex{token: token}
-}
-
-func (m *contextMutex) Lock(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-m.token:
-		return nil
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
-}
-
-func (m *contextMutex) TryLock() bool {
-	select {
-	case <-m.token:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m *contextMutex) Unlock() {
-	select {
-	case m.token <- struct{}{}:
-	default:
-		panic("context mutex unlock without lock")
-	}
 }
 
 type sessionStartBlockRelease struct {
@@ -93,7 +54,7 @@ func (a *Authority) gateFor(sessionID runtimeids.SessionID) *sessionAdmissionGat
 	defer a.mu.Unlock()
 	gate := a.gates[sessionID]
 	if gate == nil {
-		gate = &sessionAdmissionGate{mu: newContextMutex()}
+		gate = &sessionAdmissionGate{}
 		a.gates[sessionID] = gate
 	}
 	return gate
@@ -116,7 +77,9 @@ func (a *Authority) BlockSessionStarts(ctx context.Context, sessionIDs []runtime
 	}
 	for _, sessionID := range normalizedSessionIDs {
 		gate := a.gateFor(sessionID)
-		if err := gate.mu.Lock(ctx); err != nil {
+		gate.mu.Lock()
+		if err := context.Cause(ctx); err != nil {
+			gate.mu.Unlock()
 			return nil, errors.Join(err, release.Close(context.Background()))
 		}
 		if gate.blocks == nil {
@@ -231,7 +194,7 @@ func (r *sessionStartBlockRelease) AuthorizeMaintenance(ctx context.Context) con
 	})
 }
 
-func (r *sessionStartBlockRelease) Close(ctx context.Context) error {
+func (r *sessionStartBlockRelease) Close(context.Context) error {
 	if r == nil {
 		return nil
 	}
@@ -240,19 +203,15 @@ func (r *sessionStartBlockRelease) Close(ctx context.Context) error {
 	if r.released {
 		return nil
 	}
-	for len(r.sessionIDs) > 0 {
-		index := len(r.sessionIDs) - 1
+	for index := len(r.sessionIDs) - 1; index >= 0; index-- {
 		sessionID := r.sessionIDs[index]
 		gate := r.authority.gateFor(sessionID)
-		if err := gate.mu.Lock(ctx); err != nil {
-			return err
-		}
+		gate.mu.Lock()
 		if _, exists := gate.blocks[r.block]; !exists {
 			panic(fmt.Sprintf("session start block %d for session %s underflow", r.block.reason, sessionID))
 		}
 		delete(gate.blocks, r.block)
 		gate.mu.Unlock()
-		r.sessionIDs = r.sessionIDs[:index]
 	}
 	r.released = true
 	return nil
@@ -303,9 +262,7 @@ func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.Ses
 		return errors.New("session store callback is required")
 	}
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if err := context.Cause(ctx); err != nil {
 		return err
@@ -349,9 +306,7 @@ func (a *Authority) WithDormantSessionStore(
 		return DormantSessionStoreAdmission{}, errors.New("session store callback is required")
 	}
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return DormantSessionStoreAdmission{}, err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if len(gate.blocks) != 0 {
 		return DormantSessionStoreAdmission{}, sessionStartsBlockedError(sessionID)

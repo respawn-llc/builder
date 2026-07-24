@@ -21,34 +21,6 @@ func claimRunFixture(t *testing.T, ctx context.Context, store *Store, runID work
 	return claimed
 }
 
-func admitTaskResumeFixture(t *testing.T, ctx context.Context, store *Store, taskID workflow.TaskID) ResumeTaskRunsResult {
-	t.Helper()
-	candidates, err := store.ListTaskResumeCandidates(ctx, taskID)
-	if err != nil {
-		t.Fatalf("ListTaskResumeCandidates: %v", err)
-	}
-	admissions := make([]RunAdmission, 0, len(candidates))
-	for _, candidate := range candidates {
-		admission := RunAdmission{
-			RunID:              candidate.ID,
-			ExpectedGeneration: candidate.Generation,
-		}
-		if sessionID := strings.TrimSpace(candidate.SessionID); sessionID != "" {
-			admission.SessionID = &sessionID
-		}
-		if candidate.EffectiveCompletionMode != nil {
-			mode := *candidate.EffectiveCompletionMode
-			admission.EffectiveCompletionMode = &mode
-		}
-		admissions = append(admissions, admission)
-	}
-	resumed, err := store.AdmitTaskResume(ctx, taskID, admissions)
-	if err != nil {
-		t.Fatalf("AdmitTaskResume: %v", err)
-	}
-	return resumed
-}
-
 func createAndAttachRunSessionFixture(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, cfg config.App, runID workflow.RunID, generation int64) string {
 	t.Helper()
 	sessionID := createTestSession(t, ctx, store, binding, cfg)

@@ -50,51 +50,6 @@ func newRoutePolicyExecutor(gateway *Gateway) routePolicyExecutor {
 	return routePolicyExecutor{gateway: gateway}
 }
 
-func gatewayRouteRequiresConnectionLane(method string) bool {
-	route, ok := rpccontract.RouteByMethod(method)
-	if !ok {
-		return false
-	}
-	switch route.Scope {
-	case rpccontract.ScopeAttachProject,
-		rpccontract.ScopeAttachSession,
-		rpccontract.ScopeProjectWorkspace,
-		rpccontract.ScopeProjectWorkspaceBinding,
-		rpccontract.ScopeSessionActiveProject,
-		rpccontract.ScopeSessionActiveProjectIfSet,
-		rpccontract.ScopeSessionAttachedProject,
-		rpccontract.ScopeAttachedSession,
-		rpccontract.ScopeGoalSession,
-		rpccontract.ScopeProcessActiveProject,
-		rpccontract.ScopeProcessListActiveProject:
-		return true
-	}
-	switch route.Method {
-	case protocol.MethodHandshake,
-		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodSessionRuntimeActivate,
-		protocol.MethodSessionRuntimeRelease:
-		return true
-	default:
-		return false
-	}
-}
-
-func gatewayRouteRequiresAuthMutationBarrier(method string) bool {
-	route, ok := rpccontract.RouteByMethod(method)
-	return ok && route.Auth == rpccontract.AuthServer
-}
-
-func gatewayRouteMutatesConnectionAuth(method string) bool {
-	switch method {
-	case protocol.MethodAuthCompleteBootstrap, protocol.MethodAuthAcknowledgeNoAuth:
-		return true
-	default:
-		return false
-	}
-}
-
 type routePreflightResult struct {
 	params any
 	resp   protocol.Response
@@ -178,7 +133,7 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *co
 	if auth.EvaluateStartupGate(state).Ready {
 		return true, nil
 	}
-	if connection != nil && connection.acceptedNoAuth() {
+	if connection != nil && connection.noAuthAccepted {
 		stored, err := g.deps.AuthManager().StoredState(ctx)
 		if err != nil {
 			return false, err
@@ -230,8 +185,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		if strings.TrimSpace(scopeParams.projectID) != strings.TrimSpace(activeProjectID) {
 			return serverapi.ErrWorkspaceNotRegistered
 		}
-		_, attachedWorkspaceID, _, _ := state.attachment()
-		if strings.TrimSpace(attachedWorkspaceID) != strings.TrimSpace(scopeParams.workspaceID) {
+		if strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(scopeParams.workspaceID) {
 			return serverapi.ErrWorkspaceNotRegistered
 		}
 		binding, err := e.gateway.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, scopeParams.workspaceID)
@@ -255,8 +209,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
-		_, _, _, attachedSession := state.attachment()
-		if attachedSession != scopeParams.sessionID {
+		if state.attachedSession != scopeParams.sessionID {
 			return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
 		}
 		return nil
@@ -469,8 +422,7 @@ func (g *Gateway) preflightRouteRequest(ctx context.Context, state *connectionSt
 }
 
 func (g *Gateway) activeProjectID(ctx context.Context, state *connectionState) (string, error) {
-	attachedProject, _, _, _ := state.attachment()
-	if trimmed := strings.TrimSpace(attachedProject); trimmed != "" {
+	if trimmed := strings.TrimSpace(state.attachedProject); trimmed != "" {
 		return trimmed, nil
 	}
 	if trimmed := strings.TrimSpace(g.deps.ProjectID()); trimmed != "" {
@@ -503,8 +455,7 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 }
 
 func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectionState, sessionID string) error {
-	attachedProject, _, _, _ := state.attachment()
-	if strings.TrimSpace(attachedProject) == "" && strings.TrimSpace(g.deps.ProjectID()) == "" {
+	if strings.TrimSpace(state.attachedProject) == "" && strings.TrimSpace(g.deps.ProjectID()) == "" {
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
@@ -526,8 +477,7 @@ func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID strin
 }
 
 func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {
-	attachedProject, _, _, _ := state.attachment()
-	projectID := strings.TrimSpace(attachedProject)
+	projectID := strings.TrimSpace(state.attachedProject)
 	if projectID == "" {
 		return nil
 	}

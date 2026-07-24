@@ -2,7 +2,6 @@ package workflowrunner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -440,8 +439,7 @@ func TestSchedulerRuntimeStartFailureInterruptsRun(t *testing.T) {
 	ctx, store, binding, metadataStore := newSchedulerTestContextStore(t)
 	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
 	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
-	starterErr := errors.New("runtime preparation failed")
-	starter := &recordingStarter{err: starterErr}
+	starter := &recordingStarter{err: errors.New("role missing")}
 	scheduler := newSchedulerTestService(t, store, starter, SchedulerConfig{Concurrency: 1})
 	registerAutomaticStarts(t, scheduler, []workflow.RunID{started.RunID})
 
@@ -459,150 +457,8 @@ func TestSchedulerRuntimeStartFailureInterruptsRun(t *testing.T) {
 	if err := metadataStore.DB().QueryRowContext(ctx, `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(runs[0].ID)).Scan(&detail); err != nil {
 		t.Fatalf("query interruption detail: %v", err)
 	}
-	var diagnostic struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(detail), &diagnostic); err != nil {
-		t.Fatalf("decode interruption detail: %v", err)
-	}
-	if diagnostic.Error != starterErr.Error() {
-		t.Fatalf("interruption diagnostic = %q, want %q", diagnostic.Error, starterErr)
-	}
-}
-
-func TestSchedulerRuntimeFinalizationInterruptsLostDurableRun(t *testing.T) {
-	ctx, store, binding, metadataStore := newSchedulerTestContextStore(t)
-	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
-	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
-	starter := &recordingStarter{}
-	finalizer := &recordingInterruptedRunFinalizer{}
-	scheduler := newSchedulerTestService(
-		t,
-		store,
-		starter,
-		SchedulerConfig{Concurrency: 1},
-		WithSchedulerAttentionFinalizer(finalizer),
-	)
-	registerAutomaticStarts(t, scheduler, []workflow.RunID{started.RunID})
-	if err := scheduler.Process(ctx); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	requests := starter.requests()
-	if len(requests) != 1 {
-		t.Fatalf("runtime requests = %+v, want one", requests)
-	}
-
-	scheduler.RuntimeFinished(requests[0].RunID, requests[0].Generation)
-
-	runs, err := store.ListRuns(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 ||
-		runs[0].InterruptedAt == nil ||
-		runs[0].InterruptionReason == nil ||
-		*runs[0].InterruptionReason != ReasonSchedulerExecutionLost {
-		t.Fatalf("run after exact execution loss = %+v, want resumable interruption", runs)
-	}
-	var detail string
-	if err := metadataStore.DB().QueryRowContext(
-		ctx,
-		`SELECT interruption_detail_json FROM task_runs WHERE id = ?`,
-		string(started.RunID),
-	).Scan(&detail); err != nil {
-		t.Fatalf("query interruption detail: %v", err)
-	}
-	var diagnostic struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(detail), &diagnostic); err != nil {
-		t.Fatalf("decode interruption detail: %v", err)
-	}
-	if strings.TrimSpace(diagnostic.Error) == "" {
-		t.Fatalf("interruption detail has no diagnostic error: %s", detail)
-	}
-	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != started.RunID {
-		t.Fatalf("interrupted run finalizations = %+v, want %s", finalizer.interruptedRuns, started.RunID)
-	}
-	if scheduler.ActiveCount() != 0 {
-		t.Fatalf("active count = %d, want released ownership", scheduler.ActiveCount())
-	}
-	resumable, err := store.ListTaskResumeCandidates(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListTaskResumeCandidates: %v", err)
-	}
-	if len(resumable) != 1 || resumable[0].ID != started.RunID {
-		t.Fatalf("resume candidates = %+v, want %s", resumable, started.RunID)
-	}
-}
-
-func TestSchedulerRetriesLostExecutionInterruptionBeforeReleasingOwnership(t *testing.T) {
-	ctx, store, binding, _ := newSchedulerTestContextStore(t)
-	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
-	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
-	starter := &recordingStarter{}
-	flakyStore := &failingInterruptStore{SchedulerStore: store, failures: 1}
-	scheduler := newSchedulerTestService(t, flakyStore, starter, SchedulerConfig{Concurrency: 1})
-	registerAutomaticStarts(t, scheduler, []workflow.RunID{started.RunID})
-	if err := scheduler.Process(ctx); err != nil {
-		t.Fatalf("Process start: %v", err)
-	}
-	request := starter.requests()[0]
-
-	scheduler.RuntimeFinished(request.RunID, request.Generation)
-
-	if scheduler.ActiveCount() != 1 {
-		t.Fatalf("active count after failed durable interruption = %d, want retained ownership", scheduler.ActiveCount())
-	}
-	runs, err := store.ListRuns(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListRuns after failed interruption: %v", err)
-	}
-	if runs[0].InterruptedAt != nil {
-		t.Fatalf("run interrupted despite injected store failure: %+v", runs[0])
-	}
-
-	if err := scheduler.Process(ctx); err != nil {
-		t.Fatalf("Process retry: %v", err)
-	}
-	if scheduler.ActiveCount() != 0 {
-		t.Fatalf("active count after retry = %d, want released ownership", scheduler.ActiveCount())
-	}
-	runs, err = store.ListRuns(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListRuns after retry: %v", err)
-	}
-	if runs[0].InterruptedAt == nil ||
-		runs[0].InterruptionReason == nil ||
-		*runs[0].InterruptionReason != ReasonSchedulerExecutionLost {
-		t.Fatalf("run after retry = %+v, want resumable execution-loss interruption", runs[0])
-	}
-}
-
-func TestSchedulerFinishedRunRaceWithDurableInterruptionReleasesOwnership(t *testing.T) {
-	ctx, store, binding, _ := newSchedulerTestContextStore(t)
-	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
-	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
-	starter := &recordingStarter{}
-	racingStore := &terminalInterruptRaceStore{SchedulerStore: store}
-	scheduler := newSchedulerTestService(t, racingStore, starter, SchedulerConfig{Concurrency: 1})
-	registerAutomaticStarts(t, scheduler, []workflow.RunID{started.RunID})
-	if err := scheduler.Process(ctx); err != nil {
-		t.Fatalf("Process start: %v", err)
-	}
-	request := starter.requests()[0]
-
-	scheduler.RuntimeFinished(request.RunID, request.Generation)
-
-	if scheduler.ActiveCount() != 0 {
-		t.Fatalf("active count after durable lifecycle race = %d, want released ownership", scheduler.ActiveCount())
-	}
-	runs, err := store.ListRuns(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil {
-		t.Fatalf("run after durable lifecycle race = %+v, want terminal interruption", runs[0])
+	if !strings.Contains(detail, "role missing") {
+		t.Fatalf("interruption detail = %s, want starter error", detail)
 	}
 }
 
@@ -639,37 +495,11 @@ type recordingStarter struct {
 	err     error
 }
 
-func (s *recordingStarter) PrepareWorkflowRun(_ context.Context, req SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
-	startRequest := SchedulerStartRunRequest{
-		RunID:       req.RunID,
-		TaskID:      req.TaskID,
-		PlacementID: req.PlacementID,
-		NodeID:      req.NodeID,
-		Generation:  req.Generation,
-	}
+func (s *recordingStarter) StartWorkflowRun(_ context.Context, req SchedulerStartRunRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return nil, s.err
-	}
-	return recordingPreparedRun{starter: s, request: startRequest}, nil
-}
-
-type recordingPreparedRun struct {
-	starter *recordingStarter
-	request SchedulerStartRunRequest
-}
-
-func (recordingPreparedRun) Admission() RunAdmission { return RunAdmission{} }
-func (recordingPreparedRun) Commit() error           { return nil }
-func (p recordingPreparedRun) Activate() {
-	p.starter.mu.Lock()
-	defer p.starter.mu.Unlock()
-	p.starter.started = append(p.starter.started, p.request)
-}
-func (recordingPreparedRun) Abort(context.Context) error { return nil }
-func (recordingPreparedRun) Compensate(context.Context) error {
-	return nil
+	s.started = append(s.started, req)
+	return s.err
 }
 
 func (s *recordingStarter) requests() []SchedulerStartRunRequest {
@@ -684,7 +514,7 @@ type failingClaimStore struct {
 	failures int
 }
 
-func (s *failingClaimStore) AdmitRun(ctx context.Context, admission workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error) {
+func (s *failingClaimStore) ClaimRun(ctx context.Context, runID workflow.RunID, generation int64) (workflowstore.RunnableRunRecord, error) {
 	s.mu.Lock()
 	if s.failures > 0 {
 		s.failures--
@@ -692,58 +522,7 @@ func (s *failingClaimStore) AdmitRun(ctx context.Context, admission workflowstor
 		return workflowstore.RunnableRunRecord{}, errors.New("temporary claim failure")
 	}
 	s.mu.Unlock()
-	return s.SchedulerStore.AdmitRun(ctx, admission)
-}
-
-type failingInterruptStore struct {
-	SchedulerStore
-	mu       sync.Mutex
-	failures int
-}
-
-func (s *failingInterruptStore) InterruptRunGeneration(
-	ctx context.Context,
-	runID workflow.RunID,
-	generation int64,
-	reason string,
-	detail string,
-) error {
-	s.mu.Lock()
-	if s.failures > 0 {
-		s.failures--
-		s.mu.Unlock()
-		return errors.New("temporary interruption failure")
-	}
-	s.mu.Unlock()
-	return s.SchedulerStore.InterruptRunGeneration(ctx, runID, generation, reason, detail)
-}
-
-type terminalInterruptRaceStore struct {
-	SchedulerStore
-	once sync.Once
-}
-
-func (s *terminalInterruptRaceStore) InterruptRunGeneration(
-	ctx context.Context,
-	runID workflow.RunID,
-	generation int64,
-	reason string,
-	detail string,
-) error {
-	var raceErr error
-	s.once.Do(func() {
-		raceErr = s.SchedulerStore.InterruptRunGeneration(
-			ctx,
-			runID,
-			generation,
-			"concurrent_lifecycle",
-			"{}",
-		)
-	})
-	if raceErr != nil {
-		return raceErr
-	}
-	return s.SchedulerStore.InterruptRunGeneration(ctx, runID, generation, reason, detail)
+	return s.SchedulerStore.ClaimRun(ctx, runID, generation)
 }
 
 type pendingAskResolverFunc func(context.Context, string, workflow.RunID, string) (bool, error)

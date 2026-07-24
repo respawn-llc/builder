@@ -19,7 +19,6 @@ type taskListLabelFilterFixture struct {
 	metadata   *metadata.Store
 	store      *workflowstore.Store
 	view       *workflowViewTestFixture
-	binding    metadata.Binding
 	alpha      label.ID
 	beta       label.ID
 	gamma      label.ID
@@ -64,7 +63,6 @@ func newTaskListLabelFilterFixture(t *testing.T) taskListLabelFilterFixture {
 		metadata:   metadataStore,
 		store:      workflowStore,
 		view:       view,
-		binding:    binding,
 		alpha:      alpha.ID,
 		beta:       beta.ID,
 		gamma:      gamma.ID,
@@ -342,14 +340,10 @@ func TestTaskListLabelFilterComposesWithScopeStatusAttentionColumnAndSort(t *tes
 		if err != nil {
 			t.Fatalf("StartTask %s: %v", taskID, err)
 		}
-		claimed, _ := startWorkflowViewAgentRun(
-			t,
-			fixture.metadata,
-			fixture.store,
-			fixture.view,
-			fixture.binding,
-			started.RunID,
-		)
+		claimed, err := fixture.store.ClaimRun(fixture.ctx, started.RunID, 0)
+		if err != nil {
+			t.Fatalf("ClaimRun %s: %v", taskID, err)
+		}
 		if err := fixture.store.SetRunWaitingAsk(
 			fixture.ctx,
 			started.RunID,

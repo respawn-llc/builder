@@ -61,26 +61,24 @@ func (p *clientLifecycleProxy) AcceptSessionStart(kind lifecyclecontract.Opening
 	p.enqueue(lifecyclecontract.NewSessionStart(time.Now().UTC(), p.isFocused(), p.context(), kind))
 }
 
-func (p *clientLifecycleProxy) acceptLiveRunFailure(result clientui.TranscriptLiveRunResult) {
-	if result.Status != clientui.LiveRunStatusFailed || result.Failure == nil {
-		return
+func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptLiveRunResult) {
+	switch {
+	case result.Status == clientui.LiveRunStatusFailed && result.Failure != nil:
+		p.enqueue(lifecyclecontract.NewTaskError(
+			result.FinishedAt,
+			p.isFocused(),
+			p.context(),
+			*result.Failure,
+		))
+	case result.ResultKind == clientui.LiveRunResultAssistantFinalAnswer && result.FinalAnswer != nil:
+		p.enqueue(lifecyclecontract.NewTaskComplete(
+			result.FinishedAt,
+			p.isFocused(),
+			p.context(),
+			*result.FinalAnswer,
+			result.WorkPerformed,
+		))
 	}
-	p.enqueue(lifecyclecontract.NewTaskError(
-		result.FinishedAt,
-		p.isFocused(),
-		p.context(),
-		*result.Failure,
-	))
-}
-
-func (p *clientLifecycleProxy) enqueueTaskCompletion(result clientui.TranscriptLiveRunResult) {
-	p.enqueue(lifecyclecontract.NewTaskComplete(
-		result.FinishedAt,
-		p.isFocused(),
-		p.context(),
-		*result.FinalAnswer,
-		result.WorkPerformed,
-	))
 }
 
 func (p *clientLifecycleProxy) acceptSessionIdentity(identity clientui.TranscriptSessionIdentity) {

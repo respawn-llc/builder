@@ -348,9 +348,7 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 		return err
 	}
 	gate := a.gateFor(sessionID)
-	if err := gate.mu.Lock(ctx); err != nil {
-		return err
-	}
+	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil {
 		return errors.Join(

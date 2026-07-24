@@ -251,56 +251,6 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 	}
 }
 
-func TestWorkflowExecutionFinalizationCallbackRunsBeforeExactScopeRetires(t *testing.T) {
-	sleepPath, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skipf("sleep executable unavailable: %v", err)
-	}
-	ref := WorkflowExecutionRef{
-		TaskID:     workflow.TaskID(uuid.NewString()),
-		RunID:      workflow.RunID(uuid.NewString()),
-		Generation: 1,
-	}
-	callbackSawExact := make(chan bool, 1)
-	var authority *Authority
-	authority = NewAuthority(AuthorityOptions{
-		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized WorkflowExecutionRef) {
-			handle, ok := authority.ExecutionByWorkflow(finalized)
-			indexedRef, hasWorkflow := WorkflowExecutionRef{}, false
-			if ok {
-				indexedRef, hasWorkflow = handle.Scope().Workflow()
-			}
-			callbackSawExact <- ok && hasWorkflow && indexedRef == finalized
-		}),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	cancellationGrace := 50 * time.Millisecond
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &ref,
-		Command: ScriptCommand{
-			Path:              sleepPath,
-			Args:              []string{"30"},
-			CancellationGrace: &cancellationGrace,
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	if err := handle.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if sawExact := <-callbackSawExact; !sawExact {
-		t.Fatal("workflow execution retired before its durable finalization callback")
-	}
-	if _, ok := authority.ExecutionByWorkflow(ref); ok {
-		t.Fatal("workflow execution remained indexed after finalization callback")
-	}
-}
-
 func TestNewLazyWithIDUsesExactCanonicalSessionIdentity(t *testing.T) {
 	containerDir := t.TempDir()
 	sessionID := runtimeids.NewSessionID()
@@ -1067,7 +1017,7 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 	}
 }
 
-func TestScriptExecutionRetainsExactIdentityButIsNotInterruptibleDuringCompletionFinalizer(t *testing.T) {
+func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	truePath, err := exec.LookPath("true")
 	if err != nil {
 		t.Skipf("true executable unavailable: %v", err)
@@ -1114,54 +1064,6 @@ func TestScriptExecutionRetainsExactIdentityButIsNotInterruptibleDuringCompletio
 	close(releaseFinalize)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
-	}
-}
-
-func TestPreparedScriptCommitFailureRetainsExactScopeUntilAbort(t *testing.T) {
-	authority := NewAuthority(AuthorityOptions{})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	taskID := workflow.TaskID("task-script-commit-failure")
-	ref := WorkflowExecutionRef{
-		TaskID:     taskID,
-		RunID:      "run-script-commit-failure",
-		Generation: 1,
-	}
-	prepared, err := authority.PrepareScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &ref,
-		Command:  ScriptCommand{Path: t.TempDir()},
-	})
-	if err != nil {
-		t.Fatalf("PrepareScriptExecution: %v", err)
-	}
-
-	commitErr := prepared.Commit()
-	if commitErr == nil {
-		t.Fatal("committing a directory as a script executable unexpectedly succeeded")
-	}
-	snapshot, err := authority.CurrentTaskExecutionSnapshot(taskID)
-	if err != nil {
-		t.Fatalf("CurrentTaskExecutionSnapshot after failed commit: %v", err)
-	}
-	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Ref != ref {
-		t.Fatalf("failed script commit exact scope = %+v, want retained ref %+v", snapshot.Executions, ref)
-	}
-
-	if err := prepared.Abort(); err != nil {
-		t.Fatalf("Abort: %v", err)
-	}
-	if _, waitErr := prepared.Handle().Wait(context.Background()); waitErr == nil {
-		t.Fatal("aborted failed script preparation omitted its commit failure")
-	}
-	snapshot, err = authority.CurrentTaskExecutionSnapshot(taskID)
-	if err != nil {
-		t.Fatalf("CurrentTaskExecutionSnapshot after abort: %v", err)
-	}
-	if len(snapshot.Executions) != 0 {
-		t.Fatalf("aborted failed script preparation remains live: %+v", snapshot.Executions)
 	}
 }
 
@@ -1525,72 +1427,6 @@ func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	}
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second Store callback: %v", err)
-	}
-}
-
-func TestDormantSessionStoreWaitHonorsContextCancellation(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- authority.WithSessionStore(context.Background(), descriptor, func(context.Context, *session.Store) error {
-			close(firstEntered)
-			<-releaseFirst
-			return nil
-		})
-	}()
-	<-firstEntered
-
-	waitCtx, cancel := context.WithCancel(context.Background())
-	waiting := make(chan struct{})
-	callbackCalled := make(chan struct{}, 1)
-	secondDone := make(chan error, 1)
-	go func() {
-		close(waiting)
-		secondDone <- authority.WithSessionStore(waitCtx, descriptor, func(context.Context, *session.Store) error {
-			callbackCalled <- struct{}{}
-			return nil
-		})
-	}()
-	<-waiting
-	cancel()
-
-	select {
-	case err := <-secondDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("canceled Store waiter error = %v, want context cancellation", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("canceled Store waiter remained blocked on session admission")
-	}
-	select {
-	case <-callbackCalled:
-		t.Fatal("canceled Store waiter entered its callback")
-	default:
-	}
-
-	close(releaseFirst)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first Store callback: %v", err)
 	}
 }
 
@@ -1970,133 +1806,6 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	}
 	if reopened.Meta().SessionID != sessionID.String() {
 		t.Fatalf("reopened session id = %q, want %q", reopened.Meta().SessionID, sessionID)
-	}
-}
-
-func TestSessionStartBlockReleaseRetriesAfterCanceledPartialRelease(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	containerDir := filepath.Dir(fixture.store.Dir())
-	type blockedSession struct {
-		id         runtimeids.SessionID
-		descriptor session.SessionDescriptor
-	}
-	newBlockedSession := func() blockedSession {
-		sessionID := runtimeids.NewSessionID()
-		descriptor, err := session.NewCreateSessionDescriptor(
-			sessionID,
-			containerDir,
-			filepath.Base(containerDir),
-			fixture.config.WorkspaceRoot,
-			sessioncontract.SessionCategoryMain,
-		)
-		if err != nil {
-			t.Fatalf("new create session descriptor: %v", err)
-		}
-		return blockedSession{id: sessionID, descriptor: descriptor}
-	}
-	lower := newBlockedSession()
-	higher := newBlockedSession()
-	if lower.id.String() > higher.id.String() {
-		lower, higher = higher, lower
-	}
-
-	release, err := fixture.authority.BlockSessionStarts(
-		context.Background(),
-		[]runtimeids.SessionID{lower.id, higher.id},
-		SessionStartBlockMaintenance,
-	)
-	if err != nil {
-		t.Fatalf("block session starts: %v", err)
-	}
-
-	storeEntered := make(chan struct{})
-	releaseStore := make(chan struct{})
-	var releaseStoreOnce sync.Once
-	unblockStore := func() {
-		releaseStoreOnce.Do(func() { close(releaseStore) })
-	}
-	t.Cleanup(unblockStore)
-	storeDone := make(chan error, 1)
-	go func() {
-		storeDone <- fixture.authority.WithSessionStore(
-			release.AuthorizeMaintenance(context.Background()),
-			lower.descriptor,
-			func(context.Context, *session.Store) error {
-				close(storeEntered)
-				<-releaseStore
-				return nil
-			},
-		)
-	}()
-	select {
-	case <-storeEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("lower session Store operation did not acquire admission")
-	}
-
-	closeCtx, cancelClose := context.WithCancel(context.Background())
-	closeDone := make(chan error, 1)
-	go func() {
-		closeDone <- release.Close(closeCtx)
-	}()
-
-	var higherProbe SessionStartBlockRelease
-	deadline := time.Now().Add(3 * time.Second)
-	for higherProbe == nil && time.Now().Before(deadline) {
-		probe, probeErr := fixture.authority.TryBlockSessionStarts(
-			context.Background(),
-			[]runtimeids.SessionID{higher.id},
-			SessionStartBlockMaintenance,
-		)
-		switch {
-		case probeErr == nil:
-			higherProbe = probe
-		case errors.Is(probeErr, ErrSessionStartAdmissionBusy):
-			time.Sleep(time.Millisecond)
-		default:
-			t.Fatalf("probe higher session release: %v", probeErr)
-		}
-	}
-	if higherProbe == nil {
-		t.Fatal("partial release did not unblock the higher session")
-	}
-	if err := higherProbe.Close(context.Background()); err != nil {
-		t.Fatalf("release higher session probe: %v", err)
-	}
-
-	cancelClose()
-	select {
-	case err := <-closeDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("canceled partial release error = %v, want context canceled", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("canceled partial release did not return")
-	}
-
-	unblockStore()
-	select {
-	case err := <-storeDone:
-		if err != nil {
-			t.Fatalf("release lower session Store operation: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("lower session Store operation did not return")
-	}
-	if err := release.Close(context.Background()); err != nil {
-		t.Fatalf("retry partial release: %v", err)
-	}
-
-	reblocked, err := fixture.authority.TryBlockSessionStarts(
-		context.Background(),
-		[]runtimeids.SessionID{lower.id, higher.id},
-		SessionStartBlockMaintenance,
-	)
-	if err != nil {
-		t.Fatalf("reblock sessions after release retry: %v", err)
-	}
-	if err := reblocked.Close(context.Background()); err != nil {
-		t.Fatalf("release reblocked sessions: %v", err)
 	}
 }
 

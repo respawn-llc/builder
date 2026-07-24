@@ -222,7 +222,10 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 	}
 	f.store.roleResolver = testsetup.QuestionsEnabled()
 
-	resumed := admitTaskResumeFixture(t, f.ctx, f.store, f.task.ID)
+	resumed, err := f.store.ResumeTaskRuns(f.ctx, f.task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
 	if len(resumed.Runs) != 1 || resumed.Runs[0].ID != started.RunID || resumed.Runs[0].InterruptedAt != nil {
 		t.Fatalf("resumed = %+v, want script run requeued", resumed)
 	}

@@ -81,61 +81,6 @@ func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg Acqui
 	return result.RowsAffected()
 }
 
-const admitResumedTaskRun = `-- name: AdmitResumedTaskRun :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    started_at_unix_ms = ?2,
-    interrupted_at_unix_ms = NULL,
-    interruption_reason = NULL,
-    interruption_detail_json = '{}',
-    waiting_ask_id = NULL,
-    session_id = COALESCE(?3, session_id),
-    effective_completion_mode = COALESCE(?4, effective_completion_mode),
-    invalid_completion_count = 0,
-    run_generation = run_generation + 1
-WHERE task_runs.id = ?5
-  AND task_runs.run_generation = ?6
-  AND task_runs.completed_at_unix_ms IS NULL
-  AND task_runs.interrupted_at_unix_ms IS NOT NULL
-  AND EXISTS (
-      SELECT 1
-      FROM tasks t
-      JOIN task_node_placements p ON p.id = task_runs.placement_id
-      JOIN workflow_nodes n ON n.id = p.node_id
-      WHERE t.id = p.task_id
-        AND t.canceled_at_unix_ms IS NULL
-        AND p.state = 'active'
-        AND n.kind IN ('agent', 'script')
-  )
-`
-
-type AdmitResumedTaskRunParams struct {
-	UpdatedAtUnixMs         int64
-	StartedAtUnixMs         sql.NullInt64
-	SessionID               sql.NullString
-	EffectiveCompletionMode sql.NullString
-	RunID                   string
-	ExpectedGeneration      int64
-}
-
-func (q *Queries) AdmitResumedTaskRun(ctx context.Context, arg AdmitResumedTaskRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, admitResumedTaskRun,
-		arg.UpdatedAtUnixMs,
-		arg.StartedAtUnixMs,
-		arg.SessionID,
-		arg.EffectiveCompletionMode,
-		arg.RunID,
-		arg.ExpectedGeneration,
-	)
-	err = recordQueryError(ctx, err, admitResumedTaskRun, 6)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const allocateProjectTaskSequence = `-- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET
@@ -293,12 +238,10 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
     started_at_unix_ms = ?2,
-    session_id = COALESCE(?3, session_id),
-    effective_completion_mode = COALESCE(?4, effective_completion_mode),
     invalid_completion_count = 0,
     run_generation = run_generation + 1
-WHERE task_runs.id = ?5
-  AND run_generation = ?6
+WHERE task_runs.id = ?3
+  AND run_generation = ?4
   AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
@@ -345,12 +288,10 @@ RETURNING
 `
 
 type ClaimWorkflowRunParams struct {
-	UpdatedAtUnixMs         int64
-	StartedAtUnixMs         sql.NullInt64
-	SessionID               sql.NullString
-	EffectiveCompletionMode sql.NullString
-	ID                      string
-	ExpectedGeneration      int64
+	UpdatedAtUnixMs    int64
+	StartedAtUnixMs    sql.NullInt64
+	ID                 string
+	ExpectedGeneration int64
 }
 
 type ClaimWorkflowRunRow struct {
@@ -380,8 +321,6 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 	row := q.db.QueryRowContext(ctx, claimWorkflowRun,
 		arg.UpdatedAtUnixMs,
 		arg.StartedAtUnixMs,
-		arg.SessionID,
-		arg.EffectiveCompletionMode,
 		arg.ID,
 		arg.ExpectedGeneration,
 	)
@@ -407,7 +346,7 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 		&i.InvalidCompletionCount,
 		&i.RunStartSnapshotJson,
 		&i.MetadataJson,
-	), claimWorkflowRun, 6)
+	), claimWorkflowRun, 4)
 
 	return i, err
 }
@@ -8437,48 +8376,76 @@ func (q *Queries) ListWorkflowTaskAttentionCandidates(ctx context.Context, taskI
 	return items, nil
 }
 
-const listWorkflowTaskExecutablePlacementFactsByTasks = `-- name: ListWorkflowTaskExecutablePlacementFactsByTasks :many
+const listWorkflowTaskCurrentRunFacts = `-- name: ListWorkflowTaskCurrentRunFacts :many
 SELECT
-    p.task_id,
-    p.id AS placement_id,
-    p.node_id,
-    n.kind AS node_kind,
-    p.state AS placement_state,
-    r.id AS run_id,
-    r.session_id,
+    r.id,
     r.run_generation,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
     r.waiting_ask_id
-FROM task_node_placements p
-JOIN workflow_nodes n ON n.id = p.node_id
-LEFT JOIN task_run_records r
-  ON r.placement_id = p.id
- AND r.completed_at_unix_ms IS NULL
-WHERE p.task_id IN (/*SLICE:task_ids*/?)
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id = ?1
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-ORDER BY p.task_id ASC, p.id ASC, r.id ASC
+ORDER BY r.id ASC
 `
 
-type ListWorkflowTaskExecutablePlacementFactsByTasksRow struct {
-	TaskID              string
-	PlacementID         string
-	NodeID              sql.NullString
-	NodeKind            string
-	PlacementState      string
-	RunID               sql.NullString
-	SessionID           sql.NullString
-	RunGeneration       sql.NullInt64
-	StartedAtUnixMs     sql.NullInt64
-	CompletedAtUnixMs   sql.NullInt64
-	InterruptedAtUnixMs sql.NullInt64
-	WaitingAskID        sql.NullString
+type ListWorkflowTaskCurrentRunFactsRow struct {
+	ID            string
+	RunGeneration int64
+	WaitingAskID  sql.NullString
 }
 
-func (q *Queries) ListWorkflowTaskExecutablePlacementFactsByTasks(ctx context.Context, taskIds []string) ([]ListWorkflowTaskExecutablePlacementFactsByTasksRow, error) {
-	query := listWorkflowTaskExecutablePlacementFactsByTasks
+func (q *Queries) ListWorkflowTaskCurrentRunFacts(ctx context.Context, taskID string) ([]ListWorkflowTaskCurrentRunFactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowTaskCurrentRunFacts, taskID)
+	err = recordQueryError(ctx, err, listWorkflowTaskCurrentRunFacts, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkflowTaskCurrentRunFactsRow
+	for rows.Next() {
+		var i ListWorkflowTaskCurrentRunFactsRow
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.RunGeneration, &i.WaitingAskID), listWorkflowTaskCurrentRunFacts, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskCurrentRunFacts, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskCurrentRunFacts, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowTaskCurrentRunFactsByTasks = `-- name: ListWorkflowTaskCurrentRunFactsByTasks :many
+SELECT
+    r.task_id,
+    r.id,
+    r.run_generation,
+    r.waiting_ask_id
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id IN (/*SLICE:task_ids*/?)
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND p.state = 'active'
+ORDER BY r.task_id ASC, r.id ASC
+`
+
+type ListWorkflowTaskCurrentRunFactsByTasksRow struct {
+	TaskID        string
+	ID            string
+	RunGeneration int64
+	WaitingAskID  sql.NullString
+}
+
+func (q *Queries) ListWorkflowTaskCurrentRunFactsByTasks(ctx context.Context, taskIds []string) ([]ListWorkflowTaskCurrentRunFactsByTasksRow, error) {
+	query := listWorkflowTaskCurrentRunFactsByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
 		for _, v := range taskIds {
@@ -8494,21 +8461,13 @@ func (q *Queries) ListWorkflowTaskExecutablePlacementFactsByTasks(ctx context.Co
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListWorkflowTaskExecutablePlacementFactsByTasksRow
+	var items []ListWorkflowTaskCurrentRunFactsByTasksRow
 	for rows.Next() {
-		var i ListWorkflowTaskExecutablePlacementFactsByTasksRow
+		var i ListWorkflowTaskCurrentRunFactsByTasksRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.NodeKind,
-			&i.PlacementState,
-			&i.RunID,
-			&i.SessionID,
+			&i.ID,
 			&i.RunGeneration,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
 			&i.WaitingAskID,
 		), query, 1); err != nil {
 			return nil, err
@@ -9108,6 +9067,78 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 32); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowTaskRunActionFactsByTasks = `-- name: ListWorkflowTaskRunActionFactsByTasks :many
+SELECT
+    p.task_id,
+    CAST(MAX(CASE
+        WHEN r.started_at_unix_ms IS NOT NULL
+         AND r.interrupted_at_unix_ms IS NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_running,
+    CAST(MAX(CASE
+        WHEN r.interrupted_at_unix_ms IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_interrupted,
+    CAST(MAX(CASE
+        WHEN r.waiting_ask_id IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_waiting_question
+FROM task_node_placements p
+LEFT JOIN task_runs r
+    ON r.placement_id = p.id
+   AND r.completed_at_unix_ms IS NULL
+WHERE p.task_id IN (/*SLICE:task_ids*/?)
+  AND p.state IN ('active', 'waiting_approval')
+GROUP BY p.task_id
+ORDER BY p.task_id ASC
+`
+
+type ListWorkflowTaskRunActionFactsByTasksRow struct {
+	TaskID             string
+	HasRunning         int64
+	HasInterrupted     int64
+	HasWaitingQuestion int64
+}
+
+func (q *Queries) ListWorkflowTaskRunActionFactsByTasks(ctx context.Context, taskIds []string) ([]ListWorkflowTaskRunActionFactsByTasksRow, error) {
+	query := listWorkflowTaskRunActionFactsByTasks
+	var queryParams []interface{}
+	if len(taskIds) > 0 {
+		for _, v := range taskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	err = recordQueryError(ctx, err, query, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkflowTaskRunActionFactsByTasksRow
+	for rows.Next() {
+		var i ListWorkflowTaskRunActionFactsByTasksRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.TaskID,
+			&i.HasRunning,
+			&i.HasInterrupted,
+			&i.HasWaitingQuestion,
+		), query, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -10206,6 +10237,36 @@ func (q *Queries) ResolveTaskWaitingAsk(ctx context.Context, arg ResolveTaskWait
 		return nil, err
 	}
 	return items, nil
+}
+
+const resumeTaskRun = `-- name: ResumeTaskRun :execrows
+UPDATE task_runs
+SET
+    updated_at_unix_ms = ?1,
+    started_at_unix_ms = NULL,
+    interrupted_at_unix_ms = NULL,
+    interruption_reason = NULL,
+    interruption_detail_json = '{}',
+    waiting_ask_id = NULL,
+    invalid_completion_count = 0,
+    run_generation = run_generation + 1
+WHERE id = ?2
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NOT NULL
+`
+
+type ResumeTaskRunParams struct {
+	UpdatedAtUnixMs int64
+	RunID           string
+}
+
+func (q *Queries) ResumeTaskRun(ctx context.Context, arg ResumeTaskRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resumeTaskRun, arg.UpdatedAtUnixMs, arg.RunID)
+	err = recordQueryError(ctx, err, resumeTaskRun, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const retargetSessionWorkspaceProject = `-- name: RetargetSessionWorkspaceProject :execrows

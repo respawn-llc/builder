@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { taskStatusKinds } from "../models";
 import type {
   ApprovalDecision,
   ApprovalQuestionPrompt,
@@ -231,7 +230,17 @@ export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
 
 export const taskStatusSchema: z.ZodType<TaskStatus> = z
   .object({
-    kind: z.enum(taskStatusKinds),
+    kind: z.enum([
+      "canceled",
+      "done",
+      "waiting_question",
+      "waiting_approval",
+      "interrupted",
+      "running",
+      "queued",
+      "backlog",
+      "active",
+    ]),
     native_state: z.string(),
     node_ids: stringList,
     run_ids: stringList,

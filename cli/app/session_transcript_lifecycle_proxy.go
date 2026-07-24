@@ -30,7 +30,7 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 		}
 	case clientui.TranscriptMessageLiveRunFinished:
 		if result := message.Payload.LiveRunFinished; result != nil {
-			p.acceptLiveRunFailure(*result)
+			p.acceptLiveRunFinished(*result)
 		}
 	case clientui.TranscriptMessageCompactionStatus:
 		status := message.Payload.CompactionStatus

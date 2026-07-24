@@ -10,7 +10,6 @@ import (
 	"maps"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"text/template"
 	"time"
@@ -150,155 +149,58 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	}, nil
 }
 
-type preparedWorkflowRun struct {
-	admission workflowexecution.RunAdmission
-	execution sessionruntime.ExecutionHandle
-	decision  chan bool
-	cleanup   func() error
-
-	committed atomic.Bool
-	activated atomic.Bool
-	decide    sync.Once
-}
-
-func (p *preparedWorkflowRun) Admission() workflowexecution.RunAdmission {
-	if p == nil {
-		panic("prepared workflow run is uninitialized")
-	}
-	return p.admission
-}
-
-func (p *preparedWorkflowRun) Commit() error {
-	if p == nil {
-		panic("prepared workflow run is uninitialized")
-	}
-	p.committed.Store(true)
-	return nil
-}
-
-func (p *preparedWorkflowRun) Activate() {
-	if p == nil {
-		panic("prepared workflow run is uninitialized")
-	}
-	if !p.committed.Load() {
-		panic("uncommitted workflow run preparation cannot be activated")
-	}
-	p.activated.Store(true)
-	p.decideExecution(true)
-}
-
-func (p *preparedWorkflowRun) Abort(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	if p.activated.Load() {
-		return errors.New("activated workflow run preparation cannot be aborted")
-	}
-	aborted := p.decideExecution(false)
-	if !aborted {
-		return nil
-	}
-	_, waitErr := p.execution.Wait(ctx)
-	return errors.Join(waitErr, p.cleanup())
-}
-
-func (p *preparedWorkflowRun) Compensate(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	if !p.activated.Load() {
-		return p.Abort(ctx)
-	}
-	return p.execution.Stop(ctx)
-}
-
-func (p *preparedWorkflowRun) decideExecution(activate bool) bool {
-	decided := false
-	p.decide.Do(func() {
-		decided = true
-		p.decision <- activate
-	})
-	return decided
-}
-
-func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
+func (s *Starter) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
 	if strings.TrimSpace(string(req.RunID)) == "" {
-		return nil, errors.New("workflow run id is required")
+		return errors.New("workflow run id is required")
 	}
 	if s.closed.Load() {
-		return nil, errors.New("workflow runtime starter closed")
-	}
-	if req.SourceGeneration < 0 || req.Generation != req.SourceGeneration+1 {
-		return nil, fmt.Errorf(
-			"workflow run preparation generation is invalid: source=%d target=%d",
-			req.SourceGeneration,
-			req.Generation,
-		)
+		return errors.New("workflow runtime starter closed")
 	}
 	input, err := s.store.GetRunStartContext(ctx, req.RunID)
 	if err != nil {
 		if s.worktrees == nil || !recoverableManagedExecutionRootError(err) {
-			return nil, err
+			return err
 		}
 		if restoreErr := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); restoreErr != nil {
-			return nil, restoreErr
+			return restoreErr
 		}
 		input, err = s.store.GetRunStartContext(ctx, req.RunID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	} else if input.ExecutionRoot != nil && input.ExecutionRoot.Managed != nil && s.worktrees != nil {
 		if err := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); err != nil {
-			return nil, err
+			return err
 		}
 		input, err = s.store.GetRunStartContext(ctx, req.RunID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if input.Run.Generation != req.SourceGeneration {
-		return nil, fmt.Errorf("stale workflow run generation: got %d want %d", req.SourceGeneration, input.Run.Generation)
+	if input.Run.Generation != req.Generation {
+		return fmt.Errorf("stale workflow run generation: got %d want %d", req.Generation, input.Run.Generation)
 	}
-	if input.Task.CanceledAt != nil || input.Run.CompletedAt != nil {
-		return nil, sql.ErrNoRows
-	}
-	switch req.Admission {
-	case workflowexecution.RunAdmissionInitial:
-		if input.Run.StartedAt != nil || input.Run.InterruptedAt != nil {
-			return nil, sql.ErrNoRows
-		}
-	case workflowexecution.RunAdmissionResume:
-		if input.Run.InterruptedAt == nil {
-			return nil, sql.ErrNoRows
-		}
-	default:
-		return nil, errors.New("workflow run admission kind is required")
-	}
-	startReq := workflowexecution.SchedulerStartRunRequest{
-		RunID:       req.RunID,
-		TaskID:      req.TaskID,
-		PlacementID: req.PlacementID,
-		NodeID:      req.NodeID,
-		Generation:  req.Generation,
-	}
-	runtimeInput := input
-	runtimeInput.Run.Generation = req.Generation
 	if input.Node.Kind == workflow.NodeKindScript {
-		return s.prepareScriptWorkflowRun(ctx, startReq, runtimeInput)
+		return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+			if err := s.ensureRunStartable(ctx, req); err != nil {
+				return err
+			}
+			return s.startScriptWorkflowRun(req, input)
+		})
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
-		return nil, fmt.Errorf("workflow node %q is %q, want executable agent or script", input.Node.ID, input.Node.Kind)
+		return fmt.Errorf("workflow node %q is %q, want executable agent or script", input.Node.ID, input.Node.Kind)
 	}
 	if err := s.validateRole(input.Node.SubagentRole); err != nil {
-		return nil, err
+		return err
 	}
 	plan, warnings, err := s.planSession(ctx, input)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// When the plan reuses an existing session (resume, continue, or in-place
 	// compact-and-continue), it is the previous node's persisted session — never
@@ -325,21 +227,21 @@ func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.
 		return s.cleanupSession(ctx, plan.Descriptor)
 	}
 	if err := s.applyWorkflowSessionMetadata(ctx, input, &plan); err != nil {
-		return nil, errors.Join(err, cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	client := llm.Client(nil)
 	if s.clientFactory != nil {
-		client = s.clientFactory(startReq)
+		client = s.clientFactory(req)
 	}
 	if s.runtimeClientFactory != nil {
 		client, err = s.newWorkflowProviderClient(ctx, plan)
 		if err != nil {
-			return nil, errors.Join(err, cleanupSession())
+			return errors.Join(err, cleanupSession())
 		}
 	}
-	effectiveMode, client, err := s.resolveWorkflowCompletionMode(ctx, input, plan, client)
+	effectiveMode, client, err := s.resolveAndPersistWorkflowCompletionMode(ctx, req, input, plan, client)
 	if err != nil {
-		return nil, errors.Join(err, cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	var reminder *session.WorktreeReminderState
 	if executionRoot.Managed != nil {
@@ -355,7 +257,7 @@ func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.
 	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		return store.SetWorktreeReminderState(reminder)
 	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	plan.WorktreeReminder = reminder
 	targetUpdate := metadata.SessionExecutionTargetUpdate{
@@ -369,7 +271,7 @@ func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.
 	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		return s.metadata.UpdateSessionExecutionTarget(ctx, targetUpdate)
 	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	var previousWorkflowSession *session.WorkflowSessionState
 	if workflowSession := plan.WorkflowSession; workflowSession != nil {
@@ -389,27 +291,21 @@ func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.
 	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		return store.SetWorkflowSessionState(workflowSession)
 	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	plan.WorkflowSession = workflowSession
-	decision := make(chan bool, 1)
-	execution, err := s.prepareAgentExecution(ctx, startReq, runtimeInput, plan, warnings, client, effectiveMode, decision)
-	if err != nil {
-		return nil, errors.Join(err, restoreWorkflowSession(), cleanupSession())
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		if err := s.ensureRunStartable(ctx, req); err != nil {
+			return err
+		}
+		if err := s.store.AttachRunSession(ctx, req.RunID, req.Generation, plan.Descriptor.SessionID().String()); err != nil {
+			return err
+		}
+		return s.startAgentExecution(ctx, req, input, plan, warnings, client, effectiveMode)
+	}); err != nil {
+		return errors.Join(err, restoreWorkflowSession(), cleanupSession())
 	}
-	sessionID := plan.Descriptor.SessionID().String()
-	mode := string(effectiveMode)
-	return &preparedWorkflowRun{
-		admission: workflowexecution.RunAdmission{
-			SessionID:               &sessionID,
-			EffectiveCompletionMode: &mode,
-		},
-		execution: execution,
-		decision:  decision,
-		cleanup: func() error {
-			return errors.Join(restoreWorkflowSession(), cleanupSession())
-		},
-	}, nil
+	return nil
 }
 
 func (s *Starter) ensureRunStartable(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
@@ -1038,7 +934,7 @@ func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
 	return fmt.Sprintf("%s: %s -> %s", taskDisplayID, sourceDisplayName, targetDisplayName), nil
 }
 
-func (s *Starter) resolveWorkflowCompletionMode(ctx context.Context, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
+func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
 	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
 	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
 		mode, err := workflowruntime.ParseCompletionMode(stored)
@@ -1073,6 +969,11 @@ func (s *Starter) resolveWorkflowCompletionMode(ctx context.Context, input workf
 	}
 	mode, err := workflowruntime.SelectCompletionMode(selection)
 	if err != nil {
+		return "", resolvedClient, err
+	}
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		return s.store.SetRunEffectiveCompletionMode(ctx, req.RunID, req.Generation, string(mode))
+	}); err != nil {
 		return "", resolvedClient, err
 	}
 	return mode, resolvedClient, nil
@@ -1257,19 +1158,10 @@ func (s *Starter) validateRole(role string) error {
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
 }
 
-func (s *Starter) prepareAgentExecution(
-	ctx context.Context,
-	req workflowexecution.SchedulerStartRunRequest,
-	input workflowstore.RunStartContext,
-	plan launch.SessionPlan,
-	warnings []string,
-	client llm.Client,
-	effectiveMode workflowruntime.CompletionMode,
-	decision <-chan bool,
-) (sessionruntime.ExecutionHandle, error) {
+func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) error {
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sessionID := plan.Descriptor.SessionID().String()
 	startLogLines := []string{fmt.Sprintf(
@@ -1293,7 +1185,7 @@ func (s *Starter) prepareAgentExecution(
 		s.store,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var currentWorktreeRoot *string
 	if executionRoot.Managed != nil {
@@ -1304,7 +1196,7 @@ func (s *Starter) prepareAgentExecution(
 	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
 		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
@@ -1328,10 +1220,10 @@ func (s *Starter) prepareAgentExecution(
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: req.TaskID, RunID: req.RunID, Generation: req.Generation}
-	return s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: plan.Descriptor,
 		Runtime:    &runtimePlan,
 		Workflow:   &workflowRef,
@@ -1340,14 +1232,6 @@ func (s *Starter) prepareAgentExecution(
 			return s.handleWorkflowAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, sessionID, req, input, askReq)
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			select {
-			case committed := <-decision:
-				if !committed {
-					return nil
-				}
-			case <-runCtx.Done():
-				return context.Cause(runCtx)
-			}
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				engineCtx = metadata.WithQueryFailureDiagnostics(engineCtx)
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
@@ -1369,6 +1253,7 @@ func (s *Starter) prepareAgentExecution(
 			return turnErr
 		},
 	})
+	return err
 }
 
 type executionPromptAwaiter struct {
