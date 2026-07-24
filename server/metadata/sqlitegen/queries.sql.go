@@ -9696,10 +9696,16 @@ const resetInvalidCompletionProtocolViolationBudget = `-- name: ResetInvalidComp
 UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
-    invalid_completion_count = 0
+    invalid_completion_count = 0,
+    interrupted_at_unix_ms = NULL,
+    interruption_reason = NULL,
+    interruption_detail_json = '{}'
 WHERE id = ?2
   AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
+  AND (
+    interrupted_at_unix_ms IS NULL OR
+    interruption_reason = 'workflow_protocol_violation_limit'
+  )
   AND (?3 = 0 OR run_generation = ?4)
 `
 
