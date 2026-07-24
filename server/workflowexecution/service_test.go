@@ -235,7 +235,7 @@ func TestSchedulerResumeAdmissionFailureAbortsAllScopesAndPreservesInterruptedRu
 	}
 }
 
-func TestSchedulerResumeCommitFailureCompensatesDurableAdmission(t *testing.T) {
+func TestSchedulerResumeCommitFailureAbortsBeforeDurableAdmission(t *testing.T) {
 	taskID := workflow.TaskID("task-failed-resume-commit")
 	store := newResumeSchedulerStore(taskID, 1)
 	commitErr := errors.New("script process start failed")
@@ -250,22 +250,18 @@ func TestSchedulerResumeCommitFailureCompensatesDurableAdmission(t *testing.T) {
 		t.Fatalf("ResumeTaskRuns error = %v, want runtime start and commit failures", err)
 	}
 	if prepared.abortCount() != 1 {
-		t.Fatalf("preparation aborts = %d, want 1 after durable compensation", prepared.abortCount())
+		t.Fatalf("preparation aborts = %d, want 1", prepared.abortCount())
 	}
-	runs := store.snapshot()
-	if len(runs) != 1 ||
-		runs[0].Generation != 2 ||
-		runs[0].InterruptedAt == nil ||
-		runs[0].InterruptionReason == nil ||
-		*runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
-		t.Fatalf("runs after commit compensation = %+v", runs)
+	if store.admitCount() != 0 {
+		t.Fatalf("durable admissions = %d, want 0", store.admitCount())
 	}
+	assertResumeStoreInterrupted(t, store)
 	if scheduler.ActiveCount() != 0 {
 		t.Fatalf("active count = %d, want released ownership", scheduler.ActiveCount())
 	}
 }
 
-func TestSchedulerResumeCommitFailureCompensatesEveryAdmittedBranch(t *testing.T) {
+func TestSchedulerResumeCommitFailureAbortsEveryBranchBeforeDurableAdmission(t *testing.T) {
 	taskID := workflow.TaskID("task-failed-multi-run-resume-commit")
 	store := newResumeSchedulerStore(taskID, 3)
 	commitErr := errors.New("second script process start failed")
@@ -279,25 +275,21 @@ func TestSchedulerResumeCommitFailureCompensatesEveryAdmittedBranch(t *testing.T
 	if _, err := scheduler.ResumeTaskRuns(context.Background(), taskID); !errors.Is(err, ErrSchedulerRuntimeStartFailed) || !errors.Is(err, commitErr) {
 		t.Fatalf("ResumeTaskRuns error = %v, want runtime start and commit failures", err)
 	}
-	for _, run := range store.snapshot() {
-		if run.Generation != 2 ||
-			run.InterruptedAt == nil ||
-			run.InterruptionReason == nil ||
-			*run.InterruptionReason != ReasonSchedulerRuntimeStartFailed {
-			t.Fatalf("run after task compensation = %+v, want every admitted branch interrupted", run)
-		}
+	if store.admitCount() != 0 {
+		t.Fatalf("durable admissions = %d, want 0", store.admitCount())
 	}
+	assertResumeStoreInterrupted(t, store)
 	if scheduler.ActiveCount() != 0 {
-		t.Fatalf("active count = %d, want every admitted branch released", scheduler.ActiveCount())
+		t.Fatalf("active count = %d, want every preparation released", scheduler.ActiveCount())
 	}
 }
 
-func TestSchedulerResumeCommitFailureRetiresSiblingThatAlreadyCompleted(t *testing.T) {
+func TestSchedulerResumeCommitFailureDoesNotAllowSiblingCompletion(t *testing.T) {
 	taskID := workflow.TaskID("task-fast-sibling-resume-commit")
 	store := newResumeSchedulerStore(taskID, 3)
 	commitErr := errors.New("second script process start failed")
 	prepared := []*resumePreparedRun{
-		{onCommit: func() { store.complete("a-run", 2) }},
+		{onActivate: func() { store.complete("a-run", 2) }},
 		{commitErr: commitErr},
 		{},
 	}
@@ -310,39 +302,124 @@ func TestSchedulerResumeCommitFailureRetiresSiblingThatAlreadyCompleted(t *testi
 	if _, err := scheduler.ResumeTaskRuns(context.Background(), taskID); !errors.Is(err, ErrSchedulerRuntimeStartFailed) || !errors.Is(err, commitErr) {
 		t.Fatalf("ResumeTaskRuns error = %v, want runtime start and commit failures", err)
 	}
-	runs := store.snapshot()
-	if runs[0].CompletedAt == nil || runs[0].InterruptedAt != nil {
-		t.Fatalf("fast sibling after compensation = %+v, want completed terminal generation", runs[0])
+	if store.admitCount() != 0 {
+		t.Fatalf("durable admissions = %d, want 0", store.admitCount())
 	}
-	for _, run := range runs[1:] {
-		if run.InterruptedAt == nil ||
-			run.InterruptionReason == nil ||
-			*run.InterruptionReason != ReasonSchedulerRuntimeStartFailed {
-			t.Fatalf("remaining sibling after compensation = %+v, want resumable interruption", run)
-		}
-	}
+	assertResumeStoreInterrupted(t, store)
 	if scheduler.ActiveCount() != 0 {
 		t.Fatalf("active count = %d, want every exact scope retired", scheduler.ActiveCount())
 	}
 }
 
-func TestSchedulerResumeCommitFailureRetainsScopeUntilCompensationRetries(t *testing.T) {
+func TestSchedulerResumeCancellationDuringCommitAbortsBeforeDurableAdmission(t *testing.T) {
+	taskID := workflow.TaskID("task-canceled-resume-commit")
+	store := newResumeSchedulerStore(taskID, 3)
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	prepared := []*resumePreparedRun{
+		{},
+		{onCommit: func() {
+			close(commitStarted)
+			<-releaseCommit
+		}},
+		{},
+	}
+	scheduler := newResumeScheduler(t, store, &resumeSchedulerStarter{
+		prepare: func(_ context.Context, _ SchedulerPrepareRunRequest, index int) (PreparedWorkflowRun, error) {
+			return prepared[index], nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := scheduler.ResumeTaskRuns(ctx, taskID)
+		result <- err
+	}()
+	<-commitStarted
+	cancel()
+	close(releaseCommit)
+
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResumeTaskRuns error = %v, want context.Canceled", err)
+	}
+	if store.admitCount() != 0 {
+		t.Fatalf("durable admissions = %d, want 0", store.admitCount())
+	}
+	for index, item := range prepared {
+		if item.activationCount() != 0 {
+			t.Fatalf("preparation %d activations = %d, want 0", index, item.activationCount())
+		}
+		if item.abortCount() != 1 {
+			t.Fatalf("preparation %d aborts = %d, want 1", index, item.abortCount())
+		}
+	}
+	assertResumeStoreInterrupted(t, store)
+	if scheduler.ActiveCount() != 0 {
+		t.Fatalf("active count = %d, want no retained preparation", scheduler.ActiveCount())
+	}
+}
+
+func TestSchedulerResumeActivatesBranchesOnlyAfterEveryCommitSucceeds(t *testing.T) {
+	taskID := workflow.TaskID("task-activation-barrier")
+	store := newResumeSchedulerStore(taskID, 3)
+	committed := 0
+	activationCommitCounts := make([]int, 0, 3)
+	prepared := make([]*resumePreparedRun, 3)
+	for index := range prepared {
+		prepared[index] = &resumePreparedRun{
+			onCommit: func() {
+				committed++
+			},
+			onActivate: func() {
+				activationCommitCounts = append(activationCommitCounts, committed)
+			},
+		}
+	}
+	scheduler := newResumeScheduler(t, store, &resumeSchedulerStarter{
+		prepare: func(_ context.Context, _ SchedulerPrepareRunRequest, index int) (PreparedWorkflowRun, error) {
+			return prepared[index], nil
+		},
+	})
+
+	resumed, err := scheduler.ResumeTaskRuns(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+	if len(resumed.Runs) != 3 {
+		t.Fatalf("resumed runs = %d, want 3", len(resumed.Runs))
+	}
+	if len(activationCommitCounts) != 3 {
+		t.Fatalf("activations = %d, want 3", len(activationCommitCounts))
+	}
+	for index, commitCount := range activationCommitCounts {
+		if commitCount != 3 {
+			t.Fatalf("activation %d observed %d commits, want all 3", index, commitCount)
+		}
+	}
+}
+
+func TestSchedulerResumeCancellationAfterAdmissionRetainsScopeUntilCompensationRetries(t *testing.T) {
 	taskID := workflow.TaskID("task-retry-resume-compensation")
 	store := newResumeSchedulerStore(taskID, 1)
 	compensationErr := errors.New("interruption storage unavailable")
 	store.interruptErr = compensationErr
-	prepared := &resumePreparedRun{commitErr: errors.New("script process start failed")}
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterAdmit = cancel
+	prepared := &resumePreparedRun{}
 	scheduler := newResumeScheduler(t, store, &resumeSchedulerStarter{
 		prepare: func(context.Context, SchedulerPrepareRunRequest, int) (PreparedWorkflowRun, error) {
 			return prepared, nil
 		},
 	})
 
-	if _, err := scheduler.ResumeTaskRuns(context.Background(), taskID); !errors.Is(err, compensationErr) {
-		t.Fatalf("ResumeTaskRuns error = %v, want compensation failure", err)
+	if _, err := scheduler.ResumeTaskRuns(ctx, taskID); !errors.Is(err, context.Canceled) || !errors.Is(err, compensationErr) {
+		t.Fatalf("ResumeTaskRuns error = %v, want cancellation and compensation failure", err)
 	}
 	if prepared.abortCount() != 0 {
 		t.Fatalf("preparation aborts = %d, want retained exact scope", prepared.abortCount())
+	}
+	if prepared.activationCount() != 0 {
+		t.Fatalf("preparation activations = %d, want 0", prepared.activationCount())
 	}
 	if scheduler.ActiveCount() != 1 {
 		t.Fatalf("active count = %d, want retained ownership", scheduler.ActiveCount())
@@ -370,20 +447,22 @@ func TestSchedulerResumeCommitFailureRetainsScopeUntilCompensationRetries(t *tes
 	}
 }
 
-func TestSchedulerMultiRunResumeCommitFailureRetriesCompensationAsOneBatch(t *testing.T) {
+func TestSchedulerMultiRunResumeCancellationAfterAdmissionRetriesCompensationAsOneBatch(t *testing.T) {
 	taskID := workflow.TaskID("task-retry-multi-run-resume-compensation")
 	store := newResumeSchedulerStore(taskID, 3)
 	compensationErr := errors.New("batch interruption storage unavailable")
 	store.interruptErr = compensationErr
-	prepared := []*resumePreparedRun{{}, {commitErr: errors.New("script process start failed")}, {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterAdmit = cancel
+	prepared := []*resumePreparedRun{{}, {}, {}}
 	scheduler := newResumeScheduler(t, store, &resumeSchedulerStarter{
 		prepare: func(_ context.Context, _ SchedulerPrepareRunRequest, index int) (PreparedWorkflowRun, error) {
 			return prepared[index], nil
 		},
 	})
 
-	if _, err := scheduler.ResumeTaskRuns(context.Background(), taskID); !errors.Is(err, compensationErr) {
-		t.Fatalf("ResumeTaskRuns error = %v, want batch compensation failure", err)
+	if _, err := scheduler.ResumeTaskRuns(ctx, taskID); !errors.Is(err, context.Canceled) || !errors.Is(err, compensationErr) {
+		t.Fatalf("ResumeTaskRuns error = %v, want cancellation and batch compensation failure", err)
 	}
 	for _, run := range store.snapshot() {
 		if run.Generation != 2 || run.InterruptedAt != nil {
@@ -392,6 +471,11 @@ func TestSchedulerMultiRunResumeCommitFailureRetriesCompensationAsOneBatch(t *te
 	}
 	if scheduler.ActiveCount() != 3 {
 		t.Fatalf("active count = %d, want every admitted scope retained", scheduler.ActiveCount())
+	}
+	for index, item := range prepared {
+		if item.activationCount() != 0 {
+			t.Fatalf("preparation %d activations = %d, want 0", index, item.activationCount())
+		}
 	}
 
 	store.setInterruptError(nil)
@@ -476,6 +560,8 @@ func (p discardingPreparedRun) Commit() error {
 	return nil
 }
 
+func (discardingPreparedRun) Activate() {}
+
 func (p discardingPreparedRun) Abort(context.Context) error {
 	return nil
 }
@@ -492,6 +578,7 @@ type resumeSchedulerStore struct {
 	runs         []workflowstore.RunRecord
 	admitErr     error
 	interruptErr error
+	afterAdmit   func()
 	admitCalls   int
 }
 
@@ -567,6 +654,9 @@ func (s *resumeSchedulerStore) AdmitTaskResume(
 		if !found {
 			return workflowstore.ResumeTaskRunsResult{}, sql.ErrNoRows
 		}
+	}
+	if s.afterAdmit != nil {
+		s.afterAdmit()
 	}
 	return workflowstore.ResumeTaskRunsResult{Runs: resumed}, nil
 }
@@ -687,10 +777,12 @@ func (s *resumeSchedulerStarter) PrepareWorkflowRun(
 }
 
 type resumePreparedRun struct {
-	mu        sync.Mutex
-	commitErr error
-	onCommit  func()
-	aborts    int
+	mu          sync.Mutex
+	commitErr   error
+	onCommit    func()
+	onActivate  func()
+	activations int
+	aborts      int
 }
 
 func (*resumePreparedRun) Admission() RunAdmission {
@@ -702,6 +794,15 @@ func (p *resumePreparedRun) Commit() error {
 		p.onCommit()
 	}
 	return p.commitErr
+}
+
+func (p *resumePreparedRun) Activate() {
+	p.mu.Lock()
+	p.activations++
+	p.mu.Unlock()
+	if p.onActivate != nil {
+		p.onActivate()
+	}
 }
 
 func (p *resumePreparedRun) Abort(context.Context) error {
@@ -719,6 +820,12 @@ func (p *resumePreparedRun) abortCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.aborts
+}
+
+func (p *resumePreparedRun) activationCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.activations
 }
 
 func newResumeScheduler(t *testing.T, store SchedulerStore, starter SchedulerRuntimeStarter) *SchedulerService {

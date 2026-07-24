@@ -867,8 +867,11 @@ func (p workflowViewPreparedRun) Admission() workflowexecution.RunAdmission {
 }
 
 func (p workflowViewPreparedRun) Commit() error {
-	p.starter.requests = append(p.starter.requests, p.request)
 	return nil
+}
+
+func (p workflowViewPreparedRun) Activate() {
+	p.starter.requests = append(p.starter.requests, p.request)
 }
 
 func (workflowViewPreparedRun) Abort(context.Context) error {

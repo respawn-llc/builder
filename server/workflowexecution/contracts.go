@@ -36,7 +36,11 @@ type SchedulerRuntimeStarter interface {
 
 type PreparedWorkflowRun interface {
 	Admission() RunAdmission
+	// Commit performs fallible launch work while execution remains behind the
+	// activation boundary. Activate is infallible and follows successful durable
+	// admission; batch owners commit every member before admission.
 	Commit() error
+	Activate()
 	Abort(context.Context) error
 	Compensate(context.Context) error
 }

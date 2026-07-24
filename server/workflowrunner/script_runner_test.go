@@ -14,6 +14,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 )
 
@@ -36,7 +37,7 @@ func TestPreparedScriptWorkflowRunCompensationRetiresFailedCommit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("PrepareScriptExecution: %v", err)
 	}
-	prepared := &preparedScriptWorkflowRun{prepared: preparedExecution}
+	prepared := newPreparedScriptWorkflowRun(preparedExecution)
 
 	commitErr := prepared.Commit()
 	if commitErr == nil {
@@ -54,6 +55,104 @@ func TestPreparedScriptWorkflowRunCompensationRetiresFailedCommit(t *testing.T) 
 	}
 	if _, waitErr := preparedExecution.Handle().Wait(context.Background()); !errors.Is(waitErr, commitErr) {
 		t.Fatalf("execution result error = %v, want original commit failure %v", waitErr, commitErr)
+	}
+}
+
+func TestPreparedScriptWorkflowRunKeepsFastScriptBehindActivationBoundary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture uses POSIX shebang")
+	}
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, "script-finished")
+	scriptPath := filepath.Join(dir, "complete.sh")
+	script := "#!/bin/sh\nprintf 'finished' > " + shellQuote(markerPath) + "\nprintf '{\"done\":\"ok\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	req := SchedulerStartRunRequest{
+		RunID:       "run-script-activation",
+		TaskID:      "task-script-activation",
+		PlacementID: "placement-script-activation",
+		NodeID:      "node-script-activation",
+		Generation:  1,
+	}
+	input := workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         req.TaskID,
+			WorkflowID: "workflow-script-activation",
+		},
+		Node: workflowstore.NodeRecord{
+			ID:          req.NodeID,
+			WorkflowID:  "workflow-script-activation",
+			Kind:        workflow.NodeKindScript,
+			ScriptPath:  filepath.Base(scriptPath),
+			DisplayName: "Fast Script",
+		},
+		InputValues: map[string]string{},
+		ExecutionRoot: &workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   "workspace-script-activation",
+			SourceWorkspaceRoot: dir,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	starter := &Starter{runtimeAuthority: authority}
+	prepared, err := starter.prepareScriptWorkflowRun(context.Background(), req, input)
+	if err != nil {
+		t.Fatalf("prepare script workflow run: %v", err)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("commit script workflow run: %v", err)
+	}
+	scriptRun, ok := prepared.(*preparedScriptWorkflowRun)
+	if !ok {
+		t.Fatalf("prepared script workflow run = %T", prepared)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, err := os.Stat(markerPath)
+		if err == nil {
+			return true
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat script marker: %v", err)
+		}
+		return false
+	}, "timed out waiting for fast script")
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelWait()
+	if err := scriptRun.prepared.Handle().Close(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("script close before activation = %v, want activation-bound wait", err)
+	}
+	snapshot, err := authority.CurrentTaskExecutionSnapshot(req.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot before activation: %v", err)
+	}
+	if len(snapshot.Executions) != 0 {
+		t.Fatalf("exact executions before activation = %+v, want no exited Script scope", snapshot.Executions)
+	}
+	if _, err := starter.PrepareWorkflowInterrupt(workflowexecution.InterruptSelector{
+		TaskID: req.TaskID,
+	}); !errors.Is(err, workflowexecution.ErrNoInterruptibleExecution) {
+		t.Fatalf("PrepareWorkflowInterrupt before activation = %v, want no interruptible execution", err)
+	}
+
+	if err := prepared.Compensate(context.Background()); err != nil {
+		t.Fatalf("compensate script before activation: %v", err)
+	}
+	if err := scriptRun.prepared.Handle().Close(context.Background()); err != nil {
+		t.Fatalf("close compensated script: %v", err)
+	}
+	snapshot, err = authority.CurrentTaskExecutionSnapshot(req.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot after compensation: %v", err)
+	}
+	if len(snapshot.Executions) != 0 {
+		t.Fatalf("compensated script remains live: %+v", snapshot.Executions)
 	}
 }
 

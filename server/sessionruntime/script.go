@@ -74,9 +74,11 @@ type PreparedScriptExecution struct {
 	process   *scriptProcess
 	execution *execution
 
-	mu        sync.Mutex
-	state     preparedScriptExecutionState
-	commitErr error
+	mu         sync.Mutex
+	state      preparedScriptExecutionState
+	commitErr  error
+	activation chan struct{}
+	activate   sync.Once
 }
 
 func (p *PreparedScriptExecution) Handle() ExecutionHandle {
@@ -107,6 +109,12 @@ func (p *PreparedScriptExecution) Commit() error {
 	go func() {
 		result, runErr, stopErr := p.process.wait(p.execution.ctx)
 		p.execution.beginFinalization()
+		select {
+		case <-p.activation:
+		case <-p.execution.ctx.Done():
+			p.execution.finish(ExecutionResult{Script: &result}, runErr, stopErr)
+			return
+		}
 		var finalizeErr error
 		if p.request.Finalize != nil {
 			finalizeErr = p.request.Finalize(context.WithoutCancel(p.execution.ctx), p.execution.scope, result.clone(), runErr)
@@ -114,6 +122,22 @@ func (p *PreparedScriptExecution) Commit() error {
 		p.execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, finalizeErr), stopErr)
 	}()
 	return nil
+}
+
+// Activate releases a successfully committed process into finalization. A
+// workflow batch can commit every process first, then activate all of them only
+// after no later commit can fail.
+func (p *PreparedScriptExecution) Activate() {
+	if p == nil || p.execution == nil || p.process == nil {
+		panic("prepared script execution is uninitialized")
+	}
+	p.mu.Lock()
+	state := p.state
+	p.mu.Unlock()
+	if state != preparedScriptExecutionRunning {
+		panic(fmt.Sprintf("prepared script execution cannot activate from state %d", state))
+	}
+	p.activate.Do(func() { close(p.activation) })
 }
 
 func (p *PreparedScriptExecution) Abort() error {
@@ -170,10 +194,11 @@ func (a *Authority) PrepareScriptExecution(ctx context.Context, req ScriptExecut
 	}
 	a.mu.Unlock()
 	return &PreparedScriptExecution{
-		request:   req,
-		process:   process,
-		execution: execution,
-		state:     preparedScriptExecutionPrepared,
+		request:    req,
+		process:    process,
+		execution:  execution,
+		state:      preparedScriptExecutionPrepared,
+		activation: make(chan struct{}),
 	}, nil
 }
 
@@ -185,6 +210,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	if err := prepared.Commit(); err != nil {
 		return nil, errors.Join(err, prepared.Abort())
 	}
+	prepared.Activate()
 	return prepared.Handle(), nil
 }
 

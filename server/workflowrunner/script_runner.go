@@ -29,6 +29,14 @@ const (
 type preparedScriptWorkflowRun struct {
 	prepared  *sessionruntime.PreparedScriptExecution
 	committed atomic.Bool
+	activated atomic.Bool
+}
+
+func newPreparedScriptWorkflowRun(prepared *sessionruntime.PreparedScriptExecution) *preparedScriptWorkflowRun {
+	if prepared == nil {
+		panic("prepared workflow script requires execution")
+	}
+	return &preparedScriptWorkflowRun{prepared: prepared}
 }
 
 func (p *preparedScriptWorkflowRun) Admission() workflowexecution.RunAdmission {
@@ -46,25 +54,41 @@ func (p *preparedScriptWorkflowRun) Commit() error {
 	return nil
 }
 
+func (p *preparedScriptWorkflowRun) Activate() {
+	if p == nil || p.prepared == nil {
+		panic("prepared workflow script is uninitialized")
+	}
+	if !p.committed.Load() {
+		panic("uncommitted workflow script preparation cannot be activated")
+	}
+	p.activated.Store(true)
+	p.prepared.Activate()
+}
+
 func (p *preparedScriptWorkflowRun) Abort(ctx context.Context) error {
 	if p == nil || p.prepared == nil {
 		return nil
 	}
+	if p.activated.Load() {
+		return errors.New("activated workflow script preparation cannot be aborted")
+	}
+	if p.committed.Load() {
+		return p.prepared.Handle().Stop(ctx)
+	}
 	if err := p.prepared.Abort(); err != nil {
 		return err
 	}
-	_, err := p.prepared.Handle().Wait(ctx)
-	return err
+	return p.prepared.Handle().Close(ctx)
 }
 
 func (p *preparedScriptWorkflowRun) Compensate(ctx context.Context) error {
 	if p == nil || p.prepared == nil {
 		return nil
 	}
-	if p.committed.Load() {
-		return p.prepared.Handle().Stop(ctx)
+	if !p.activated.Load() {
+		return p.Abort(ctx)
 	}
-	return p.prepared.Abort()
+	return p.prepared.Handle().Stop(ctx)
 }
 
 func (s *Starter) prepareScriptWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowexecution.PreparedWorkflowRun, error) {
@@ -79,7 +103,7 @@ func (s *Starter) prepareScriptWorkflowRun(ctx context.Context, req workflowexec
 	if err != nil {
 		return nil, err
 	}
-	return &preparedScriptWorkflowRun{prepared: prepared}, nil
+	return newPreparedScriptWorkflowRun(prepared), nil
 }
 
 func (s *Starter) finalizeWorkflowScript(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {

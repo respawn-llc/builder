@@ -2793,6 +2793,7 @@ func startClaimedWorkflowRun(t *testing.T, ctx context.Context, fixture starterF
 	if err := prepared.Commit(); err != nil {
 		t.Fatalf("Commit prepared workflow run %s: %v", run.ID, err)
 	}
+	prepared.Activate()
 }
 
 func workflowRequestAskQuestionToolMessages(reqs []llm.Request) []llm.Message {

@@ -2771,6 +2771,7 @@ func (claimScopeRacePreparedRun) Admission() workflowexecution.RunAdmission {
 	return workflowexecution.RunAdmission{}
 }
 func (claimScopeRacePreparedRun) Commit() error               { return nil }
+func (claimScopeRacePreparedRun) Activate()                   {}
 func (claimScopeRacePreparedRun) Abort(context.Context) error { return nil }
 func (claimScopeRacePreparedRun) Compensate(context.Context) error {
 	return nil

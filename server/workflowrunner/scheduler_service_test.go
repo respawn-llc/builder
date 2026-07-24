@@ -661,11 +661,11 @@ type recordingPreparedRun struct {
 }
 
 func (recordingPreparedRun) Admission() RunAdmission { return RunAdmission{} }
-func (p recordingPreparedRun) Commit() error {
+func (recordingPreparedRun) Commit() error           { return nil }
+func (p recordingPreparedRun) Activate() {
 	p.starter.mu.Lock()
 	defer p.starter.mu.Unlock()
 	p.starter.started = append(p.starter.started, p.request)
-	return nil
 }
 func (recordingPreparedRun) Abort(context.Context) error { return nil }
 func (recordingPreparedRun) Compensate(context.Context) error {

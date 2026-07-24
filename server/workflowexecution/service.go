@@ -606,6 +606,20 @@ func (s *SchedulerService) ResumeTaskRuns(ctx context.Context, taskID workflow.T
 			EffectiveCompletionMode: admission.EffectiveCompletionMode,
 		})
 	}
+	for _, item := range prepared {
+		if err := context.Cause(ctx); err != nil {
+			return workflowstore.ResumeTaskRunsResult{}, errors.Join(err, abortAll())
+		}
+		if err := item.prepared.Commit(); err != nil {
+			return workflowstore.ResumeTaskRunsResult{}, errors.Join(
+				fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err),
+				abortAll(),
+			)
+		}
+	}
+	if err := context.Cause(ctx); err != nil {
+		return workflowstore.ResumeTaskRunsResult{}, errors.Join(err, abortAll())
+	}
 	var resumed workflowstore.ResumeTaskRunsResult
 	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		var admitErr error
@@ -625,25 +639,26 @@ func (s *SchedulerService) ResumeTaskRuns(ctx context.Context, taskID workflow.T
 			taskID,
 		))
 	}
-	for _, item := range prepared {
-		if err := item.prepared.Commit(); err != nil {
-			compensated := make([]schedulerCompensatedRun, 0, len(prepared))
-			for _, admitted := range prepared {
-				compensated = append(compensated, schedulerCompensatedRun{
-					request:  admitted.request,
-					prepared: admitted.prepared,
-				})
-			}
-			return resumed, errors.Join(
-				fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err),
-				s.compensatePreparedRuns(
-					context.WithoutCancel(ctx),
-					compensated,
-					ReasonSchedulerRuntimeStartFailed,
-					fmt.Sprintf(`{"error":%q}`, err.Error()),
-				),
-			)
+	if err := context.Cause(ctx); err != nil {
+		compensated := make([]schedulerCompensatedRun, 0, len(prepared))
+		for _, admitted := range prepared {
+			compensated = append(compensated, schedulerCompensatedRun{
+				request:  admitted.request,
+				prepared: admitted.prepared,
+			})
 		}
+		return resumed, errors.Join(
+			err,
+			s.compensatePreparedRuns(
+				context.WithoutCancel(ctx),
+				compensated,
+				ReasonSchedulerRuntimeStartFailed,
+				fmt.Sprintf(`{"error":%q}`, err.Error()),
+			),
+		)
+	}
+	for _, item := range prepared {
+		item.prepared.Activate()
 	}
 	return resumed, nil
 }
@@ -835,6 +850,7 @@ func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore
 			),
 		)
 	}
+	prepared.Activate()
 	return nil
 }
 

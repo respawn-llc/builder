@@ -157,6 +157,7 @@ type preparedWorkflowRun struct {
 	cleanup   func() error
 
 	committed atomic.Bool
+	activated atomic.Bool
 	decide    sync.Once
 }
 
@@ -172,23 +173,29 @@ func (p *preparedWorkflowRun) Commit() error {
 		panic("prepared workflow run is uninitialized")
 	}
 	p.committed.Store(true)
-	p.decide.Do(func() { p.decision <- true })
 	return nil
+}
+
+func (p *preparedWorkflowRun) Activate() {
+	if p == nil {
+		panic("prepared workflow run is uninitialized")
+	}
+	if !p.committed.Load() {
+		panic("uncommitted workflow run preparation cannot be activated")
+	}
+	p.activated.Store(true)
+	p.decideExecution(true)
 }
 
 func (p *preparedWorkflowRun) Abort(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
-	aborted := false
-	p.decide.Do(func() {
-		aborted = true
-		p.decision <- false
-	})
+	if p.activated.Load() {
+		return errors.New("activated workflow run preparation cannot be aborted")
+	}
+	aborted := p.decideExecution(false)
 	if !aborted {
-		if p.committed.Load() {
-			return errors.New("committed workflow run preparation cannot be aborted")
-		}
 		return nil
 	}
 	_, waitErr := p.execution.Wait(ctx)
@@ -199,10 +206,19 @@ func (p *preparedWorkflowRun) Compensate(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
-	if p.committed.Load() {
-		return p.execution.Stop(ctx)
+	if !p.activated.Load() {
+		return p.Abort(ctx)
 	}
-	return p.Abort(ctx)
+	return p.execution.Stop(ctx)
+}
+
+func (p *preparedWorkflowRun) decideExecution(activate bool) bool {
+	decided := false
+	p.decide.Do(func() {
+		decided = true
+		p.decision <- activate
+	})
+	return decided
 }
 
 func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
