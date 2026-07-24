@@ -636,10 +636,10 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	if enginePlan.engineKind == compactionEngineRemote {
 		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions)
 		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			result, err = e.compactLocal(ctx, input, providerID, instructions, mode)
+			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
 		}
 	} else {
-		result, err = e.compactLocal(ctx, input, providerID, instructions, mode)
+		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
 	}
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
