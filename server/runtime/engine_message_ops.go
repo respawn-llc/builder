@@ -379,9 +379,6 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return session.CommitReceipt{}, nil
 	}
-	if err := e.transcriptRuntimeState().ValidateMessage(stepID, msg); err != nil {
-		return session.CommitReceipt{}, fmt.Errorf("validate queued message projection: %w", err)
-	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
 	normalizedIDs := queuedUserMessageStatusItemIDs(normalizedItems)
 	appended, appendErr := e.appendPersistedMessageEvent(stepID, msg)
