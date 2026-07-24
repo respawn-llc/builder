@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -33,6 +34,7 @@ var missingToolOutputInterruptedOutput = json.RawMessage(`{"error":"Tool executi
 type danglingToolCall struct {
 	callID string
 	name   string
+	stepID string
 }
 
 // repairMissingToolOutputsByAppending closes any tool calls in the live
@@ -64,24 +66,30 @@ func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error)
 	if len(dangling) == 0 {
 		return 0, nil
 	}
-	intents := make([]steeringIntent, 0, len(dangling)+1)
+	repaired := 0
 	for _, call := range dangling {
-		intents = append(intents, steerToolCompletionIntent(tools.Result{
+		callStepID := strings.TrimSpace(call.stepID)
+		if callStepID == "" {
+			return repaired, fmt.Errorf("repair dangling tool call %q: step id is required", call.callID)
+		}
+		if err := e.steer(callStepID, steerToolCompletionIntent(tools.Result{
 			CallID:  call.callID,
 			Name:    toolspec.ID(call.name),
 			IsError: true,
 			Output:  append(json.RawMessage(nil), missingToolOutputInterruptedOutput...),
-		}))
+		})); err != nil {
+			return repaired, err
+		}
+		repaired++
 	}
-	intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
+	if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       fmt.Sprintf(missingToolOutputRepairWarningTemplate, len(dangling)),
-	}))
-	if err := e.steer(stepID, intents...); err != nil {
-		return 0, err
+	})); err != nil {
+		return repaired, err
 	}
-	return len(dangling), nil
+	return repaired, nil
 }
 
 // itemsHaveDanglingToolCalls reports whether a prepared request item sequence

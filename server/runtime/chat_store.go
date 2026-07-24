@@ -78,6 +78,7 @@ type chatStore struct {
 	toolCompletions                   map[string]tools.Result
 	toolCompletionProviderItems       map[string][]llm.ResponseItem
 	assistantToolCalls                map[string]struct{}
+	assistantToolCallStepIDs          map[string]string
 	materializedToolResults           map[string]struct{}
 	synthesizedToolResults            map[string]struct{}
 	assistantStreamIDsByEntry         map[int]uuid.UUID
@@ -127,6 +128,7 @@ func newChatStoreWithCWD(cwd string) *chatStore {
 		toolCompletions:             make(map[string]tools.Result, 16),
 		toolCompletionProviderItems: make(map[string][]llm.ResponseItem, 16),
 		assistantToolCalls:          make(map[string]struct{}, 16),
+		assistantToolCallStepIDs:    make(map[string]string, 16),
 		materializedToolResults:     make(map[string]struct{}, 16),
 		synthesizedToolResults:      make(map[string]struct{}, 16),
 		cwd:                         strings.TrimSpace(cwd),
@@ -143,7 +145,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 		Message:       cloneChatStoreMessage(msg),
 		ProviderItems: llm.ItemsFromMessages([]llm.Message{msg}),
 	})
-	s.applyMessageStatsLocked(msg)
+	s.applyMessageStatsLocked(stepID, msg)
 	s.placeAttachedLocalEntriesAfterMaterializedToolLocked(msg)
 	s.providerTokenEstimateDirty = true
 }
@@ -162,6 +164,7 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(stepID string, items []l
 		activeSegmentEntryStart = *committedEntryStart
 	}
 	preparedItems := llm.PrepareOpenAIInputItems(items)
+	s.recordReplacementToolCallStepIDsLocked(stepID, preparedItems)
 	// Non-reviewer compaction keeps user-visible transcript history append-only by
 	// materializing replacement items as synthetic local entries at the compaction
 	// boundary while provider/model history switches to the compacted checkpoint.
@@ -194,6 +197,7 @@ func (s *chatStore) pruneToolCompletionsToWorkingSetLocked() {
 	if len(s.toolCompletions) == 0 &&
 		len(s.toolCompletionProviderItems) == 0 &&
 		len(s.assistantToolCalls) == 0 &&
+		len(s.assistantToolCallStepIDs) == 0 &&
 		len(s.materializedToolResults) == 0 &&
 		len(s.synthesizedToolResults) == 0 {
 		return
@@ -210,6 +214,7 @@ func (s *chatStore) pruneToolCompletionsToWorkingSetLocked() {
 	pruneCallIDMapToReferenced(s.toolCompletions, referenced)
 	pruneCallIDMapToReferenced(s.toolCompletionProviderItems, referenced)
 	pruneCallIDMapToReferenced(s.assistantToolCalls, referenced)
+	pruneCallIDMapToReferenced(s.assistantToolCallStepIDs, referenced)
 	pruneCallIDMapToReferenced(s.materializedToolResults, referenced)
 	pruneCallIDMapToReferenced(s.synthesizedToolResults, referenced)
 }
@@ -634,7 +639,7 @@ func (s *chatStore) danglingToolCalls() []danglingToolCall {
 		}
 		name, _ := textutil.OptionalTrimmed(item.Name)
 		seen[callID] = struct{}{}
-		out = append(out, danglingToolCall{callID: callID, name: name})
+		out = append(out, danglingToolCall{callID: callID, name: name, stepID: s.assistantToolCallStepIDs[callID]})
 	}
 	return out
 }
@@ -706,15 +711,22 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
+func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
 	s.applyLastCommittedAssistantFinalAnswerLocked(msg)
 	delta := len(VisibleChatEntriesFromMessage(msg))
 	switch msg.Role {
 	case llm.RoleAssistant:
+		stepID = strings.TrimSpace(stepID)
 		for _, call := range msg.ToolCalls {
 			callID := strings.TrimSpace(call.ID)
 			if callID == "" {
 				continue
+			}
+			if stepID != "" {
+				if existing := s.assistantToolCallStepIDs[callID]; existing != "" && existing != stepID {
+					panic(fmt.Sprintf("assistant tool call %q changed step identity from %q to %q", callID, existing, stepID))
+				}
+				s.assistantToolCallStepIDs[callID] = stepID
 			}
 			s.assistantToolCalls[callID] = struct{}{}
 			if _, materialized := s.materializedToolResults[callID]; materialized {
@@ -740,6 +752,23 @@ func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 	s.transcriptEntryCount += delta
 	if s.transcriptEntryCount < 0 {
 		s.transcriptEntryCount = 0
+	}
+}
+
+func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID string, items []llm.ResponseItem) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return
+	}
+	for _, item := range items {
+		if !isToolCallItem(item.Type) {
+			continue
+		}
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present || s.assistantToolCallStepIDs[callID] != "" {
+			continue
+		}
+		s.assistantToolCallStepIDs[callID] = stepID
 	}
 }
 
