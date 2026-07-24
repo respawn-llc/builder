@@ -6,9 +6,16 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"core/shared/config"
 )
 
 const processEnvironmentProbeName = "KENT_TEST_PROCESS_ENVIRONMENT_PROBE"
+
+// init applies persistence isolation to every test process that uses testsetup.
+func init() {
+	ClearEnvironmentAtTestProcessStart(config.PersistenceRootEnvName)
+}
 
 // ClearEnvironmentAtTestProcessStart clears environmentName before package tests run.
 func ClearEnvironmentAtTestProcessStart(environmentName string) {

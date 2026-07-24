@@ -1,6 +1,18 @@
 package testsetup
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/config"
+)
+
+func TestTestSetupProcessClearsPersistenceRoot(t *testing.T) {
+	AssertEnvironmentUnsetAtProcessStart(
+		t,
+		"TestTestSetupProcessClearsPersistenceRoot",
+		config.PersistenceRootEnvName,
+	)
+}
 
 func TestReplaceEnvironmentReplacesOnlyNamedVariables(t *testing.T) {
 	got := replaceEnvironment(

@@ -145,18 +145,20 @@ func completedJobEvent(job testJob, startedAt time.Time, err error) jobEvent {
 }
 
 func jobID(job testJob) string {
-	if len(job.testNames) == 0 {
+	rootListHash := rootListSHA256(job.testNames)
+	if rootListHash == nil {
 		return job.packagePath + ":all"
 	}
-	return job.packagePath + ":" + rootListSHA256(job.testNames)[:12]
+	return job.packagePath + ":" + (*rootListHash)[:12]
 }
 
-func rootListSHA256(names []string) string {
+func rootListSHA256(names []string) *string {
 	if len(names) == 0 {
-		return ""
+		return nil
 	}
 	sum := sha256.Sum256([]byte(strings.Join(names, "\x00")))
-	return fmt.Sprintf("%x", sum)
+	hash := fmt.Sprintf("%x", sum)
+	return &hash
 }
 
 func writeJobEvent(eventMu *sync.Mutex, event jobEvent) {

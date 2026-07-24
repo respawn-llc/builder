@@ -8,14 +8,12 @@ import (
 	"time"
 
 	"core/internal/testharness/pty/appfixture"
-	"core/internal/testharness/testsetup"
 	"core/shared/config"
 )
 
 const onboardingRemoteLifecycleTestRunArgument = "-test.run=^TestOnboardingRemoteLifecycleProcess$"
 
 func init() {
-	testsetup.ClearEnvironmentAtTestProcessStart(config.PersistenceRootEnvName)
 	if appTestProcessInvocation() {
 		return
 	}
@@ -38,14 +36,6 @@ func appTestProcessInvocation() bool {
 		}
 	}
 	return false
-}
-
-func TestAppTestProcessClearsPersistenceRoot(t *testing.T) {
-	testsetup.AssertEnvironmentUnsetAtProcessStart(
-		t,
-		"TestAppTestProcessClearsPersistenceRoot",
-		config.PersistenceRootEnvName,
-	)
 }
 
 func TestOnboardingRemoteLifecycleProcess(t *testing.T) {

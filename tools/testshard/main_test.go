@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDiscoverTestRootsIncludesInternalAndExternalRoots(t *testing.T) {
@@ -294,6 +296,27 @@ func TestGoTestArgumentsLimitEachShardToOnePackageBuild(t *testing.T) {
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("arguments = %q, want %q", got, want)
+	}
+}
+
+func TestUnshardedJobEventOmitsAbsentRootListHash(t *testing.T) {
+	event := completedJobEvent(testJob{
+		packagePath:   "core/fixture",
+		testRootCount: 1,
+	}, time.Now(), nil)
+	if event.RootListSHA256 != nil {
+		t.Fatalf("root list hash = %q, want absent", *event.RootListSHA256)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal job event: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal job event: %v", err)
+	}
+	if _, exists := fields["rootListSHA256"]; exists {
+		t.Fatalf("unsharded job event contains a root list hash: %s", encoded)
 	}
 }
 

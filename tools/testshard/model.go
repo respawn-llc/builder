@@ -30,7 +30,7 @@ type jobEvent struct {
 	Event           string  `json:"event"`
 	Package         string  `json:"package"`
 	ShardID         string  `json:"shardID"`
-	RootListSHA256  string  `json:"rootListSHA256,omitempty"`
+	RootListSHA256  *string `json:"rootListSHA256,omitempty"`
 	TestRoots       int     `json:"testRoots"`
 	EstimatedWeight int     `json:"estimatedWeight"`
 	PackageWeight   int     `json:"packageWeight"`
