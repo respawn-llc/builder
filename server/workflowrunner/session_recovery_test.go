@@ -62,36 +62,7 @@ func (p gatedMetadataSessionPersistence) ResolvePersistedSession(ctx context.Con
 	return p.metadata.ResolvePersistedSession(ctx, sessionID)
 }
 
-type runSessionAttachmentGate struct {
-	RuntimeStore
-	runID   workflow.RunID
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func newRunSessionAttachmentGate(store RuntimeStore, runID workflow.RunID) *runSessionAttachmentGate {
-	return &runSessionAttachmentGate{
-		RuntimeStore: store,
-		runID:        runID,
-		entered:      make(chan struct{}),
-		release:      make(chan struct{}),
-	}
-}
-
-func (s *runSessionAttachmentGate) AttachRunSession(ctx context.Context, runID workflow.RunID, generation int64, sessionID string) error {
-	if runID == s.runID {
-		s.once.Do(func() { close(s.entered) })
-		select {
-		case <-s.release:
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}
-	return s.RuntimeStore.AttachRunSession(ctx, runID, generation, sessionID)
-}
-
-func TestSchedulerRejectedReviewContinueSessionAttachesBeforeStartingLaterScriptIntent(t *testing.T) {
+func TestSchedulerRejectedReviewContinueSessionAdmitsAtomicallyBeforeStartingLaterScriptIntent(t *testing.T) {
 	if stdruntime.GOOS == "windows" {
 		t.Skip("script fixture uses a POSIX shebang")
 	}
@@ -195,10 +166,6 @@ func TestSchedulerRejectedReviewContinueSessionAttachesBeforeStartingLaterScript
 	})
 	fixture.rebuildStarter(t)
 	fixture.starter.storeOptions = storeOptions
-	attachmentGate := newRunSessionAttachmentGate(fixture.store, continuationRunID)
-	fixture.starter.store = attachmentGate
-	var releaseAttachment sync.Once
-	t.Cleanup(func() { releaseAttachment.Do(func() { close(attachmentGate.release) }) })
 
 	const scriptPath = "watcher.sh"
 	scriptWorkflowID := createWorkflowRunnerScriptWorkflow(t, fixture.store, scriptPath)
@@ -264,9 +231,9 @@ func TestSchedulerRejectedReviewContinueSessionAttachesBeforeStartingLaterScript
 	}
 	if len(runs) != 3 ||
 		runs[2].ID != continuationRunID ||
-		runs[2].StartedAt == nil ||
+		runs[2].StartedAt != nil ||
 		runs[2].SessionID != "" {
-		t.Fatalf("blocked continuation run = %+v, want started without attached session", runs)
+		t.Fatalf("blocked continuation run = %+v, want unstarted without attached session", runs)
 	}
 	scriptRuns, err := fixture.store.ListRuns(ctx, scriptTask.ID)
 	if err != nil {
@@ -278,39 +245,22 @@ func TestSchedulerRejectedReviewContinueSessionAttachesBeforeStartingLaterScript
 
 	releasePlanningPersistence()
 	select {
-	case <-attachmentGate.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("continue_session start did not reach durable Session attachment")
-	}
-	runs, err = fixture.store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("list continuation blocked at attachment: %v", err)
-	}
-	if len(runs) != 3 || runs[2].SessionID != "" {
-		t.Fatalf("continuation attached before attachment gate release: %+v", runs)
-	}
-	scriptRuns, err = fixture.store.ListRuns(ctx, scriptTask.ID)
-	if err != nil {
-		t.Fatalf("list script run blocked by attachment: %v", err)
-	}
-	if len(scriptRuns) != 1 || scriptRuns[0].StartedAt != nil {
-		t.Fatalf("later script intent started before durable Session attachment: %+v", scriptRuns)
-	}
-	releaseAttachment.Do(func() { close(attachmentGate.release) })
-	select {
 	case err := <-processed:
 		if err != nil {
 			t.Fatalf("process continuation and script intents: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("scheduler Process did not return after Session attachment release")
+		t.Fatal("scheduler Process did not return after Session preparation release")
 	}
 	runs, err = fixture.store.ListRuns(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("list attached continuation run: %v", err)
 	}
-	if len(runs) != 3 || runs[2].SessionID != sourceSessionID.String() || runs[2].InterruptedAt != nil {
-		t.Fatalf("continuation run after scheduler Process = %+v, want source session attached", runs)
+	if len(runs) != 3 ||
+		runs[2].StartedAt == nil ||
+		runs[2].SessionID != sourceSessionID.String() ||
+		runs[2].InterruptedAt != nil {
+		t.Fatalf("continuation run after scheduler Process = %+v, want started with source session attached", runs)
 	}
 	scriptRuns, err = fixture.store.ListRuns(ctx, scriptTask.ID)
 	if err != nil {
