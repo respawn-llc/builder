@@ -1297,6 +1297,7 @@ func BuildWorkflowTaskInstructions(input workflowstore.RunStartContext) (workflo
 		TaskBody:        strings.TrimSpace(input.Task.Body),
 		WorkflowID:      string(input.Task.WorkflowID),
 		WorkflowShortID: workflowShortID,
+		WorkflowName:    strings.TrimSpace(input.Workflow.Name),
 		NodeID:          string(input.Node.ID),
 		NodeKey:         string(input.Node.Key),
 		NodeDisplayName: strings.TrimSpace(input.Node.DisplayName),

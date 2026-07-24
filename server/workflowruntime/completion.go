@@ -83,6 +83,7 @@ type TaskInstructions struct {
 	TaskBody        string
 	WorkflowID      string
 	WorkflowShortID string
+	WorkflowName    string
 	NodeID          string
 	NodeKey         string
 	NodeDisplayName string

@@ -1043,13 +1043,27 @@ func workflowTaskInstructionContext(promptTemplate string) workflowstore.RunStar
 			Title:      "Task title",
 			Body:       "Task body",
 		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Workflow: workflowstore.WorkflowRecord{
+			ID:   "workflow-1",
+			Name: "Release preparation",
+		},
 		Node: workflowstore.NodeRecord{
 			ID:          "node-review",
 			Key:         "review",
 			DisplayName: "Review",
 		},
 		PromptTemplate: promptTemplate,
+	}
+}
+
+func TestBuildWorkflowTaskInstructionsCarriesWorkflowName(t *testing.T) {
+	input := workflowTaskInstructionContext("Do the work.")
+	instructions, err := BuildWorkflowTaskInstructions(input)
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
+	}
+	if instructions.WorkflowName != input.Workflow.Name {
+		t.Fatalf("workflow name = %q, want %q", instructions.WorkflowName, input.Workflow.Name)
 	}
 }
 
