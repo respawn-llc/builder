@@ -240,7 +240,8 @@ func (r *sessionStartBlockRelease) Close(ctx context.Context) error {
 	if r.released {
 		return nil
 	}
-	for index := len(r.sessionIDs) - 1; index >= 0; index-- {
+	for len(r.sessionIDs) > 0 {
+		index := len(r.sessionIDs) - 1
 		sessionID := r.sessionIDs[index]
 		gate := r.authority.gateFor(sessionID)
 		if err := gate.mu.Lock(ctx); err != nil {
@@ -251,6 +252,7 @@ func (r *sessionStartBlockRelease) Close(ctx context.Context) error {
 		}
 		delete(gate.blocks, r.block)
 		gate.mu.Unlock()
+		r.sessionIDs = r.sessionIDs[:index]
 	}
 	r.released = true
 	return nil

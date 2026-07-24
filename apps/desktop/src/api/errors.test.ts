@@ -1,4 +1,5 @@
 import {
+  ContractError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskIntegrityError,
   RpcError,
@@ -164,48 +165,48 @@ describe("workflow task integrity RPC errors", () => {
         canResume: false,
       },
     });
-    expect(error?.message).toBe("display-only backend diagnostics");
+  });
+
+  it("ignores other RPC error codes", () => {
+    const rpcError = new RpcError({
+      code: -32000,
+      message: "generic",
+      method: "workflow.task.get",
+      data,
+    });
+
+    expect(decodeWorkflowTaskIntegrityError(rpcError)).toBeNull();
   });
 
   it.each([
     {
-      name: "wrong RPC code",
-      code: -32000,
-      data,
-    },
-    {
       name: "padded identity",
-      code: -32049,
       data: { ...data, task_id: " task-1" },
     },
     {
       name: "generation without run",
-      code: -32049,
       data: compactJsonObject({ ...data, run_id: undefined }),
     },
     {
       name: "absent exact execution with retained facts",
-      code: -32049,
       data: { ...data, exact: { present: false, session_id: "session-1", waiting_question: false } },
     },
     {
       name: "present exact execution without kind",
-      code: -32049,
       data: { ...data, exact: { present: true, waiting_question: false } },
     },
     {
       name: "unknown status",
-      code: -32049,
       data: { ...data, status_kind: "lost" },
     },
-  ])("uses the generic RPC path for $name", ({ code, data: malformedData }) => {
+  ])("surfaces contract drift for $name", ({ data: malformedData }) => {
     const rpcError = new RpcError({
-      code,
+      code: -32049,
       message: "generic",
       method: "workflow.task.get",
       data: malformedData,
     });
 
-    expect(decodeWorkflowTaskIntegrityError(rpcError)).toBeNull();
+    expect(() => decodeWorkflowTaskIntegrityError(rpcError)).toThrow(ContractError);
   });
 });

@@ -155,7 +155,8 @@ describe("task lifecycle client", () => {
     });
     await client.approveTransition("transition-3", undefined, { mode: "none", customRef: null });
 
-    expect(transport.calls.map((call) => call.params)).toMatchObject([
+    expect(transport.calls).toEqual([]);
+    expect(transport.longRunningCalls.map((call) => call.params)).toMatchObject([
       { execution_target: { mode: "default_branch" } },
       { execution_target: { mode: "custom_ref", custom_ref: "release/v2" } },
       { execution_target: { mode: "none" } },

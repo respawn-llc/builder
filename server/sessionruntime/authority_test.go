@@ -1973,6 +1973,133 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	}
 }
 
+func TestSessionStartBlockReleaseRetriesAfterCanceledPartialRelease(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	containerDir := filepath.Dir(fixture.store.Dir())
+	type blockedSession struct {
+		id         runtimeids.SessionID
+		descriptor session.SessionDescriptor
+	}
+	newBlockedSession := func() blockedSession {
+		sessionID := runtimeids.NewSessionID()
+		descriptor, err := session.NewCreateSessionDescriptor(
+			sessionID,
+			containerDir,
+			filepath.Base(containerDir),
+			fixture.config.WorkspaceRoot,
+			sessioncontract.SessionCategoryMain,
+		)
+		if err != nil {
+			t.Fatalf("new create session descriptor: %v", err)
+		}
+		return blockedSession{id: sessionID, descriptor: descriptor}
+	}
+	lower := newBlockedSession()
+	higher := newBlockedSession()
+	if lower.id.String() > higher.id.String() {
+		lower, higher = higher, lower
+	}
+
+	release, err := fixture.authority.BlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{lower.id, higher.id},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("block session starts: %v", err)
+	}
+
+	storeEntered := make(chan struct{})
+	releaseStore := make(chan struct{})
+	var releaseStoreOnce sync.Once
+	unblockStore := func() {
+		releaseStoreOnce.Do(func() { close(releaseStore) })
+	}
+	t.Cleanup(unblockStore)
+	storeDone := make(chan error, 1)
+	go func() {
+		storeDone <- fixture.authority.WithSessionStore(
+			release.AuthorizeMaintenance(context.Background()),
+			lower.descriptor,
+			func(context.Context, *session.Store) error {
+				close(storeEntered)
+				<-releaseStore
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-storeEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("lower session Store operation did not acquire admission")
+	}
+
+	closeCtx, cancelClose := context.WithCancel(context.Background())
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- release.Close(closeCtx)
+	}()
+
+	var higherProbe SessionStartBlockRelease
+	deadline := time.Now().Add(3 * time.Second)
+	for higherProbe == nil && time.Now().Before(deadline) {
+		probe, probeErr := fixture.authority.TryBlockSessionStarts(
+			context.Background(),
+			[]runtimeids.SessionID{higher.id},
+			SessionStartBlockMaintenance,
+		)
+		switch {
+		case probeErr == nil:
+			higherProbe = probe
+		case errors.Is(probeErr, ErrSessionStartAdmissionBusy):
+			time.Sleep(time.Millisecond)
+		default:
+			t.Fatalf("probe higher session release: %v", probeErr)
+		}
+	}
+	if higherProbe == nil {
+		t.Fatal("partial release did not unblock the higher session")
+	}
+	if err := higherProbe.Close(context.Background()); err != nil {
+		t.Fatalf("release higher session probe: %v", err)
+	}
+
+	cancelClose()
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled partial release error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled partial release did not return")
+	}
+
+	unblockStore()
+	select {
+	case err := <-storeDone:
+		if err != nil {
+			t.Fatalf("release lower session Store operation: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("lower session Store operation did not return")
+	}
+	if err := release.Close(context.Background()); err != nil {
+		t.Fatalf("retry partial release: %v", err)
+	}
+
+	reblocked, err := fixture.authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{lower.id, higher.id},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("reblock sessions after release retry: %v", err)
+	}
+	if err := reblocked.Close(context.Background()); err != nil {
+		t.Fatalf("release reblocked sessions: %v", err)
+	}
+}
+
 func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)

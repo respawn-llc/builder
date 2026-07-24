@@ -326,7 +326,9 @@ export function decodeWorkflowTaskIntegrityError(error: unknown): WorkflowTaskIn
   }
   const parsed = workflowTaskIntegrityDataSchema.safeParse(error.data);
   if (!parsed.success) {
-    return null;
+    throw new ContractError(
+      `workflow task integrity error payload failed validation for ${error.method}: ${parsed.error.message}`,
+    );
   }
   return new WorkflowTaskIntegrityError(error, parsed.data);
 }

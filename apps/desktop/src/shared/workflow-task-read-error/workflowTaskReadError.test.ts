@@ -57,15 +57,15 @@ describe("workflow task read errors", () => {
     );
 
     expect(error).toEqual({
-      body: "contract-error:task-1",
-      title: "error-title",
+      body: translate("states.workflowTaskContractError", { taskID: "task-1" }),
+      title: translate("states.error"),
     });
   });
 
   it("preserves the generic error path for untyped failures", () => {
     expect(workflowTaskReadError(new Error("network failed"), translate)).toEqual({
       body: "network failed",
-      title: "error-title",
+      title: translate("states.error"),
     });
   });
 });

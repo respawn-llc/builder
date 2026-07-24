@@ -58,7 +58,9 @@ export class FakeRpcTransport implements RpcTransport {
   }
 
   get calls(): readonly Readonly<{ method: string; params: JsonValue }>[] {
-    return this.#calls.map(({ method, params }) => ({ method, params }));
+    return this.#calls.flatMap((call) =>
+      call.kind === "ordinary" ? [{ method: call.method, params: call.params }] : [],
+    );
   }
 
   get longRunningCalls(): readonly Readonly<{ method: LongRunningRpcMethod; params: JsonValue }>[] {
