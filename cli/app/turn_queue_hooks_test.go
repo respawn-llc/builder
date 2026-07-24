@@ -170,19 +170,28 @@ func newTurnQueueHookTestModel(hooks turnQueueHook) *uiModel {
 	return model
 }
 
-func TestTurnQueueHooksDoNotCompleteFailedAssistantFinalResult(t *testing.T) {
-	completions := &recordingTaskCompletionSink{}
-	hooks := newTurnQueueHooks(newUnfocusedBellHooks(&countRinger{}), completions)
-	message := testAssistantFinalLiveRunMessage(2, "answer before terminal failure", true)
-	failure := "terminal failure"
-	message.Payload.LiveRunFinished.Status = clientui.LiveRunStatusFailed
-	message.Payload.LiveRunFinished.Failure = &failure
+func TestTurnQueueHooksDoNotCompleteNonCompletedAssistantFinalResult(t *testing.T) {
+	for _, status := range []clientui.LiveRunStatus{
+		clientui.LiveRunStatusFailed,
+		clientui.LiveRunStatusInterrupted,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			completions := &recordingTaskCompletionSink{}
+			hooks := newTurnQueueHooks(newUnfocusedBellHooks(&countRinger{}), completions)
+			message := testAssistantFinalLiveRunMessage(2, "answer before non-completed outcome", true)
+			message.Payload.LiveRunFinished.Status = status
+			if status == clientui.LiveRunStatusFailed {
+				failure := "terminal failure"
+				message.Payload.LiveRunFinished.Failure = &failure
+			}
 
-	hooks.OnTranscriptMessage(message)
-	hooks.OnTurnQueueDrained()
+			hooks.OnTranscriptMessage(message)
+			hooks.OnTurnQueueDrained()
 
-	if got := len(completions.results); got != 0 {
-		t.Fatalf("failed assistant-final completion hooks = %d, want 0", got)
+			if got := len(completions.results); got != 0 {
+				t.Fatalf("%s assistant-final completion hooks = %d, want 0", status, got)
+			}
+		})
 	}
 }
 

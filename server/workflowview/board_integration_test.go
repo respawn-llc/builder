@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os/exec"
 	"reflect"
 	"sort"
 	"strconv"
@@ -906,6 +907,78 @@ func TestTaskDetailRejectsStartedAgentRunWithoutRetainedSession(t *testing.T) {
 		t,
 		err,
 		serverapi.WorkflowTaskIntegrityReasonAgentSessionMissing,
+		string(task.ID),
+		string(started.RunID),
+	)
+}
+
+func TestTaskDetailRejectsStartedScriptRunWithoutExactExecution(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	definition, _, err := workflowStore.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	agent := workflowViewNodeByKind(t, definition, workflow.NodeKindAgent)
+	if _, err := workflowStore.UpdateNode(ctx, workflowstore.NodeRecord{
+		ID:          workflow.NodeIDOf(agent),
+		WorkflowID:  workflowID,
+		Key:         workflow.NodeKey(agent),
+		Kind:        workflow.NodeKindScript,
+		DisplayName: workflow.NodeDisplayName(agent),
+		ScriptPath:  truePath,
+	}); err != nil {
+		t.Fatalf("UpdateNode script: %v", err)
+	}
+	for _, edge := range definition.Edges {
+		if edge.TargetNodeID != workflow.NodeIDOf(agent) {
+			continue
+		}
+		if _, err := workflowStore.UpdateEdge(ctx, workflowstore.EdgeRecord{
+			ID:                 edge.ID,
+			WorkflowID:         workflowID,
+			Key:                edge.Key,
+			TransitionGroupID:  edge.TransitionGroupID,
+			TargetNodeID:       edge.TargetNodeID,
+			ContextMode:        edge.ContextMode,
+			ContextSource:      edge.ContextSource,
+			RequiresApproval:   edge.RequiresApproval,
+			Parameters:         edge.Parameters,
+			InputBindings:      edge.InputBindings,
+			OutputRequirements: edge.OutputRequirements,
+		}); err != nil {
+			t.Fatalf("UpdateEdge script target: %v", err)
+		}
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Missing script execution",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+
+	_, err = view.detail(t).GetTask(ctx, string(task.ID))
+	requireWorkflowTaskIntegrityError(
+		t,
+		err,
+		serverapi.WorkflowTaskIntegrityReasonExactExecutionMissing,
 		string(task.ID),
 		string(started.RunID),
 	)

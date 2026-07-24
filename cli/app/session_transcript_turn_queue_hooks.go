@@ -47,7 +47,7 @@ func (h *turnQueueHooks) OnTranscriptMessage(message clientui.TranscriptMessage)
 		return
 	}
 	result := *message.Payload.LiveRunFinished
-	if result.Status == clientui.LiveRunStatusFailed ||
+	if result.Status != clientui.LiveRunStatusCompleted ||
 		result.ResultKind != clientui.LiveRunResultAssistantFinalAnswer ||
 		result.FinalAnswer == nil {
 		return

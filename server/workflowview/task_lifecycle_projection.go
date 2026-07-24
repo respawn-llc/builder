@@ -165,14 +165,6 @@ func (p *TaskLifecycleProjection) Project(
 					)
 				}
 			}
-			if fact.started && !fact.interrupted && !fact.waitingQuestion && fact.exact == nil {
-				return nil, p.fail(
-					status.Status.Kind,
-					serverapi.WorkflowTaskIntegrityReasonExactExecutionMissing,
-					fact,
-					projection.RunActions,
-				)
-			}
 		case workflow.NodeKindScript:
 			if fact.exact != nil && (fact.exact.Script == nil || fact.exact.Agent != nil) {
 				return nil, p.fail(
@@ -184,6 +176,17 @@ func (p *TaskLifecycleProjection) Project(
 			}
 		default:
 			return nil, fmt.Errorf("workflow task %q executable placement has node kind %q", row.TaskID, fact.nodeKind)
+		}
+		if fact.started &&
+			!fact.interrupted &&
+			fact.exact == nil &&
+			(fact.nodeKind == workflow.NodeKindScript || !fact.waitingQuestion) {
+			return nil, p.fail(
+				status.Status.Kind,
+				serverapi.WorkflowTaskIntegrityReasonExactExecutionMissing,
+				fact,
+				projection.RunActions,
+			)
 		}
 		if fact.interrupted {
 			projection.RunActions.HasInterrupted = true
