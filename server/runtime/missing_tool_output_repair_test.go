@@ -204,11 +204,11 @@ func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	first, err := eng.repairMissingToolOutputsByAppending("step")
+	first, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
 	if err != nil {
 		t.Fatalf("first repair: %v", err)
 	}
-	second, err := eng.repairMissingToolOutputsByAppending("step")
+	second, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
 	if err != nil {
 		t.Fatalf("second repair: %v", err)
 	}
@@ -227,31 +227,36 @@ func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	if _, err := eng.repairMissingToolOutputsByAppending(""); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(nil); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	stepID := repairCompletionStepID(t, store, "missing")
+	if stepID == nil || *stepID != chatStoreTestStepID {
+		t.Fatalf("repair step id = %v, want original call step %q", stepID, chatStoreTestStepID)
+	}
+}
+
+func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T) {
+	store := mustCreateTestSession(t)
+	legacyMessage, err := sessionMessageRecordFromLLM(llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	})
 	if err != nil {
-		t.Fatalf("read bounded repair records: %v", err)
+		t.Fatalf("adapt unowned dangling tool call: %v", err)
 	}
-	for _, record := range window.Records {
-		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
-		if !ok {
-			continue
-		}
-		stored, err := storedToolCompletionFromSessionRecord(completion)
-		if err != nil {
-			t.Fatalf("restore completion: %v", err)
-		}
-		if stored.CallID != "missing" {
-			continue
-		}
-		if record.StepID() == nil || *record.StepID() != chatStoreTestStepID {
-			t.Fatalf("repair step id = %v, want original call step %q", record.StepID(), chatStoreTestStepID)
-		}
-		return
+	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecord(nil, legacyMessage); err != nil {
+		t.Fatalf("append unowned dangling tool call: %v", err)
 	}
-	t.Fatal("missing synthetic completion")
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value(chatStoreTestStepID)); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	stepID := repairCompletionStepID(t, store, "unowned")
+	if stepID == nil || *stepID != chatStoreTestStepID {
+		t.Fatalf("repair step id = %v, want repair step %q", stepID, chatStoreTestStepID)
+	}
 }
 
 func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T) {
@@ -274,7 +279,7 @@ func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	repaired, err := eng.repairMissingToolOutputsByAppending(chatStoreTestStepID)
+	repaired, err := eng.repairMissingToolOutputsByAppending(nil)
 	if err == nil {
 		t.Fatal("repair accepted a dangling tool call with no recoverable step identity")
 	}
@@ -285,6 +290,29 @@ func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T
 	if repairRequestHasToolOutput(items, "owned") || repairRequestHasToolOutput(items, "unowned") {
 		t.Fatal("repair appended output before validating every dangling call identity")
 	}
+}
+
+func repairCompletionStepID(t *testing.T, store *session.Store, callID string) *string {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded repair records: %v", err)
+	}
+	for _, record := range window.Records {
+		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+		if !ok {
+			continue
+		}
+		stored, err := storedToolCompletionFromSessionRecord(completion)
+		if err != nil {
+			t.Fatalf("restore completion: %v", err)
+		}
+		if stored.CallID == callID {
+			return record.StepID()
+		}
+	}
+	t.Fatalf("missing synthetic completion for call %q", callID)
+	return nil
 }
 
 func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
@@ -298,7 +326,7 @@ func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.rememberPendingToolCallStarts(map[string]int{"missing": 1})
 
-	repaired, err := eng.repairMissingToolOutputsByAppending("step")
+	repaired, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
@@ -324,7 +352,7 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	if _, err := eng.repairMissingToolOutputsByAppending("step"); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step")); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)

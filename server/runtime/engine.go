@@ -884,7 +884,7 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		if emitted.Load() && onAttemptReset != nil {
 			onAttemptReset()
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(stepID)
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
 		if repairErr != nil {
 			return llm.Response{}, errors.Join(err, repairErr)
 		}
