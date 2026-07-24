@@ -278,6 +278,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
+	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions: workflowDefinitions,
 		Board:       workflowBoard,
@@ -439,11 +440,11 @@ type workflowApprovalProjection struct {
 	store *workflowstore.Store
 }
 
-func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, approvalID workflow.ApprovalID) (workflowattention.ApprovalProjection, bool, error) {
 	if p.store == nil {
 		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	projection, ok, err := p.store.PendingApprovalTransitionProjection(ctx, transitionID)
+	projection, ok, err := p.store.PendingApprovalAttentionProjection(ctx, approvalID)
 	if err != nil {
 		return workflowattention.ApprovalProjection{}, false, err
 	}
@@ -453,18 +454,18 @@ func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Contex
 	return workflowattention.ApprovalProjectionFromStore(projection), true, nil
 }
 
-func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
-	if p.store == nil || runID == "" {
-		return workflowattention.InterruptedRunProjection{}, false, nil
+func (p workflowApprovalProjection) PendingInterruptedCurrentNodeProjection(ctx context.Context, currentNode workflow.CurrentNodeReference) (workflowattention.InterruptedCurrentNodeProjection, bool, error) {
+	if p.store == nil {
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, nil
 	}
-	projection, ok, err := p.store.PendingInterruptedRunAttentionProjection(ctx, runID)
+	projection, ok, err := p.store.PendingInterruptedCurrentNodeAttentionProjection(ctx, currentNode)
 	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, err
 	}
 	if !ok {
-		return workflowattention.InterruptedRunProjection{}, false, nil
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, nil
 	}
-	return workflowattention.InterruptedRunProjectionFromStore(projection), true, nil
+	return workflowattention.InterruptedCurrentNodeProjectionFromStore(projection), true, nil
 }
 
 type taskWorktreeDeleter struct {
@@ -508,12 +509,6 @@ func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionr
 
 func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
 	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
-}
-
-type runtimePendingAskResolver struct {
-	prompts interface {
-		ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
-	}
 }
 
 type workflowViewPendingPromptSource struct {
@@ -595,34 +590,4 @@ func legacyOptionalRecommendedOptionIndex(index int) (*int, error) {
 		}
 	}
 	return &index, nil
-}
-
-func (r runtimePendingAskResolver) CanRehydrate(_ context.Context, sessionID string, _ workflow.RunID, askID string) (bool, error) {
-	if r.prompts == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(askID) == "" {
-		return false, nil
-	}
-	for _, item := range r.prompts.ListPendingPrompts(sessionID) {
-		if strings.TrimSpace(item.Request.ID) != strings.TrimSpace(askID) {
-			continue
-		}
-		if !item.Request.Approval {
-			return true, nil
-		}
-		if taskScopedApprovalPendingAsk(item.Request, askID) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func taskScopedApprovalPendingAsk(req askquestion.AskQuestionRequest, askID string) bool {
-	if !req.IsTaskScopedApprovalQuestion() {
-		return false
-	}
-	for _, focusedAskID := range req.AttentionTarget.Focus.AskIDs {
-		if strings.TrimSpace(focusedAskID) == strings.TrimSpace(askID) {
-			return true
-		}
-	}
-	return false
 }

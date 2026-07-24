@@ -9,9 +9,9 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/tools"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -255,7 +255,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
 		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID(projectionWorkflowRun)},
+			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
 				TaskID:     projectionWorkflowTask,
 				WorkflowID: projectionWorkflowID,
@@ -266,8 +266,8 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	if !view.Status.WorkflowActive || view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
 	}
-	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
+	if view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
+		t.Fatalf("workflow session = %+v, want task/workflow ids", view.Status.WorkflowSession)
 	}
 }
 

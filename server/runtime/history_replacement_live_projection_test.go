@@ -43,7 +43,7 @@ func TestHistoryReplacementLiveProjectionMatchesPersistedActiveSegment(t *testin
 
 	if err := engine.steer(
 		"compaction",
-		steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", items),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", "", items),
 	); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}

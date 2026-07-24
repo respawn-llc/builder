@@ -7,8 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflow/label"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -591,33 +593,33 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 	active := createDefaultTask(t, ctx, store, binding.ProjectID)
 	startTask(t, ctx, store, active.ID)
 
-	running := createDefaultTask(t, ctx, store, binding.ProjectID)
-	runningStart := startTask(t, ctx, store, running.ID)
-	claimRunFixture(t, ctx, store, runningStart.RunID, 0)
+	admitted := createDefaultTask(t, ctx, store, binding.ProjectID)
+	admittedStart := startTask(t, ctx, store, admitted.ID)
+	if err := store.AdmitCurrentNode(ctx, admittedStart.Mutation.Created[0].Reference); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
 
 	interrupted := createDefaultTask(t, ctx, store, binding.ProjectID)
 	interruptedStart := startTask(t, ctx, store, interrupted.ID)
-	claimRunFixture(t, ctx, store, interruptedStart.RunID, 0)
-	if err := store.InterruptRun(ctx, interruptedStart.RunID, "test", "{}"); err != nil {
-		t.Fatalf("InterruptRun: %v", err)
+	if err := store.InterruptCurrentNode(ctx, interruptedStart.Mutation.Created[0].Reference, "test", workflow.CurrentNodeInterruptionDetail{Code: "test"}); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 
 	done := createDefaultTask(t, ctx, store, binding.ProjectID)
 	doneStart := startTask(t, ctx, store, done.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: doneStart.RunID, TransitionID: "done"})
-
-	canceled := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := store.CancelTask(ctx, canceled.ID, "test"); err != nil {
-		t.Fatalf("CancelTask: %v", err)
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       doneStart.Mutation.Created[0].Reference,
+		TransitionID: "done",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 
 	for name, task := range map[string]TaskRecord{
 		"backlog":     backlog,
 		"active":      active,
-		"running":     running,
+		"admitted":    admitted,
 		"interrupted": interrupted,
 		"done":        done,
-		"canceled":    canceled,
 	} {
 		t.Run(name, func(t *testing.T) {
 			assigned, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
@@ -642,6 +644,27 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func openConcurrentWorkflowStores(t *testing.T, cfg config.App) (*Store, *Store) {
+	t.Helper()
+	open := func() *Store {
+		metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+		if err != nil {
+			t.Fatalf("metadata.Open concurrent store: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := metadataStore.Close(); err != nil {
+				t.Errorf("close concurrent metadata store: %v", err)
+			}
+		})
+		store, err := New(metadataStore)
+		if err != nil {
+			t.Fatalf("workflowstore.New concurrent store: %v", err)
+		}
+		return store
+	}
+	return open(), open()
 }
 
 func TestTaskLabelUpdateAcceptsTheFullProjectCatalog(t *testing.T) {

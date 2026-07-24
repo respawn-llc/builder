@@ -11,199 +11,175 @@ import (
 	"core/server/workflow"
 )
 
-type InterruptedRunAttentionProjection struct {
+type ApprovalAttentionProjection struct {
+	ApprovalID       workflow.ApprovalID
+	Source           workflow.CurrentNodeReference
+	ProjectID        string
+	WorkflowID       string
+	TaskShortID      string
+	TaskTitle        string
+	SessionID        string
+	OccurredAtUnixMs int64
+}
+
+type InterruptedCurrentNodeAttentionProjection struct {
+	CurrentNode            workflow.CurrentNodeReference
 	ProjectID              string
 	WorkflowID             string
-	TaskID                 workflow.TaskID
 	TaskShortID            string
 	TaskTitle              string
-	RunID                  workflow.RunID
 	SessionID              string
 	InterruptionReason     string
-	InterruptionDetailJSON *string
+	InterruptionDetailJSON string
 	OccurredAtUnixMs       int64
 }
 
-func (s *Store) PendingApprovalTransitionProjection(ctx context.Context, transitionID workflow.TransitionID) (ApprovalTransitionProjection, bool, error) {
-	id := strings.TrimSpace(string(transitionID))
-	if id == "" {
-		return ApprovalTransitionProjection{}, false, ErrTransitionIDRequired
+type TaskAttentionResolution struct {
+	Approvals               []ApprovalAttentionProjection
+	InterruptedCurrentNodes []InterruptedCurrentNodeAttentionProjection
+}
+
+func (s *Store) PendingApprovalAttentionProjection(ctx context.Context, approvalID workflow.ApprovalID) (ApprovalAttentionProjection, bool, error) {
+	if err := approvalID.Validate(); err != nil {
+		return ApprovalAttentionProjection{}, false, err
 	}
-	row, err := s.queries.GetWorkflowApprovalAttentionCandidateByTransitionID(ctx, id)
+	return pendingApprovalAttentionProjection(ctx, s.queries, approvalID)
+}
+
+func pendingApprovalAttentionProjection(ctx context.Context, q *sqlitegen.Queries, approvalID workflow.ApprovalID) (ApprovalAttentionProjection, bool, error) {
+	row, err := q.GetTaskPendingApproval(ctx, approvalID.String())
 	if errors.Is(err, sql.ErrNoRows) {
-		return ApprovalTransitionProjection{}, false, nil
+		return ApprovalAttentionProjection{}, false, nil
 	}
 	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
+		return ApprovalAttentionProjection{}, false, err
 	}
-	projection, err := approvalTransitionProjectionFromCandidate(row, id)
+	approval, err := pendingApprovalFromRow(ctx, q, row)
 	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
+		return ApprovalAttentionProjection{}, false, err
 	}
-	return projection, true, nil
+	task, err := q.GetTask(ctx, string(approval.Source.TaskID))
+	if err != nil {
+		return ApprovalAttentionProjection{}, false, err
+	}
+	sessionID := ""
+	if approval.SourceSessionID != nil {
+		sessionID = approval.SourceSessionID.String()
+	}
+	return ApprovalAttentionProjection{
+		ApprovalID:       approval.ID,
+		Source:           approval.Source,
+		ProjectID:        task.ProjectID,
+		WorkflowID:       task.WorkflowID,
+		TaskShortID:      task.ShortID,
+		TaskTitle:        task.Title,
+		SessionID:        sessionID,
+		OccurredAtUnixMs: approval.CreatedAt.UnixMilli(),
+	}, true, nil
 }
 
-func approvalTransitionProjectionFromCandidate(row sqlitegen.WorkflowAttentionCandidate, transitionID string) (ApprovalTransitionProjection, error) {
-	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
-	if err != nil {
-		return ApprovalTransitionProjection{}, err
+func (s *Store) PendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+	if err := reference.Validate(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	taskShortID, err := requiredAttentionCandidateString(row, "short_id", row.ShortID)
-	if err != nil {
-		return ApprovalTransitionProjection{}, err
-	}
-	taskTitle, err := requiredAttentionCandidateString(row, "title", row.Title)
-	if err != nil {
-		return ApprovalTransitionProjection{}, err
-	}
-	candidateTransitionID, err := requiredAttentionCandidateString(row, "task_transition_id", row.TaskTransitionID)
-	if err != nil {
-		return ApprovalTransitionProjection{}, err
-	}
-	if candidateTransitionID != transitionID {
-		return ApprovalTransitionProjection{}, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q task_transition_id=%q, want %q", row.Kind, row.ID, candidateTransitionID, transitionID)
-	}
-	return ApprovalTransitionProjection{
-		TransitionID:     workflow.TransitionID(transitionID),
-		ProjectID:        row.ProjectID,
-		WorkflowID:       row.WorkflowID,
-		TaskID:           workflow.TaskID(taskID),
-		TaskShortID:      taskShortID,
-		TaskTitle:        taskTitle,
-		SourceRunID:      workflow.RunID(optionalAttentionCandidateValue(row.RunID)),
-		SessionID:        optionalAttentionCandidateValue(row.SessionID),
-		OccurredAtUnixMs: row.OccurredAtUnixMs,
-	}, nil
+	return pendingInterruptedCurrentNodeAttentionProjection(ctx, s.queries, reference)
 }
 
-func (s *Store) PendingInterruptedRunAttentionProjection(ctx context.Context, runID workflow.RunID) (InterruptedRunAttentionProjection, bool, error) {
-	id := strings.TrimSpace(string(runID))
-	if id == "" {
-		return InterruptedRunAttentionProjection{}, false, ErrRunIDRequired
-	}
-	return pendingInterruptedRunAttentionProjection(ctx, s.queries, workflow.RunID(id))
-}
-
-func pendingInterruptedRunAttentionProjection(ctx context.Context, q *sqlitegen.Queries, runID workflow.RunID) (InterruptedRunAttentionProjection, bool, error) {
-	id := strings.TrimSpace(string(runID))
-	if id == "" {
-		return InterruptedRunAttentionProjection{}, false, ErrRunIDRequired
-	}
-	row, err := q.GetWorkflowInterruptedRunAttentionCandidateByRunID(ctx, id)
+func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+	currentNode, err := currentNodeForReference(ctx, q, reference)
 	if errors.Is(err, sql.ErrNoRows) {
-		return InterruptedRunAttentionProjection{}, false, nil
+		return InterruptedCurrentNodeAttentionProjection{}, false, nil
 	}
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	projection, err := interruptedRunAttentionProjectionFromCandidate(row, id)
+	if currentNode.Scheduling == nil || currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted || currentNode.Scheduling.Interruption == nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, nil
+	}
+	reason := string(currentNode.Scheduling.Interruption.Reason)
+	if !attentionInterruptionRequiresNotification(reason) {
+		return InterruptedCurrentNodeAttentionProjection{}, false, nil
+	}
+	task, err := q.GetTask(ctx, string(reference.TaskID))
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	return projection, true, nil
-}
-
-func interruptedRunAttentionProjectionFromCandidate(row sqlitegen.WorkflowAttentionCandidate, runID string) (InterruptedRunAttentionProjection, error) {
-	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
+	detail, err := workflow.MarshalString(currentNode.Scheduling.Interruption.Detail)
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, err
+		return InterruptedCurrentNodeAttentionProjection{}, false, fmt.Errorf("encode interrupted current node attention detail: %w", err)
 	}
-	taskShortID, err := requiredAttentionCandidateString(row, "short_id", row.ShortID)
-	if err != nil {
-		return InterruptedRunAttentionProjection{}, err
+	sessionID := ""
+	if currentNode.SessionID != nil {
+		sessionID = currentNode.SessionID.String()
 	}
-	taskTitle, err := requiredAttentionCandidateString(row, "title", row.Title)
-	if err != nil {
-		return InterruptedRunAttentionProjection{}, err
-	}
-	candidateRunID, err := requiredAttentionCandidateString(row, "run_id", row.RunID)
-	if err != nil {
-		return InterruptedRunAttentionProjection{}, err
-	}
-	if candidateRunID != runID {
-		return InterruptedRunAttentionProjection{}, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q run_id=%q, want %q", row.Kind, row.ID, candidateRunID, runID)
-	}
-	reason, err := requiredAttentionCandidateString(row, "interruption_reason", row.InterruptionReason)
-	if err != nil {
-		return InterruptedRunAttentionProjection{}, err
-	}
-	return InterruptedRunAttentionProjection{
-		ProjectID:              row.ProjectID,
-		WorkflowID:             row.WorkflowID,
-		TaskID:                 workflow.TaskID(taskID),
-		TaskShortID:            taskShortID,
-		TaskTitle:              taskTitle,
-		RunID:                  workflow.RunID(runID),
-		SessionID:              optionalAttentionCandidateValue(row.SessionID),
+	return InterruptedCurrentNodeAttentionProjection{
+		CurrentNode:            reference,
+		ProjectID:              task.ProjectID,
+		WorkflowID:             task.WorkflowID,
+		TaskShortID:            task.ShortID,
+		TaskTitle:              task.Title,
+		SessionID:              sessionID,
 		InterruptionReason:     reason,
-		InterruptionDetailJSON: optionalAttentionCandidateString(row.InterruptionDetailJson),
-		OccurredAtUnixMs:       row.OccurredAtUnixMs,
-	}, nil
+		InterruptionDetailJSON: detail,
+		OccurredAtUnixMs:       currentNode.Scheduling.Interruption.OccurredAt.UnixMilli(),
+	}, true, nil
 }
 
-func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID string) (TaskAttentionResolution, error) {
-	rows, err := q.ListWorkflowTaskAttentionCandidates(ctx, taskID)
+func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskAttentionResolution, error) {
+	approvals, err := q.ListTaskPendingApprovals(ctx, string(taskID))
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
-	return attentionResolutionFromCandidates(rows)
-}
-
-func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID string) (TaskAttentionResolution, error) {
-	rows, err := q.ListWorkflowResolutionAttentionCandidates(ctx, workflowID)
+	resolution := TaskAttentionResolution{}
+	for _, row := range approvals {
+		approvalID, err := workflow.ParseApprovalID(row.ID)
+		if err != nil {
+			return TaskAttentionResolution{}, err
+		}
+		projection, found, err := pendingApprovalAttentionProjection(ctx, q, approvalID)
+		if err != nil {
+			return TaskAttentionResolution{}, err
+		}
+		if !found {
+			return TaskAttentionResolution{}, fmt.Errorf("pending approval %q disappeared during attention resolution", row.ID)
+		}
+		resolution.Approvals = append(resolution.Approvals, projection)
+	}
+	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
-	return attentionResolutionFromCandidates(rows)
-}
-
-func attentionResolutionFromCandidates(rows []sqlitegen.WorkflowAttentionCandidate) (TaskAttentionResolution, error) {
-	var resolution TaskAttentionResolution
-	for _, row := range rows {
-		switch row.Kind {
-		case "approval":
-			transitionID, err := requiredAttentionCandidateString(row, "task_transition_id", row.TaskTransitionID)
-			if err != nil {
-				return TaskAttentionResolution{}, err
-			}
-			projection, err := approvalTransitionProjectionFromCandidate(row, transitionID)
-			if err != nil {
-				return TaskAttentionResolution{}, err
-			}
-			resolution.ResolvedApprovalTransitionProjections = append(resolution.ResolvedApprovalTransitionProjections, projection)
-		case "interrupted_run":
-			runID, err := requiredAttentionCandidateString(row, "run_id", row.RunID)
-			if err != nil {
-				return TaskAttentionResolution{}, err
-			}
-			projection, err := interruptedRunAttentionProjectionFromCandidate(row, runID)
-			if err != nil {
-				return TaskAttentionResolution{}, err
-			}
-			resolution.ResolvedInterruptedRunProjections = append(resolution.ResolvedInterruptedRunProjections, projection)
+	for _, currentNode := range currentNodes {
+		projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
+		if err != nil {
+			return TaskAttentionResolution{}, err
+		}
+		if found {
+			resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
 		}
 	}
 	return resolution, nil
 }
 
-func requiredAttentionCandidateString(row sqlitegen.WorkflowAttentionCandidate, field string, value sql.NullString) (string, error) {
-	if !value.Valid || strings.TrimSpace(value.String) == "" {
-		return "", fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q field=%q is absent", row.Kind, row.ID, field)
+func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (TaskAttentionResolution, error) {
+	taskIDs, err := q.ListWorkflowTaskIDs(ctx, string(workflowID))
+	if err != nil {
+		return TaskAttentionResolution{}, err
 	}
-	return value.String, nil
+	var resolution TaskAttentionResolution
+	for _, taskID := range taskIDs {
+		taskResolution, err := taskAttentionResolution(ctx, q, workflow.TaskID(taskID))
+		if err != nil {
+			return TaskAttentionResolution{}, err
+		}
+		resolution.Approvals = append(resolution.Approvals, taskResolution.Approvals...)
+		resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, taskResolution.InterruptedCurrentNodes...)
+	}
+	return resolution, nil
 }
 
-func optionalAttentionCandidateString(value sql.NullString) *string {
-	if !value.Valid {
-		return nil
-	}
-	out := value.String
-	return &out
-}
-
-func optionalAttentionCandidateValue(value sql.NullString) string {
-	if !value.Valid {
-		return ""
-	}
-	return value.String
+func attentionInterruptionRequiresNotification(reason string) bool {
+	return workflow.IsActionableCurrentNodeInterruptionReason(
+		workflow.CurrentNodeInterruptionReason(strings.TrimSpace(reason)),
+	)
 }

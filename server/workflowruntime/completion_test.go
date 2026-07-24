@@ -35,7 +35,8 @@ func TestSelectCompletionMode(t *testing.T) {
 		{name: "auto continuation shell", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeAuto, ProviderCapabilities: supported, HasContinueSessionEdge: true, ShellAvailable: true}, want: CompletionModeShellCommand},
 		{name: "auto shell unavailable", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeAuto, ProviderCapabilities: supported, HasContinueSessionEdge: true, ShellAvailable: false}, want: CompletionModeUnstructuredOutput},
 		{name: "forced tool", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeTool, ProviderCapabilities: supported}, want: CompletionModeTool},
-		{name: "forced shell", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeShellCommand, ProviderCapabilities: supported}, want: CompletionModeShellCommand},
+		{name: "forced shell", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeShellCommand, ProviderCapabilities: supported, ShellAvailable: true}, want: CompletionModeShellCommand},
+		{name: "forced shell unavailable", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeShellCommand, ProviderCapabilities: supported}, wantErr: ErrShellCompletionUnavailable},
 		{name: "forced unstructured", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeUnstructured, ProviderCapabilities: supported}, want: CompletionModeUnstructuredOutput},
 		{name: "forced structured unsupported", selection: CompletionModeSelection{ConfiguredMode: config.WorkflowCompletionModeStructuredOutput, ProviderCapabilities: unsupported}, wantErr: ErrStructuredOutputUnsupported},
 	}

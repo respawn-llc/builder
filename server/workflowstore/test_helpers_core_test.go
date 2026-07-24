@@ -13,61 +13,46 @@ func completionHasCode(err error, code CompletionCode) bool {
 	return errors.As(err, &cve) && cve.HasCode(code)
 }
 
+func projectNextTaskSequence(t *testing.T, ctx context.Context, store *Store, projectID string) int64 {
+	t.Helper()
+	var sequence int64
+	if err := store.db.QueryRowContext(ctx, `SELECT next_task_seq FROM projects WHERE id = ?`, projectID).Scan(&sequence); err != nil {
+		t.Fatalf("query project next task sequence: %v", err)
+	}
+	return sequence
+}
+
+func assertTaskCreationUnchanged(t *testing.T, ctx context.Context, store *Store, projectID string, wantSequence int64) {
+	t.Helper()
+	if got := projectNextTaskSequence(t, ctx, store, projectID); got != wantSequence {
+		t.Fatalf("project next task sequence = %d, want unchanged %d", got, wantSequence)
+	}
+	var taskCount int64
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_records WHERE project_id = ?`, projectID).Scan(&taskCount); err != nil {
+		t.Fatalf("count project tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("project task count = %d, want 0", taskCount)
+	}
+	var currentNodeCount int64
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM task_current_nodes current_node
+JOIN task_records task ON task.id = current_node.task_id
+WHERE task.project_id = ?`, projectID).Scan(&currentNodeCount); err != nil {
+		t.Fatalf("count project current nodes: %v", err)
+	}
+	if currentNodeCount != 0 {
+		t.Fatalf("project current node count = %d, want 0", currentNodeCount)
+	}
+}
+
 func setCommentCreatedAt(t *testing.T, ctx context.Context, store *Store, commentID string, createdAtUnixMs int64) {
 	t.Helper()
 	// Intentional direct timestamp fixture: comment pagination needs stable
 	// created_at rows without sleeping between comment writes.
 	if _, err := store.db.ExecContext(ctx, `UPDATE task_comments SET created_at_unix_ms = ? WHERE id = ?`, createdAtUnixMs, commentID); err != nil {
 		t.Fatalf("force comment timestamp: %v", err)
-	}
-}
-
-func mutateSnapshotTransition(t *testing.T, snapshot *runStartSnapshot, transitionID string, mutate func(*transitionContractSnapshot)) {
-	t.Helper()
-	for index := range snapshot.TransitionGroups {
-		if snapshot.TransitionGroups[index].TransitionID == transitionID {
-			mutate(&snapshot.TransitionGroups[index])
-			return
-		}
-	}
-	t.Fatalf("snapshot transition %q missing from %+v", transitionID, snapshot.TransitionGroups)
-}
-
-func mutateRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID, mutate func(*testing.T, *runStartSnapshot)) {
-	t.Helper()
-	row, err := store.queries.GetTaskRun(ctx, string(runID))
-	if err != nil {
-		t.Fatalf("GetTaskRun: %v", err)
-	}
-	snapshot := runStartSnapshot{}
-	if err := workflow.UnmarshalString(row.RunStartSnapshotJson, &snapshot); err != nil {
-		t.Fatalf("unmarshal snapshot: %v", err)
-	}
-	mutate(t, &snapshot)
-	updateRunStartSnapshot(t, ctx, store, runID, snapshot)
-}
-
-func nodeSnapshotByID(t *testing.T, snapshot runStartSnapshot, nodeID workflow.NodeID) nodeContractSnapshot {
-	t.Helper()
-	for _, node := range snapshot.Nodes {
-		if node.ID == nodeID {
-			return node
-		}
-	}
-	t.Fatalf("snapshot node %q missing from %+v", nodeID, snapshot.Nodes)
-	return nodeContractSnapshot{}
-}
-
-func updateRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID, snapshot runStartSnapshot) {
-	t.Helper()
-	snapshotJSON, err := workflow.MarshalString(snapshot)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
-	// Intentional corruption fixture: mutate a persisted run-start snapshot to
-	// test snapshot drift/freeze behavior that product APIs cannot create.
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET run_start_snapshot_json = ? WHERE id = ?`, snapshotJSON, string(runID)); err != nil {
-		t.Fatalf("update snapshot: %v", err)
 	}
 }
 

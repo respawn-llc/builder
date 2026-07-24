@@ -160,12 +160,13 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 	}
 	successorStarted := make(chan startResult, 1)
 	successorCancellationGrace := 50 * time.Millisecond
+	var predecessorScopeID runtimeids.ExecutionScopeID
 
 	var authority *Authority
 	authority = NewAuthority(AuthorityOptions{
 		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized ExecutionScope) {
 			finalizedRef, ok := finalized.Workflow()
-			if !ok || !finalizedRef.CurrentNode.Equal(predecessor.CurrentNode) {
+			if !ok || !finalizedRef.CurrentNode.Equal(predecessor.CurrentNode) || finalized.ID() != predecessorScopeID {
 				return
 			}
 			handle, startErr := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
@@ -184,9 +185,15 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 			t.Errorf("close authority: %v", err)
 		}
 	})
+	predecessorLease, err := authority.NewWorkflowExecutionLease(predecessor)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease predecessor: %v", err)
+	}
+	predecessorScopeID = predecessorLease.ScopeID()
+	predecessorLease.Release()
 
 	predecessorHandle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: releasedWorkflowLeaseForTest(t, authority, predecessor),
+		Workflow: &predecessorLease,
 		Command:  ScriptCommand{Path: truePath},
 	})
 	if err != nil {

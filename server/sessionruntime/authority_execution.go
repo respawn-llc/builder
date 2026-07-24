@@ -204,21 +204,36 @@ func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error)
 
 func (e *execution) retire() {
 	authority := e.authority
-	workflowRef, hasWorkflow := e.scope.Workflow()
 	authority.mu.Lock()
 	if authority.byScope[e.scope.ID()] == e {
 		delete(authority.byScope, e.scope.ID())
 	}
-	if hasWorkflow {
-		workflowKey, err := workflowExecutionKeyFor(workflowRef)
-		if err != nil {
-			panic(fmt.Sprintf("retire workflow execution scope %s: %v", e.scope.ID(), err))
-		}
-		if authority.byWorkflow[workflowKey] == e {
-			delete(authority.byWorkflow, workflowKey)
-		}
-	}
+	e.retireWorkflowLocked()
 	authority.mu.Unlock()
+}
+
+// retireWorkflow keeps an exact scope addressable for an in-flight finalizer
+// while removing it from every workflow liveness index. Completion finalizers
+// need the exact scope to prove ownership, but a finished process is neither
+// interruptible nor an active workflow execution.
+func (e *execution) retireWorkflow() {
+	e.authority.mu.Lock()
+	e.retireWorkflowLocked()
+	e.authority.mu.Unlock()
+}
+
+func (e *execution) retireWorkflowLocked() {
+	workflowRef, hasWorkflow := e.scope.Workflow()
+	if !hasWorkflow {
+		return
+	}
+	workflowKey, err := workflowExecutionKeyFor(workflowRef)
+	if err != nil {
+		panic(fmt.Sprintf("retire workflow execution scope %s: %v", e.scope.ID(), err))
+	}
+	if e.authority.byWorkflow[workflowKey] == e {
+		delete(e.authority.byWorkflow, workflowKey)
+	}
 }
 
 func (e *execution) cleanup() error {

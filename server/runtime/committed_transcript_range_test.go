@@ -449,7 +449,6 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		steerHistoryReplacementIntent(
 			"local",
 			compactionModeAuto,
-			"",
 			1,
 			"",
 			"",
@@ -524,7 +523,6 @@ func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *
 		steerHistoryReplacementIntent(
 			"local",
 			compactionModeManual,
-			"",
 			1,
 			"",
 			"",

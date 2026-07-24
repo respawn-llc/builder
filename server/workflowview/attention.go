@@ -151,8 +151,8 @@ func (a *Attention) durableCandidates(ctx context.Context, cursor attentionPageC
 func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (serverapi.WorkflowAttentionItem, error) {
 	switch row.Kind {
 	case "approval":
-		approvalID := strings.TrimSpace(row.ApprovalID)
-		if approvalID == "" {
+		approvalID := strings.TrimSpace(row.ApprovalID.String)
+		if !row.ApprovalID.Valid || approvalID == "" {
 			return serverapi.WorkflowAttentionItem{}, fmt.Errorf("approval attention candidate %q has no approval id", row.ID)
 		}
 		approval, err := a.pendingApproval(ctx, workflow.TaskID(row.TaskID), approvalID)

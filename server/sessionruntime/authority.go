@@ -158,8 +158,9 @@ func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionH
 }
 
 // WithExactExecutions linearizes an operation against retirement of the exact
-// execution handles. The operation runs while the authority lock keeps those
-// scopes registered as live.
+// execution handles. A script finalizer may retire a workflow scope from
+// liveness indexes before it commits completion, while retaining its exact
+// scope registration for that commit.
 func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation func() error) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
@@ -180,12 +181,6 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 		execution := exact.execution
 		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
 			return ErrExecutionNoLongerLive
-		}
-		if workflowRef, ok := execution.scope.Workflow(); ok {
-			workflowKey, err := workflowExecutionKeyFor(workflowRef)
-			if err != nil || a.byWorkflow[workflowKey] != execution {
-				return ErrExecutionNoLongerLive
-			}
 		}
 	}
 	return operation()

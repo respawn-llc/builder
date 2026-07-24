@@ -217,7 +217,6 @@ func TestCurrentEventLogHistoryReplacementProviderRawSurvivesReopen(t *testing.T
 	record, err := NewEventRecord(1, nil, HistoryReplacementRecord{
 		Engine:                            "local",
 		Mode:                              CompactionModeHandoff,
-		WorkflowRunID:                     stringPointer("workflow-run-1"),
 		CompactionNumber:                  intPointer(2),
 		CommittedEntryStart:               intPointer(8),
 		PendingHandoffFutureMessage:       stringPointer("continue"),

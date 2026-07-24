@@ -403,7 +403,6 @@ func decodeLegacyHistoryReplacementV0(
 	record := HistoryReplacementRecord{
 		Engine:                            legacy.Engine,
 		Mode:                              legacy.Mode,
-		WorkflowRunID:                     optionalLegacyString(legacy.WorkflowRunID),
 		CommittedEntryStart:               cloneOptionalLegacyValue(legacy.CommittedEntryStart),
 		PendingHandoffFutureMessage:       optionalLegacyString(legacy.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: optionalLegacyString(legacy.LastCommittedAssistantFinalAnswer),

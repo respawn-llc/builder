@@ -219,7 +219,7 @@ func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal empty detail: %v", err)
 	}
-	for _, requiredArray := range []string{"current_session_ids", "current_scripts"} {
+	for _, requiredArray := range []string{"live_session_ids", "current_scripts"} {
 		if !jsonFieldPresent(t, data, requiredArray) {
 			t.Fatalf("task detail omitted required array %q: %s", requiredArray, data)
 		}
@@ -296,14 +296,6 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	invalid.Task.LiveSessionIDs = nil
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted a null live_session_ids collection")
-	}
-	invalid = valid
-	invalid.Task.CurrentScripts = []WorkflowTaskCurrentScript{
-		{CurrentNode: WorkflowTaskCurrentNode{NodeID: "node-b"}, Path: "script"},
-		{CurrentNode: WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "script"},
-	}
-	if err := invalid.Validate(); err == nil {
-		t.Fatal("task detail response accepted non-deterministic current scripts")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -782,7 +783,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T) {
 	store := mustCreateTestSession(t)
 	countErr := errors.New("workflow task comment count failure")
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
@@ -802,8 +803,8 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		}},
 	}
 	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.Config{
-		RunID:              runID,
-		Contract:           workflowruntime.CompletionContract{RunID: runID},
+		ScopeID:            scopeID,
+		Contract:           workflowruntime.CompletionContract{},
 		CompletionMode:     workflowruntime.CompletionModeTool,
 		Controller:         &externallyCompletedWorkflowController{},
 		TaskCommentCounter: failingWorkflowTaskCommentCounter{err: countErr},
@@ -914,15 +915,15 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 
 func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 	resetErr := errors.New("workflow protocol budget reset failure")
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowBudgetResetFailureController{err: resetErr}
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		Model: "gpt-5",
 		WorkflowRun: &workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     controller,
 		},
@@ -978,7 +979,7 @@ type workflowBudgetResetFailureController struct {
 	err error
 }
 
-func (c *workflowBudgetResetFailureController) ResetWorkflowProtocolViolationBudget(
+func (c *workflowBudgetResetFailureController) ResetProtocolViolationBudget(
 	context.Context,
 	workflowruntime.ViolationResetRequest,
 ) error {

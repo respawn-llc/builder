@@ -12,7 +12,6 @@ func taskSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			"start":    taskStartSubcommand,
 			"list":     taskListSubcommand,
 			"show":     taskShowSubcommand,
-			"cancel":   taskCancelSubcommand,
 			"delete":   taskDeleteSubcommand,
 			"approve":  taskApproveSubcommand,
 			"move":     taskMoveSubcommand,

@@ -9,7 +9,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -171,10 +170,8 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 		store,
 		client,
 		Config{WorkflowRun: &workflowruntime.Config{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
 			CompletionMode: workflowruntime.CompletionModeTool,
-			Contract: workflowruntime.CompletionContract{
-				RunID: workflow.RunID("workflow-run"),
-			},
 		}},
 	)
 

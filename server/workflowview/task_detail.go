@@ -383,9 +383,7 @@ func taskAttentionCount(currentNodes []workflow.CurrentNode, executions []sessio
 		if currentNode.Scheduling == nil || currentNode.Scheduling.Interruption == nil {
 			continue
 		}
-		switch currentNode.Scheduling.Interruption.Reason {
-		case workflow.CurrentNodeInterruptionReason("user_interrupted"), workflow.CurrentNodeInterruptionReason("workflow_runtime_canceled"):
-		default:
+		if workflow.IsActionableCurrentNodeInterruptionReason(currentNode.Scheduling.Interruption.Reason) {
 			count++
 		}
 	}

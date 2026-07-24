@@ -24,7 +24,6 @@ type TranscriptSessionStatus struct {
 
 type TranscriptWorkflowSession struct {
 	Active     bool
-	RunID      string
 	TaskID     string
 	WorkflowID string
 }
@@ -58,9 +57,6 @@ func (s TranscriptSessionStatus) Validate() error {
 }
 
 func (s TranscriptWorkflowSession) Validate() error {
-	if strings.TrimSpace(s.RunID) == "" {
-		return fmt.Errorf("workflow session run id is required")
-	}
 	if strings.TrimSpace(s.TaskID) == "" {
 		return fmt.Errorf("workflow session task id is required")
 	}

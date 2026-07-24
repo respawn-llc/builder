@@ -339,10 +339,8 @@ type WorkflowGraphSaveImpact struct {
 	RemovedEdgeCount                  int64 `json:"removed_edge_count"`
 	NodeTaskReferenceCount            int64 `json:"node_task_reference_count"`
 	EdgeTaskReferenceCount            int64 `json:"edge_task_reference_count"`
-	ActiveNodePlacementCount          int64 `json:"active_node_placement_count"`
+	ActiveCurrentNodeCount            int64 `json:"active_current_node_count"`
 	PendingApprovalCount              int64 `json:"pending_approval_count"`
-	ActiveRunCount                    int64 `json:"active_run_count"`
-	RunnableRunCount                  int64 `json:"runnable_run_count"`
 	StartNodeChangeCount              int64 `json:"start_node_change_count"`
 	LastTerminalChangeCount           int64 `json:"last_terminal_change_count"`
 	TaskReferencedNodeKindChangeCount int64 `json:"task_referenced_node_kind_change_count"`
@@ -616,8 +614,8 @@ type WorkflowDeleteImpact struct {
 	LinkCount                      int64  `json:"link_count"`
 	DefaultReplacementProjectCount int64  `json:"default_replacement_project_count"`
 	TaskCount                      int64  `json:"task_count"`
-	ActiveRunCount                 int64  `json:"active_run_count"`
-	RunnableRunCount               int64  `json:"runnable_run_count"`
+	CurrentNodeCount               int64  `json:"current_node_count"`
+	PendingApprovalCount           int64  `json:"pending_approval_count"`
 	BlockedTaskCount               int64  `json:"blocked_task_count"`
 }
 
@@ -861,11 +859,13 @@ type WorkflowTaskApproveApplied struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string            `json:"task_id"`
-	TargetNodeID     string            `json:"target_node_id"`
-	OutputValues     map[string]string `json:"output_values,omitempty"`
-	Commentary       string            `json:"commentary,omitempty"`
-	AllowMissingEdge bool              `json:"allow_missing_edge,omitempty"`
+	TaskID           string                            `json:"task_id"`
+	TargetNodeID     string                            `json:"target_node_id"`
+	OutputValues     map[string]string                 `json:"output_values,omitempty"`
+	Commentary       string                            `json:"commentary,omitempty"`
+	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
+	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	AllowMissingEdge bool                              `json:"allow_missing_edge,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -1435,7 +1435,6 @@ const (
 	WorkflowProjectEventActionResumed                = protocol.WorkflowProjectEventActionResumed
 	WorkflowProjectEventActionApproved               = protocol.WorkflowProjectEventActionApproved
 	WorkflowProjectEventActionMoved                  = protocol.WorkflowProjectEventActionMoved
-	WorkflowProjectEventActionCanceled               = protocol.WorkflowProjectEventActionCanceled
 	WorkflowProjectEventActionCompleted              = protocol.WorkflowProjectEventActionCompleted
 	WorkflowProjectEventActionCommentAdded           = protocol.WorkflowProjectEventActionCommentAdded
 	WorkflowProjectEventActionCommentUpdated         = protocol.WorkflowProjectEventActionCommentUpdated
@@ -1558,7 +1557,6 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 			WorkflowProjectEventActionResumed,
 			WorkflowProjectEventActionApproved,
 			WorkflowProjectEventActionMoved,
-			WorkflowProjectEventActionCanceled,
 			WorkflowProjectEventActionCompleted,
 			WorkflowProjectEventActionCommentAdded,
 			WorkflowProjectEventActionCommentUpdated,

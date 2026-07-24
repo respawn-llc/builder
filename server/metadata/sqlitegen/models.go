@@ -141,8 +141,6 @@ type Task struct {
 	ExecutionTargetResolvedRef  sql.NullString
 	ExecutionTargetCommitOid    sql.NullString
 	ExecutionTargetProvenance   sql.NullString
-	CanceledAtUnixMs            sql.NullInt64
-	CancellationReason          sql.NullString
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
@@ -188,29 +186,6 @@ type TaskLabelAssignment struct {
 	LabelID string
 }
 
-type TaskNodePlacement struct {
-	ID                        string
-	TaskID                    string
-	NodeID                    sql.NullString
-	State                     string
-	ParallelBatchTransitionID sql.NullString
-	ParallelBranchEdgeID      sql.NullString
-	CreatedAtUnixMs           int64
-	UpdatedAtUnixMs           int64
-}
-
-type TaskNodePlacementRecord struct {
-	ID                        string
-	TaskID                    string
-	NodeID                    sql.NullString
-	State                     string
-	CreatedByTransitionID     string
-	ParallelBatchTransitionID sql.NullString
-	ParallelBranchEdgeID      sql.NullString
-	CreatedAtUnixMs           int64
-	UpdatedAtUnixMs           int64
-}
-
 type TaskPendingApproval struct {
 	ID                        string
 	SourceTaskID              string
@@ -249,130 +224,9 @@ type TaskRecord struct {
 	ExecutionTargetResolvedRef  sql.NullString
 	ExecutionTargetCommitOid    sql.NullString
 	ExecutionTargetProvenance   sql.NullString
-	CanceledAtUnixMs            sql.NullInt64
-	CancellationReason          sql.NullString
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-}
-
-type TaskRun struct {
-	ID                          string
-	PlacementID                 string
-	SessionID                   sql.NullString
-	RunGeneration               int64
-	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs sql.NullInt64
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             sql.NullInt64
-	CompletedAtUnixMs           sql.NullInt64
-	InterruptedAtUnixMs         sql.NullInt64
-	InterruptionReason          sql.NullString
-	InterruptionDetailJson      string
-	WaitingAskID                sql.NullString
-	EffectiveCompletionMode     sql.NullString
-	InvalidCompletionCount      int64
-	RunStartSnapshotJson        string
-	MetadataJson                string
-}
-
-type TaskRunRecord struct {
-	ID                          string
-	TaskID                      string
-	PlacementID                 string
-	NodeID                      sql.NullString
-	SessionID                   sql.NullString
-	RunGeneration               int64
-	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs sql.NullInt64
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             sql.NullInt64
-	CompletedAtUnixMs           sql.NullInt64
-	InterruptedAtUnixMs         sql.NullInt64
-	InterruptionReason          sql.NullString
-	InterruptionDetailJson      string
-	WaitingAskID                sql.NullString
-	EffectiveCompletionMode     sql.NullString
-	InvalidCompletionCount      int64
-	RunStartSnapshotJson        string
-	MetadataJson                string
-}
-
-type TaskTransition struct {
-	ID                    string
-	TaskID                string
-	SourceRunID           sql.NullString
-	SourcePlacementID     sql.NullString
-	SourceNodeKey         string
-	SourceNodeDisplayName string
-	TransitionID          string
-	TransitionDisplayName string
-	WorkflowRevisionSeen  int64
-	Actor                 string
-	State                 string
-	Commentary            string
-	OutputValuesJson      string
-	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       sql.NullInt64
-}
-
-type TaskTransitionEdge struct {
-	ID                     string
-	TaskTransitionID       string
-	WorkflowEdgeID         sql.NullString
-	EdgeKey                string
-	TargetNodeID           sql.NullString
-	TargetNodeKey          string
-	TargetNodeDisplayName  string
-	TargetNodeKind         string
-	TargetPlacementID      sql.NullString
-	State                  string
-	ContextMode            string
-	RequiresApproval       int64
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	MetadataJson           string
-}
-
-type TaskTransitionEdgeRecord struct {
-	ID                     string
-	TaskTransitionID       string
-	WorkflowEdgeID         sql.NullString
-	EdgeKey                string
-	WorkflowRevisionSeen   int64
-	TargetNodeID           sql.NullString
-	TargetNodeKey          string
-	TargetNodeDisplayName  string
-	TargetNodeKind         string
-	TargetPlacementID      sql.NullString
-	State                  string
-	ContextMode            string
-	RequiresApproval       int64
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	MetadataJson           string
-}
-
-type TaskTransitionRecord struct {
-	ID                    string
-	TaskID                string
-	SourceRunID           sql.NullString
-	SourcePlacementID     sql.NullString
-	SourceNodeID          sql.NullString
-	SourceNodeKey         string
-	SourceNodeDisplayName string
-	TransitionGroupID     sql.NullString
-	TransitionID          string
-	TransitionDisplayName string
-	WorkflowRevisionSeen  int64
-	Actor                 string
-	State                 string
-	Commentary            string
-	OutputValuesJson      string
-	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       sql.NullInt64
 }
 
 type Workflow struct {
@@ -384,23 +238,6 @@ type Workflow struct {
 	ExecutionTargetCustomRef sql.NullString
 	CreatedAtUnixMs          int64
 	UpdatedAtUnixMs          int64
-}
-
-type WorkflowAttentionCandidate struct {
-	Kind                   string
-	ID                     string
-	ProjectID              string
-	WorkflowID             string
-	TaskID                 sql.NullString
-	ShortID                sql.NullString
-	Title                  sql.NullString
-	RunID                  sql.NullString
-	SessionID              sql.NullString
-	AskID                  sql.NullString
-	TaskTransitionID       sql.NullString
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson sql.NullString
-	OccurredAtUnixMs       int64
 }
 
 type WorkflowEdge struct {
@@ -444,50 +281,13 @@ type WorkflowNodeGroup struct {
 	SortOrder   int64
 }
 
-type WorkflowTaskCurrentRunRecord struct {
-	ID                  string
-	TaskID              string
-	PlacementID         string
-	SessionID           sql.NullString
-	UpdatedAtUnixMs     int64
-	StartedAtUnixMs     sql.NullInt64
-	CompletedAtUnixMs   sql.NullInt64
-	InterruptedAtUnixMs sql.NullInt64
-	WaitingAskID        sql.NullString
-}
-
 type WorkflowTaskStatusRecord struct {
 	TaskID             string
 	IsDone             int64
 	Kind               string
 	PrimaryStatusRank  int64
 	NodeIdsJson        interface{}
-	RunIdsJson         string
 	AttentionTypesJson interface{}
-}
-
-type WorkflowTaskStatusRunRecord struct {
-	ID                  string
-	TaskID              string
-	PlacementID         string
-	SessionID           sql.NullString
-	UpdatedAtUnixMs     int64
-	StartedAtUnixMs     sql.NullInt64
-	CompletedAtUnixMs   sql.NullInt64
-	InterruptedAtUnixMs sql.NullInt64
-	InterruptionReason  sql.NullString
-	WaitingAskID        sql.NullString
-}
-
-type WorkflowTaskStatusTaskRecord struct {
-	ID               string
-	CanceledAtUnixMs sql.NullInt64
-}
-
-type WorkflowTaskStatusTransitionRecord struct {
-	TaskID       string
-	State        string
-	SourceNodeID sql.NullString
 }
 
 type WorkflowTransitionGroup struct {

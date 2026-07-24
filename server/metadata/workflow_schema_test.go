@@ -51,10 +51,6 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 		"task_pending_approvals",
 		"task_pending_approval_branches",
 		"session_workflow_node_associations",
-		"task_node_placements",
-		"task_runs",
-		"task_transitions",
-		"task_transition_edges",
 		"task_comments",
 		"project_labels",
 		"task_label_assignments",
@@ -141,6 +137,11 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if !columnExists(t, store.db, "tasks", "source_url") {
 		t.Fatal("tasks.source_url should stay as a structured task field")
 	}
+	for _, column := range []string{"canceled_at_unix_ms", "cancellation_reason"} {
+		if columnExists(t, store.db, "tasks", column) {
+			t.Fatalf("tasks.%s should not exist; task cancellation was removed", column)
+		}
+	}
 	for _, column := range []string{"normalized_name", "revision", "color", "sort_order"} {
 		if columnExists(t, store.db, "project_labels", column) {
 			t.Fatalf("project_labels.%s should not exist", column)
@@ -149,46 +150,27 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if !indexExists(t, store.db, "task_label_assignments_label_task_idx") {
 		t.Fatal("task_label_assignments_label_task_idx should support reverse label membership")
 	}
-	if columnExists(t, store.db, "task_runs", "task_id") {
-		t.Fatal("task_runs.task_id should not exist; run task is derived from placement_id")
-	}
-	if columnExists(t, store.db, "task_runs", "node_id") {
-		t.Fatal("task_runs.node_id should not exist; run node is derived from placement_id")
-	}
-	if !viewExists(t, store.db, "task_run_records") {
-		t.Fatal("task_run_records view should expose derived run task/node fields")
-	}
-	if columnExists(t, store.db, "task_transition_edges", "workflow_revision_seen") {
-		t.Fatal("task_transition_edges.workflow_revision_seen should not exist; edge revision is derived from its transition")
-	}
-	if !viewExists(t, store.db, "task_transition_edge_records") {
-		t.Fatal("task_transition_edge_records view should expose derived edge workflow revision")
-	}
-	if columnExists(t, store.db, "task_node_placements", "created_by_transition_id") {
-		t.Fatal("task_node_placements.created_by_transition_id should not exist; placement provenance is derived from transition edges")
-	}
-	if !viewExists(t, store.db, "task_node_placement_records") {
-		t.Fatal("task_node_placement_records view should expose derived placement provenance")
-	}
-	if columnExists(t, store.db, "task_transitions", "source_node_id") {
-		t.Fatal("task_transitions.source_node_id should not exist; transition source node is derived from source placement")
-	}
-	if !viewExists(t, store.db, "task_transition_records") {
-		t.Fatal("task_transition_records view should expose derived transition source node")
-	}
-	for _, view := range []string{
+	for _, relation := range []string{
+		"task_node_placements",
+		"task_runs",
+		"task_transitions",
+		"task_transition_edges",
+		"task_node_placement_records",
+		"task_run_records",
+		"task_transition_records",
+		"task_transition_edge_records",
 		"workflow_task_status_task_records",
 		"workflow_task_status_run_records",
 		"workflow_task_status_transition_records",
 		"workflow_task_current_run_records",
-		"workflow_task_status_records",
+		"workflow_attention_candidates",
 	} {
-		if !viewExists(t, store.db, view) {
-			t.Fatalf("%s view should expose canonical task status facts", view)
+		if tableExists(t, store.db, relation) || viewExists(t, store.db, relation) {
+			t.Fatalf("legacy workflow relation %s should not exist after the hard cutover", relation)
 		}
 	}
-	if columnExists(t, store.db, "task_transitions", "transition_group_id") {
-		t.Fatal("task_transitions.transition_group_id should not exist; transition group is derived from edge snapshots when available")
+	if !viewExists(t, store.db, "workflow_task_status_records") {
+		t.Fatal("workflow_task_status_records should expose canonical Current Node status facts")
 	}
 	for _, column := range []string{"source_run_id", "deleted_at_unix_ms", "metadata_json"} {
 		if columnExists(t, store.db, "task_comments", column) {
@@ -637,10 +619,6 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-previous-target-key', 'group-start', 'bad_previous_target_context_key', 'node-agent', 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-time', 'Bad', 1, -1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-rev', 'Bad', 0, 1, 1)`)
-	execSeed(t, store.db, "script actor transition", `INSERT INTO task_transitions (id, task_id, transition_id, workflow_revision_seen, actor, state, created_at_unix_ms) VALUES ('transition-script-actor', 'task-1', 'done', 1, 'script', 'applied', 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transitions (id, task_id, transition_id, workflow_revision_seen, actor, state, created_at_unix_ms) VALUES ('transition-invalid-actor', 'task-1', 'done', 1, 'robot', 'applied', 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, effective_completion_mode, created_at_unix_ms, updated_at_unix_ms) VALUES ('run-bad-completion-mode', 'placement-start', 1, 'invalid', 1, 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, invalid_completion_count, created_at_unix_ms, updated_at_unix_ms) VALUES ('run-bad-counter', 'placement-start', 1, -1, 1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-author', 'task-1', 'system note', 'system', 1, 1)`)
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-too-large', 'task-1', ?, 'agent', 1, 1)`, strings.Repeat("a", 262145))
 }
@@ -893,86 +871,6 @@ func stringPointerForSchemaTest(value string) *string {
 	return &value
 }
 
-func TestWorkflowRuntimeSchemaRejectsCrossWorkflowPlacementsAndRuns(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	seedWorkflowTaskWithID(t, store, "task-2", "link-1", 2, "BLD-2", "placement-start-2", "node-start")
-
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('placement-cross-workflow', 'task-1', 'node-agent-2', 'active', ?, ?)`, now, now)
-	assertSQLiteConstraint(t, store.db, `UPDATE task_node_placements SET node_id = 'node-agent-2' WHERE id = 'placement-start'`)
-	execSeed(t, store.db, "canceled active agent placement", `UPDATE tasks SET canceled_at_unix_ms = ? WHERE id = 'task-2'`, now)
-	execSeed(t, store.db, "active agent placement on canceled task", `UPDATE task_node_placements SET node_id = 'node-agent' WHERE id = 'placement-start-2'`)
-	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-agent'`)
-	execSeed(t, store.db, "historical node", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-history', 'workflow-1', 'history', 'agent', 'History', '[]')`)
-	execSeed(t, store.db, "completed historical placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-history', 'task-1', 'node-history', 'completed', ?, ?)`, now, now)
-	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-history'`)
-	execSeed(t, store.db, "derived task run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('run-derived', 'placement-start', 1, ?, ?)`, now, now)
-	var taskID string
-	var nodeID string
-	if err := store.db.QueryRow(`SELECT task_id, node_id FROM task_run_records WHERE id = 'run-derived'`).Scan(&taskID, &nodeID); err != nil {
-		t.Fatalf("query derived task run: %v", err)
-	}
-	if taskID != "task-1" || nodeID != "node-start" {
-		t.Fatalf("derived task run = task %q node %q, want task-1/node-start", taskID, nodeID)
-	}
-}
-
-func TestWorkflowRuntimeSchemaRejectsCrossTaskTransitionsAndEdges(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	seedWorkflowTaskWithID(t, store, "task-2", "link-1", 2, "BLD-2", "placement-start-2", "node-start")
-	execSeed(t, store.db, "task-2 run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('run-2', 'placement-start-2', 1, ?, ?)`, now, now)
-
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transitions (id, task_id, source_run_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
-VALUES ('transition-cross-run', 'task-1', 'run-2', 'placement-start', 'start', 1, 'system', 'applied', '{}', ?)`, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transitions (id, task_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
-VALUES ('transition-cross-placement', 'task-1', 'placement-start-2', 'start', 1, 'system', 'applied', '{}', ?)`, now)
-	execSeed(t, store.db, "valid transition", `INSERT INTO task_transitions (id, task_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
-VALUES ('transition-valid', 'task-1', 'placement-start', 'start', 1, 'system', 'applied', '{}', ?)`, now)
-	var sourceNodeID string
-	if err := store.db.QueryRow(`SELECT source_node_id FROM task_transition_records WHERE id = 'transition-valid'`).Scan(&sourceNodeID); err != nil {
-		t.Fatalf("query derived transition source node: %v", err)
-	}
-	if sourceNodeID != "node-start" {
-		t.Fatalf("derived transition source node = %q, want node-start", sourceNodeID)
-	}
-	execSeed(t, store.db, "valid transition edge", `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-valid', 'transition-valid', 'edge-start-1', 'start', 'node-agent', 'pending', '[]', '[]')`)
-	var transitionGroupID string
-	if err := store.db.QueryRow(`SELECT transition_group_id FROM task_transition_records WHERE id = 'transition-valid'`).Scan(&transitionGroupID); err != nil {
-		t.Fatalf("query derived transition group: %v", err)
-	}
-	if transitionGroupID != "group-start" {
-		t.Fatalf("derived transition group = %q, want group-start", transitionGroupID)
-	}
-	var edgeRevision int64
-	if err := store.db.QueryRow(`SELECT workflow_revision_seen FROM task_transition_edge_records WHERE id = 'transition-edge-valid'`).Scan(&edgeRevision); err != nil {
-		t.Fatalf("query derived transition edge revision: %v", err)
-	}
-	if edgeRevision != 1 {
-		t.Fatalf("derived transition edge revision = %d, want 1", edgeRevision)
-	}
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transition_edges (id, task_transition_id, edge_key, target_node_id, target_placement_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-cross-task', 'transition-valid', 'bad', 'node-start', 'placement-start-2', 'applied', '[]', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transition_edges (id, task_transition_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-cross-node', 'transition-valid', 'bad', 'node-agent-2', 'pending', '[]', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-cross-workflow-edge', 'transition-valid', 'edge-start-2', 'bad', 'node-agent', 'pending', '[]', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-object-inputs', 'transition-valid', 'edge-start-1', 'bad', 'node-agent', 'pending', '{}', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-object-outputs', 'transition-valid', 'edge-start-1', 'bad', 'node-agent', 'pending', '[]', '{}')`)
-}
-
 func TestTaskShortIDUniquenessIsProjectScoped(t *testing.T) {
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
@@ -1036,29 +934,6 @@ func TestTaskSequenceAllocationIsAtomic(t *testing.T) {
 		if !seen[seq] {
 			t.Fatalf("missing sequence %d in %+v", seq, seen)
 		}
-	}
-}
-
-func TestCircularTransitionPlacementReferencesUseNullableDomainValidatedPath(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-
-	if _, err := store.db.Exec(`INSERT INTO task_transitions (id, task_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
-VALUES ('transition-1', 'task-1', 'placement-start', 'start', 1, 'system', 'applied', '{}', ?)`, now); err != nil {
-		t.Fatalf("insert transition referencing existing placement: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('placement-agent', 'task-1', 'node-agent', 'active', ?, ?)`, now, now); err != nil {
-		t.Fatalf("insert placement before transition edge: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, target_placement_id, state, input_bindings_json, output_requirements_json)
-VALUES ('transition-edge-1', 'transition-1', 'edge-start-1', 'start', 'node-agent', 'placement-agent', 'applied', '[]', '[]')`); err != nil {
-		t.Fatalf("insert transition edge referencing placement: %v", err)
-	}
-	if _, err := store.db.Exec(`UPDATE task_transitions SET applied_at_unix_ms = ? WHERE id = 'transition-1'`, now); err != nil {
-		t.Fatalf("update transition after circular insert path: %v", err)
 	}
 }
 
@@ -1327,9 +1202,8 @@ func seedWorkflowTask(t *testing.T, store *Store, projectID string, shortID stri
 	seedWorkflowTaskWithID(t, store, "task-1", "link-1", 1, shortID, "placement-start", "node-start")
 }
 
-func seedWorkflowTaskWithID(t *testing.T, store *Store, taskID string, linkID string, taskSeq int64, shortID string, placementID string, nodeID string) {
+func seedWorkflowTaskWithID(t *testing.T, store *Store, taskID string, linkID string, taskSeq int64, shortID string, _ string, _ string) {
 	t.Helper()
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, store.db, "workflow task", workflowSeedTaskSQL, taskID, linkID, taskSeq, shortID, now, now)
-	execSeed(t, store.db, "workflow placement", workflowSeedPlacementSQL, placementID, taskID, nodeID, now, now)
 }

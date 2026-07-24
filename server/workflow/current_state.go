@@ -113,6 +113,20 @@ const (
 
 type CurrentNodeInterruptionReason string
 
+const (
+	CurrentNodeInterruptionReasonUserInterrupt   CurrentNodeInterruptionReason = "user_interrupt"
+	CurrentNodeInterruptionReasonRuntimeCanceled CurrentNodeInterruptionReason = "workflow_runtime_canceled"
+)
+
+func IsActionableCurrentNodeInterruptionReason(reason CurrentNodeInterruptionReason) bool {
+	switch CurrentNodeInterruptionReason(strings.TrimSpace(string(reason))) {
+	case "", CurrentNodeInterruptionReasonUserInterrupt, CurrentNodeInterruptionReasonRuntimeCanceled:
+		return false
+	default:
+		return true
+	}
+}
+
 type CurrentNodeInterruptionDetail struct {
 	Code   string
 	Fields map[string]string

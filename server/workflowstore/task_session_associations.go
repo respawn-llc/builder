@@ -341,13 +341,26 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 			SourceNodeDisplayName: workflow.NodeDisplayName(sourceNode),
 			TargetNodeDisplayName: workflow.NodeDisplayName(node),
 		},
-		TransitionIDs:        transitionIDs,
-		TransitionOptions:    transitionOptions,
-		PromptTemplate:       strings.TrimSpace(enteringEdge.PromptTemplate),
-		ParameterValues:      values,
-		PriorParameterValues: clonePriorParameterValues(currentNode.PriorNodeValues),
-		ExecutionRoot:        executionRoot,
+		TransitionIDs:                  transitionIDs,
+		TransitionOptions:              transitionOptions,
+		HasContinueSessionOutgoingEdge: currentNodeHasContinueSessionOutgoingEdge(definition, workflow.NodeIDOf(node)),
+		PromptTemplate:                 strings.TrimSpace(enteringEdge.PromptTemplate),
+		ParameterValues:                values,
+		PriorParameterValues:           clonePriorParameterValues(currentNode.PriorNodeValues),
+		ExecutionRoot:                  executionRoot,
 	}, nil
+}
+
+func currentNodeHasContinueSessionOutgoingEdge(definition workflow.Definition, nodeID workflow.NodeID) bool {
+	for _, edge := range definition.Edges {
+		if edge.ContextMode != workflow.ContextModeContinueSession && edge.ContextMode != workflow.ContextModeCompactAndContinueSession {
+			continue
+		}
+		if transitionGroupSourceNodeID(definition, edge.TransitionGroupID) == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func transitionGroupSourceNodeID(definition workflow.Definition, groupID workflow.TransitionGroupID) workflow.NodeID {
@@ -392,6 +405,22 @@ func currentNodeTransitionParameters(definition workflow.Definition, group workf
 		}
 	}
 	return nil
+}
+
+func clonePriorParameterValues(values map[string]map[string]string) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(values))
+	for nodeKey, outputs := range values {
+		out[nodeKey] = cloneCurrentNodeOutputValues(outputs)
+	}
+	return out
+}
+
+func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parameter {
+	out := make([]workflow.Parameter, 0, len(fields))
+	for _, field := range fields {
+		out = append(out, workflow.Parameter{Key: field.Name, Description: field.Description})
+	}
+	return out
 }
 
 func nodeRecordFromCurrentDefinition(node workflow.Node) NodeRecord {

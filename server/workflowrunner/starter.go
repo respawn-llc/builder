@@ -35,8 +35,7 @@ import (
 )
 
 const (
-	ReasonRuntimeCanceled = "workflow_runtime_canceled"
-	ReasonRuntimeFailed   = "workflow_runtime_failed"
+	ReasonRuntimeFailed = "workflow_runtime_failed"
 )
 
 type RuntimeStore interface {
@@ -193,7 +192,7 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 			}
 			reason := ReasonRuntimeFailed
 			if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
-				reason = ReasonRuntimeCanceled
+				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
 			}
 			return errors.Join(turnErr, s.failCurrentNodeScope(context.WithoutCancel(runCtx), controller, scope, reason, turnErr))
 		},
@@ -312,7 +311,7 @@ func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input wo
 	if input.Node.CompletionMode != "" {
 		configured = config.WorkflowCompletionMode(input.Node.CompletionMode)
 	}
-	selection := workflowruntime.CompletionModeSelection{ConfiguredMode: configured, HasContinueSessionEdge: input.ContextMode == workflow.ContextModeContinueSession || input.ContextMode == workflow.ContextModeCompactAndContinueSession, ShellAvailable: toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)}
+	selection := workflowruntime.CompletionModeSelection{ConfiguredMode: configured, HasContinueSessionEdge: input.HasContinueSessionOutgoingEdge, ShellAvailable: toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)}
 	if workflowCompletionModeNeedsProviderCapabilities(selection) {
 		caps, resolved, err := s.workflowProviderCapabilities(ctx, plan, client)
 		if err != nil {

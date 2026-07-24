@@ -12,6 +12,8 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -96,6 +98,79 @@ func TestServiceDeletesProjectWithBacklogTasks(t *testing.T) {
 	}
 	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
 		t.Fatal("expected deleted backlog-only project lookup to fail")
+	}
+}
+
+func TestServiceProjectDeleteRequiresWorkflowExecution(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc, err := NewMetadataService(store, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("NewMetadataService: %v", err)
+	}
+	if _, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); err == nil {
+		t.Fatal("DeleteProject succeeded without the shared workflow execution permit")
+	}
+}
+
+func TestServiceProjectDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newProjectViewMetadataStore(t)
+	workflowStore, err := workflowstore.New(store)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowRecord, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Quiescence Board"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowRecord.ID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Blocked", Body: "Body"}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.workflowExecution = projectViewQuiescentExecution{err: workflowexecution.ErrTaskExecutionNotQuiescent}
+
+	if _, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("DeleteProject error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
+	}
+	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err != nil {
+		t.Fatalf("GetProjectOverview after rejected delete: %v", err)
+	}
+}
+
+func TestServiceProjectDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- svc.mutationPermit.Run(context.Background(), func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("DeleteProject escaped concurrent workflow mutation: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-held; err != nil {
+		t.Fatalf("concurrent workflow mutation: %v", err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
 	}
 }
 
@@ -701,7 +776,15 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
-	return svc
+	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{})
+}
+
+type projectViewQuiescentExecution struct {
+	err error
+}
+
+func (e projectViewQuiescentExecution) EnsureTaskQuiescent(workflow.TaskID) error {
+	return e.err
 }
 
 func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.App, projectID string, workspaceRoot string, name string) *session.Store {

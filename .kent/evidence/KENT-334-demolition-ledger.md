@@ -10,21 +10,17 @@ excluded from this calculation.
 
 ## Current inventory — 2026-07-24
 
-- The earlier `+5981 / -1412` count is not accepted evidence because it has no
-  command, commit, or worktree-status hash and the worktree was changing.
 - Recompute the ledger after every coherent commit from `3c7d45a62` with the
   command below. It includes untracked handwritten production files and
   excludes tests, generated SQL, migrations, documentation, `.kent`, and the
   frozen `tui-rs/` tree.
-- This is an interim implementation count, not a passing result.
-- Snapshot at `2026-07-24T13:43:47Z`,
-  `HEAD=791217047b82444e4a7e40e1bf9b2b8a51edbc8b`, production-patch SHA-256
-  `c5d1b0e348bed561856bd43d42ff3cc1f0971867e6038a76d4bfc70ebaf51899`:
-  62 included files, `+6442 / -1356`, net `+5086`. The gate is failing.
-- Remaining high-value removals: legacy scheduler/reconciliation,
-  `AutomaticStartRegistration`, Run/Placement store/domain/query paths,
-  Run-bearing runtime/transcript/session contracts, legacy transition-history
-  projections, and their production client adapters.
+- Current dirty-worktree snapshot at `2026-07-24T23:56:21Z`,
+  `HEAD=4d9c0fc2c977677ac6c425343ab7bbad41edba9f`, production-patch SHA-256
+  `9f7a311626cd0163fb9e1b87031cc55d0d99f777a6c10736a20680240676b8f9`:
+  121 included files, `+8613 / -11912`, net `-3299`.
+- The net-negative gate is passing. This is server/API checkpoint evidence,
+  not a claim that deferred Go-client, CLI, Desktop, protocol, documentation,
+  repository-wide verification, or manual QA work is complete.
 
 ```sh
 set -eu -o pipefail
@@ -104,12 +100,13 @@ END {
 git rev-parse HEAD
 ```
 
-## Replacement present; demolition incomplete
+## Server/API demolition evidence
 
-- Current Node controller implementations exist for admission, live-scope
-  completion, interruption, restart recovery, and automatic successor intent
-  release. The legacy scheduler and automatic registration remain in
-  production composition, so execution authority is not yet singular.
-- Direct Session Task ownership plus Current Node binding replaces persisted
-  workflow Run metadata for current-session inspection. Run-bearing
-  runtime/status consumers remain and are not counted as demolished.
+- The Current Node controller owns admission, live-scope completion,
+  interruption, restart recovery, and automatic successor release. Legacy
+  scheduler, automatic-registration, Run/Placement store, transition-history,
+  cancellation, and server read-model paths have been removed.
+- Direct Session Task ownership plus Current Node binding is the durable
+  server authority for current-session inspection. The remaining references
+  to removed Task Cancel behavior are isolated to the explicitly deferred Go
+  remote client and CLI.

@@ -13,15 +13,21 @@ import (
 
 	"core/server/metadata"
 	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 type Service struct {
-	metadata  *metadata.Store
-	projectID string
-	authority *sessionruntime.Authority
+	metadata          *metadata.Store
+	projectID         string
+	authority         *sessionruntime.Authority
+	mutationPermit    *workflowexecution.MutationPermit
+	workflowExecution interface {
+		EnsureTaskQuiescent(workflow.TaskID) error
+	}
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -60,6 +66,17 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 		return nil
 	}
 	s.authority = authority
+	return s
+}
+
+func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
+	EnsureTaskQuiescent(workflow.TaskID) error
+}) *Service {
+	if s == nil {
+		return nil
+	}
+	s.mutationPermit = permit
+	s.workflowExecution = execution
 	return s
 }
 
@@ -384,6 +401,9 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	projectID := strings.TrimSpace(req.ProjectID)
 	unlock := lockProjectDelete(projectID)
 	defer unlock()
+	if s.mutationPermit == nil || s.workflowExecution == nil {
+		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
+	}
 
 	if _, err := s.projectHomeSummary(ctx, projectID); err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
@@ -422,8 +442,25 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			return blockers, release, nil
 		}
 	}
-	blockers, err := s.metadata.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, runtimeBlocker, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
-		return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
+	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
+		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		for _, taskID := range taskIDs {
+			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
+				return nil, err
+			}
+		}
+		return s.metadata.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, runtimeBlocker, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
+			return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
+		})
+	}
+	var blockers []serverapi.ProjectDeleteBlocker
+	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		var runErr error
+		blockers, runErr = deleteProject(ctx)
+		return runErr
 	})
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err

@@ -445,12 +445,12 @@ func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflow
 		RemovedEdgeCount:            int64(len(removed.edges)),
 	}
 	for _, nodeID := range removed.nodes {
-		count, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))
+		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
 			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
 		}
 		impact.NodeTaskReferenceCount += count
-		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
+		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
 		if err != nil {
 			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
 		}

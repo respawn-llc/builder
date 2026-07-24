@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -93,7 +93,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	return PersistedWorkflowInspection{
 		Plan: plan,
 		Prompt: &workflowruntime.PromptContract{
-			Identity:               sessionID.String(),
+			Identity:               workflowPromptIdentity(instructions),
 			CompletionMode:         mode,
 			UseAutomaticToolChoice: !plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 			Instructions:           instructions,
@@ -101,6 +101,15 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		},
 		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil
+}
+
+func workflowPromptIdentity(instructions workflowruntime.TaskInstructions) string {
+	taskID := strings.TrimSpace(instructions.TaskID)
+	nodeID := strings.TrimSpace(instructions.NodeID)
+	if taskID == "" || nodeID == "" {
+		return ""
+	}
+	return taskID + "/" + nodeID
 }
 
 func requireCurrentNodeExecutionRoot(input workflowstore.CurrentNodeStartContext) (workflowstore.ExecutionRoot, error) {
@@ -124,7 +133,7 @@ func persistedInspectionCompletionMode(plan launch.SessionPlan, input workflowst
 	}
 	selection := workflowruntime.CompletionModeSelection{
 		ConfiguredMode:         configured,
-		HasContinueSessionEdge: input.EnteringEdge.ContextMode == workflow.ContextModeContinueSession || input.EnteringEdge.ContextMode == workflow.ContextModeCompactAndContinueSession,
+		HasContinueSessionEdge: input.HasContinueSessionOutgoingEdge,
 		ShellAvailable:         toolIDEnabled(plan.EnabledTools, "exec_command"),
 	}
 	if workflowCompletionModeNeedsProviderCapabilities(selection) {

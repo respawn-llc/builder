@@ -129,3 +129,29 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 		t.Fatalf("second AdmitCurrentNode error = %v, want stale-ready absence", err)
 	}
 }
+
+func TestCurrentNodeStartContextDerivesContinuationFromOutgoingEdges(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		for index := range req.Edges {
+			if req.Edges[index].TransitionGroupID == workflow.TransitionGroupID("group-done-"+string(workflowID)) {
+				req.Edges[index].ContextMode = workflow.ContextModeContinueSession
+			}
+		}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	input, err := store.ResolveCurrentNodeStartContext(ctx, started.Mutation.Created[0].Reference)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeNewSession {
+		t.Fatalf("entering context mode = %q, want new_session", input.ContextMode)
+	}
+	if !input.HasContinueSessionOutgoingEdge {
+		t.Fatal("current-node start context did not derive its continuation fact from outgoing edges")
+	}
+}

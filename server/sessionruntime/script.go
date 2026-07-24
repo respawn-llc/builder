@@ -105,7 +105,11 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			return
 		}
 		result, runErr, stopErr := process.wait(execution.ctx)
-		execution.retire()
+		// The process is no longer live, so remove its workflow liveness
+		// index. Keep its exact scope addressable until the finalizer commits
+		// workflow completion; that finalizer proves Current Node ownership by
+		// exact scope rather than a durable execution record.
+		execution.retireWorkflow()
 		var finalizeErr error
 		if req.Finalize != nil {
 			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)

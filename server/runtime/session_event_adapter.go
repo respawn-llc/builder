@@ -425,7 +425,6 @@ func sessionHistoryReplacementRecordFromRuntime(
 	record := session.HistoryReplacementRecord{
 		Engine:                            payload.Engine,
 		Mode:                              session.CompactionMode(payload.Mode),
-		WorkflowRunID:                     textutil.Pointer(payload.WorkflowRunID),
 		CommittedEntryStart:               textutil.Pointer(payload.CommittedEntryStart),
 		PendingHandoffFutureMessage:       textutil.Pointer(payload.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: textutil.Pointer(payload.LastCommittedAssistantFinalAnswer),
@@ -463,7 +462,6 @@ func historyReplacementPayloadFromSessionRecord(
 	payload := historyReplacementPayload{
 		Engine:                            record.Engine,
 		Mode:                              string(record.Mode),
-		WorkflowRunID:                     textutil.Pointer(record.WorkflowRunID),
 		CommittedEntryStart:               textutil.Pointer(record.CommittedEntryStart),
 		PendingHandoffFutureMessage:       textutil.Pointer(record.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: textutil.Pointer(record.LastCommittedAssistantFinalAnswer),

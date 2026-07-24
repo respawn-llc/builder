@@ -88,6 +88,50 @@ INSERT INTO task_node_placements (
     ?,
     ?
 )`, now, now)
+	execLegacyMigrationSeed(t, db, "source entering transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms, applied_at_unix_ms
+) VALUES (
+    'transition-migrated-start',
+    'task-migrated-approval-fanout',
+    'backlog',
+    'Backlog',
+    'start',
+    'Start',
+    1,
+    'system',
+    'applied',
+    '',
+    '{}',
+    ?,
+    ?
+)`, now, now)
+	execLegacyMigrationSeed(t, db, "source entering transition edge", `
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key, target_placement_id,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    target_placement_id, state, context_mode, requires_approval,
+    input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-migrated-start',
+    'transition-migrated-start',
+    'edge-start',
+    'start',
+    'placement-migrated-approval-fanout',
+    'node-source',
+    'source',
+    'Source',
+    'agent',
+    'placement-migrated-approval-fanout',
+    'applied',
+    'new_session',
+    0,
+    '[]',
+    '[]',
+    '{}'
+)`)
 	execLegacyMigrationSeed(t, db, "approval transition", `
 INSERT INTO task_transitions (
     id, task_id, source_placement_id, source_node_key, source_node_display_name,
@@ -190,20 +234,7 @@ func TestResolveCurrentSessionStartContextUsesMigratedDirectOwnership(t *testing
 		sessionID  = "550e8400-e29b-41d4-a716-446655440090"
 		runID      = "run-migrated-session-context"
 	)
-	snapshotJSON, err := workflow.MarshalString(runStartSnapshot{
-		WorkflowID:           workflow.WorkflowID(workflowID),
-		WorkflowRevisionSeen: 1,
-		Node: nodeContractSnapshot{
-			ID:           "node-agent",
-			Key:          "agent",
-			DisplayName:  "Agent",
-			Kind:         workflow.NodeKindAgent,
-			SubagentRole: "coder",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal legacy run snapshot: %v", err)
-	}
+	snapshotJSON := `{"workflow_id":"workflow-migrated-session-context","workflow_revision_seen":1,"node":{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","subagent_role":"coder"}}`
 	execLegacyMigrationSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES (?, 'Project', ?, ?, '{}')`, projectID, now, now)
@@ -347,10 +378,6 @@ INSERT INTO task_runs (
 	if !workflowOwned {
 		t.Fatal("migrated session direct task ownership was not retained")
 	}
-	if _, err := metadataStore.DB().ExecContext(t.Context(), `DELETE FROM task_runs`); err != nil {
-		t.Fatalf("remove obsolete run records before direct resolution: %v", err)
-	}
-
 	input, err := store.ResolveCurrentSessionStartContext(t.Context(), parsedSessionID)
 	if err != nil {
 		t.Fatalf("ResolveCurrentSessionStartContext: %v", err)

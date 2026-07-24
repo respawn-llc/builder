@@ -79,29 +79,10 @@ var (
 	// workflow it does not belong to.
 	ErrBelongsToOtherWorkflow = errors.New("workflow graph element belongs to a different workflow")
 
-	// ErrTaskCanceled is returned when an operation targets a canceled task.
-	ErrTaskCanceled = errors.New("task is canceled")
-
 	// Source-workspace edit guards. Each names a distinct condition under which
 	// a task's source workspace cannot be changed.
-	ErrSourceWorkspaceForCanceledTask = errors.New("cannot edit source workspace for canceled task")
 	ErrSourceWorkspaceAfterAutomation = errors.New("cannot edit source workspace after automation starts")
 	ErrSourceWorkspaceNotInProject    = errors.New("source workspace does not belong to project")
-
-	// ErrRunAlreadyCompleted is returned when completing a run that already has a
-	// completion timestamp.
-	ErrRunAlreadyCompleted = errors.New("run already completed")
-
-	// ErrStaleRunGeneration is returned when an optimistic-generation guard fails.
-	ErrStaleRunGeneration = errors.New("stale workflow run generation")
-
-	// ErrInvalidEffectiveCompletionMode is returned when a run completion-mode
-	// snapshot value is not one of the runtime-supported modes.
-	ErrInvalidEffectiveCompletionMode = errors.New("invalid workflow effective completion mode")
-
-	// ErrTransitionIDRequired is returned when a transition id is required but
-	// blank.
-	ErrTransitionIDRequired = errors.New("transition id is required")
 
 	// ErrApprovalIDRequired is returned when an approval id is required but
 	// blank.
@@ -110,10 +91,6 @@ var (
 	// ErrCurrentNodePendingApproval is returned when an operation tries to
 	// execute a current node that is awaiting its Approval.
 	ErrCurrentNodePendingApproval = errors.New("current node has a pending approval")
-
-	// ErrRunIDRequired is returned when a run id must be supplied to
-	// disambiguate among multiple matching runs.
-	ErrRunIDRequired = errors.New("run_id is required")
 
 	// ErrTaskAskNotPending is returned when resolving a task waiting-ask that has
 	// no matching pending ask.
@@ -143,14 +120,8 @@ var (
 
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
-	ErrManualMoveSelectedContextSource      = errors.New("manual move with selected context source is not supported")
-	ErrManualMoveContinueSessionNeedsSource = errors.New("continue_session requires source session for manual move")
-	ErrManualMoveApprovalNeedsSourceRun     = errors.New("manual move requiring approval needs a source run")
-	ErrManualMoveDuringParallelBatch        = errors.New("manual move during active parallel batch is not supported")
-	ErrManualMoveExecutableTargetNeedsEdge  = errors.New("manual move to executable target requires a workflow edge")
-	ErrManualMoveNoSourcePosition           = errors.New("manual move has no active placement or pending approval to move from")
-	ErrManualMoveMultiplePendingApprovals   = errors.New("manual move with multiple pending approvals is not supported")
-	ErrManualMovePendingApprovalResolved    = errors.New("pending approval was resolved before the manual move could override it")
+	ErrManualMoveExecutableTargetNeedsEdge = errors.New("manual move to executable target requires a workflow edge")
+	ErrManualMoveNoSourcePosition          = errors.New("manual move has no active placement or pending approval to move from")
 )
 
 type ProjectLabelNotFoundError struct {

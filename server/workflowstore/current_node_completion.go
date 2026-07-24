@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
@@ -119,9 +120,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	task, err := s.queries.GetTask(ctx, string(prepared.Source.TaskID))
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
-	}
-	if task.CanceledAtUnixMs.Valid {
-		return CurrentNodeCompletionResult{}, ErrTaskCanceled
 	}
 	definition, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
@@ -325,6 +323,15 @@ func cloneCurrentNodeOutputValues(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func sortedStringKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func currentNodeDefinitionNode(definition workflow.Definition, nodeID workflow.NodeID) (workflow.Node, error) {

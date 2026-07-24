@@ -100,15 +100,15 @@ const (
 	workflowTaskPromptTriggerCompaction
 )
 
-func selectWorkflowTaskPrompt(items []llm.ResponseItem, runID string, trigger workflowTaskPromptTrigger) (prompts.WorkflowTaskPromptKind, bool) {
-	normalizedRunID := strings.TrimSpace(runID)
-	if normalizedRunID == "" {
-		panic("select workflow task prompt: workflow run ID is required")
+func selectWorkflowTaskPrompt(items []llm.ResponseItem, currentNodeIdentity string, trigger workflowTaskPromptTrigger) (prompts.WorkflowTaskPromptKind, bool) {
+	normalizedCurrentNodeIdentity := strings.TrimSpace(currentNodeIdentity)
+	if normalizedCurrentNodeIdentity == "" {
+		panic("select workflow task prompt: current node identity is required")
 	}
 	desired, ok := classifyMetaContextMessage(llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-		SourcePath:  textutil.Value(normalizedRunID),
+		SourcePath:  textutil.Value(normalizedCurrentNodeIdentity),
 	})
 	if !ok {
 		panic("select workflow task prompt: workflow-mode message classification failed")
@@ -297,9 +297,13 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if e.workflowRunActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
+		prompt, configured := e.workflowPrompt()
+		if !configured {
+			return nil, errors.New("workflow prompt is unavailable")
+		}
 		kind, shouldInject := selectWorkflowTaskPrompt(
 			e.transcriptRuntimeState().SnapshotItems(),
-			e.cfg.WorkflowRun.ScopeID.String(),
+			prompt.Identity,
 			workflowTaskPromptTriggerCompaction,
 		)
 		if !shouldInject {
@@ -311,10 +315,6 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		}
 		opts.IncludeWorkflow = true
 		opts.WorkflowCompletionMode = mode
-		prompt, configured := e.workflowPrompt()
-		if !configured {
-			return nil, errors.New("workflow prompt is unavailable")
-		}
 		opts.WorkflowPrompt = prompt
 		opts.WorkflowTaskPromptKind = kind
 		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)

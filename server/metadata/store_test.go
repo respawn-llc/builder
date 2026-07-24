@@ -252,8 +252,7 @@ func TestUnlinkProjectWorkspaceBlocksUnsafeStates(t *testing.T) {
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
 	execSeed(t, store.db, "active source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-active-workspace', 'link-1', 1, 1, 'BLD-1', 'Active', '', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
-	execSeed(t, store.db, "active source placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('placement-active-workspace', 'task-active-workspace', 'node-agent', 'active', ?, ?)`, now, now)
+	insertTaskCurrentNode(t, store.db, "task-active-workspace", "node-agent", nil)
 
 	activeTaskBlockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -261,9 +260,7 @@ VALUES ('placement-active-workspace', 'task-active-workspace', 'node-agent', 'ac
 	}
 	assertWorkspaceUnlinkBlocker(t, activeTaskBlockers, "non_terminal_tasks")
 
-	execSeed(t, store.db, "complete active source placement", `UPDATE task_node_placements SET state = 'completed' WHERE id = 'placement-active-workspace'`)
-	execSeed(t, store.db, "pending approval transition", `INSERT INTO task_transitions (id, task_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
-VALUES ('transition-pending-workspace', 'task-active-workspace', 'placement-active-workspace', 'done', 1, 'agent', 'pending_approval', '{}', ?)`, now)
+	insertTaskPendingApproval(t, store.db, "approval-pending-workspace", "task-active-workspace", "node-agent", nil, now)
 	pendingApprovalBlockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
 		t.Fatalf("UnlinkProjectWorkspace pending approval transition: %v", err)
@@ -278,9 +275,9 @@ func TestDeleteProjectBlocksWorkflowWork(t *testing.T) {
 	seedWorkflowTaskWithID(t, store, "task-delete-active", "link-1", 1, "BLD-1", "placement-delete-active", "node-agent")
 	seedWorkflowTaskWithID(t, store, "task-delete-running", "link-1", 2, "BLD-2", "placement-delete-running", "node-agent")
 	seedWorkflowTaskWithID(t, store, "task-delete-runnable", "link-1", 3, "BLD-3", "placement-delete-runnable", "node-agent")
-	execSeed(t, store.db, "delete runs", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, automation_requested_at_unix_ms, started_at_unix_ms, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('run-delete-running', 'placement-delete-running', 1, ?, ?, ?, ?),
-       ('run-delete-runnable', 'placement-delete-runnable', 1, ?, NULL, ?, ?)`, now, now, now, now, now, now, now)
+	for _, taskID := range []string{"task-delete-active", "task-delete-running", "task-delete-runnable"} {
+		insertTaskCurrentNode(t, store.db, taskID, "node-agent", nil)
+	}
 	blockers, err := store.DeleteProject(ctx, binding.ProjectID, func(ProjectSessionArtifact, bool) error { return nil })
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
@@ -289,8 +286,8 @@ VALUES ('run-delete-running', 'placement-delete-running', 1, ?, ?, ?, ?),
 	for _, blocker := range blockers {
 		counts[blocker.Code] = blocker.Count
 	}
-	if len(blockers) != 3 || counts["non_terminal_tasks"] != 3 || counts["active_runs"] != 1 || counts["runnable_runs"] != 1 {
-		t.Fatalf("delete blockers = %+v, want exact workflow blockers", blockers)
+	if len(blockers) != 1 || counts["non_terminal_tasks"] != 3 {
+		t.Fatalf("delete blockers = %+v, want Current Node quiescence blocker", blockers)
 	}
 }
 
@@ -299,6 +296,7 @@ func TestDeleteProjectAllowsBacklogTasks(t *testing.T) {
 	ctx, now := context.Background(), time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
 	seedWorkflowTaskWithID(t, store, "task-delete-backlog", "link-1", 1, "BLD-1", "placement-delete-backlog", "node-start")
+	insertTaskCurrentNode(t, store.db, "task-delete-backlog", "node-start", nil)
 
 	blockers, err := store.DeleteProject(ctx, binding.ProjectID, func(ProjectSessionArtifact, bool) error { return nil })
 	if err != nil {
@@ -323,8 +321,7 @@ func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
 VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(attached.CanonicalRoot, "terminal-worktree"), now, now)
 	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
-	execSeed(t, store.db, "terminal source placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('placement-terminal-workspace', 'task-terminal-workspace', 'node-done', 'completed', ?, ?)`, now, now)
+	insertTaskCurrentNode(t, store.db, "task-terminal-workspace", "node-done", nil)
 	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
 VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 

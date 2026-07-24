@@ -16,14 +16,12 @@ const (
 
 type WorkflowTerminalState struct {
 	Completed   bool
-	RunID       string
 	Generation  int64
 	Source      WorkflowCompletionSource
 	CompletedAt time.Time
 }
 
 type WorkflowSessionState struct {
-	RunID      string
 	TaskID     string
 	WorkflowID string
 }
@@ -34,7 +32,6 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	}
 	if e.workflowRunActive() {
 		return WorkflowSessionState{
-			RunID:      e.cfg.WorkflowRun.ScopeID.String(),
 			TaskID:     strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID),
 			WorkflowID: strings.TrimSpace(e.cfg.WorkflowRun.Instructions.WorkflowID),
 		}
@@ -82,7 +79,6 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bo
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       e.cfg.WorkflowRun.ScopeID.String(),
 		Source:      source,
 		CompletedAt: time.Now(),
 	}

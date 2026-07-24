@@ -406,44 +406,6 @@ func writeWorkflowExecutionTargetError(stderr io.Writer, err error) bool {
 	return false
 }
 
-func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task cancel", stderr, taskCancelUsage)
-	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	reason := fs.String("reason", "", "reason recorded with the cancellation")
-	positionals, flagArgs := takeLeadingPositionals(args, 1)
-	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
-		return exitCode
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 1 {
-		fmt.Fprintln(stderr, "task cancel requires <short-id-or-task-id>")
-		return 2
-	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
-		return 1
-	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		if err := remote.CancelWorkflowTask(ctx, serverapi.WorkflowTaskCancelRequest{TaskID: taskID, Reason: *reason}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "canceled task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "Canceled task %s.\n", taskDisplayID(detail))
-		return 0
-	})
-}
-
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task delete", stderr, taskDeleteUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
@@ -718,13 +680,9 @@ func (f *stringMapFlag) Set(raw string) error {
 	return nil
 }
 
-func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, runID string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
+func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
-	}
-	trimmedRunID := strings.TrimSpace(runID)
-	if trimmedRunID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("run id is required")
 	}
 	if interval <= 0 {
 		interval = taskStartSessionPollInterval
@@ -735,23 +693,18 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 		detail, err := getWorkflowTaskByID(pollCtx, remote, taskID)
 		if err != nil {
 			if pollCtx.Err() != nil {
-				return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but session id was not assigned within %s", taskID, trimmedRunID, timeout)
+				return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskID, timeout)
 			}
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but failed to load task detail while waiting for session id: %w", taskID, trimmedRunID, err)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but failed to load task detail while waiting for session id: %w", taskID, err)
 		}
-		for _, script := range detail.CurrentScripts {
-			if script.RunID == trimmedRunID {
-				return detail, nil
-			}
-		}
-		if len(detail.CurrentSessionIDs) > 0 {
+		if len(detail.CurrentScripts) > 0 || len(detail.LiveSessionIDs) > 0 {
 			return detail, nil
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-pollCtx.Done():
 			timer.Stop()
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but session id was not assigned within %s", taskDisplayID(detail), trimmedRunID, timeout)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskDisplayID(detail), timeout)
 		case <-timer.C:
 		}
 	}

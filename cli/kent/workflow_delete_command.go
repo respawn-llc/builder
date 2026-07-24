@@ -104,7 +104,7 @@ func writeWorkflowDeleteImpact(w io.Writer, impact serverapi.WorkflowDeleteImpac
 	fmt.Fprintf(w, "  Project links: %d\n", impact.LinkCount)
 	fmt.Fprintf(w, "  Projects requiring a replacement default: %d\n", impact.DefaultReplacementProjectCount)
 	fmt.Fprintf(w, "  Tasks: %d\n", impact.TaskCount)
-	fmt.Fprintf(w, "  Active runs: %d\n", impact.ActiveRunCount)
-	fmt.Fprintf(w, "  Runnable runs: %d\n", impact.RunnableRunCount)
+	fmt.Fprintf(w, "  Current nodes: %d\n", impact.CurrentNodeCount)
+	fmt.Fprintf(w, "  Pending approvals: %d\n", impact.PendingApprovalCount)
 	fmt.Fprintf(w, "  Blocked tasks: %d\n", impact.BlockedTaskCount)
 }

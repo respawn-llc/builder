@@ -16,6 +16,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -29,14 +30,12 @@ type fakeWorkflowController struct {
 	maxHits                             atomic.Int64
 	completionObservations              atomic.Int64
 	completeExternallyAfterObservations int64
-	completedRunID                      string
-	completedGeneration                 int64
 	completedExternally                 atomic.Bool
 	mu                                  sync.Mutex
 	requests                            []workflowruntime.CompletionRequest
 }
 
-func (c *fakeWorkflowController) CompleteWorkflowRun(_ context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
+func (c *fakeWorkflowController) CompleteCurrentNode(_ context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
@@ -47,7 +46,7 @@ func (c *fakeWorkflowController) CompleteWorkflowRun(_ context.Context, req work
 	return workflowruntime.CompletionResult{TransitionID: "transition-applied", State: "applied"}, nil
 }
 
-func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
+func (c *fakeWorkflowController) RecordProtocolViolation(_ context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
 	count := c.violations.Add(1)
 	interrupted := count >= int64(req.MaxCount)
 	if interrupted {
@@ -56,7 +55,7 @@ func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Conte
 	return workflowruntime.ViolationResult{Count: count, Interrupted: interrupted}, nil
 }
 
-func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
+func (c *fakeWorkflowController) ResetProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
 	if c.protocolBudgetResetErr != nil {
 		return c.protocolBudgetResetErr
 	}
@@ -65,14 +64,8 @@ func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.
 	return nil
 }
 
-func (c *fakeWorkflowController) ObserveWorkflowRunCompletion(_ context.Context, req workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {
+func (c *fakeWorkflowController) ObserveCurrentNodeCompletion(_ context.Context, _ workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {
 	count := c.completionObservations.Add(1)
-	if c.completedRunID != "" && string(req.RunID) != c.completedRunID {
-		return workflowruntime.CompletionObservationResult{}, nil
-	}
-	if c.completedGeneration != 0 && req.ExpectedGeneration != c.completedGeneration {
-		return workflowruntime.CompletionObservationResult{}, nil
-	}
 	completed := c.completedExternally.Load()
 	if c.completeExternallyAfterObservations > 0 && count >= c.completeExternallyAfterObservations {
 		completed = true
@@ -162,10 +155,8 @@ func (t *externalCompletionTool) Call(_ context.Context, c tools.Call) (tools.Re
 
 func testWorkflowConfig(controller workflowruntime.Controller, mode config.WorkflowCompletionMode) *workflowruntime.Config {
 	return &workflowruntime.Config{
+		ScopeID: runtimeids.NewExecutionScopeID(),
 		Contract: workflowruntime.CompletionContract{
-			RunID:              "run-1",
-			ExpectedGeneration: 7,
-			RequireGeneration:  true,
 			Transitions: []workflowruntime.CompletionTransition{{
 				ID:         "done",
 				Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary of work."}},
@@ -494,14 +485,14 @@ func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
 	}
 }
 
-func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *testing.T) {
+func TestWorkflowModePromptExistingCurrentNodeMessageSkipsCommentCountQuery(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value("run-1"), Content: textutil.Value("existing workflow instructions")}); err != nil {
-		t.Fatalf("seed workflow message: %v", err)
-	}
 	counter := &fakeTaskCommentCounter{count: 2}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = counter
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowPromptIdentity(workflowCfg.Instructions)), Content: textutil.Value("existing workflow instructions")}); err != nil {
+		t.Fatalf("seed workflow message: %v", err)
+	}
 	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
 		completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
 	)}}
@@ -514,7 +505,7 @@ func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *tes
 	}
 	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
 	if len(workflowMessages) != 1 || messageContent(workflowMessages[0]) != "existing workflow instructions" {
-		t.Fatalf("workflow messages = %+v, want only the existing run-scoped prompt", workflowMessages)
+		t.Fatalf("workflow messages = %+v, want only the existing current-node prompt", workflowMessages)
 	}
 }
 
@@ -722,7 +713,7 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 		t.Fatalf("completions = %d, want 1", got)
 	}
 	terminal := eng.WorkflowTerminalState()
-	if !terminal.Completed || terminal.RunID != "run-1" || terminal.Source != WorkflowCompletionSourceStructuredOutput {
+	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceStructuredOutput {
 		t.Fatalf("terminal state = %+v, want structured completion", terminal)
 	}
 }
@@ -753,7 +744,7 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 		t.Fatalf("completion commentary = %q, want complete", got)
 	}
 	terminal := eng.WorkflowTerminalState()
-	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured || terminal.RunID != "run-1" {
+	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
 	}
 }
@@ -799,7 +790,7 @@ func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
 				t.Fatalf("completion request = %+v, want decoded workflow submission", requests[0])
 			}
 			terminal := eng.WorkflowTerminalState()
-			if !terminal.Completed || terminal.Source != tt.source || terminal.RunID != "run-1" {
+			if !terminal.Completed || terminal.Source != tt.source {
 				t.Fatalf("terminal state = %+v, want %s completion", terminal, tt.source)
 			}
 		})

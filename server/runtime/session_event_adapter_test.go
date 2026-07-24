@@ -301,7 +301,7 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSessionHistoryReplacementRecordAdapterRejectsPresentBlankOptionalFacts(t *testing.T) {
+func TestSessionHistoryReplacementRecordAdapterRejectsInvalidOptionalFacts(t *testing.T) {
 	base := historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeAuto),
@@ -313,12 +313,6 @@ func TestSessionHistoryReplacementRecordAdapterRejectsPresentBlankOptionalFacts(
 	}
 
 	invalid := base
-	invalid.WorkflowRunID = textutil.Value(" \t")
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present blank workflow run identity")
-	}
-
-	invalid = base
 	invalid.CompactionNumber = textutil.Value(0)
 	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
 		t.Fatal("history-replacement adapter accepted a present zero compaction number")
@@ -570,7 +564,6 @@ func TestSessionHistoryReplacementRecordAdapterPreservesProviderHistoryAndProven
 	payload := historyReplacementPayload{
 		Engine:                            "local",
 		Mode:                              string(compactionModeAuto),
-		WorkflowRunID:                     textutil.Value("workflow-run-1"),
 		CompactionNumber:                  textutil.Value(4),
 		CommittedEntryStart:               &committedEntryStart,
 		PendingHandoffFutureMessage:       textutil.Value("continue from the compacted prefix"),

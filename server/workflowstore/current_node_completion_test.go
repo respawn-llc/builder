@@ -93,7 +93,6 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 	}
 	reviewEdgeID := edgeByKey(t, definition, "review").ID
 	reviewNode := nodeByKey(t, definition, "review")
-	auditNode := nodeByKey(t, definition, "audit")
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
 		edge.RequiresApproval = true
@@ -162,6 +161,26 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 	if eligible {
 		t.Fatal("pending approval source was eligible for execution")
 	}
+	currentDefinition, currentRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition before frozen edge removal: %v", err)
+	}
+	edgeRemoval := workflowGraphSaveRequestFromDefinition(workflowID, currentRecord.Version, true, currentDefinition)
+	edgeRemoval.Edges = removeWorkflowGraphSaveEdge(edgeRemoval.Edges, reviewEdgeID)
+	preview, err := store.PreviewWorkflowGraphSave(ctx, edgeRemoval)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave frozen target edge removal: %v", err)
+	}
+	if preview.Impact.EdgeTaskReferenceCount != 1 || workflowGraphSaveBlockerCount(preview.Blockers, "edge_task_references") != 1 {
+		t.Fatalf("frozen target edge removal preview = %+v, want one protected approval edge", preview)
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, edgeRemoval)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph frozen target edge removal: %v", err)
+	}
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "edge_task_references") != 1 {
+		t.Fatalf("frozen target edge removal save = %+v, want blocked save", saved)
+	}
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "review",
@@ -182,9 +201,6 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
-		edge.ContextMode = workflow.ContextModeNewSession
-		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
-		edge.TargetNodeID = workflow.NodeIDOf(auditNode)
 		edge.PromptTemplate = "Changed after approval."
 	})
 	frozenAfterEdit, err := store.ListPendingApprovals(ctx, task.ID)
@@ -297,15 +313,8 @@ func TestDeleteWorkflowRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testin
 	if err != nil {
 		t.Fatalf("DeleteWorkflow: %v", err)
 	}
-	if !deleted.Deleted {
-		t.Fatalf("workflow deletion = %+v, want deleted", deleted)
-	}
-	remaining, err := store.ListPendingApprovals(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPendingApprovals after workflow deletion: %v", err)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("pending approvals after workflow deletion = %+v, want none", remaining)
+	if deleted.Deleted || len(deleted.Blockers) == 0 {
+		t.Fatalf("workflow deletion = %+v, want quiescence blockers", deleted)
 	}
 }
 
@@ -340,15 +349,8 @@ func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
-	if len(blockers) != 0 {
-		t.Fatalf("project deletion blockers = %+v, want none", blockers)
-	}
-	remaining, err := store.ListPendingApprovals(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPendingApprovals after project deletion: %v", err)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("pending approvals after project deletion = %+v, want none", remaining)
+	if len(blockers) == 0 {
+		t.Fatalf("project deletion blockers = %+v, want quiescence blockers", blockers)
 	}
 }
 

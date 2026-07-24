@@ -6,8 +6,8 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -90,14 +90,14 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 	if clone.Meta().SessionID == source.Meta().SessionID {
 		t.Fatalf("fan-out clone reused source Session ID %q", source.Meta().SessionID)
 	}
-	runID := workflow.RunID("run-current")
+	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
 		clone,
 		&fakeClient{},
 		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -106,7 +106,7 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 
 	kind, ok := selectWorkflowTaskPrompt(
 		engine.transcriptRuntimeState().SnapshotItems(),
-		string(runID),
+		scopeID.String(),
 		workflowTaskPromptTriggerTaskDelivery,
 	)
 	if !ok || kind != prompts.WorkflowTaskPromptReassignment {
@@ -114,11 +114,11 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 	}
 }
 
-func workflowPromptItems(runID string) []llm.ResponseItem {
+func workflowPromptItems(scopeID string) []llm.ResponseItem {
 	return llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-		SourcePath:  textutil.Value(runID),
+		SourcePath:  textutil.Value(scopeID),
 		Content:     textutil.Value("workflow instructions"),
 	}})
 }

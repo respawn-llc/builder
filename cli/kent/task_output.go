@@ -9,8 +9,8 @@ import (
 )
 
 func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, _ serverapi.WorkflowTaskStartApplied) {
-	if len(task.CurrentSessionIDs) == 1 {
-		fmt.Fprintf(stdout, "Started task %s in session %s using workflow %q (%s).\n", taskDisplayID(task), task.CurrentSessionIDs[0], task.Workflow.DisplayName, task.Workflow.WorkflowID)
+	if len(task.LiveSessionIDs) == 1 {
+		fmt.Fprintf(stdout, "Started task %s in session %s using workflow %q (%s).\n", taskDisplayID(task), task.LiveSessionIDs[0], task.Workflow.DisplayName, task.Workflow.WorkflowID)
 		return
 	}
 	if len(task.CurrentScripts) == 1 {

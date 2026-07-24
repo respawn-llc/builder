@@ -7,8 +7,8 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -36,14 +36,12 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			}}
 			var engine *Engine
 			if test.workflow {
-				runID := workflow.RunID("workflow-run")
 				engine = mustNewWorkflowTestEngine(
 					t,
 					store,
 					client,
 					&workflowruntime.Config{
-						RunID:          runID,
-						Contract:       workflowruntime.CompletionContract{RunID: runID},
+						ScopeID:        runtimeids.NewExecutionScopeID(),
 						CompletionMode: workflowruntime.CompletionModeTool,
 						Controller:     &externallyCompletedWorkflowController{},
 					},

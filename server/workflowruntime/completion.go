@@ -27,6 +27,7 @@ const (
 // ErrStructuredOutputUnsupported is returned when structured-output completion
 // is requested but the provider lacks responses-API support.
 var ErrStructuredOutputUnsupported = errors.New("workflow structured output completion requires provider responses API support")
+var ErrShellCompletionUnavailable = errors.New("workflow shell-command completion requires exec_command")
 
 type CompletionMode string
 
@@ -163,6 +164,9 @@ func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, er
 		}
 		return CompletionModeStructuredOutput, nil
 	case config.WorkflowCompletionModeShellCommand:
+		if !selection.ShellAvailable {
+			return "", ErrShellCompletionUnavailable
+		}
 		return CompletionModeShellCommand, nil
 	case config.WorkflowCompletionModeUnstructured:
 		return CompletionModeUnstructuredOutput, nil

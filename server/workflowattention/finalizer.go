@@ -2,6 +2,7 @@ package workflowattention
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,37 +13,33 @@ import (
 	"core/shared/clientui"
 )
 
-type TransitionResult struct {
-	TransitionID                      workflow.TransitionID
-	State                             string
-	ResolvedApprovalProjections       []ApprovalProjection
-	ResolvedInterruptedRunProjections []InterruptedRunProjection
+type Resolution struct {
+	Approvals               []ApprovalProjection
+	InterruptedCurrentNodes []InterruptedCurrentNodeProjection
 }
 
 type ApprovalProjection struct {
-	TransitionID     workflow.TransitionID
+	ApprovalID       workflow.ApprovalID
+	Source           workflow.CurrentNodeReference
 	ProjectID        string
 	WorkflowID       string
-	TaskID           workflow.TaskID
 	TaskShortID      string
 	TaskTitle        string
-	RunID            string
 	SessionID        string
 	Message          string
 	OccurredAtUnixMs int64
 }
 
 type PendingApprovalProjectionProvider interface {
-	PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (ApprovalProjection, bool, error)
+	PendingApprovalProjection(context.Context, workflow.ApprovalID) (ApprovalProjection, bool, error)
 }
 
-type InterruptedRunProjection struct {
+type InterruptedCurrentNodeProjection struct {
+	CurrentNode      workflow.CurrentNodeReference
 	ProjectID        string
 	WorkflowID       string
-	TaskID           workflow.TaskID
 	TaskShortID      string
 	TaskTitle        string
-	RunID            workflow.RunID
 	SessionID        string
 	Message          string
 	Reason           string
@@ -50,221 +47,221 @@ type InterruptedRunProjection struct {
 	OccurredAtUnixMs int64
 }
 
-type PendingInterruptedRunProjectionProvider interface {
-	PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (InterruptedRunProjection, bool, error)
+type PendingInterruptedCurrentNodeProjectionProvider interface {
+	PendingInterruptedCurrentNodeProjection(context.Context, workflow.CurrentNodeReference) (InterruptedCurrentNodeProjection, bool, error)
 }
 
 type Publisher interface {
-	PublishPending(scope attentionnotify.RoutingScope, notification clientui.AttentionNotification) error
-	PublishResolved(scope attentionnotify.RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, occurredAt time.Time) error
+	PublishPending(attentionnotify.RoutingScope, clientui.AttentionNotification) error
+	PublishResolved(attentionnotify.RoutingScope, clientui.AttentionNotificationID, clientui.AttentionNotificationKind, time.Time) error
 }
 
 type Finalizer struct {
-	mu          sync.Mutex
-	projection  PendingApprovalProjectionProvider
-	runs        PendingInterruptedRunProjectionProvider
-	publisher   Publisher
-	resolved    map[workflow.TransitionID]struct{}
-	runResolved map[interruptedRunOccurrenceKey]struct{}
+	mu                      sync.Mutex
+	approvals               PendingApprovalProjectionProvider
+	interruptedCurrentNodes PendingInterruptedCurrentNodeProjectionProvider
+	publisher               Publisher
+	resolvedApprovals       map[workflow.ApprovalID]struct{}
+	resolvedInterruptions   map[interruptedCurrentNodeOccurrenceKey]struct{}
 }
 
-type interruptedRunOccurrenceKey struct {
-	runID            workflow.RunID
+type interruptedCurrentNodeOccurrenceKey struct {
+	taskID           workflow.TaskID
+	nodeID           workflow.NodeID
+	branchKey        workflow.TransitionBranchKey
+	branchScoped     bool
 	occurredAtUnixMs int64
 }
 
-func NewFinalizer(projection PendingApprovalProjectionProvider, publisher Publisher) *Finalizer {
-	runs, _ := projection.(PendingInterruptedRunProjectionProvider)
+func NewFinalizer(provider PendingApprovalProjectionProvider, publisher Publisher) *Finalizer {
+	interrupted, _ := provider.(PendingInterruptedCurrentNodeProjectionProvider)
 	return &Finalizer{
-		projection:  projection,
-		runs:        runs,
-		publisher:   publisher,
-		resolved:    map[workflow.TransitionID]struct{}{},
-		runResolved: map[interruptedRunOccurrenceKey]struct{}{},
+		approvals:               provider,
+		interruptedCurrentNodes: interrupted,
+		publisher:               publisher,
+		resolvedApprovals:       map[workflow.ApprovalID]struct{}{},
+		resolvedInterruptions:   map[interruptedCurrentNodeOccurrenceKey]struct{}{},
 	}
 }
 
-func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionResult) {
+func (f *Finalizer) PublishPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) {
+	if f == nil || f.approvals == nil || f.publisher == nil {
+		return
+	}
+	projection, ok, err := f.approvals.PendingApprovalProjection(ctx, approvalID)
+	if err != nil {
+		slog.Warn("workflow approval attention projection failed", "approval_id", approvalID.String(), "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	f.publishPendingApproval(projection)
+}
+
+func (f *Finalizer) PublishPendingInterruptedCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) {
+	if f == nil || f.interruptedCurrentNodes == nil || f.publisher == nil {
+		return
+	}
+	projection, ok, err := f.interruptedCurrentNodes.PendingInterruptedCurrentNodeProjection(ctx, reference)
+	if err != nil {
+		slog.Warn("workflow interrupted-current-node attention projection failed", "task_id", reference.TaskID, "node_id", reference.NodeID, "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	f.publishPendingInterruptedCurrentNode(projection)
+}
+
+func (f *Finalizer) FinalizeResolution(resolution Resolution) {
 	if f == nil {
 		return
 	}
-	for _, projection := range result.ResolvedApprovalProjections {
-		if projection.TransitionID == "" {
-			continue
-		}
-		f.ResolveApproval(projection)
+	for _, approval := range resolution.Approvals {
+		f.resolveApproval(approval)
 	}
-	for _, projection := range result.ResolvedInterruptedRunProjections {
-		f.ResolveInterruptedRun(projection)
-	}
-	if result.TransitionID == "" {
-		return
-	}
-	if strings.TrimSpace(result.State) == "pending_approval" {
-		f.PublishPendingApproval(ctx, result.TransitionID)
+	for _, interrupted := range resolution.InterruptedCurrentNodes {
+		f.resolveInterruptedCurrentNode(interrupted)
 	}
 }
 
-func (f *Finalizer) PublishPendingApproval(ctx context.Context, transitionID workflow.TransitionID) {
-	f.publishPending(ctx, transitionID)
-}
-
-func (f *Finalizer) PublishPendingInterruptedRun(ctx context.Context, runID workflow.RunID) {
-	if f == nil || f.publisher == nil || f.runs == nil || runID == "" {
+func (f *Finalizer) publishPendingApproval(projection ApprovalProjection) {
+	if err := projection.ApprovalID.Validate(); err != nil {
+		slog.Warn("workflow approval attention projection has invalid identity", "error", err)
 		return
 	}
-	projection, ok, err := f.runs.PendingInterruptedRunProjection(ctx, runID)
+	f.mu.Lock()
+	_, resolved := f.resolvedApprovals[projection.ApprovalID]
+	f.mu.Unlock()
+	if resolved {
+		return
+	}
+	if err := f.publisher.PublishPending(approvalRoutingScope(projection), approvalNotification(projection)); err != nil {
+		slog.Warn("workflow approval attention publish failed", "approval_id", projection.ApprovalID.String(), "task_id", projection.Source.TaskID, "error", err)
+	}
+}
+
+func (f *Finalizer) publishPendingInterruptedCurrentNode(projection InterruptedCurrentNodeProjection) {
+	occurrence, err := interruptedCurrentNodeOccurrence(projection)
 	if err != nil {
-		slog.Warn("workflow interrupted-run attention projection failed", "run_id", string(runID), "error", err)
+		slog.Warn("workflow interrupted-current-node attention projection is invalid", "error", err)
 		return
 	}
-	if !ok {
-		return
-	}
-	scope := interruptedRunRoutingScope(projection)
-	notification := interruptedRunNotification(projection)
-	occurrence := interruptedRunOccurrence(projection)
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, ok := f.runResolved[occurrence]; ok {
+	_, resolved := f.resolvedInterruptions[occurrence]
+	f.mu.Unlock()
+	if resolved {
 		return
 	}
-	if err := f.publisher.PublishPending(scope, notification); err != nil {
-		slog.Warn("workflow interrupted-run attention publish failed", "run_id", string(runID), "task_id", string(projection.TaskID), "error", err)
-		return
+	if err := f.publisher.PublishPending(interruptedCurrentNodeRoutingScope(projection), interruptedCurrentNodeNotification(projection)); err != nil {
+		slog.Warn("workflow interrupted-current-node attention publish failed", "task_id", projection.CurrentNode.TaskID, "node_id", projection.CurrentNode.NodeID, "error", err)
 	}
 }
 
-func (f *Finalizer) ResolveApproval(projection ApprovalProjection) {
-	if f == nil || projection.TransitionID == "" {
+func (f *Finalizer) resolveApproval(projection ApprovalProjection) {
+	if f == nil || f.publisher == nil {
 		return
 	}
-	f.publishResolvedWithScope(projection.TransitionID, approvalRoutingScope(projection))
+	if err := projection.ApprovalID.Validate(); err != nil {
+		slog.Warn("workflow approval resolution has invalid identity", "error", err)
+		return
+	}
+	f.mu.Lock()
+	f.resolvedApprovals[projection.ApprovalID] = struct{}{}
+	f.mu.Unlock()
+	if err := f.publisher.PublishResolved(approvalRoutingScope(projection), approvalNotificationID(projection.ApprovalID), clientui.AttentionNotificationKindApproval, time.Now().UTC()); err != nil {
+		slog.Warn("workflow approval attention resolved publish failed", "approval_id", projection.ApprovalID.String(), "error", err)
+	}
 }
 
-func (f *Finalizer) ResolveInterruptedRun(projection InterruptedRunProjection) {
-	runID := projection.RunID
-	if f == nil || f.publisher == nil || runID == "" {
+func (f *Finalizer) resolveInterruptedCurrentNode(projection InterruptedCurrentNodeProjection) {
+	if f == nil || f.publisher == nil {
 		return
 	}
-	occurrence := interruptedRunOccurrence(projection)
+	occurrence, err := interruptedCurrentNodeOccurrence(projection)
+	if err != nil {
+		slog.Warn("workflow interrupted-current-node resolution is invalid", "error", err)
+		return
+	}
 	f.mu.Lock()
-	if _, resolved := f.runResolved[occurrence]; resolved {
+	if _, resolved := f.resolvedInterruptions[occurrence]; resolved {
 		f.mu.Unlock()
 		return
 	}
-	f.runResolved[occurrence] = struct{}{}
+	f.resolvedInterruptions[occurrence] = struct{}{}
 	f.mu.Unlock()
-	scope := interruptedRunRoutingScope(projection)
-	if err := f.publisher.PublishResolved(scope, interruptedRunNotificationID(runID), clientui.AttentionNotificationKindInterruptedRun, time.Now().UTC()); err != nil {
-		slog.Warn("workflow interrupted-run attention resolved publish failed", "run_id", string(runID), "error", err)
+	if err := f.publisher.PublishResolved(interruptedCurrentNodeRoutingScope(projection), interruptedCurrentNodeNotificationID(projection.CurrentNode), clientui.AttentionNotificationKindInterruptedCurrentNode, time.Now().UTC()); err != nil {
+		slog.Warn("workflow interrupted-current-node attention resolved publish failed", "task_id", projection.CurrentNode.TaskID, "node_id", projection.CurrentNode.NodeID, "error", err)
 	}
 }
 
-func (f *Finalizer) publishPending(ctx context.Context, transitionID workflow.TransitionID) {
-	if f.projection == nil || f.publisher == nil {
-		return
+func interruptedCurrentNodeOccurrence(projection InterruptedCurrentNodeProjection) (interruptedCurrentNodeOccurrenceKey, error) {
+	if err := projection.CurrentNode.Validate(); err != nil {
+		return interruptedCurrentNodeOccurrenceKey{}, err
 	}
-	projection, ok, err := f.projection.PendingApprovalProjection(ctx, transitionID)
-	if err != nil {
-		slog.Warn("workflow approval attention projection failed", "transition_id", string(transitionID), "error", err)
-		return
+	if projection.OccurredAtUnixMs <= 0 {
+		return interruptedCurrentNodeOccurrenceKey{}, fmt.Errorf("interrupted current node occurrence time is required")
 	}
-	if !ok {
-		return
+	key := interruptedCurrentNodeOccurrenceKey{
+		taskID:           projection.CurrentNode.TaskID,
+		nodeID:           projection.CurrentNode.NodeID,
+		occurredAtUnixMs: projection.OccurredAtUnixMs,
 	}
-	scope := approvalRoutingScope(projection)
-	notification := approvalNotification(projection)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, ok := f.resolved[transitionID]; ok {
-		return
+	if branchKey, branchScoped := projection.CurrentNode.TransitionBranchKey(); branchScoped {
+		key.branchKey = branchKey
+		key.branchScoped = true
 	}
-	if err := f.publisher.PublishPending(scope, notification); err != nil {
-		slog.Warn("workflow approval attention publish failed", "transition_id", string(transitionID), "task_id", string(projection.TaskID), "error", err)
-		return
-	}
-}
-
-func (f *Finalizer) publishResolvedWithScope(transitionID workflow.TransitionID, scope attentionnotify.RoutingScope) {
-	if f.publisher == nil {
-		return
-	}
-	f.mu.Lock()
-	f.resolved[transitionID] = struct{}{}
-	f.mu.Unlock()
-	if err := f.publisher.PublishResolved(scope, approvalNotificationID(transitionID), clientui.AttentionNotificationKindApproval, time.Now().UTC()); err != nil {
-		slog.Warn("workflow approval attention resolved publish failed", "transition_id", string(transitionID), "error", err)
-	}
-}
-
-func interruptedRunOccurrence(projection InterruptedRunProjection) interruptedRunOccurrenceKey {
-	return interruptedRunOccurrenceKey{runID: projection.RunID, occurredAtUnixMs: projection.OccurredAtUnixMs}
+	return key, nil
 }
 
 func approvalNotification(projection ApprovalProjection) clientui.AttentionNotification {
-	taskShortID := strings.TrimSpace(projection.TaskShortID)
-	if taskShortID == "" {
-		taskShortID = strings.TrimSpace(string(projection.TaskID))
-	}
 	return clientui.AttentionNotification{
-		ID:         approvalNotificationID(projection.TransitionID),
+		ID:         approvalNotificationID(projection.ApprovalID),
 		Kind:       clientui.AttentionNotificationKindApproval,
 		OccurredAt: time.UnixMilli(projection.OccurredAtUnixMs).UTC(),
 		Revision:   1,
 		Approval: &clientui.AttentionNotificationApprovalState{
-			TaskTransitionID: strings.TrimSpace(string(projection.TransitionID)),
-			Message:          strings.TrimSpace(projection.Message),
+			ApprovalID: projection.ApprovalID.String(),
+			Message:    strings.TrimSpace(projection.Message),
 		},
-		Target: clientui.AttentionNotificationTarget{
-			Kind:        clientui.AttentionNotificationTargetWorkflowTask,
-			ProjectID:   strings.TrimSpace(projection.ProjectID),
-			WorkflowID:  strings.TrimSpace(projection.WorkflowID),
-			TaskID:      strings.TrimSpace(string(projection.TaskID)),
-			TaskShortID: taskShortID,
-			TaskTitle:   strings.TrimSpace(projection.TaskTitle),
-			RunID:       strings.TrimSpace(projection.RunID),
-			SessionID:   strings.TrimSpace(projection.SessionID),
-			Focus: &clientui.AttentionNotificationTaskDetailFocus{
-				Kind:             clientui.AttentionNotificationFocusApproval,
-				TaskTransitionID: strings.TrimSpace(string(projection.TransitionID)),
-			},
-		},
+		Target: workflowTaskTarget(projection.ProjectID, projection.WorkflowID, projection.Source, projection.TaskShortID, projection.TaskTitle, projection.SessionID, clientui.AttentionNotificationFocusApproval, projection.ApprovalID.String()),
 	}
 }
 
-func interruptedRunNotification(projection InterruptedRunProjection) clientui.AttentionNotification {
-	taskShortID := strings.TrimSpace(projection.TaskShortID)
-	if taskShortID == "" {
-		taskShortID = strings.TrimSpace(string(projection.TaskID))
-	}
-	runID := strings.TrimSpace(string(projection.RunID))
+func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProjection) clientui.AttentionNotification {
 	return clientui.AttentionNotification{
-		ID:         interruptedRunNotificationID(projection.RunID),
-		Kind:       clientui.AttentionNotificationKindInterruptedRun,
+		ID:         interruptedCurrentNodeNotificationID(projection.CurrentNode),
+		Kind:       clientui.AttentionNotificationKindInterruptedCurrentNode,
 		OccurredAt: time.UnixMilli(projection.OccurredAtUnixMs).UTC(),
 		Revision:   1,
-		InterruptedRun: &clientui.AttentionNotificationInterruptedRunState{
-			RunID:      runID,
+		InterruptedCurrentNode: &clientui.AttentionNotificationInterruptedCurrentNodeState{
 			Message:    strings.TrimSpace(projection.Message),
 			Reason:     strings.TrimSpace(projection.Reason),
 			DetailJSON: strings.TrimSpace(projection.DetailJSON),
 		},
-		Target: clientui.AttentionNotificationTarget{
-			Kind:        clientui.AttentionNotificationTargetWorkflowTask,
-			ProjectID:   strings.TrimSpace(projection.ProjectID),
-			WorkflowID:  strings.TrimSpace(projection.WorkflowID),
-			TaskID:      strings.TrimSpace(string(projection.TaskID)),
-			TaskShortID: taskShortID,
-			TaskTitle:   strings.TrimSpace(projection.TaskTitle),
-			RunID:       runID,
-			SessionID:   strings.TrimSpace(projection.SessionID),
-			Focus: &clientui.AttentionNotificationTaskDetailFocus{
-				Kind:  clientui.AttentionNotificationFocusInterruptedRun,
-				RunID: runID,
-			},
-		},
+		Target: workflowTaskTarget(projection.ProjectID, projection.WorkflowID, projection.CurrentNode, projection.TaskShortID, projection.TaskTitle, projection.SessionID, clientui.AttentionNotificationFocusInterruptedCurrentNode, ""),
 	}
+}
+
+func workflowTaskTarget(projectID, workflowID string, reference workflow.CurrentNodeReference, shortID, title, sessionID string, focusKind clientui.AttentionNotificationFocusKind, approvalID string) clientui.AttentionNotificationTarget {
+	nodeID := string(reference.NodeID)
+	target := clientui.AttentionNotificationTarget{
+		Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+		ProjectID:     strings.TrimSpace(projectID),
+		WorkflowID:    strings.TrimSpace(workflowID),
+		TaskID:        string(reference.TaskID),
+		TaskShortID:   strings.TrimSpace(shortID),
+		TaskTitle:     strings.TrimSpace(title),
+		SessionID:     strings.TrimSpace(sessionID),
+		CurrentNodeID: &nodeID,
+		Focus:         &clientui.AttentionNotificationTaskDetailFocus{Kind: focusKind, ApprovalID: approvalID},
+	}
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		value := string(branchKey)
+		target.CurrentNodeBranchKey = &value
+	}
+	return target
 }
 
 func approvalRoutingScope(projection ApprovalProjection) attentionnotify.RoutingScope {
@@ -272,31 +269,30 @@ func approvalRoutingScope(projection ApprovalProjection) attentionnotify.Routing
 		Kind:       attentionnotify.RoutingWorkflowTask,
 		ProjectID:  strings.TrimSpace(projection.ProjectID),
 		WorkflowID: strings.TrimSpace(projection.WorkflowID),
-		TaskID:     strings.TrimSpace(string(projection.TaskID)),
+		TaskID:     string(projection.Source.TaskID),
 		SessionID:  strings.TrimSpace(projection.SessionID),
 	}
 }
 
-func approvalNotificationID(transitionID workflow.TransitionID) clientui.AttentionNotificationID {
-	return clientui.AttentionNotificationID{
-		Kind: clientui.AttentionNotificationKindApproval,
-		UUID: strings.TrimSpace(string(transitionID)),
-	}
-}
-
-func interruptedRunRoutingScope(projection InterruptedRunProjection) attentionnotify.RoutingScope {
+func interruptedCurrentNodeRoutingScope(projection InterruptedCurrentNodeProjection) attentionnotify.RoutingScope {
 	return attentionnotify.RoutingScope{
 		Kind:       attentionnotify.RoutingWorkflowTask,
 		ProjectID:  strings.TrimSpace(projection.ProjectID),
 		WorkflowID: strings.TrimSpace(projection.WorkflowID),
-		TaskID:     strings.TrimSpace(string(projection.TaskID)),
+		TaskID:     string(projection.CurrentNode.TaskID),
 		SessionID:  strings.TrimSpace(projection.SessionID),
 	}
 }
 
-func interruptedRunNotificationID(runID workflow.RunID) clientui.AttentionNotificationID {
-	return clientui.AttentionNotificationID{
-		Kind: clientui.AttentionNotificationKindInterruptedRun,
-		UUID: strings.TrimSpace(string(runID)),
+func approvalNotificationID(approvalID workflow.ApprovalID) clientui.AttentionNotificationID {
+	return clientui.AttentionNotificationID{Kind: clientui.AttentionNotificationKindApproval, UUID: approvalID.String()}
+}
+
+func interruptedCurrentNodeNotificationID(reference workflow.CurrentNodeReference) clientui.AttentionNotificationID {
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	id := string(reference.TaskID) + ":" + string(reference.NodeID)
+	if branchScoped {
+		id += ":" + string(branchKey)
 	}
+	return clientui.AttentionNotificationID{Kind: clientui.AttentionNotificationKindInterruptedCurrentNode, UUID: id}
 }

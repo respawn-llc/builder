@@ -13,20 +13,20 @@ import (
 )
 
 type taskShowOutput struct {
-	Summary           serverapi.WorkflowTaskSummary         `json:"summary"`
-	Body              string                                `json:"body"`
-	SourceURL         string                                `json:"source_url,omitempty"`
-	Project           serverapi.ProjectBoardProject         `json:"project"`
-	Workflow          serverapi.WorkflowTaskWorkflowSummary `json:"workflow"`
-	SourceWorkspace   serverapi.ProjectWorkspaceSummary     `json:"source_workspace"`
-	ExecutionTarget   *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
-	WorktreePath      *string                               `json:"worktree_path"`
-	CurrentSessionIDs []string                              `json:"current_session_ids"`
-	CurrentScripts    []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
-	Status            serverapi.WorkflowTaskStatus          `json:"status"`
-	Actions           serverapi.WorkflowTaskActions         `json:"actions"`
-	LabelIDs          []string                              `json:"label_ids"`
-	AttentionCount    int                                   `json:"attention_count"`
+	Summary         serverapi.WorkflowTaskSummary         `json:"summary"`
+	Body            string                                `json:"body"`
+	SourceURL       string                                `json:"source_url,omitempty"`
+	Project         serverapi.ProjectBoardProject         `json:"project"`
+	Workflow        serverapi.WorkflowTaskWorkflowSummary `json:"workflow"`
+	SourceWorkspace serverapi.ProjectWorkspaceSummary     `json:"source_workspace"`
+	ExecutionTarget *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
+	WorktreePath    *string                               `json:"worktree_path"`
+	LiveSessionIDs  []string                              `json:"live_session_ids"`
+	CurrentScripts  []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
+	Status          serverapi.WorkflowTaskStatus          `json:"status"`
+	Actions         serverapi.WorkflowTaskActions         `json:"actions"`
+	LabelIDs        []string                              `json:"label_ids"`
+	AttentionCount  int                                   `json:"attention_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -78,20 +78,20 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput {
 	return taskShowOutput{
-		Summary:           task.Summary,
-		Body:              task.Body,
-		SourceURL:         task.SourceURL,
-		Project:           task.Project,
-		Workflow:          task.Workflow,
-		SourceWorkspace:   task.SourceWorkspace,
-		ExecutionTarget:   task.ExecutionTarget,
-		WorktreePath:      task.WorktreePath,
-		CurrentSessionIDs: task.CurrentSessionIDs,
-		CurrentScripts:    task.CurrentScripts,
-		Status:            task.Status,
-		Actions:           task.Actions,
-		LabelIDs:          normalizedLabelIDs(task.LabelIDs),
-		AttentionCount:    task.AttentionCount,
+		Summary:         task.Summary,
+		Body:            task.Body,
+		SourceURL:       task.SourceURL,
+		Project:         task.Project,
+		Workflow:        task.Workflow,
+		SourceWorkspace: task.SourceWorkspace,
+		ExecutionTarget: task.ExecutionTarget,
+		WorktreePath:    task.WorktreePath,
+		LiveSessionIDs:  task.LiveSessionIDs,
+		CurrentScripts:  task.CurrentScripts,
+		Status:          task.Status,
+		Actions:         task.Actions,
+		LabelIDs:        normalizedLabelIDs(task.LabelIDs),
+		AttentionCount:  task.AttentionCount,
 	}
 }
 
@@ -163,11 +163,11 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	if task.WorktreePath != nil {
 		fmt.Fprintf(stdout, "Worktree: %s\n", *task.WorktreePath)
 	}
-	for _, sessionID := range task.CurrentSessionIDs {
+	for _, sessionID := range task.LiveSessionIDs {
 		fmt.Fprintf(stdout, "Current session: %s\n", sessionID)
 	}
 	for _, script := range task.CurrentScripts {
-		fmt.Fprintf(stdout, "Current script: %s (%s)\n", script.Path, script.RunID)
+		fmt.Fprintf(stdout, "Current script: %s (%s)\n", script.Path, script.CurrentNode.NodeID)
 	}
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
@@ -221,7 +221,7 @@ func shortCommitOID(commitOID string) string {
 
 func taskStatusText(status serverapi.WorkflowTaskStatus) (string, error) {
 	switch status.Kind {
-	case serverapi.WorkflowTaskStatusKindCanceled, serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
+	case serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
 		return string(status.Kind), nil
 	default:
 		return "", fmt.Errorf("unsupported task status %q", status.Kind)

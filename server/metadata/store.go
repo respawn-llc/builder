@@ -163,6 +163,14 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+func (s *Store) ListProjectTaskIDs(ctx context.Context, projectID string) ([]string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	return s.queries.ListProjectTaskIDs(ctx, projectID)
+}
+
 func (s *Store) Queries() *sqlitegen.Queries {
 	if s == nil {
 		return nil
@@ -497,16 +505,14 @@ type ProjectSessionArtifact struct {
 type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
 type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
 
-func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
+func projectDeleteBlockersFromCounts(nonTerminalTasks int64) []serverapi.ProjectDeleteBlocker {
 	blockers := []serverapi.ProjectDeleteBlocker{}
 	add := func(code string, message string, count int64) {
 		if count > 0 {
 			blockers = append(blockers, serverapi.ProjectDeleteBlocker{Code: code, Message: message, Count: int(count)})
 		}
 	}
-	add("non_terminal_tasks", "Project has active or non-terminal tasks.", counts.NonTerminalTasks)
-	add("active_runs", "Project has active workflow runs.", counts.ActiveRuns)
-	add("runnable_runs", "Project has runnable workflow runs.", counts.RunnableRuns)
+	add("non_terminal_tasks", "Project has active or non-terminal tasks.", nonTerminalTasks)
 	return blockers
 }
 
@@ -948,11 +954,11 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("count non-terminal workspace tasks: %w", err)
 	}
 	addCountBlocker("non_terminal_tasks", "Active or non-terminal tasks still depend on this workspace.", nonTerminalTasks)
-	activeRuns, err := q.CountActiveTaskRunsByWorkspace(ctx, workspaceID)
+	executableCurrentNodes, err := q.CountExecutableCurrentNodesByWorkspace(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("count active workspace runs: %w", err)
+		return nil, fmt.Errorf("count executable workspace current nodes: %w", err)
 	}
-	addCountBlocker("active_runs", "Active runs still depend on this workspace.", activeRuns)
+	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
 	ownedWorktrees, err := q.CountManagedOwnedWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count managed owned worktrees: %w", err)

@@ -212,12 +212,21 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 	}
 	run := e.cfg.WorkflowRun
 	return &workflowruntime.PromptContract{
-		Identity:               run.ScopeID.String(),
+		Identity:               workflowPromptIdentity(run.Instructions),
 		CompletionMode:         run.CompletionMode,
 		UseAutomaticToolChoice: run.UseAutomaticToolChoice,
 		Instructions:           run.Instructions,
 		Transitions:            append([]workflowruntime.CompletionTransition(nil), run.Contract.Transitions...),
 	}, true
+}
+
+func workflowPromptIdentity(instructions workflowruntime.TaskInstructions) string {
+	taskID := strings.TrimSpace(instructions.TaskID)
+	nodeID := strings.TrimSpace(instructions.NodeID)
+	if taskID == "" || nodeID == "" {
+		panic("workflow prompt identity requires direct task and current node facts")
+	}
+	return taskID + "/" + nodeID
 }
 
 func (e *Engine) WorkflowRunConfigured() bool {

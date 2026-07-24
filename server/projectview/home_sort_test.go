@@ -15,12 +15,6 @@ import (
 	"core/shared/sessioncontract"
 )
 
-//go:embed testdata/home_sort_task_run.sql
-var homeSortTaskRunSQL string
-
-//go:embed testdata/home_sort_task_transition.sql
-var homeSortTaskTransitionSQL string
-
 //go:embed testdata/home_sort_task_comment.sql
 var homeSortTaskCommentSQL string
 
@@ -106,38 +100,6 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 		touch func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture)
 	}{
 		{
-			name: "task_node_placements",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				if _, err := fixture.store.DB().ExecContext(ctx, `UPDATE task_node_placements SET updated_at_unix_ms = ? WHERE task_id = ?`, fixture.highUnixMs, string(fixture.task.ID)); err != nil {
-					t.Fatalf("touch placement activity: %v", err)
-				}
-			},
-		},
-		{
-			name: "task_runs",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				placementID, _ := taskPlacement(t, ctx, fixture.store, string(fixture.task.ID))
-				if _, err := fixture.store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-					"run-home-sort", placementID, fixture.highUnixMs, fixture.highUnixMs, fixture.highUnixMs,
-				); err != nil {
-					t.Fatalf("insert run activity: %v", err)
-				}
-			},
-		},
-		{
-			name: "task_transitions",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				if _, err := fixture.store.DB().ExecContext(ctx, homeSortTaskTransitionSQL,
-					"transition-home-sort", string(fixture.task.ID), fixture.highUnixMs-1, fixture.highUnixMs,
-				); err != nil {
-					t.Fatalf("insert transition activity: %v", err)
-				}
-			},
-		},
-		{
 			name: "task_comments",
 			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
 				t.Helper()
@@ -204,18 +166,6 @@ func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 			}
 			if _, err := workflowStore.AddComment(ctx, task.ID, "Comment", "user", "bench"); err != nil {
 				b.Fatalf("AddComment %d/%d: %v", projectIndex, taskIndex, err)
-			}
-			placementID, _ := taskPlacement(b, ctx, store, string(task.ID))
-			timestamp := int64(projectIndex*10 + taskIndex + 1)
-			if _, err := store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-				fmt.Sprintf("bench-run-%d-%d", projectIndex, taskIndex), placementID, timestamp, timestamp, timestamp,
-			); err != nil {
-				b.Fatalf("insert run %d/%d: %v", projectIndex, taskIndex, err)
-			}
-			if _, err := store.DB().ExecContext(ctx, homeSortTaskTransitionSQL,
-				fmt.Sprintf("bench-transition-%d-%d", projectIndex, taskIndex), string(task.ID), timestamp, timestamp,
-			); err != nil {
-				b.Fatalf("insert transition %d/%d: %v", projectIndex, taskIndex, err)
 			}
 		}
 	}

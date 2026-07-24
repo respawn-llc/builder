@@ -169,100 +169,6 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	return i, err
 }
 
-const applyPendingTransitionEdgeToJoin = `-- name: ApplyPendingTransitionEdgeToJoin :execrows
-UPDATE task_transition_edges
-SET state = 'applied'
-WHERE id = ?1
-  AND state = 'pending'
-`
-
-func (q *Queries) ApplyPendingTransitionEdgeToJoin(ctx context.Context, edgeID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, applyPendingTransitionEdgeToJoin, edgeID)
-	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToJoin, 1)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const applyPendingTransitionEdgeToPlacement = `-- name: ApplyPendingTransitionEdgeToPlacement :execrows
-UPDATE task_transition_edges
-SET state = 'applied',
-    target_placement_id = ?1
-WHERE id = ?2
-  AND state = 'pending'
-`
-
-type ApplyPendingTransitionEdgeToPlacementParams struct {
-	TargetPlacementID sql.NullString
-	EdgeID            string
-}
-
-func (q *Queries) ApplyPendingTransitionEdgeToPlacement(ctx context.Context, arg ApplyPendingTransitionEdgeToPlacementParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, applyPendingTransitionEdgeToPlacement, arg.TargetPlacementID, arg.EdgeID)
-	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToPlacement, 2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const approvePendingTransition = `-- name: ApprovePendingTransition :execrows
-UPDATE task_transitions
-SET state = 'approved', applied_at_unix_ms = ?1
-WHERE id = ?2
-  AND state = 'pending_approval'
-`
-
-type ApprovePendingTransitionParams struct {
-	AppliedAtUnixMs sql.NullInt64
-	TransitionID    string
-}
-
-func (q *Queries) ApprovePendingTransition(ctx context.Context, arg ApprovePendingTransitionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, approvePendingTransition, arg.AppliedAtUnixMs, arg.TransitionID)
-	err = recordQueryError(ctx, err, approvePendingTransition, 2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const attachRunSession = `-- name: AttachRunSession :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    session_id = ?2
-WHERE id = ?3
-  AND run_generation = ?4
-  AND started_at_unix_ms IS NOT NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND (session_id IS NULL OR session_id = ?2)
-`
-
-type AttachRunSessionParams struct {
-	UpdatedAtUnixMs int64
-	SessionID       sql.NullString
-	RunID           string
-	RunGeneration   int64
-}
-
-func (q *Queries) AttachRunSession(ctx context.Context, arg AttachRunSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, attachRunSession,
-		arg.UpdatedAtUnixMs,
-		arg.SessionID,
-		arg.RunID,
-		arg.RunGeneration,
-	)
-	err = recordQueryError(ctx, err, attachRunSession, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const bindSessionToBranchCurrentNode = `-- name: BindSessionToBranchCurrentNode :execrows
 UPDATE task_current_nodes
 SET session_id = ?1
@@ -354,155 +260,6 @@ func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskPa
 	return result.RowsAffected()
 }
 
-const cancelTask = `-- name: CancelTask :execrows
-UPDATE tasks
-SET
-    canceled_at_unix_ms = ?1,
-    cancellation_reason = ?2,
-    updated_at_unix_ms = ?3
-WHERE id = ?4
-`
-
-type CancelTaskParams struct {
-	CanceledAtUnixMs   sql.NullInt64
-	CancellationReason sql.NullString
-	UpdatedAtUnixMs    int64
-	ID                 string
-}
-
-func (q *Queries) CancelTask(ctx context.Context, arg CancelTaskParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, cancelTask,
-		arg.CanceledAtUnixMs,
-		arg.CancellationReason,
-		arg.UpdatedAtUnixMs,
-		arg.ID,
-	)
-	err = recordQueryError(ctx, err, cancelTask, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const claimWorkflowRun = `-- name: ClaimWorkflowRun :one
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    started_at_unix_ms = ?2,
-    invalid_completion_count = 0,
-    run_generation = run_generation + 1
-WHERE task_runs.id = ?3
-  AND run_generation = ?4
-  AND started_at_unix_ms IS NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id IS NULL
-  AND EXISTS (
-      SELECT 1
-      FROM tasks t
-      JOIN task_node_placements p ON p.id = task_runs.placement_id
-      JOIN workflow_nodes n ON n.id = p.node_id
-      WHERE t.id = p.task_id
-        AND t.canceled_at_unix_ms IS NULL
-        AND p.state = 'active'
-        AND n.kind IN ('agent', 'script')
-  )
-RETURNING
-    id,
-    (
-        SELECT p.task_id
-        FROM task_node_placements p
-        WHERE p.id = task_runs.placement_id
-    ) AS task_id,
-    placement_id,
-    (
-        SELECT p.node_id
-        FROM task_node_placements p
-        WHERE p.id = task_runs.placement_id
-    ) AS node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-`
-
-type ClaimWorkflowRunParams struct {
-	UpdatedAtUnixMs    int64
-	StartedAtUnixMs    sql.NullInt64
-	ID                 string
-	ExpectedGeneration int64
-}
-
-type ClaimWorkflowRunRow struct {
-	ID                          string
-	TaskID                      string
-	PlacementID                 string
-	NodeID                      sql.NullString
-	SessionID                   sql.NullString
-	RunGeneration               int64
-	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs sql.NullInt64
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             sql.NullInt64
-	CompletedAtUnixMs           sql.NullInt64
-	InterruptedAtUnixMs         sql.NullInt64
-	InterruptionReason          sql.NullString
-	InterruptionDetailJson      string
-	WaitingAskID                sql.NullString
-	EffectiveCompletionMode     sql.NullString
-	InvalidCompletionCount      int64
-	RunStartSnapshotJson        string
-	MetadataJson                string
-}
-
-func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunParams) (ClaimWorkflowRunRow, error) {
-	row := q.db.QueryRowContext(ctx, claimWorkflowRun,
-		arg.UpdatedAtUnixMs,
-		arg.StartedAtUnixMs,
-		arg.ID,
-		arg.ExpectedGeneration,
-	)
-	var i ClaimWorkflowRunRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.TaskID,
-		&i.PlacementID,
-		&i.NodeID,
-		&i.SessionID,
-		&i.RunGeneration,
-		&i.WorkflowRevisionSeen,
-		&i.AutomationRequestedAtUnixMs,
-		&i.CreatedAtUnixMs,
-		&i.UpdatedAtUnixMs,
-		&i.StartedAtUnixMs,
-		&i.CompletedAtUnixMs,
-		&i.InterruptedAtUnixMs,
-		&i.InterruptionReason,
-		&i.InterruptionDetailJson,
-		&i.WaitingAskID,
-		&i.EffectiveCompletionMode,
-		&i.InvalidCompletionCount,
-		&i.RunStartSnapshotJson,
-		&i.MetadataJson,
-	), claimWorkflowRun, 4)
-
-	return i, err
-}
-
 const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
@@ -548,107 +305,6 @@ func (q *Queries) ClearProjectDefaultWorkflowLinks(ctx context.Context, arg Clea
 	return err
 }
 
-const clearRunWaitingAsk = `-- name: ClearRunWaitingAsk :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    waiting_ask_id = NULL
-WHERE id = ?2
-  AND run_generation = ?3
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id = ?4
-`
-
-type ClearRunWaitingAskParams struct {
-	UpdatedAtUnixMs int64
-	RunID           string
-	RunGeneration   int64
-	AskID           sql.NullString
-}
-
-func (q *Queries) ClearRunWaitingAsk(ctx context.Context, arg ClearRunWaitingAskParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearRunWaitingAsk,
-		arg.UpdatedAtUnixMs,
-		arg.RunID,
-		arg.RunGeneration,
-		arg.AskID,
-	)
-	err = recordQueryError(ctx, err, clearRunWaitingAsk, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeActiveManualMoveSourcePlacement = `-- name: CompleteActiveManualMoveSourcePlacement :execrows
-UPDATE task_node_placements
-SET state = 'completed',
-    updated_at_unix_ms = ?1
-WHERE task_node_placements.id = ?2
-  AND state = 'active'
-`
-
-type CompleteActiveManualMoveSourcePlacementParams struct {
-	UpdatedAtUnixMs int64
-	PlacementID     string
-}
-
-func (q *Queries) CompleteActiveManualMoveSourcePlacement(ctx context.Context, arg CompleteActiveManualMoveSourcePlacementParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeActiveManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
-	err = recordQueryError(ctx, err, completeActiveManualMoveSourcePlacement, 2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeRunUpdateRun = `-- name: CompleteRunUpdateRun :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    completed_at_unix_ms = ?2,
-    interrupted_at_unix_ms = NULL,
-    interruption_reason = NULL,
-    interruption_detail_json = '{}',
-    waiting_ask_id = NULL
-WHERE id = ?3
-  AND run_generation = ?4
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS ?5
-  AND (
-      CAST(?6 AS TEXT) IS NULL
-      OR session_id = CAST(?6 AS TEXT)
-  )
-`
-
-type CompleteRunUpdateRunParams struct {
-	UpdatedAtUnixMs             int64
-	CompletedAtUnixMs           sql.NullInt64
-	RunID                       string
-	RunGeneration               int64
-	ExpectedInterruptedAtUnixMs sql.NullInt64
-	ExpectedSessionID           sql.NullString
-}
-
-func (q *Queries) CompleteRunUpdateRun(ctx context.Context, arg CompleteRunUpdateRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeRunUpdateRun,
-		arg.UpdatedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.RunID,
-		arg.RunGeneration,
-		arg.ExpectedInterruptedAtUnixMs,
-		arg.ExpectedSessionID,
-	)
-	err = recordQueryError(ctx, err, completeRunUpdateRun, 6)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const countActiveProjectWorkflowLinks = `-- name: CountActiveProjectWorkflowLinks :one
 SELECT CAST(COUNT(*) AS INTEGER) AS active_link_count
 FROM project_workflow_links
@@ -663,37 +319,16 @@ func (q *Queries) CountActiveProjectWorkflowLinks(ctx context.Context, projectID
 	return active_link_count, err
 }
 
-const countActiveTaskRunsByWorkspace = `-- name: CountActiveTaskRunsByWorkspace :one
-SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-LEFT JOIN sessions s ON s.id = r.session_id
-WHERE r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND (
-      t.source_workspace_id = ?1
-      OR s.workspace_id = ?1
-  )
-`
-
-func (q *Queries) CountActiveTaskRunsByWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countActiveTaskRunsByWorkspace, workspaceID)
-	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countActiveTaskRunsByWorkspace, 1)
-
-	return run_count, err
-}
-
 const countAllTaskEdgeReferences = `-- name: CountAllTaskEdgeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    SELECT te.id
-    FROM task_transition_edges te
-    WHERE te.workflow_edge_id = ?1
+    SELECT current_node.task_id
+    FROM task_current_nodes current_node
+    WHERE current_node.entered_by_edge_id = ?1
     UNION ALL
-    SELECT p.id
-    FROM task_node_placements p
-    WHERE p.parallel_branch_edge_id = ?1
+    SELECT branch.approval_id
+    FROM task_pending_approval_branches branch
+    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?1
 )
 `
 
@@ -708,40 +343,47 @@ func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID sql.Nul
 const countCurrentTaskNodeAnchorReferences = `-- name: CountCurrentTaskNodeAnchorReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    SELECT p.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.node_id = ?1
-      AND (
-          p.state IN ('active', 'waiting_approval')
-      )
-      AND t.canceled_at_unix_ms IS NULL
+    SELECT current_node.task_id
+    FROM task_current_nodes current_node
+    WHERE current_node.node_id = ?1
     UNION ALL
-    SELECT tt.id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE tt.source_node_id = ?1
-      AND tt.state = 'pending_approval'
-      AND t.canceled_at_unix_ms IS NULL
+    SELECT approval.id
+    FROM task_pending_approvals approval
+    WHERE approval.source_node_id = ?1
     UNION ALL
-    SELECT te.id
-    FROM task_transition_edges te
-    JOIN task_transition_records tt ON tt.id = te.task_transition_id
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE te.target_node_id = ?1
-      AND tt.state = 'pending_approval'
-      AND te.state = 'pending'
-      AND t.canceled_at_unix_ms IS NULL
+    SELECT branch.approval_id
+    FROM task_pending_approval_branches branch
+    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = ?1
 )
 `
 
-func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
+func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countCurrentTaskNodeAnchorReferences, nodeID)
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countCurrentTaskNodeAnchorReferences, 1)
 
 	return ref_count, err
+}
+
+const countExecutableCurrentNodesByWorkspace = `-- name: CountExecutableCurrentNodesByWorkspace :one
+SELECT CAST(COUNT(DISTINCT current_node.task_id) AS INTEGER) AS current_node_count
+FROM task_current_nodes current_node
+JOIN task_records task ON task.id = current_node.task_id
+JOIN workflow_nodes node ON node.id = current_node.node_id
+LEFT JOIN sessions session ON session.id = current_node.session_id
+WHERE node.kind IN ('agent', 'script')
+  AND (
+      task.source_workspace_id = ?1
+      OR session.workspace_id = ?1
+  )
+`
+
+func (q *Queries) CountExecutableCurrentNodesByWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countExecutableCurrentNodesByWorkspace, workspaceID)
+	var current_node_count int64
+	err := recordQueryError(ctx, row.Scan(&current_node_count), countExecutableCurrentNodesByWorkspace, 1)
+
+	return current_node_count, err
 }
 
 const countManagedOwnedWorktreesByWorkspace = `-- name: CountManagedOwnedWorktreesByWorkspace :one
@@ -763,13 +405,10 @@ func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, wor
 const countNonTerminalTasksByManagedWorktree = `-- name: CountNonTerminalTasksByManagedWorktree :one
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS ref_count
 FROM tasks t
-JOIN task_node_placements p
-    ON p.task_id = t.id
-    AND p.state IN ('active', 'waiting_approval')
-JOIN workflow_nodes n ON n.id = p.node_id
+JOIN task_current_nodes current_node ON current_node.task_id = t.id
+JOIN workflow_nodes node ON node.id = current_node.node_id
 WHERE t.managed_worktree_id = ?1
-  AND t.canceled_at_unix_ms IS NULL
-  AND n.kind != 'terminal'
+  AND node.kind != 'terminal'
 `
 
 func (q *Queries) CountNonTerminalTasksByManagedWorktree(ctx context.Context, managedWorktreeID sql.NullString) (int64, error) {
@@ -783,11 +422,10 @@ func (q *Queries) CountNonTerminalTasksByManagedWorktree(ctx context.Context, ma
 const countNonTerminalTasksByProjectWorkflowLink = `-- name: CountNonTerminalTasksByProjectWorkflowLink :one
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count
 FROM tasks t
-JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
-JOIN workflow_nodes n ON n.id = p.node_id
+JOIN task_current_nodes current_node ON current_node.task_id = t.id
+JOIN workflow_nodes node ON node.id = current_node.node_id
 WHERE t.project_workflow_link_id = ?1
-  AND t.canceled_at_unix_ms IS NULL
-  AND n.kind != 'terminal'
+  AND node.kind != 'terminal'
 `
 
 func (q *Queries) CountNonTerminalTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (int64, error) {
@@ -802,21 +440,18 @@ const countNonTerminalTasksBySourceWorkspace = `-- name: CountNonTerminalTasksBy
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count
 FROM tasks t
 WHERE t.source_workspace_id = ?1
-  AND t.canceled_at_unix_ms IS NULL
   AND (
       EXISTS (
           SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
-            AND n.kind != 'terminal'
+          FROM task_current_nodes current_node
+          JOIN workflow_nodes node ON node.id = current_node.node_id
+          WHERE current_node.task_id = t.id
+            AND node.kind != 'terminal'
       )
       OR EXISTS (
           SELECT 1
-          FROM task_transitions tt
-          WHERE tt.task_id = t.id
-            AND tt.state = 'pending_approval'
+          FROM task_pending_approvals approval
+          WHERE approval.source_task_id = t.id
       )
   )
 `
@@ -832,11 +467,10 @@ func (q *Queries) CountNonTerminalTasksBySourceWorkspace(ctx context.Context, wo
 const countNonTerminalTasksByWorkflow = `-- name: CountNonTerminalTasksByWorkflow :one
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count
 FROM task_records t
-JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
-JOIN workflow_nodes n ON n.id = p.node_id
+JOIN task_current_nodes current_node ON current_node.task_id = t.id
+JOIN workflow_nodes node ON node.id = current_node.node_id
 WHERE t.workflow_id = ?1
-  AND t.canceled_at_unix_ms IS NULL
-  AND n.kind != 'terminal'
+  AND node.kind != 'terminal'
 `
 
 func (q *Queries) CountNonTerminalTasksByWorkflow(ctx context.Context, workflowID string) (int64, error) {
@@ -850,14 +484,11 @@ func (q *Queries) CountNonTerminalTasksByWorkflow(ctx context.Context, workflowI
 const countOtherNonTerminalTasksByManagedWorktree = `-- name: CountOtherNonTerminalTasksByManagedWorktree :one
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS ref_count
 FROM tasks t
-JOIN task_node_placements p
-    ON p.task_id = t.id
-    AND p.state IN ('active', 'waiting_approval')
-JOIN workflow_nodes n ON n.id = p.node_id
+JOIN task_current_nodes current_node ON current_node.task_id = t.id
+JOIN workflow_nodes node ON node.id = current_node.node_id
 WHERE t.managed_worktree_id = ?1
   AND t.id != ?2
-  AND t.canceled_at_unix_ms IS NULL
-  AND n.kind != 'terminal'
+  AND node.kind != 'terminal'
 `
 
 type CountOtherNonTerminalTasksByManagedWorktreeParams struct {
@@ -924,25 +555,13 @@ func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (int64, 
 const countTaskEdgeReferences = `-- name: CountTaskEdgeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    -- Only live unresolved references block edge deletion. Completed historical
-    -- transition edges intentionally rely on ON DELETE SET NULL.
-    SELECT te.id
-    FROM task_transition_edges te
-    JOIN task_transition_records tt ON tt.id = te.task_transition_id
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE te.workflow_edge_id = ?1
-      AND t.canceled_at_unix_ms IS NULL
-      AND tt.state = 'pending_approval'
-      AND te.state = 'pending'
+    SELECT current_node.task_id
+    FROM task_current_nodes current_node
+    WHERE current_node.entered_by_edge_id = ?1
     UNION ALL
-    SELECT p.id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.parallel_branch_edge_id = ?1
-      AND p.state IN ('active', 'waiting_approval')
-      AND t.canceled_at_unix_ms IS NULL
-      AND n.kind != 'terminal'
+    SELECT branch.approval_id
+    FROM task_pending_approval_branches branch
+    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?1
 )
 `
 
@@ -957,34 +576,22 @@ func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID sql.NullSt
 const countTaskNodeReferences = `-- name: CountTaskNodeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    SELECT p.id FROM task_node_placements p WHERE p.node_id = ?1
+    SELECT current_node.task_id FROM task_current_nodes current_node WHERE current_node.node_id = ?1
     UNION ALL
-    SELECT tr.id FROM task_transition_records tr WHERE tr.source_node_id = ?1
+    SELECT approval.id FROM task_pending_approvals approval WHERE approval.source_node_id = ?1
     UNION ALL
-    SELECT te.id FROM task_transition_edges te WHERE te.target_node_id = ?1
+    SELECT branch.approval_id
+    FROM task_pending_approval_branches branch
+    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = ?1
 )
 `
 
-func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
+func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskNodeReferences, nodeID)
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskNodeReferences, 1)
 
 	return ref_count, err
-}
-
-const countTaskRunsByTask = `-- name: CountTaskRunsByTask :one
-SELECT CAST(COUNT(*) AS INTEGER) AS run_count
-FROM task_run_records
-WHERE task_id = ?1
-`
-
-func (q *Queries) CountTaskRunsByTask(ctx context.Context, taskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskRunsByTask, taskID)
-	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countTaskRunsByTask, 1)
-
-	return run_count, err
 }
 
 const countTaskSessions = `-- name: CountTaskSessions :one
@@ -1034,49 +641,6 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	return task_count, err
 }
 
-const countUnresolvedTaskRunsAtWorkflowNode = `-- name: CountUnresolvedTaskRunsAtWorkflowNode :one
-SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE t.workflow_id = ?1
-  AND r.node_id = ?2
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND (
-      (
-          r.started_at_unix_ms IS NOT NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-      )
-      OR (
-          r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NOT NULL
-      )
-      OR (
-          r.started_at_unix_ms IS NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND r.waiting_ask_id IS NULL
-      )
-  )
-`
-
-type CountUnresolvedTaskRunsAtWorkflowNodeParams struct {
-	WorkflowID string
-	NodeID     sql.NullString
-}
-
-func (q *Queries) CountUnresolvedTaskRunsAtWorkflowNode(ctx context.Context, arg CountUnresolvedTaskRunsAtWorkflowNodeParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUnresolvedTaskRunsAtWorkflowNode, arg.WorkflowID, arg.NodeID)
-	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countUnresolvedTaskRunsAtWorkflowNode, 2)
-
-	return run_count, err
-}
-
 const countWorkflowNodesByGroup = `-- name: CountWorkflowNodesByGroup :one
 SELECT CAST(COUNT(*) AS INTEGER) AS node_count
 FROM workflow_nodes
@@ -1089,20 +653,6 @@ func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.Nul
 	err := recordQueryError(ctx, row.Scan(&node_count), countWorkflowNodesByGroup, 1)
 
 	return node_count, err
-}
-
-const countWorkflowTaskAttentionCandidates = `-- name: CountWorkflowTaskAttentionCandidates :one
-SELECT CAST(COUNT(*) AS INTEGER)
-FROM workflow_attention_candidates
-WHERE task_id = CAST(?1 AS TEXT)
-`
-
-func (q *Queries) CountWorkflowTaskAttentionCandidates(ctx context.Context, taskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countWorkflowTaskAttentionCandidates, taskID)
-	var column_1 int64
-	err := recordQueryError(ctx, row.Scan(&column_1), countWorkflowTaskAttentionCandidates, 1)
-
-	return column_1, err
 }
 
 const deleteProject = `-- name: DeleteProject :execrows
@@ -1395,20 +945,6 @@ func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID s
 	return result.RowsAffected()
 }
 
-const deleteTaskNodePlacementsByTask = `-- name: DeleteTaskNodePlacementsByTask :execrows
-DELETE FROM task_node_placements
-WHERE task_id = ?1
-`
-
-func (q *Queries) DeleteTaskNodePlacementsByTask(ctx context.Context, taskID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteTaskNodePlacementsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskNodePlacementsByTask, 1)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const deleteTaskPendingApproval = `-- name: DeleteTaskPendingApproval :execrows
 DELETE FROM task_pending_approvals
 WHERE id = ?1
@@ -1431,20 +967,6 @@ WHERE source_task_id = ?1
 func (q *Queries) DeleteTaskPendingApprovalsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskPendingApprovalsByTask, taskID)
 	err = recordQueryError(ctx, err, deleteTaskPendingApprovalsByTask, 1)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const deleteTaskTransitionsByTask = `-- name: DeleteTaskTransitionsByTask :execrows
-DELETE FROM task_transitions
-WHERE task_id = ?1
-`
-
-func (q *Queries) DeleteTaskTransitionsByTask(ctx context.Context, taskID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteTaskTransitionsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskTransitionsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1531,8 +1053,8 @@ func (q *Queries) DeleteWorkflowTaskCommentsByWorkflowID(ctx context.Context, wo
 	return result.RowsAffected()
 }
 
-const deleteWorkflowTaskNodePlacementsByWorkflowID = `-- name: DeleteWorkflowTaskNodePlacementsByWorkflowID :execrows
-DELETE FROM task_node_placements
+const deleteWorkflowTaskCurrentNodesByWorkflowID = `-- name: DeleteWorkflowTaskCurrentNodesByWorkflowID :execrows
+DELETE FROM task_current_nodes
 WHERE task_id IN (
     SELECT task_records.id
     FROM task_records
@@ -1540,9 +1062,9 @@ WHERE task_id IN (
 )
 `
 
-func (q *Queries) DeleteWorkflowTaskNodePlacementsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskNodePlacementsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskNodePlacementsByWorkflowID, 1)
+func (q *Queries) DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCurrentNodesByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskCurrentNodesByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1561,24 +1083,6 @@ WHERE source_task_id IN (
 func (q *Queries) DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskPendingApprovalsByWorkflowID, workflowID)
 	err = recordQueryError(ctx, err, deleteWorkflowTaskPendingApprovalsByWorkflowID, 1)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const deleteWorkflowTaskTransitionsByWorkflowID = `-- name: DeleteWorkflowTaskTransitionsByWorkflowID :execrows
-DELETE FROM task_transitions
-WHERE task_id IN (
-    SELECT task_records.id
-    FROM task_records
-    WHERE workflow_id = ?1
-)
-`
-
-func (q *Queries) DeleteWorkflowTaskTransitionsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskTransitionsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskTransitionsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1685,58 +1189,6 @@ func (q *Queries) GetActiveProjectWorkflowLinkByWorkflow(ctx context.Context, ar
 	return i, err
 }
 
-const getActiveStartPlacementForTask = `-- name: GetActiveStartPlacementForTask :one
-SELECT
-    p.id,
-    p.task_id,
-    p.node_id,
-    p.state,
-    p.created_by_transition_id,
-    p.parallel_batch_transition_id,
-    p.parallel_branch_edge_id,
-    p.created_at_unix_ms,
-    p.updated_at_unix_ms
-FROM task_node_placement_records p
-JOIN workflow_nodes n ON n.id = p.node_id
-WHERE p.task_id = ?1
-  AND p.state = 'active'
-  AND n.kind = 'start'
-LIMIT 1
-`
-
-func (q *Queries) GetActiveStartPlacementForTask(ctx context.Context, taskID string) (TaskNodePlacementRecord, error) {
-	row := q.db.QueryRowContext(ctx, getActiveStartPlacementForTask, taskID)
-	var i TaskNodePlacementRecord
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.TaskID,
-		&i.NodeID,
-		&i.State,
-		&i.CreatedByTransitionID,
-		&i.ParallelBatchTransitionID,
-		&i.ParallelBranchEdgeID,
-		&i.CreatedAtUnixMs,
-		&i.UpdatedAtUnixMs,
-	), getActiveStartPlacementForTask, 1)
-
-	return i, err
-}
-
-const getContextSourceBatchScope = `-- name: GetContextSourceBatchScope :one
-SELECT parallel_batch_transition_id
-FROM task_node_placements
-WHERE task_node_placements.id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetContextSourceBatchScope(ctx context.Context, placementID string) (sql.NullString, error) {
-	row := q.db.QueryRowContext(ctx, getContextSourceBatchScope, placementID)
-	var parallel_batch_transition_id sql.NullString
-	err := recordQueryError(ctx, row.Scan(&parallel_batch_transition_id), getContextSourceBatchScope, 1)
-
-	return parallel_batch_transition_id, err
-}
-
 const getDefaultProjectWorkflowLink = `-- name: GetDefaultProjectWorkflowLink :one
 SELECT
     id,
@@ -1764,29 +1216,6 @@ func (q *Queries) GetDefaultProjectWorkflowLink(ctx context.Context, projectID s
 	), getDefaultProjectWorkflowLink, 1)
 
 	return i, err
-}
-
-const getExistingJoinPlacement = `-- name: GetExistingJoinPlacement :one
-SELECT id
-FROM task_node_placements
-WHERE task_id = ?1
-  AND node_id = ?2
-  AND parallel_batch_transition_id = ?3
-LIMIT 1
-`
-
-type GetExistingJoinPlacementParams struct {
-	TaskID  string
-	NodeID  sql.NullString
-	BatchID sql.NullString
-}
-
-func (q *Queries) GetExistingJoinPlacement(ctx context.Context, arg GetExistingJoinPlacementParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getExistingJoinPlacement, arg.TaskID, arg.NodeID, arg.BatchID)
-	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getExistingJoinPlacement, 3)
-
-	return id, err
 }
 
 const getLatestBranchTaskSessionAssociationForNode = `-- name: GetLatestBranchTaskSessionAssociationForNode :one
@@ -1819,86 +1248,6 @@ func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Conte
 		&i.TransitionBranchKey,
 		&i.AssociatedAtUnixMs,
 	), getLatestBranchTaskSessionAssociationForNode, 3)
-
-	return i, err
-}
-
-const getLatestCompletedContextSourceRun = `-- name: GetLatestCompletedContextSourceRun :one
-SELECT r.id
-FROM task_runs r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE p.task_id = ?1
-  AND p.node_id = ?2
-  AND r.completed_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms <= ?3
-ORDER BY r.completed_at_unix_ms DESC, r.rowid DESC
-LIMIT 1
-`
-
-type GetLatestCompletedContextSourceRunParams struct {
-	TaskID       string
-	NodeID       sql.NullString
-	BeforeUnixMs sql.NullInt64
-}
-
-func (q *Queries) GetLatestCompletedContextSourceRun(ctx context.Context, arg GetLatestCompletedContextSourceRunParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getLatestCompletedContextSourceRun, arg.TaskID, arg.NodeID, arg.BeforeUnixMs)
-	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRun, 3)
-
-	return id, err
-}
-
-const getLatestCompletedContextSourceRunInBatch = `-- name: GetLatestCompletedContextSourceRunInBatch :one
-SELECT r.id
-FROM task_runs r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE p.task_id = ?1
-  AND p.node_id = ?2
-  AND p.parallel_batch_transition_id = ?3
-  AND r.completed_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms <= ?4
-ORDER BY r.completed_at_unix_ms DESC, r.rowid DESC
-LIMIT 1
-`
-
-type GetLatestCompletedContextSourceRunInBatchParams struct {
-	TaskID       string
-	NodeID       sql.NullString
-	BatchID      sql.NullString
-	BeforeUnixMs sql.NullInt64
-}
-
-func (q *Queries) GetLatestCompletedContextSourceRunInBatch(ctx context.Context, arg GetLatestCompletedContextSourceRunInBatchParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getLatestCompletedContextSourceRunInBatch,
-		arg.TaskID,
-		arg.NodeID,
-		arg.BatchID,
-		arg.BeforeUnixMs,
-	)
-	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRunInBatch, 4)
-
-	return id, err
-}
-
-const getLatestRunForPlacement = `-- name: GetLatestRunForPlacement :one
-SELECT id, session_id
-FROM task_runs
-WHERE placement_id = ?1
-ORDER BY created_at_unix_ms DESC, rowid DESC
-LIMIT 1
-`
-
-type GetLatestRunForPlacementRow struct {
-	ID        string
-	SessionID sql.NullString
-}
-
-func (q *Queries) GetLatestRunForPlacement(ctx context.Context, placementID string) (GetLatestRunForPlacementRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestRunForPlacement, placementID)
-	var i GetLatestRunForPlacementRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.SessionID), getLatestRunForPlacement, 1)
 
 	return i, err
 }
@@ -1936,131 +1285,6 @@ func (q *Queries) GetLatestSerialTaskSessionAssociationForNode(ctx context.Conte
 	return i, err
 }
 
-const getLatestTransitionOutputValues = `-- name: GetLatestTransitionOutputValues :one
-SELECT tr.output_values_json
-FROM task_transitions tr
-WHERE tr.task_id = ?1
-  AND tr.transition_id = ?2
-  AND tr.applied_at_unix_ms IS NOT NULL
-  AND tr.applied_at_unix_ms <= ?3
-  AND tr.state != 'rejected'
-ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
-LIMIT 1
-`
-
-type GetLatestTransitionOutputValuesParams struct {
-	TaskID       string
-	TransitionID string
-	BeforeUnixMs sql.NullInt64
-}
-
-func (q *Queries) GetLatestTransitionOutputValues(ctx context.Context, arg GetLatestTransitionOutputValuesParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getLatestTransitionOutputValues, arg.TaskID, arg.TransitionID, arg.BeforeUnixMs)
-	var output_values_json string
-	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValues, 3)
-
-	return output_values_json, err
-}
-
-const getLatestTransitionOutputValuesInBatch = `-- name: GetLatestTransitionOutputValuesInBatch :one
-SELECT tr.output_values_json
-FROM task_transitions tr
-JOIN task_node_placements p ON p.id = tr.source_placement_id
-WHERE tr.task_id = ?1
-  AND tr.transition_id = ?2
-  AND p.parallel_batch_transition_id = ?3
-  AND tr.applied_at_unix_ms IS NOT NULL
-  AND tr.applied_at_unix_ms <= ?4
-  AND tr.state != 'rejected'
-ORDER BY tr.applied_at_unix_ms DESC, tr.created_at_unix_ms DESC, tr.rowid DESC
-LIMIT 1
-`
-
-type GetLatestTransitionOutputValuesInBatchParams struct {
-	TaskID       string
-	TransitionID string
-	BatchID      sql.NullString
-	BeforeUnixMs sql.NullInt64
-}
-
-func (q *Queries) GetLatestTransitionOutputValuesInBatch(ctx context.Context, arg GetLatestTransitionOutputValuesInBatchParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getLatestTransitionOutputValuesInBatch,
-		arg.TaskID,
-		arg.TransitionID,
-		arg.BatchID,
-		arg.BeforeUnixMs,
-	)
-	var output_values_json string
-	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValuesInBatch, 4)
-
-	return output_values_json, err
-}
-
-const getManualMovePreviousTransition = `-- name: GetManualMovePreviousTransition :one
-SELECT
-    tr.transition_group_id,
-    tr.transition_id,
-    tr.transition_display_name,
-    tr.output_values_json,
-    tr.source_run_id,
-    te.workflow_edge_id,
-    te.edge_key,
-    te.context_mode,
-    te.requires_approval,
-    te.input_bindings_json,
-    te.output_requirements_json,
-    te.metadata_json
-FROM task_transition_records tr
-JOIN task_transitions storage ON storage.id = tr.id
-JOIN task_transition_edges te ON te.task_transition_id = tr.id
-JOIN task_node_placements source_placement ON source_placement.id = tr.source_placement_id
-WHERE te.target_placement_id = ?1
-  AND source_placement.node_id = ?2
-ORDER BY tr.created_at_unix_ms DESC, storage.rowid DESC
-LIMIT 1
-`
-
-type GetManualMovePreviousTransitionParams struct {
-	SourcePlacementID sql.NullString
-	TargetNodeID      sql.NullString
-}
-
-type GetManualMovePreviousTransitionRow struct {
-	TransitionGroupID      sql.NullString
-	TransitionID           string
-	TransitionDisplayName  string
-	OutputValuesJson       string
-	SourceRunID            sql.NullString
-	WorkflowEdgeID         sql.NullString
-	EdgeKey                string
-	ContextMode            string
-	RequiresApproval       int64
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	MetadataJson           string
-}
-
-func (q *Queries) GetManualMovePreviousTransition(ctx context.Context, arg GetManualMovePreviousTransitionParams) (GetManualMovePreviousTransitionRow, error) {
-	row := q.db.QueryRowContext(ctx, getManualMovePreviousTransition, arg.SourcePlacementID, arg.TargetNodeID)
-	var i GetManualMovePreviousTransitionRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.TransitionGroupID,
-		&i.TransitionID,
-		&i.TransitionDisplayName,
-		&i.OutputValuesJson,
-		&i.SourceRunID,
-		&i.WorkflowEdgeID,
-		&i.EdgeKey,
-		&i.ContextMode,
-		&i.RequiresApproval,
-		&i.InputBindingsJson,
-		&i.OutputRequirementsJson,
-		&i.MetadataJson,
-	), getManualMovePreviousTransition, 2)
-
-	return i, err
-}
-
 const getProjectDeleteBlockerCounts = `-- name: GetProjectDeleteBlockerCounts :one
 SELECT
     CAST((
@@ -2068,63 +1292,26 @@ SELECT
         FROM (
             SELECT t.id
             FROM task_records t
-            JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
-            JOIN workflow_nodes n ON n.id = p.node_id
+            JOIN task_current_nodes current_node ON current_node.task_id = t.id
+            JOIN workflow_nodes node ON node.id = current_node.node_id
             WHERE t.project_id = ?1
-              AND t.canceled_at_unix_ms IS NULL
               -- Backlog/start-node tasks are drafts, not active project work.
-              AND n.kind NOT IN ('start', 'terminal')
+              AND node.kind NOT IN ('start', 'terminal')
             UNION
             SELECT t.id
             FROM task_records t
-            JOIN task_transitions tt ON tt.task_id = t.id AND tt.state = 'pending_approval'
+            JOIN task_pending_approvals approval ON approval.source_task_id = t.id
             WHERE t.project_id = ?1
-              AND t.canceled_at_unix_ms IS NULL
         )
-    ) AS INTEGER) AS non_terminal_tasks,
-    CAST((
-        SELECT COUNT(DISTINCT r.id)
-        FROM task_run_records r
-        JOIN task_records t ON t.id = r.task_id
-        JOIN task_node_placements p ON p.id = r.placement_id
-        JOIN workflow_nodes n ON n.id = r.node_id
-        WHERE t.project_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND r.started_at_unix_ms IS NOT NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND p.state = 'active'
-          AND n.kind IN ('agent', 'script')
-    ) AS INTEGER) AS active_runs,
-    CAST((
-        SELECT COUNT(DISTINCT r.id)
-        FROM task_run_records r
-        JOIN task_records t ON t.id = r.task_id
-        JOIN task_node_placements p ON p.id = r.placement_id
-        JOIN workflow_nodes n ON n.id = r.node_id
-        WHERE t.project_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND r.started_at_unix_ms IS NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND r.waiting_ask_id IS NULL
-          AND p.state = 'active'
-          AND n.kind IN ('agent', 'script')
-    ) AS INTEGER) AS runnable_runs
+    ) AS INTEGER) AS non_terminal_tasks
 `
 
-type GetProjectDeleteBlockerCountsRow struct {
-	NonTerminalTasks int64
-	ActiveRuns       int64
-	RunnableRuns     int64
-}
-
-func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (GetProjectDeleteBlockerCountsRow, error) {
+func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, getProjectDeleteBlockerCounts, deleteProjectID)
-	var i GetProjectDeleteBlockerCountsRow
-	err := recordQueryError(ctx, row.Scan(&i.NonTerminalTasks, &i.ActiveRuns, &i.RunnableRuns), getProjectDeleteBlockerCounts, 1)
+	var non_terminal_tasks int64
+	err := recordQueryError(ctx, row.Scan(&non_terminal_tasks), getProjectDeleteBlockerCounts, 1)
 
-	return i, err
+	return non_terminal_tasks, err
 }
 
 const getProjectDisplayName = `-- name: GetProjectDisplayName :one
@@ -2278,89 +1465,6 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 	row := q.db.QueryRowContext(ctx, getProjectWorkflowUnlinkState, projectID)
 	var i GetProjectWorkflowUnlinkStateRow
 	err := recordQueryError(ctx, row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount), getProjectWorkflowUnlinkState, 1)
-
-	return i, err
-}
-
-const getRunInputValues = `-- name: GetRunInputValues :one
-SELECT
-    tr.commentary,
-    tr.output_values_json,
-    te.input_bindings_json
-FROM task_node_placements p
-JOIN task_transition_edges te ON te.target_placement_id = p.id
-JOIN task_transitions tr ON tr.id = te.task_transition_id
-WHERE p.id = ?1
-ORDER BY te.rowid ASC
-LIMIT 1
-`
-
-type GetRunInputValuesRow struct {
-	Commentary        string
-	OutputValuesJson  string
-	InputBindingsJson string
-}
-
-func (q *Queries) GetRunInputValues(ctx context.Context, placementID string) (GetRunInputValuesRow, error) {
-	row := q.db.QueryRowContext(ctx, getRunInputValues, placementID)
-	var i GetRunInputValuesRow
-	err := recordQueryError(ctx, row.Scan(&i.Commentary, &i.OutputValuesJson, &i.InputBindingsJson), getRunInputValues, 1)
-
-	return i, err
-}
-
-const getRunTransitionContext = `-- name: GetRunTransitionContext :one
-SELECT
-    te.context_mode,
-    tr.source_run_id,
-    tr.source_node_display_name,
-    te.target_node_display_name
-FROM task_node_placements p
-JOIN task_transition_edges te ON te.target_placement_id = p.id
-JOIN task_transitions tr ON tr.id = te.task_transition_id
-WHERE p.id = ?1
-ORDER BY te.rowid ASC
-LIMIT 1
-`
-
-type GetRunTransitionContextRow struct {
-	ContextMode           string
-	SourceRunID           sql.NullString
-	SourceNodeDisplayName string
-	TargetNodeDisplayName string
-}
-
-func (q *Queries) GetRunTransitionContext(ctx context.Context, placementID string) (GetRunTransitionContextRow, error) {
-	row := q.db.QueryRowContext(ctx, getRunTransitionContext, placementID)
-	var i GetRunTransitionContextRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.ContextMode,
-		&i.SourceRunID,
-		&i.SourceNodeDisplayName,
-		&i.TargetNodeDisplayName,
-	), getRunTransitionContext, 1)
-
-	return i, err
-}
-
-const getRunWaitingAskEventIdentity = `-- name: GetRunWaitingAskEventIdentity :one
-SELECT t.project_id, t.workflow_id, t.id AS task_id
-FROM task_runs r
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN task_records t ON t.id = p.task_id
-WHERE r.id = ?1
-`
-
-type GetRunWaitingAskEventIdentityRow struct {
-	ProjectID  string
-	WorkflowID string
-	TaskID     string
-}
-
-func (q *Queries) GetRunWaitingAskEventIdentity(ctx context.Context, runID string) (GetRunWaitingAskEventIdentityRow, error) {
-	row := q.db.QueryRowContext(ctx, getRunWaitingAskEventIdentity, runID)
-	var i GetRunWaitingAskEventIdentityRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID, &i.TaskID), getRunWaitingAskEventIdentity, 1)
 
 	return i, err
 }
@@ -2567,8 +1671,6 @@ SELECT
     execution_target_resolved_ref,
     execution_target_commit_oid,
     execution_target_provenance,
-    canceled_at_unix_ms,
-    cancellation_reason,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -2598,8 +1700,6 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 		&i.ExecutionTargetResolvedRef,
 		&i.ExecutionTargetCommitOid,
 		&i.ExecutionTargetProvenance,
-		&i.CanceledAtUnixMs,
-		&i.CancellationReason,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
@@ -2641,8 +1741,6 @@ SELECT
     execution_target_resolved_ref,
     execution_target_commit_oid,
     execution_target_provenance,
-    canceled_at_unix_ms,
-    cancellation_reason,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -2678,8 +1776,6 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.ExecutionTargetResolvedRef,
 		&i.ExecutionTargetCommitOid,
 		&i.ExecutionTargetProvenance,
-		&i.CanceledAtUnixMs,
-		&i.CancellationReason,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
@@ -2706,28 +1802,6 @@ func (q *Queries) GetTaskIdentityForComment(ctx context.Context, commentID strin
 	row := q.db.QueryRowContext(ctx, getTaskIdentityForComment, commentID)
 	var i GetTaskIdentityForCommentRow
 	err := recordQueryError(ctx, row.Scan(&i.TaskID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForComment, 1)
-
-	return i, err
-}
-
-const getTaskIdentityForTransition = `-- name: GetTaskIdentityForTransition :one
-SELECT t.id, t.project_id, t.workflow_id
-FROM task_transitions tt
-JOIN task_records t ON t.id = tt.task_id
-WHERE tt.id = ?1
-LIMIT 1
-`
-
-type GetTaskIdentityForTransitionRow struct {
-	ID         string
-	ProjectID  string
-	WorkflowID string
-}
-
-func (q *Queries) GetTaskIdentityForTransition(ctx context.Context, transitionID string) (GetTaskIdentityForTransitionRow, error) {
-	row := q.db.QueryRowContext(ctx, getTaskIdentityForTransition, transitionID)
-	var i GetTaskIdentityForTransitionRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForTransition, 1)
 
 	return i, err
 }
@@ -2810,106 +1884,6 @@ func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) 
 	return i, err
 }
 
-const getTaskRun = `-- name: GetTaskRun :one
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetTaskRun(ctx context.Context, id string) (TaskRunRecord, error) {
-	row := q.db.QueryRowContext(ctx, getTaskRun, id)
-	var i TaskRunRecord
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.TaskID,
-		&i.PlacementID,
-		&i.NodeID,
-		&i.SessionID,
-		&i.RunGeneration,
-		&i.WorkflowRevisionSeen,
-		&i.AutomationRequestedAtUnixMs,
-		&i.CreatedAtUnixMs,
-		&i.UpdatedAtUnixMs,
-		&i.StartedAtUnixMs,
-		&i.CompletedAtUnixMs,
-		&i.InterruptedAtUnixMs,
-		&i.InterruptionReason,
-		&i.InterruptionDetailJson,
-		&i.WaitingAskID,
-		&i.EffectiveCompletionMode,
-		&i.InvalidCompletionCount,
-		&i.RunStartSnapshotJson,
-		&i.MetadataJson,
-	), getTaskRun, 1)
-
-	return i, err
-}
-
-const getTaskTransitionState = `-- name: GetTaskTransitionState :one
-SELECT state
-FROM task_transitions
-WHERE id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetTaskTransitionState(ctx context.Context, transitionID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getTaskTransitionState, transitionID)
-	var state string
-	err := recordQueryError(ctx, row.Scan(&state), getTaskTransitionState, 1)
-
-	return state, err
-}
-
-const getTransitionApprovalState = `-- name: GetTransitionApprovalState :one
-SELECT task_id, source_run_id, state, workflow_revision_seen, created_at_unix_ms
-FROM task_transition_records
-WHERE id = ?1
-LIMIT 1
-`
-
-type GetTransitionApprovalStateRow struct {
-	TaskID               string
-	SourceRunID          sql.NullString
-	State                string
-	WorkflowRevisionSeen int64
-	CreatedAtUnixMs      int64
-}
-
-func (q *Queries) GetTransitionApprovalState(ctx context.Context, transitionID string) (GetTransitionApprovalStateRow, error) {
-	row := q.db.QueryRowContext(ctx, getTransitionApprovalState, transitionID)
-	var i GetTransitionApprovalStateRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.TaskID,
-		&i.SourceRunID,
-		&i.State,
-		&i.WorkflowRevisionSeen,
-		&i.CreatedAtUnixMs,
-	), getTransitionApprovalState, 1)
-
-	return i, err
-}
-
 const getWorkflow = `-- name: GetWorkflow :one
 SELECT
     id,
@@ -2942,51 +1916,6 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 	return i, err
 }
 
-const getWorkflowApprovalAttentionCandidateByTransitionID = `-- name: GetWorkflowApprovalAttentionCandidateByTransitionID :one
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE kind = 'approval'
-  AND task_transition_id = CAST(?1 AS TEXT)
-LIMIT 1
-`
-
-func (q *Queries) GetWorkflowApprovalAttentionCandidateByTransitionID(ctx context.Context, taskTransitionID string) (WorkflowAttentionCandidate, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowApprovalAttentionCandidateByTransitionID, taskTransitionID)
-	var i WorkflowAttentionCandidate
-	err := recordQueryError(ctx, row.Scan(
-		&i.Kind,
-		&i.ID,
-		&i.ProjectID,
-		&i.WorkflowID,
-		&i.TaskID,
-		&i.ShortID,
-		&i.Title,
-		&i.RunID,
-		&i.SessionID,
-		&i.AskID,
-		&i.TaskTransitionID,
-		&i.InterruptionReason,
-		&i.InterruptionDetailJson,
-		&i.OccurredAtUnixMs,
-	), getWorkflowApprovalAttentionCandidateByTransitionID, 1)
-
-	return i, err
-}
-
 const getWorkflowDeleteImpact = `-- name: GetWorkflowDeleteImpact :one
 SELECT
     w.id AS workflow_id,
@@ -3005,49 +1934,21 @@ SELECT
     END) AS INTEGER) AS default_replacement_project_count,
     CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.started_at_unix_ms IS NOT NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND placement.state = 'active'
-          AND n.kind IN ('agent', 'script')
-        THEN r.id
-    END) AS INTEGER) AS active_run_count,
+        WHEN node.kind NOT IN ('start', 'terminal') THEN current_node.task_id
+    END) AS INTEGER) AS current_node_count,
+    CAST(COUNT(DISTINCT approval.id) AS INTEGER) AS pending_approval_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.started_at_unix_ms IS NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND r.waiting_ask_id IS NULL
-          AND t.canceled_at_unix_ms IS NULL
-          AND placement.state = 'active'
-          AND n.kind IN ('agent', 'script')
-        THEN r.id
-    END) AS INTEGER) AS runnable_run_count,
-    CAST(COUNT(DISTINCT CASE
-        WHEN (
-            r.started_at_unix_ms IS NOT NULL
-            AND r.completed_at_unix_ms IS NULL
-            AND r.interrupted_at_unix_ms IS NULL
-            AND placement.state = 'active'
-            AND n.kind IN ('agent', 'script')
-        )
-        OR (
-            r.started_at_unix_ms IS NULL
-            AND r.completed_at_unix_ms IS NULL
-            AND r.interrupted_at_unix_ms IS NULL
-            AND r.waiting_ask_id IS NULL
-            AND t.canceled_at_unix_ms IS NULL
-            AND placement.state = 'active'
-            AND n.kind IN ('agent', 'script')
-        )
+        WHEN node.kind NOT IN ('start', 'terminal')
+          OR approval.id IS NOT NULL
         THEN t.id
     END) AS INTEGER) AS blocked_task_count
 FROM workflows w
 LEFT JOIN project_workflow_links pwl ON pwl.workflow_id = w.id
 LEFT JOIN projects p ON p.id = pwl.project_id
 LEFT JOIN task_records t ON t.project_workflow_link_id = pwl.id
-LEFT JOIN task_run_records r ON r.task_id = t.id
-LEFT JOIN task_node_placements placement ON placement.id = r.placement_id
-LEFT JOIN workflow_nodes n ON n.id = r.node_id
+LEFT JOIN task_current_nodes current_node ON current_node.task_id = t.id
+LEFT JOIN workflow_nodes node ON node.id = current_node.node_id
+LEFT JOIN task_pending_approvals approval ON approval.source_task_id = t.id
 WHERE w.id = ?1
 GROUP BY w.id, w.version
 `
@@ -3059,8 +1960,8 @@ type GetWorkflowDeleteImpactRow struct {
 	LinkCount                      int64
 	DefaultReplacementProjectCount int64
 	TaskCount                      int64
-	ActiveRunCount                 int64
-	RunnableRunCount               int64
+	CurrentNodeCount               int64
+	PendingApprovalCount           int64
 	BlockedTaskCount               int64
 }
 
@@ -3074,8 +1975,8 @@ func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID string
 		&i.LinkCount,
 		&i.DefaultReplacementProjectCount,
 		&i.TaskCount,
-		&i.ActiveRunCount,
-		&i.RunnableRunCount,
+		&i.CurrentNodeCount,
+		&i.PendingApprovalCount,
 		&i.BlockedTaskCount,
 	), getWorkflowDeleteImpact, 1)
 
@@ -3148,121 +2049,30 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 const getWorkflowGraphActiveWorkPolicyImpact = `-- name: GetWorkflowGraphActiveWorkPolicyImpact :one
 SELECT
     (
-        SELECT CAST(COUNT(DISTINCT p.id) AS INTEGER)
-        FROM task_records t
-        JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
-        JOIN workflow_nodes n ON n.id = p.node_id
-        WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND n.kind NOT IN ('start', 'terminal')
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_run_records interrupted
-              WHERE interrupted.placement_id = p.id
-                AND interrupted.completed_at_unix_ms IS NULL
-                AND interrupted.interrupted_at_unix_ms IS NOT NULL
-          )
-    ) AS active_node_placement_count,
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        JOIN workflow_nodes node ON node.id = current_node.node_id
+        WHERE task.workflow_id = ?1
+          AND node.kind NOT IN ('start', 'terminal')
+    ) AS active_current_node_count,
     (
-        SELECT CAST(COUNT(DISTINCT tt.id) AS INTEGER)
-        FROM task_transition_records tt
-        JOIN task_records t ON t.id = tt.task_id
-        WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND tt.state = 'pending_approval'
-    ) AS pending_approval_count,
-    (
-        SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER)
-        FROM task_run_records r
-        JOIN task_records t ON t.id = r.task_id
-        JOIN task_node_placements p ON p.id = r.placement_id
-        JOIN workflow_nodes n ON n.id = r.node_id
-        WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND r.started_at_unix_ms IS NOT NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND p.state = 'active'
-          AND n.kind IN ('agent', 'script')
-    ) AS active_run_count,
-    (
-        SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER)
-        FROM task_run_records r
-        JOIN task_records t ON t.id = r.task_id
-        JOIN task_node_placements p ON p.id = r.placement_id
-        JOIN workflow_nodes n ON n.id = r.node_id
-        WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms IS NULL
-          AND r.started_at_unix_ms IS NULL
-          AND r.completed_at_unix_ms IS NULL
-          AND r.interrupted_at_unix_ms IS NULL
-          AND r.waiting_ask_id IS NULL
-          AND p.state = 'active'
-          AND n.kind IN ('agent', 'script')
-    ) AS runnable_run_count
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_pending_approvals approval
+        JOIN task_records task ON task.id = approval.source_task_id
+        WHERE task.workflow_id = ?1
+    ) AS pending_approval_count
 `
 
 type GetWorkflowGraphActiveWorkPolicyImpactRow struct {
-	ActiveNodePlacementCount int64
-	PendingApprovalCount     int64
-	ActiveRunCount           int64
-	RunnableRunCount         int64
+	ActiveCurrentNodeCount int64
+	PendingApprovalCount   int64
 }
 
 func (q *Queries) GetWorkflowGraphActiveWorkPolicyImpact(ctx context.Context, workflowID string) (GetWorkflowGraphActiveWorkPolicyImpactRow, error) {
 	row := q.db.QueryRowContext(ctx, getWorkflowGraphActiveWorkPolicyImpact, workflowID)
 	var i GetWorkflowGraphActiveWorkPolicyImpactRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.ActiveNodePlacementCount,
-		&i.PendingApprovalCount,
-		&i.ActiveRunCount,
-		&i.RunnableRunCount,
-	), getWorkflowGraphActiveWorkPolicyImpact, 1)
-
-	return i, err
-}
-
-const getWorkflowInterruptedRunAttentionCandidateByRunID = `-- name: GetWorkflowInterruptedRunAttentionCandidateByRunID :one
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE kind = 'interrupted_run'
-  AND run_id = CAST(?1 AS TEXT)
-LIMIT 1
-`
-
-func (q *Queries) GetWorkflowInterruptedRunAttentionCandidateByRunID(ctx context.Context, runID string) (WorkflowAttentionCandidate, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowInterruptedRunAttentionCandidateByRunID, runID)
-	var i WorkflowAttentionCandidate
-	err := recordQueryError(ctx, row.Scan(
-		&i.Kind,
-		&i.ID,
-		&i.ProjectID,
-		&i.WorkflowID,
-		&i.TaskID,
-		&i.ShortID,
-		&i.Title,
-		&i.RunID,
-		&i.SessionID,
-		&i.AskID,
-		&i.TaskTransitionID,
-		&i.InterruptionReason,
-		&i.InterruptionDetailJson,
-		&i.OccurredAtUnixMs,
-	), getWorkflowInterruptedRunAttentionCandidateByRunID, 1)
+	err := recordQueryError(ctx, row.Scan(&i.ActiveCurrentNodeCount, &i.PendingApprovalCount), getWorkflowGraphActiveWorkPolicyImpact, 1)
 
 	return i, err
 }
@@ -3810,8 +2620,6 @@ INSERT INTO tasks (
     source_url,
     source_workspace_id,
     managed_worktree_id,
-    canceled_at_unix_ms,
-    cancellation_reason,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -3826,8 +2634,6 @@ INSERT INTO tasks (
     ?8,
     ?9,
     ?10,
-    NULL,
-    NULL,
     ?11,
     ?12,
     ?13
@@ -4030,55 +2836,6 @@ func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskL
 	return err
 }
 
-const insertTaskNodePlacement = `-- name: InsertTaskNodePlacement :exec
-INSERT INTO task_node_placements (
-    id,
-    task_id,
-    node_id,
-    state,
-    parallel_batch_transition_id,
-    parallel_branch_edge_id,
-    created_at_unix_ms,
-    updated_at_unix_ms
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6,
-    ?7,
-    ?8
-)
-`
-
-type InsertTaskNodePlacementParams struct {
-	ID                        string
-	TaskID                    string
-	NodeID                    sql.NullString
-	State                     string
-	ParallelBatchTransitionID sql.NullString
-	ParallelBranchEdgeID      sql.NullString
-	CreatedAtUnixMs           int64
-	UpdatedAtUnixMs           int64
-}
-
-func (q *Queries) InsertTaskNodePlacement(ctx context.Context, arg InsertTaskNodePlacementParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskNodePlacement,
-		arg.ID,
-		arg.TaskID,
-		arg.NodeID,
-		arg.State,
-		arg.ParallelBatchTransitionID,
-		arg.ParallelBranchEdgeID,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-	)
-	err = recordQueryError(ctx, err, insertTaskNodePlacement, 8)
-
-	return err
-}
-
 const insertTaskPendingApproval = `-- name: InsertTaskPendingApproval :exec
 INSERT INTO task_pending_approvals (
     id,
@@ -4165,245 +2922,6 @@ func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg Inser
 		arg.ContextSourceResolutionJson,
 	)
 	err = recordQueryError(ctx, err, insertTaskPendingApprovalBranch, 5)
-
-	return err
-}
-
-const insertTaskRun = `-- name: InsertTaskRun :exec
-INSERT INTO task_runs (
-    id,
-    placement_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6,
-    ?7,
-    ?8,
-    ?9,
-    ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14,
-    ?15,
-    ?16,
-    ?17
-)
-`
-
-type InsertTaskRunParams struct {
-	ID                          string
-	PlacementID                 string
-	SessionID                   sql.NullString
-	RunGeneration               int64
-	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs sql.NullInt64
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             sql.NullInt64
-	CompletedAtUnixMs           sql.NullInt64
-	InterruptedAtUnixMs         sql.NullInt64
-	InterruptionReason          sql.NullString
-	InterruptionDetailJson      string
-	WaitingAskID                sql.NullString
-	InvalidCompletionCount      int64
-	RunStartSnapshotJson        string
-	MetadataJson                string
-}
-
-func (q *Queries) InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskRun,
-		arg.ID,
-		arg.PlacementID,
-		arg.SessionID,
-		arg.RunGeneration,
-		arg.WorkflowRevisionSeen,
-		arg.AutomationRequestedAtUnixMs,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.StartedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.WaitingAskID,
-		arg.InvalidCompletionCount,
-		arg.RunStartSnapshotJson,
-		arg.MetadataJson,
-	)
-	err = recordQueryError(ctx, err, insertTaskRun, 17)
-
-	return err
-}
-
-const insertTaskTransition = `-- name: InsertTaskTransition :exec
-INSERT INTO task_transitions (
-    id,
-    task_id,
-    source_run_id,
-    source_placement_id,
-    source_node_key,
-    source_node_display_name,
-    transition_id,
-    transition_display_name,
-    workflow_revision_seen,
-    actor,
-    state,
-    commentary,
-    output_values_json,
-    created_at_unix_ms,
-    applied_at_unix_ms
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6,
-    ?7,
-    ?8,
-    ?9,
-    ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14,
-    ?15
-)
-`
-
-type InsertTaskTransitionParams struct {
-	ID                    string
-	TaskID                string
-	SourceRunID           sql.NullString
-	SourcePlacementID     sql.NullString
-	SourceNodeKey         string
-	SourceNodeDisplayName string
-	TransitionID          string
-	TransitionDisplayName string
-	WorkflowRevisionSeen  int64
-	Actor                 string
-	State                 string
-	Commentary            string
-	OutputValuesJson      string
-	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       sql.NullInt64
-}
-
-func (q *Queries) InsertTaskTransition(ctx context.Context, arg InsertTaskTransitionParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskTransition,
-		arg.ID,
-		arg.TaskID,
-		arg.SourceRunID,
-		arg.SourcePlacementID,
-		arg.SourceNodeKey,
-		arg.SourceNodeDisplayName,
-		arg.TransitionID,
-		arg.TransitionDisplayName,
-		arg.WorkflowRevisionSeen,
-		arg.Actor,
-		arg.State,
-		arg.Commentary,
-		arg.OutputValuesJson,
-		arg.CreatedAtUnixMs,
-		arg.AppliedAtUnixMs,
-	)
-	err = recordQueryError(ctx, err, insertTaskTransition, 15)
-
-	return err
-}
-
-const insertTaskTransitionEdge = `-- name: InsertTaskTransitionEdge :exec
-INSERT INTO task_transition_edges (
-    id,
-    task_transition_id,
-    workflow_edge_id,
-    edge_key,
-    target_node_id,
-    target_node_key,
-    target_node_display_name,
-    target_node_kind,
-    target_placement_id,
-    state,
-    context_mode,
-    requires_approval,
-    input_bindings_json,
-    output_requirements_json,
-    metadata_json
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6,
-    ?7,
-    ?8,
-    ?9,
-    ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14,
-    ?15
-)
-`
-
-type InsertTaskTransitionEdgeParams struct {
-	ID                     string
-	TaskTransitionID       string
-	WorkflowEdgeID         sql.NullString
-	EdgeKey                string
-	TargetNodeID           sql.NullString
-	TargetNodeKey          string
-	TargetNodeDisplayName  string
-	TargetNodeKind         string
-	TargetPlacementID      sql.NullString
-	State                  string
-	ContextMode            string
-	RequiresApproval       int64
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	MetadataJson           string
-}
-
-func (q *Queries) InsertTaskTransitionEdge(ctx context.Context, arg InsertTaskTransitionEdgeParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskTransitionEdge,
-		arg.ID,
-		arg.TaskTransitionID,
-		arg.WorkflowEdgeID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.TargetNodeKey,
-		arg.TargetNodeDisplayName,
-		arg.TargetNodeKind,
-		arg.TargetPlacementID,
-		arg.State,
-		arg.ContextMode,
-		arg.RequiresApproval,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.MetadataJson,
-	)
-	err = recordQueryError(ctx, err, insertTaskTransitionEdge, 15)
 
 	return err
 }
@@ -4722,48 +3240,6 @@ func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspac
 	return result.RowsAffected()
 }
 
-const interruptActiveTaskRuns = `-- name: InterruptActiveTaskRuns :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    interrupted_at_unix_ms = ?2,
-    interruption_reason = ?3,
-    interruption_detail_json = ?4,
-    waiting_ask_id = NULL
-WHERE EXISTS (
-      SELECT 1
-      FROM task_node_placements p
-      WHERE p.id = task_runs.placement_id
-        AND p.task_id = ?5
-  )
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-`
-
-type InterruptActiveTaskRunsParams struct {
-	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson string
-	TaskID                 string
-}
-
-func (q *Queries) InterruptActiveTaskRuns(ctx context.Context, arg InterruptActiveTaskRunsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptActiveTaskRuns,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.TaskID,
-	)
-	err = recordQueryError(ctx, err, interruptActiveTaskRuns, 5)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const interruptBranchAdmittedCurrentNode = `-- name: InterruptBranchAdmittedCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
@@ -4833,74 +3309,6 @@ func (q *Queries) InterruptBranchCurrentNode(ctx context.Context, arg InterruptB
 		arg.TransitionBranchKey,
 	)
 	err = recordQueryError(ctx, err, interruptBranchCurrentNode, 6)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const interruptManualMoveSourceRun = `-- name: InterruptManualMoveSourceRun :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    interrupted_at_unix_ms = ?2,
-    interruption_reason = 'user_interrupt',
-    interruption_detail_json = '{}',
-    waiting_ask_id = NULL
-WHERE id = ?3
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-`
-
-type InterruptManualMoveSourceRunParams struct {
-	UpdatedAtUnixMs     int64
-	InterruptedAtUnixMs sql.NullInt64
-	RunID               string
-}
-
-func (q *Queries) InterruptManualMoveSourceRun(ctx context.Context, arg InterruptManualMoveSourceRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptManualMoveSourceRun, arg.UpdatedAtUnixMs, arg.InterruptedAtUnixMs, arg.RunID)
-	err = recordQueryError(ctx, err, interruptManualMoveSourceRun, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const interruptRunGeneration = `-- name: InterruptRunGeneration :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    interrupted_at_unix_ms = ?2,
-    interruption_reason = ?3,
-    interruption_detail_json = ?4,
-    waiting_ask_id = NULL
-WHERE id = ?5
-  AND run_generation = ?6
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-`
-
-type InterruptRunGenerationParams struct {
-	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson string
-	RunID                  string
-	RunGeneration          int64
-}
-
-func (q *Queries) InterruptRunGeneration(ctx context.Context, arg InterruptRunGenerationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptRunGeneration,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.RunID,
-		arg.RunGeneration,
-	)
-	err = recordQueryError(ctx, err, interruptRunGeneration, 6)
 
 	if err != nil {
 		return 0, err
@@ -4978,182 +3386,6 @@ func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptS
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const interruptStartedWorkflowRunsForRecovery = `-- name: InterruptStartedWorkflowRunsForRecovery :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    interrupted_at_unix_ms = ?2,
-    interruption_reason = ?3,
-    interruption_detail_json = ?4
-WHERE started_at_unix_ms IS NOT NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id IS NULL
-`
-
-type InterruptStartedWorkflowRunsForRecoveryParams struct {
-	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson string
-}
-
-func (q *Queries) InterruptStartedWorkflowRunsForRecovery(ctx context.Context, arg InterruptStartedWorkflowRunsForRecoveryParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptStartedWorkflowRunsForRecovery,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-	)
-	err = recordQueryError(ctx, err, interruptStartedWorkflowRunsForRecovery, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const interruptWorkflowRun = `-- name: InterruptWorkflowRun :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    interrupted_at_unix_ms = ?2,
-    interruption_reason = ?3,
-    interruption_detail_json = ?4,
-    waiting_ask_id = NULL
-WHERE id = ?5
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-`
-
-type InterruptWorkflowRunParams struct {
-	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson string
-	ID                     string
-}
-
-func (q *Queries) InterruptWorkflowRun(ctx context.Context, arg InterruptWorkflowRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptWorkflowRun,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.ID,
-	)
-	err = recordQueryError(ctx, err, interruptWorkflowRun, 5)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const listActionableInterruptedRunIDsByTask = `-- name: ListActionableInterruptedRunIDsByTask :many
-SELECT run.id
-FROM workflow_attention_candidates candidate
-JOIN task_run_records run ON run.id = candidate.run_id
-WHERE candidate.kind = 'interrupted_run'
-  AND candidate.task_id = CAST(?1 AS TEXT)
-ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC
-`
-
-func (q *Queries) ListActionableInterruptedRunIDsByTask(ctx context.Context, taskID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listActionableInterruptedRunIDsByTask, taskID)
-	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByTask, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listActionableInterruptedRunIDsByWorkflow = `-- name: ListActionableInterruptedRunIDsByWorkflow :many
-SELECT run.id
-FROM workflow_attention_candidates candidate
-JOIN task_run_records run ON run.id = candidate.run_id
-WHERE candidate.kind = 'interrupted_run'
-  AND candidate.workflow_id = ?1
-ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC
-`
-
-func (q *Queries) ListActionableInterruptedRunIDsByWorkflow(ctx context.Context, workflowID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listActionableInterruptedRunIDsByWorkflow, workflowID)
-	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByWorkflow, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listActiveManualMoveSources = `-- name: ListActiveManualMoveSources :many
-SELECT task_node_placements.id, node_id, parallel_batch_transition_id
-FROM task_node_placements
-WHERE task_node_placements.task_id = ?1
-  AND task_node_placements.state = 'active'
-ORDER BY task_node_placements.created_at_unix_ms DESC, task_node_placements.rowid DESC
-`
-
-type ListActiveManualMoveSourcesRow struct {
-	ID                        string
-	NodeID                    sql.NullString
-	ParallelBatchTransitionID sql.NullString
-}
-
-func (q *Queries) ListActiveManualMoveSources(ctx context.Context, taskID string) ([]ListActiveManualMoveSourcesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveManualMoveSources, taskID)
-	err = recordQueryError(ctx, err, listActiveManualMoveSources, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListActiveManualMoveSourcesRow
-	for rows.Next() {
-		var i ListActiveManualMoveSourcesRow
-		if err := rows.Scan(&i.ID, &i.NodeID, &i.ParallelBatchTransitionID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listBoardColumnTaskCounts = `-- name: ListBoardColumnTaskCounts :many
@@ -5461,188 +3693,6 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	return items, nil
 }
 
-const listInterruptTaskRunCandidates = `-- name: ListInterruptTaskRunCandidates :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.task_id = ?1
-  AND (?2 = '' OR r.session_id = ?2)
-  AND r.started_at_unix_ms IS NOT NULL
-  AND r.waiting_ask_id IS NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-type ListInterruptTaskRunCandidatesParams struct {
-	TaskID    string
-	SessionID interface{}
-}
-
-func (q *Queries) ListInterruptTaskRunCandidates(ctx context.Context, arg ListInterruptTaskRunCandidatesParams) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listInterruptTaskRunCandidates, arg.TaskID, arg.SessionID)
-	err = recordQueryError(ctx, err, listInterruptTaskRunCandidates, 2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listJoinArrivals = `-- name: ListJoinArrivals :many
-SELECT
-    p.id,
-    p.parallel_branch_edge_id,
-    te.workflow_edge_id,
-    tr.source_node_key,
-    tr.output_values_json
-FROM task_node_placements p
-JOIN task_transitions tr ON tr.source_placement_id = p.id
-JOIN task_transition_edges te ON te.task_transition_id = tr.id
-WHERE p.parallel_batch_transition_id = ?1
-  AND p.state = 'completed'
-  AND te.target_node_id = ?2
-  AND te.state = 'applied'
-ORDER BY p.parallel_branch_edge_id ASC, tr.created_at_unix_ms ASC, te.rowid ASC
-`
-
-type ListJoinArrivalsParams struct {
-	BatchID    sql.NullString
-	JoinNodeID sql.NullString
-}
-
-type ListJoinArrivalsRow struct {
-	ID                   string
-	ParallelBranchEdgeID sql.NullString
-	WorkflowEdgeID       sql.NullString
-	SourceNodeKey        string
-	OutputValuesJson     string
-}
-
-func (q *Queries) ListJoinArrivals(ctx context.Context, arg ListJoinArrivalsParams) ([]ListJoinArrivalsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listJoinArrivals, arg.BatchID, arg.JoinNodeID)
-	err = recordQueryError(ctx, err, listJoinArrivals, 2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListJoinArrivalsRow
-	for rows.Next() {
-		var i ListJoinArrivalsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ParallelBranchEdgeID,
-			&i.WorkflowEdgeID,
-			&i.SourceNodeKey,
-			&i.OutputValuesJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listJoinExpectedBranches = `-- name: ListJoinExpectedBranches :many
-SELECT target_placement_id
-FROM task_transition_edges
-WHERE task_transition_id = ?1
-  AND target_placement_id IS NOT NULL
-ORDER BY rowid ASC
-`
-
-func (q *Queries) ListJoinExpectedBranches(ctx context.Context, batchID string) ([]sql.NullString, error) {
-	rows, err := q.db.QueryContext(ctx, listJoinExpectedBranches, batchID)
-	err = recordQueryError(ctx, err, listJoinExpectedBranches, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []sql.NullString
-	for rows.Next() {
-		var target_placement_id sql.NullString
-		if err := rows.Scan(&target_placement_id); err != nil {
-			return nil, err
-		}
-		items = append(items, target_placement_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listMetadataSchemaDefinitions = `-- name: ListMetadataSchemaDefinitions :many
 SELECT
     type AS object_kind,
@@ -5900,185 +3950,6 @@ func (q *Queries) ListOlderSessionPage(ctx context.Context, arg ListOlderSession
 	return items, nil
 }
 
-const listPendingApprovalManualMoveSources = `-- name: ListPendingApprovalManualMoveSources :many
-SELECT tt.id, tt.source_placement_id, p.node_id
-FROM task_transitions tt
-JOIN task_node_placements p ON p.id = tt.source_placement_id
-WHERE tt.task_id = ?1
-  AND tt.state = 'pending_approval'
-ORDER BY tt.created_at_unix_ms DESC, tt.rowid DESC
-`
-
-type ListPendingApprovalManualMoveSourcesRow struct {
-	ID                string
-	SourcePlacementID sql.NullString
-	NodeID            sql.NullString
-}
-
-func (q *Queries) ListPendingApprovalManualMoveSources(ctx context.Context, taskID string) ([]ListPendingApprovalManualMoveSourcesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingApprovalManualMoveSources, taskID)
-	err = recordQueryError(ctx, err, listPendingApprovalManualMoveSources, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPendingApprovalManualMoveSourcesRow
-	for rows.Next() {
-		var i ListPendingApprovalManualMoveSourcesRow
-		if err := rows.Scan(&i.ID, &i.SourcePlacementID, &i.NodeID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPendingApprovalSourcePlacementsByTasks = `-- name: ListPendingApprovalSourcePlacementsByTasks :many
-SELECT
-    CAST(COALESCE('pending-approval:' || id, '') AS TEXT) AS id,
-    task_id,
-    source_node_id AS node_id,
-    'waiting_approval' AS state,
-    '' AS created_by_transition_id,
-    CAST(NULL AS TEXT) AS parallel_batch_transition_id,
-    CAST(NULL AS TEXT) AS parallel_branch_edge_id,
-    created_at_unix_ms,
-    created_at_unix_ms AS updated_at_unix_ms
-FROM task_transition_records
-WHERE task_id IN (/*SLICE:task_ids*/?)
-  AND state = 'pending_approval'
-  AND source_node_id IS NOT NULL
-ORDER BY task_id ASC, created_at_unix_ms ASC, id ASC
-`
-
-type ListPendingApprovalSourcePlacementsByTasksRow struct {
-	ID                        string
-	TaskID                    string
-	NodeID                    sql.NullString
-	State                     string
-	CreatedByTransitionID     string
-	ParallelBatchTransitionID sql.NullString
-	ParallelBranchEdgeID      sql.NullString
-	CreatedAtUnixMs           int64
-	UpdatedAtUnixMs           int64
-}
-
-func (q *Queries) ListPendingApprovalSourcePlacementsByTasks(ctx context.Context, taskIds []string) ([]ListPendingApprovalSourcePlacementsByTasksRow, error) {
-	query := listPendingApprovalSourcePlacementsByTasks
-	var queryParams []interface{}
-	if len(taskIds) > 0 {
-		for _, v := range taskIds {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPendingApprovalSourcePlacementsByTasksRow
-	for rows.Next() {
-		var i ListPendingApprovalSourcePlacementsByTasksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.NodeID,
-			&i.State,
-			&i.CreatedByTransitionID,
-			&i.ParallelBatchTransitionID,
-			&i.ParallelBranchEdgeID,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPendingApprovalTransitionIDsByTask = `-- name: ListPendingApprovalTransitionIDsByTask :many
-SELECT transition.id
-FROM workflow_attention_candidates candidate
-JOIN task_transition_records transition ON transition.id = candidate.task_transition_id
-WHERE candidate.kind = 'approval'
-  AND candidate.task_id = CAST(?1 AS TEXT)
-ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC
-`
-
-func (q *Queries) ListPendingApprovalTransitionIDsByTask(ctx context.Context, taskID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingApprovalTransitionIDsByTask, taskID)
-	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByTask, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPendingApprovalTransitionIDsByWorkflow = `-- name: ListPendingApprovalTransitionIDsByWorkflow :many
-SELECT transition.id
-FROM workflow_attention_candidates candidate
-JOIN task_transition_records transition ON transition.id = candidate.task_transition_id
-WHERE candidate.kind = 'approval'
-  AND candidate.workflow_id = ?1
-ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC
-`
-
-func (q *Queries) ListPendingApprovalTransitionIDsByWorkflow(ctx context.Context, workflowID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingApprovalTransitionIDsByWorkflow, workflowID)
-	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByWorkflow, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProjectHomeSummaries = `-- name: ListProjectHomeSummaries :many
 SELECT
     p.id AS project_id,
@@ -6094,24 +3965,6 @@ SELECT
         p.updated_at_unix_ms,
         COALESCE(w.updated_at_unix_ms, 0),
         COALESCE((SELECT MAX(t.updated_at_unix_ms) FROM task_records t WHERE t.project_id = p.id), 0),
-        COALESCE((
-            SELECT MAX(tnp.updated_at_unix_ms)
-            FROM task_node_placements tnp
-            JOIN task_records placement_tasks ON placement_tasks.id = tnp.task_id
-            WHERE placement_tasks.project_id = p.id
-        ), 0),
-        COALESCE((
-            SELECT MAX(tr.updated_at_unix_ms)
-            FROM task_run_records tr
-            JOIN task_records run_tasks ON run_tasks.id = tr.task_id
-            WHERE run_tasks.project_id = p.id
-        ), 0),
-        COALESCE((
-            SELECT MAX(COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms))
-            FROM task_transitions tt
-            JOIN task_records transition_tasks ON transition_tasks.id = tt.task_id
-            WHERE transition_tasks.project_id = p.id
-        ), 0),
         COALESCE((
             SELECT MAX(tc.updated_at_unix_ms)
             FROM task_comments tc
@@ -6379,6 +4232,36 @@ ORDER BY rowid ASC
 func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectSessionIDs, projectID)
 	err = recordQueryError(ctx, err, listProjectSessionIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectTaskIDs = `-- name: ListProjectTaskIDs :many
+SELECT id
+FROM task_records
+WHERE project_id = ?1
+`
+
+func (q *Queries) ListProjectTaskIDs(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectTaskIDs, projectID)
+	err = recordQueryError(ctx, err, listProjectTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6743,54 +4626,6 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	return items, nil
 }
 
-const listResumeTaskRunCandidates = `-- name: ListResumeTaskRunCandidates :many
-SELECT
-    r.id,
-    r.run_start_snapshot_json
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.task_id = ?1
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NOT NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-ORDER BY r.interrupted_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-type ListResumeTaskRunCandidatesRow struct {
-	ID                   string
-	RunStartSnapshotJson string
-}
-
-func (q *Queries) ListResumeTaskRunCandidates(ctx context.Context, taskID string) ([]ListResumeTaskRunCandidatesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listResumeTaskRunCandidates, taskID)
-	err = recordQueryError(ctx, err, listResumeTaskRunCandidates, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListResumeTaskRunCandidatesRow
-	for rows.Next() {
-		var i ListResumeTaskRunCandidatesRow
-		if err := rows.Scan(&i.ID, &i.RunStartSnapshotJson); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listSessionNamesByIDs = `-- name: ListSessionNamesByIDs :many
 SELECT id, name
 FROM sessions
@@ -6938,96 +4773,6 @@ func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID 
 	for rows.Next() {
 		var i ListSessionsTargetingWorktreeRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.UpdatedAtUnixMs); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listStartedWorkflowRunRecoveryCandidates = `-- name: ListStartedWorkflowRunRecoveryCandidates :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE started_at_unix_ms IS NOT NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id IS NULL
-ORDER BY updated_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = task_run_records.id
-) ASC
-`
-
-type ListStartedWorkflowRunRecoveryCandidatesRow struct {
-	ID                      string
-	TaskID                  string
-	PlacementID             string
-	NodeID                  sql.NullString
-	SessionID               sql.NullString
-	RunGeneration           int64
-	StartedAtUnixMs         sql.NullInt64
-	CompletedAtUnixMs       sql.NullInt64
-	InterruptedAtUnixMs     sql.NullInt64
-	InterruptionReason      sql.NullString
-	InterruptionDetailJson  string
-	WaitingAskID            sql.NullString
-	EffectiveCompletionMode sql.NullString
-	InvalidCompletionCount  int64
-	RunStartSnapshotJson    string
-	MetadataJson            string
-}
-
-func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) ([]ListStartedWorkflowRunRecoveryCandidatesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listStartedWorkflowRunRecoveryCandidates)
-	err = recordQueryError(ctx, err, listStartedWorkflowRunRecoveryCandidates, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListStartedWorkflowRunRecoveryCandidatesRow
-	for rows.Next() {
-		var i ListStartedWorkflowRunRecoveryCandidatesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7458,124 +5203,6 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 	return items, nil
 }
 
-const listTaskNodePlacements = `-- name: ListTaskNodePlacements :many
-SELECT
-    id,
-    task_id,
-    node_id,
-    state,
-    created_by_transition_id,
-    parallel_batch_transition_id,
-    parallel_branch_edge_id,
-    created_at_unix_ms,
-    updated_at_unix_ms
-FROM task_node_placement_records
-WHERE task_id = ?1
-ORDER BY created_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_node_placements storage
-    WHERE storage.id = task_node_placement_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskNodePlacements(ctx context.Context, taskID string) ([]TaskNodePlacementRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskNodePlacements, taskID)
-	err = recordQueryError(ctx, err, listTaskNodePlacements, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskNodePlacementRecord
-	for rows.Next() {
-		var i TaskNodePlacementRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.NodeID,
-			&i.State,
-			&i.CreatedByTransitionID,
-			&i.ParallelBatchTransitionID,
-			&i.ParallelBranchEdgeID,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskNodePlacementsByTasks = `-- name: ListTaskNodePlacementsByTasks :many
-SELECT
-    id,
-    task_id,
-    node_id,
-    state,
-    created_by_transition_id,
-    parallel_batch_transition_id,
-    parallel_branch_edge_id,
-    created_at_unix_ms,
-    updated_at_unix_ms
-FROM task_node_placement_records
-WHERE task_id IN (/*SLICE:task_ids*/?)
-ORDER BY task_id ASC, created_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_node_placements storage
-    WHERE storage.id = task_node_placement_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskNodePlacementsByTasks(ctx context.Context, taskIds []string) ([]TaskNodePlacementRecord, error) {
-	query := listTaskNodePlacementsByTasks
-	var queryParams []interface{}
-	if len(taskIds) > 0 {
-		for _, v := range taskIds {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskNodePlacementRecord
-	for rows.Next() {
-		var i TaskNodePlacementRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.NodeID,
-			&i.State,
-			&i.CreatedByTransitionID,
-			&i.ParallelBatchTransitionID,
-			&i.ParallelBranchEdgeID,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTaskPendingApprovalBranches = `-- name: ListTaskPendingApprovalBranches :many
 SELECT
     approval_id,
@@ -7668,571 +5295,6 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	return items, nil
 }
 
-const listTaskRunIDsByPlacementForTransitionResult = `-- name: ListTaskRunIDsByPlacementForTransitionResult :many
-SELECT id
-FROM task_runs
-WHERE placement_id = ?1
-ORDER BY created_at_unix_ms ASC, rowid ASC
-`
-
-func (q *Queries) ListTaskRunIDsByPlacementForTransitionResult(ctx context.Context, placementID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskRunIDsByPlacementForTransitionResult, placementID)
-	err = recordQueryError(ctx, err, listTaskRunIDsByPlacementForTransitionResult, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskRuns = `-- name: ListTaskRuns :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE task_id = ?1
-ORDER BY created_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = task_run_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskRuns(ctx context.Context, taskID string) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskRuns, taskID)
-	err = recordQueryError(ctx, err, listTaskRuns, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskRunsByIDs = `-- name: ListTaskRunsByIDs :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE id IN (/*SLICE:ids*/?)
-`
-
-func (q *Queries) ListTaskRunsByIDs(ctx context.Context, ids []string) ([]TaskRunRecord, error) {
-	query := listTaskRunsByIDs
-	var queryParams []interface{}
-	if len(ids) > 0 {
-		for _, v := range ids {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskRunsByTasks = `-- name: ListTaskRunsByTasks :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE task_id IN (/*SLICE:task_ids*/?)
-ORDER BY task_id ASC, created_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = task_run_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskRunsByTasks(ctx context.Context, taskIds []string) ([]TaskRunRecord, error) {
-	query := listTaskRunsByTasks
-	var queryParams []interface{}
-	if len(taskIds) > 0 {
-		for _, v := range taskIds {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskTransitionEdges = `-- name: ListTaskTransitionEdges :many
-SELECT
-    id,
-    task_transition_id,
-    workflow_edge_id,
-    edge_key,
-    workflow_revision_seen,
-    target_node_id,
-    target_node_key,
-    target_node_display_name,
-    target_node_kind,
-    target_placement_id,
-    state,
-    context_mode,
-    requires_approval,
-    input_bindings_json,
-    output_requirements_json,
-    metadata_json
-FROM task_transition_edge_records
-WHERE task_transition_id = ?1
-ORDER BY (
-    SELECT storage.rowid
-    FROM task_transition_edges storage
-    WHERE storage.id = task_transition_edge_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskTransitionEdges(ctx context.Context, taskTransitionID string) ([]TaskTransitionEdgeRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskTransitionEdges, taskTransitionID)
-	err = recordQueryError(ctx, err, listTaskTransitionEdges, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskTransitionEdgeRecord
-	for rows.Next() {
-		var i TaskTransitionEdgeRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskTransitionID,
-			&i.WorkflowEdgeID,
-			&i.EdgeKey,
-			&i.WorkflowRevisionSeen,
-			&i.TargetNodeID,
-			&i.TargetNodeKey,
-			&i.TargetNodeDisplayName,
-			&i.TargetNodeKind,
-			&i.TargetPlacementID,
-			&i.State,
-			&i.ContextMode,
-			&i.RequiresApproval,
-			&i.InputBindingsJson,
-			&i.OutputRequirementsJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskTransitionEdgesByTransitionIDs = `-- name: ListTaskTransitionEdgesByTransitionIDs :many
-SELECT
-    id,
-    task_transition_id,
-    workflow_edge_id,
-    edge_key,
-    workflow_revision_seen,
-    target_node_id,
-    target_node_key,
-    target_node_display_name,
-    target_node_kind,
-    target_placement_id,
-    state,
-    context_mode,
-    requires_approval,
-    input_bindings_json,
-    output_requirements_json,
-    metadata_json
-FROM task_transition_edge_records
-WHERE task_transition_id IN (/*SLICE:transition_ids*/?)
-ORDER BY task_transition_id ASC, (
-    SELECT storage.rowid
-    FROM task_transition_edges storage
-    WHERE storage.id = task_transition_edge_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskTransitionEdgesByTransitionIDs(ctx context.Context, transitionIds []string) ([]TaskTransitionEdgeRecord, error) {
-	query := listTaskTransitionEdgesByTransitionIDs
-	var queryParams []interface{}
-	if len(transitionIds) > 0 {
-		for _, v := range transitionIds {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:transition_ids*/?", strings.Repeat(",?", len(transitionIds))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:transition_ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskTransitionEdgeRecord
-	for rows.Next() {
-		var i TaskTransitionEdgeRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskTransitionID,
-			&i.WorkflowEdgeID,
-			&i.EdgeKey,
-			&i.WorkflowRevisionSeen,
-			&i.TargetNodeID,
-			&i.TargetNodeKey,
-			&i.TargetNodeDisplayName,
-			&i.TargetNodeKind,
-			&i.TargetPlacementID,
-			&i.State,
-			&i.ContextMode,
-			&i.RequiresApproval,
-			&i.InputBindingsJson,
-			&i.OutputRequirementsJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskTransitions = `-- name: ListTaskTransitions :many
-SELECT
-    id,
-    task_id,
-    source_run_id,
-    source_placement_id,
-    source_node_id,
-    source_node_key,
-    source_node_display_name,
-    transition_group_id,
-    transition_id,
-    transition_display_name,
-    workflow_revision_seen,
-    actor,
-    state,
-    commentary,
-    output_values_json,
-    created_at_unix_ms,
-    applied_at_unix_ms
-FROM task_transition_records
-WHERE task_id = ?1
-ORDER BY created_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_transitions storage
-    WHERE storage.id = task_transition_records.id
-) ASC
-`
-
-func (q *Queries) ListTaskTransitions(ctx context.Context, taskID string) ([]TaskTransitionRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskTransitions, taskID)
-	err = recordQueryError(ctx, err, listTaskTransitions, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskTransitionRecord
-	for rows.Next() {
-		var i TaskTransitionRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.SourceRunID,
-			&i.SourcePlacementID,
-			&i.SourceNodeID,
-			&i.SourceNodeKey,
-			&i.SourceNodeDisplayName,
-			&i.TransitionGroupID,
-			&i.TransitionID,
-			&i.TransitionDisplayName,
-			&i.WorkflowRevisionSeen,
-			&i.Actor,
-			&i.State,
-			&i.Commentary,
-			&i.OutputValuesJson,
-			&i.CreatedAtUnixMs,
-			&i.AppliedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskTransitionsByIDs = `-- name: ListTaskTransitionsByIDs :many
-SELECT
-    id,
-    task_id,
-    source_run_id,
-    source_placement_id,
-    source_node_id,
-    source_node_key,
-    source_node_display_name,
-    transition_group_id,
-    transition_id,
-    transition_display_name,
-    workflow_revision_seen,
-    actor,
-    state,
-    commentary,
-    output_values_json,
-    created_at_unix_ms,
-    applied_at_unix_ms
-FROM task_transition_records
-WHERE id IN (/*SLICE:ids*/?)
-`
-
-func (q *Queries) ListTaskTransitionsByIDs(ctx context.Context, ids []string) ([]TaskTransitionRecord, error) {
-	query := listTaskTransitionsByIDs
-	var queryParams []interface{}
-	if len(ids) > 0 {
-		for _, v := range ids {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
-	}
-	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskTransitionRecord
-	for rows.Next() {
-		var i TaskTransitionRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.SourceRunID,
-			&i.SourcePlacementID,
-			&i.SourceNodeID,
-			&i.SourceNodeKey,
-			&i.SourceNodeDisplayName,
-			&i.TransitionGroupID,
-			&i.TransitionID,
-			&i.TransitionDisplayName,
-			&i.WorkflowRevisionSeen,
-			&i.Actor,
-			&i.State,
-			&i.Commentary,
-			&i.OutputValuesJson,
-			&i.CreatedAtUnixMs,
-			&i.AppliedAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTasksByProject = `-- name: ListTasksByProject :many
 SELECT
     id,
@@ -8252,8 +5314,6 @@ SELECT
     execution_target_resolved_ref,
     execution_target_commit_oid,
     execution_target_provenance,
-    canceled_at_unix_ms,
-    cancellation_reason,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -8298,8 +5358,6 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 			&i.ExecutionTargetResolvedRef,
 			&i.ExecutionTargetCommitOid,
 			&i.ExecutionTargetProvenance,
-			&i.CanceledAtUnixMs,
-			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
@@ -8331,8 +5389,6 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
-    canceled_at_unix_ms,
-    cancellation_reason,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -8354,8 +5410,6 @@ type ListTasksByShortIDRow struct {
 	SourceUrl             string
 	SourceWorkspaceID     sql.NullString
 	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      sql.NullInt64
-	CancellationReason    sql.NullString
 	CreatedAtUnixMs       int64
 	UpdatedAtUnixMs       int64
 	MetadataJson          string
@@ -8384,257 +5438,9 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
-			&i.CanceledAtUnixMs,
-			&i.CancellationReason,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUnstartedWorkflowRunRecoveryCandidates = `-- name: ListUnstartedWorkflowRunRecoveryCandidates :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE started_at_unix_ms IS NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id IS NULL
-ORDER BY updated_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = task_run_records.id
-) ASC
-`
-
-type ListUnstartedWorkflowRunRecoveryCandidatesRow struct {
-	ID                      string
-	TaskID                  string
-	PlacementID             string
-	NodeID                  sql.NullString
-	SessionID               sql.NullString
-	RunGeneration           int64
-	StartedAtUnixMs         sql.NullInt64
-	CompletedAtUnixMs       sql.NullInt64
-	InterruptedAtUnixMs     sql.NullInt64
-	InterruptionReason      sql.NullString
-	InterruptionDetailJson  string
-	WaitingAskID            sql.NullString
-	EffectiveCompletionMode sql.NullString
-	InvalidCompletionCount  int64
-	RunStartSnapshotJson    string
-	MetadataJson            string
-}
-
-func (q *Queries) ListUnstartedWorkflowRunRecoveryCandidates(ctx context.Context) ([]ListUnstartedWorkflowRunRecoveryCandidatesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUnstartedWorkflowRunRecoveryCandidates)
-	err = recordQueryError(ctx, err, listUnstartedWorkflowRunRecoveryCandidates, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUnstartedWorkflowRunRecoveryCandidatesRow
-	for rows.Next() {
-		var i ListUnstartedWorkflowRunRecoveryCandidatesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWaitingAskWorkflowRuns = `-- name: ListWaitingAskWorkflowRuns :many
-SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE waiting_ask_id IS NOT NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-ORDER BY updated_at_unix_ms ASC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = task_run_records.id
-) ASC
-`
-
-func (q *Queries) ListWaitingAskWorkflowRuns(ctx context.Context) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listWaitingAskWorkflowRuns)
-	err = recordQueryError(ctx, err, listWaitingAskWorkflowRuns, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkflowAttentionCandidates = `-- name: ListWorkflowAttentionCandidates :many
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE (
-    CAST(?1 AS INTEGER) = 0
-    OR occurred_at_unix_ms < ?2
-    OR (occurred_at_unix_ms = ?2 AND id < ?3)
-)
-ORDER BY occurred_at_unix_ms DESC, id DESC
-LIMIT ?4
-`
-
-type ListWorkflowAttentionCandidatesParams struct {
-	CursorActive           int64
-	CursorOccurredAtUnixMs int64
-	CursorItemID           string
-	PageLimit              int64
-}
-
-func (q *Queries) ListWorkflowAttentionCandidates(ctx context.Context, arg ListWorkflowAttentionCandidatesParams) ([]WorkflowAttentionCandidate, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowAttentionCandidates,
-		arg.CursorActive,
-		arg.CursorOccurredAtUnixMs,
-		arg.CursorItemID,
-		arg.PageLimit,
-	)
-	err = recordQueryError(ctx, err, listWorkflowAttentionCandidates, 4)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkflowAttentionCandidate
-	for rows.Next() {
-		var i WorkflowAttentionCandidate
-		if err := rows.Scan(
-			&i.Kind,
-			&i.ID,
-			&i.ProjectID,
-			&i.WorkflowID,
-			&i.TaskID,
-			&i.ShortID,
-			&i.Title,
-			&i.RunID,
-			&i.SessionID,
-			&i.AskID,
-			&i.TaskTransitionID,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.OccurredAtUnixMs,
 		); err != nil {
 			return nil, err
 		}
@@ -8720,7 +5526,7 @@ WITH durable_attention (
     FROM task_current_nodes current_node
     JOIN task_records task ON task.id = current_node.task_id
     WHERE current_node.scheduling_state = 'interrupted'
-      AND current_node.interruption_reason NOT IN ('user_interrupted', 'workflow_runtime_canceled')
+      AND current_node.interruption_reason NOT IN ('user_interrupt', 'workflow_runtime_canceled')
       AND (
           ?2 IS NULL
           OR task.id = ?2
@@ -8741,21 +5547,24 @@ WITH durable_attention (
       )
 )
 SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    approval_id,
-    node_id,
-    transition_branch_key,
-    session_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
+    durable_attention.kind,
+    durable_attention.id,
+    durable_attention.project_id,
+    durable_attention.workflow_id,
+    durable_attention.task_id,
+    durable_attention.short_id,
+    durable_attention.title,
+    approval.id AS approval_id,
+    durable_attention.node_id,
+    durable_attention.transition_branch_key,
+    durable_attention.session_id,
+    durable_attention.interruption_reason,
+    durable_attention.interruption_detail_json,
+    durable_attention.occurred_at_unix_ms
 FROM durable_attention
+LEFT JOIN task_pending_approvals approval
+  ON durable_attention.kind = 'approval'
+ AND approval.id = durable_attention.approval_id
 ORDER BY 14 DESC, 2 DESC
 LIMIT CASE
     WHEN ?1 = 0 THEN -1
@@ -8779,7 +5588,7 @@ type ListWorkflowDurableAttentionCandidatesRow struct {
 	TaskID                 string
 	ShortID                string
 	Title                  string
-	ApprovalID             string
+	ApprovalID             sql.NullString
 	NodeID                 sql.NullString
 	TransitionBranchKey    sql.NullString
 	SessionID              sql.NullString
@@ -9267,67 +6076,6 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 	return items, nil
 }
 
-const listWorkflowResolutionAttentionCandidates = `-- name: ListWorkflowResolutionAttentionCandidates :many
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE workflow_id = ?1
-  AND kind IN ('approval', 'interrupted_run')
-ORDER BY occurred_at_unix_ms ASC, id ASC
-`
-
-func (q *Queries) ListWorkflowResolutionAttentionCandidates(ctx context.Context, workflowID string) ([]WorkflowAttentionCandidate, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowResolutionAttentionCandidates, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowResolutionAttentionCandidates, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkflowAttentionCandidate
-	for rows.Next() {
-		var i WorkflowAttentionCandidate
-		if err := rows.Scan(
-			&i.Kind,
-			&i.ID,
-			&i.ProjectID,
-			&i.WorkflowID,
-			&i.TaskID,
-			&i.ShortID,
-			&i.Title,
-			&i.RunID,
-			&i.SessionID,
-			&i.AskID,
-			&i.TaskTransitionID,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.OccurredAtUnixMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listWorkflowTaskActivityRows = `-- name: ListWorkflowTaskActivityRows :many
 WITH activity(
     activity_id,
@@ -9416,66 +6164,6 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 			&i.OccurredAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.SessionName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkflowTaskAttentionCandidates = `-- name: ListWorkflowTaskAttentionCandidates :many
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE task_id = CAST(?1 AS TEXT)
-ORDER BY occurred_at_unix_ms DESC, id DESC
-`
-
-func (q *Queries) ListWorkflowTaskAttentionCandidates(ctx context.Context, taskID string) ([]WorkflowAttentionCandidate, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowTaskAttentionCandidates, taskID)
-	err = recordQueryError(ctx, err, listWorkflowTaskAttentionCandidates, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []WorkflowAttentionCandidate
-	for rows.Next() {
-		var i WorkflowAttentionCandidate
-		if err := rows.Scan(
-			&i.Kind,
-			&i.ID,
-			&i.ProjectID,
-			&i.WorkflowID,
-			&i.TaskID,
-			&i.ShortID,
-			&i.Title,
-			&i.RunID,
-			&i.SessionID,
-			&i.AskID,
-			&i.TaskTransitionID,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.OccurredAtUnixMs,
 		); err != nil {
 			return nil, err
 		}
@@ -10494,52 +7182,6 @@ func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSes
 	return result.RowsAffected()
 }
 
-const recordInvalidCompletionProtocolViolation = `-- name: RecordInvalidCompletionProtocolViolation :one
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    invalid_completion_count = invalid_completion_count + 1,
-    interrupted_at_unix_ms = CASE WHEN invalid_completion_count + 1 >= ?2 THEN ?3 ELSE interrupted_at_unix_ms END,
-    interruption_reason = CASE WHEN invalid_completion_count + 1 >= ?2 THEN 'workflow_protocol_violation_limit' ELSE interruption_reason END,
-    interruption_detail_json = CASE WHEN invalid_completion_count + 1 >= ?2 THEN ?4 ELSE interruption_detail_json END
-WHERE id = ?5
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND (?6 = 0 OR run_generation = ?7)
-RETURNING invalid_completion_count, interrupted_at_unix_ms
-`
-
-type RecordInvalidCompletionProtocolViolationParams struct {
-	UpdatedAtUnixMs        int64
-	MaxCount               int64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionDetailJson string
-	RunID                  string
-	RequireGeneration      interface{}
-	ExpectedGeneration     int64
-}
-
-type RecordInvalidCompletionProtocolViolationRow struct {
-	InvalidCompletionCount int64
-	InterruptedAtUnixMs    sql.NullInt64
-}
-
-func (q *Queries) RecordInvalidCompletionProtocolViolation(ctx context.Context, arg RecordInvalidCompletionProtocolViolationParams) (RecordInvalidCompletionProtocolViolationRow, error) {
-	row := q.db.QueryRowContext(ctx, recordInvalidCompletionProtocolViolation,
-		arg.UpdatedAtUnixMs,
-		arg.MaxCount,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionDetailJson,
-		arg.RunID,
-		arg.RequireGeneration,
-		arg.ExpectedGeneration,
-	)
-	var i RecordInvalidCompletionProtocolViolationRow
-	err := recordQueryError(ctx, row.Scan(&i.InvalidCompletionCount, &i.InterruptedAtUnixMs), recordInvalidCompletionProtocolViolation, 7)
-
-	return i, err
-}
-
 const recoverAdmittedCurrentNodes = `-- name: RecoverAdmittedCurrentNodes :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
@@ -10558,22 +7200,6 @@ type RecoverAdmittedCurrentNodesParams struct {
 func (q *Queries) RecoverAdmittedCurrentNodes(ctx context.Context, arg RecoverAdmittedCurrentNodesParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recoverAdmittedCurrentNodes, arg.InterruptionReason, arg.InterruptionDetailJson, arg.InterruptedAtUnixMs)
 	err = recordQueryError(ctx, err, recoverAdmittedCurrentNodes, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const rejectPendingApprovalTransition = `-- name: RejectPendingApprovalTransition :execrows
-UPDATE task_transitions
-SET state = 'rejected'
-WHERE id = ?1
-  AND state = 'pending_approval'
-`
-
-func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitionID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, rejectPendingApprovalTransition, transitionID)
-	err = recordQueryError(ctx, err, rejectPendingApprovalTransition, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -10614,553 +7240,6 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), renameProjectLabel, 4)
 
 	return i, err
-}
-
-const resetInvalidCompletionProtocolViolationBudget = `-- name: ResetInvalidCompletionProtocolViolationBudget :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    invalid_completion_count = 0
-WHERE id = ?2
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND (?3 = 0 OR run_generation = ?4)
-`
-
-type ResetInvalidCompletionProtocolViolationBudgetParams struct {
-	UpdatedAtUnixMs    int64
-	RunID              string
-	RequireGeneration  interface{}
-	ExpectedGeneration int64
-}
-
-func (q *Queries) ResetInvalidCompletionProtocolViolationBudget(ctx context.Context, arg ResetInvalidCompletionProtocolViolationBudgetParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, resetInvalidCompletionProtocolViolationBudget,
-		arg.UpdatedAtUnixMs,
-		arg.RunID,
-		arg.RequireGeneration,
-		arg.ExpectedGeneration,
-	)
-	err = recordQueryError(ctx, err, resetInvalidCompletionProtocolViolationBudget, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const resolveActiveRunCompletionTargetByProjectShortID = `-- name: ResolveActiveRunCompletionTargetByProjectShortID :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND t.short_id = ?1
-  AND t.project_id = ?2
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-type ResolveActiveRunCompletionTargetByProjectShortIDParams struct {
-	ShortID   string
-	ProjectID string
-}
-
-func (q *Queries) ResolveActiveRunCompletionTargetByProjectShortID(ctx context.Context, arg ResolveActiveRunCompletionTargetByProjectShortIDParams) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByProjectShortID, arg.ShortID, arg.ProjectID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByProjectShortID, 2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const resolveActiveRunCompletionTargetByRunID = `-- name: ResolveActiveRunCompletionTargetByRunID :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND r.id = ?1
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-func (q *Queries) ResolveActiveRunCompletionTargetByRunID(ctx context.Context, runID string) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByRunID, runID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByRunID, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const resolveActiveRunCompletionTargetByShortID = `-- name: ResolveActiveRunCompletionTargetByShortID :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND t.short_id = ?1
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-func (q *Queries) ResolveActiveRunCompletionTargetByShortID(ctx context.Context, shortID string) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByShortID, shortID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByShortID, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const resolveActiveRunCompletionTargetByTaskID = `-- name: ResolveActiveRunCompletionTargetByTaskID :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-  AND t.id = ?1
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-func (q *Queries) ResolveActiveRunCompletionTargetByTaskID(ctx context.Context, taskID string) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByTaskID, taskID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByTaskID, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const resolveSessionRunCompletionTargets = `-- name: ResolveSessionRunCompletionTargets :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind = 'agent'
-  AND r.session_id = ?1
-ORDER BY r.started_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
-`
-
-func (q *Queries) ResolveSessionRunCompletionTargets(ctx context.Context, sessionID sql.NullString) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, resolveSessionRunCompletionTargets, sessionID)
-	err = recordQueryError(ctx, err, resolveSessionRunCompletionTargets, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskRunRecord
-	for rows.Next() {
-		var i TaskRunRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const resolveTaskWaitingAsk = `-- name: ResolveTaskWaitingAsk :many
-SELECT
-    runs.id, runs.task_id, runs.placement_id, runs.node_id, runs.session_id, runs.run_generation, runs.workflow_revision_seen, runs.automation_requested_at_unix_ms, runs.created_at_unix_ms, runs.updated_at_unix_ms, runs.started_at_unix_ms, runs.completed_at_unix_ms, runs.interrupted_at_unix_ms, runs.interruption_reason, runs.interruption_detail_json, runs.waiting_ask_id, runs.effective_completion_mode, runs.invalid_completion_count, runs.run_start_snapshot_json, runs.metadata_json,
-    tasks.project_id,
-    tasks.workflow_id
-FROM task_run_records runs
-JOIN task_records tasks ON tasks.id = runs.task_id
-WHERE runs.task_id = ?1
-  AND runs.waiting_ask_id = ?2
-  AND (?3 = '' OR runs.id = ?3)
-  AND runs.completed_at_unix_ms IS NULL
-  AND runs.interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(runs.session_id, '')) != ''
-ORDER BY runs.updated_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = runs.id
-) DESC
-`
-
-type ResolveTaskWaitingAskParams struct {
-	TaskID string
-	AskID  sql.NullString
-	RunID  interface{}
-}
-
-type ResolveTaskWaitingAskRow struct {
-	TaskRunRecord TaskRunRecord
-	ProjectID     string
-	WorkflowID    string
-}
-
-func (q *Queries) ResolveTaskWaitingAsk(ctx context.Context, arg ResolveTaskWaitingAskParams) ([]ResolveTaskWaitingAskRow, error) {
-	rows, err := q.db.QueryContext(ctx, resolveTaskWaitingAsk, arg.TaskID, arg.AskID, arg.RunID)
-	err = recordQueryError(ctx, err, resolveTaskWaitingAsk, 3)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ResolveTaskWaitingAskRow
-	for rows.Next() {
-		var i ResolveTaskWaitingAskRow
-		if err := rows.Scan(
-			&i.TaskRunRecord.ID,
-			&i.TaskRunRecord.TaskID,
-			&i.TaskRunRecord.PlacementID,
-			&i.TaskRunRecord.NodeID,
-			&i.TaskRunRecord.SessionID,
-			&i.TaskRunRecord.RunGeneration,
-			&i.TaskRunRecord.WorkflowRevisionSeen,
-			&i.TaskRunRecord.AutomationRequestedAtUnixMs,
-			&i.TaskRunRecord.CreatedAtUnixMs,
-			&i.TaskRunRecord.UpdatedAtUnixMs,
-			&i.TaskRunRecord.StartedAtUnixMs,
-			&i.TaskRunRecord.CompletedAtUnixMs,
-			&i.TaskRunRecord.InterruptedAtUnixMs,
-			&i.TaskRunRecord.InterruptionReason,
-			&i.TaskRunRecord.InterruptionDetailJson,
-			&i.TaskRunRecord.WaitingAskID,
-			&i.TaskRunRecord.EffectiveCompletionMode,
-			&i.TaskRunRecord.InvalidCompletionCount,
-			&i.TaskRunRecord.RunStartSnapshotJson,
-			&i.TaskRunRecord.MetadataJson,
-			&i.ProjectID,
-			&i.WorkflowID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows
@@ -11224,36 +7303,6 @@ type ResumeSerialCurrentNodeParams struct {
 func (q *Queries) ResumeSerialCurrentNode(ctx context.Context, arg ResumeSerialCurrentNodeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, resumeSerialCurrentNode, arg.TaskID, arg.NodeID)
 	err = recordQueryError(ctx, err, resumeSerialCurrentNode, 2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const resumeTaskRun = `-- name: ResumeTaskRun :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    started_at_unix_ms = NULL,
-    interrupted_at_unix_ms = NULL,
-    interruption_reason = NULL,
-    interruption_detail_json = '{}',
-    waiting_ask_id = NULL,
-    invalid_completion_count = 0,
-    run_generation = run_generation + 1
-WHERE id = ?2
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NOT NULL
-`
-
-type ResumeTaskRunParams struct {
-	UpdatedAtUnixMs int64
-	RunID           string
-}
-
-func (q *Queries) ResumeTaskRun(ctx context.Context, arg ResumeTaskRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, resumeTaskRun, arg.UpdatedAtUnixMs, arg.RunID)
-	err = recordQueryError(ctx, err, resumeTaskRun, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -11401,141 +7450,6 @@ type SetProjectPrimaryWorkspaceParams struct {
 func (q *Queries) SetProjectPrimaryWorkspace(ctx context.Context, arg SetProjectPrimaryWorkspaceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setProjectPrimaryWorkspace, arg.WorkspaceID, arg.UpdatedAtUnixMs, arg.ProjectID)
 	err = recordQueryError(ctx, err, setProjectPrimaryWorkspace, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setRunWaitingAsk = `-- name: SetRunWaitingAsk :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    waiting_ask_id = ?2
-WHERE id = ?3
-  AND run_generation = ?4
-  AND started_at_unix_ms IS NOT NULL
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND waiting_ask_id IS NULL
-`
-
-type SetRunWaitingAskParams struct {
-	UpdatedAtUnixMs int64
-	AskID           sql.NullString
-	RunID           string
-	RunGeneration   int64
-}
-
-func (q *Queries) SetRunWaitingAsk(ctx context.Context, arg SetRunWaitingAskParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setRunWaitingAsk,
-		arg.UpdatedAtUnixMs,
-		arg.AskID,
-		arg.RunID,
-		arg.RunGeneration,
-	)
-	err = recordQueryError(ctx, err, setRunWaitingAsk, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setTaskRunEffectiveCompletionMode = `-- name: SetTaskRunEffectiveCompletionMode :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    effective_completion_mode = ?2
-WHERE id = ?3
-  AND run_generation = ?4
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND (
-      effective_completion_mode IS NULL
-      OR effective_completion_mode = ?2
-  )
-`
-
-type SetTaskRunEffectiveCompletionModeParams struct {
-	UpdatedAtUnixMs         int64
-	EffectiveCompletionMode sql.NullString
-	ID                      string
-	ExpectedGeneration      int64
-}
-
-func (q *Queries) SetTaskRunEffectiveCompletionMode(ctx context.Context, arg SetTaskRunEffectiveCompletionModeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setTaskRunEffectiveCompletionMode,
-		arg.UpdatedAtUnixMs,
-		arg.EffectiveCompletionMode,
-		arg.ID,
-		arg.ExpectedGeneration,
-	)
-	err = recordQueryError(ctx, err, setTaskRunEffectiveCompletionMode, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const startTaskCompleteStartPlacement = `-- name: StartTaskCompleteStartPlacement :execrows
-UPDATE task_node_placements
-SET state = ?1, updated_at_unix_ms = ?2
-WHERE task_node_placements.id = ?3
-  AND state = 'active'
-  AND task_id IN (
-      SELECT tasks.id
-      FROM tasks
-      WHERE tasks.id = ?4
-        AND tasks.canceled_at_unix_ms IS NULL
-  )
-`
-
-type StartTaskCompleteStartPlacementParams struct {
-	State           string
-	UpdatedAtUnixMs int64
-	PlacementID     string
-	TaskID          string
-}
-
-func (q *Queries) StartTaskCompleteStartPlacement(ctx context.Context, arg StartTaskCompleteStartPlacementParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, startTaskCompleteStartPlacement,
-		arg.State,
-		arg.UpdatedAtUnixMs,
-		arg.PlacementID,
-		arg.TaskID,
-	)
-	err = recordQueryError(ctx, err, startTaskCompleteStartPlacement, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const supersedeActiveTerminalManualMoveSourcePlacement = `-- name: SupersedeActiveTerminalManualMoveSourcePlacement :execrows
-UPDATE task_node_placements
-SET state = 'superseded',
-    updated_at_unix_ms = ?1
-WHERE task_node_placements.id = ?2
-  AND state = 'active'
-  AND EXISTS (
-      SELECT 1
-      FROM workflow_nodes n
-      WHERE n.id = task_node_placements.node_id
-        AND n.kind = 'terminal'
-  )
-`
-
-type SupersedeActiveTerminalManualMoveSourcePlacementParams struct {
-	UpdatedAtUnixMs int64
-	PlacementID     string
-}
-
-func (q *Queries) SupersedeActiveTerminalManualMoveSourcePlacement(ctx context.Context, arg SupersedeActiveTerminalManualMoveSourcePlacementParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, supersedeActiveTerminalManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
-	err = recordQueryError(ctx, err, supersedeActiveTerminalManualMoveSourcePlacement, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -11695,72 +7609,6 @@ type UpdateTaskManagedWorktreeParams struct {
 func (q *Queries) UpdateTaskManagedWorktree(ctx context.Context, arg UpdateTaskManagedWorktreeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.ID)
 	err = recordQueryError(ctx, err, updateTaskManagedWorktree, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateTaskNodePlacementState = `-- name: UpdateTaskNodePlacementState :execrows
-UPDATE task_node_placements
-SET
-    state = ?1,
-    updated_at_unix_ms = ?2
-WHERE id = ?3
-`
-
-type UpdateTaskNodePlacementStateParams struct {
-	State           string
-	UpdatedAtUnixMs int64
-	ID              string
-}
-
-func (q *Queries) UpdateTaskNodePlacementState(ctx context.Context, arg UpdateTaskNodePlacementStateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateTaskNodePlacementState, arg.State, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskNodePlacementState, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateTaskRunOutcome = `-- name: UpdateTaskRunOutcome :execrows
-UPDATE task_runs
-SET
-    updated_at_unix_ms = ?1,
-    completed_at_unix_ms = ?2,
-    interrupted_at_unix_ms = ?3,
-    interruption_reason = ?4,
-    interruption_detail_json = ?5,
-    waiting_ask_id = ?6,
-    invalid_completion_count = ?7
-WHERE id = ?8
-`
-
-type UpdateTaskRunOutcomeParams struct {
-	UpdatedAtUnixMs        int64
-	CompletedAtUnixMs      sql.NullInt64
-	InterruptedAtUnixMs    sql.NullInt64
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson string
-	WaitingAskID           sql.NullString
-	InvalidCompletionCount int64
-	ID                     string
-}
-
-func (q *Queries) UpdateTaskRunOutcome(ctx context.Context, arg UpdateTaskRunOutcomeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateTaskRunOutcome,
-		arg.UpdatedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.WaitingAskID,
-		arg.InvalidCompletionCount,
-		arg.ID,
-	)
-	err = recordQueryError(ctx, err, updateTaskRunOutcome, 8)
-
 	if err != nil {
 		return 0, err
 	}

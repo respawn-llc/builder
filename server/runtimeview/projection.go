@@ -85,10 +85,9 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 		CompactionCount: engine.CompactionCount(),
 		Goal:            GoalFromSessionState(engine.Goal(), engine.GoalLoopSuspended()),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.RunID != "" {
+	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
 		status.WorkflowActive = engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
-			RunID:      workflowState.RunID,
 			TaskID:     workflowState.TaskID,
 			WorkflowID: workflowState.WorkflowID,
 		}
@@ -113,10 +112,9 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 		ParentAgentSessionID:      engine.ParentAgentSessionID(),
 		NavigationTargetSessionID: engine.NavigationTargetSessionID(),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.RunID != "" {
+	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
 		status.Workflow = &clientui.TranscriptWorkflowSession{
 			Active:     engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed,
-			RunID:      workflowState.RunID,
 			TaskID:     workflowState.TaskID,
 			WorkflowID: workflowState.WorkflowID,
 		}

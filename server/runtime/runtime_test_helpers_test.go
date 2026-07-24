@@ -17,6 +17,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -224,6 +225,17 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	t.Helper()
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
+	}
+	if cfg.WorkflowRun != nil {
+		if cfg.WorkflowRun.ScopeID.IsZero() {
+			cfg.WorkflowRun.ScopeID = runtimeids.NewExecutionScopeID()
+		}
+		if cfg.WorkflowRun.Instructions.TaskID == "" {
+			cfg.WorkflowRun.Instructions.TaskID = "test-task"
+		}
+		if cfg.WorkflowRun.Instructions.NodeID == "" {
+			cfg.WorkflowRun.Instructions.NodeID = "test-current-node"
+		}
 	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)
