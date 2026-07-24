@@ -162,4 +162,16 @@ describe("task lifecycle client", () => {
       { execution_target: { mode: "none" } },
     ]);
   });
+
+  it("keeps workflow task resume on the long-running transport lane", async () => {
+    const transport = new FakeRpcTransport([{ method: "workflow.task.resume", result: {} }]);
+    const client = new ApiClient(transport);
+
+    await client.resumeTask("task-1");
+
+    expect(transport.calls).toEqual([]);
+    expect(transport.longRunningCalls).toEqual([
+      { method: "workflow.task.resume", params: { task_id: "task-1" } },
+    ]);
+  });
 });

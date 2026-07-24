@@ -15,6 +15,7 @@ export type RpcSubscription = Readonly<{
 export type LongRunningRpcMethod =
   | "workflow.task.approve"
   | "workflow.task.move"
+  | "workflow.task.resume"
   | "workflow.task.start";
 
 export type RpcTransport = Readonly<{

@@ -271,7 +271,7 @@ describe("JsonRpcWebSocketTransport", () => {
   it("times out ordinary control calls after exactly five seconds", async () => {
     vi.useFakeTimers();
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const request = transport.call("workflow.task.resume", { task_id: "task-1" });
+    const request = transport.call("workflow.task.get", { task_id: "task-1" });
     let settled = false;
     const observed = request.then(
       () => ({ kind: "resolved" as const }),
@@ -303,7 +303,7 @@ describe("JsonRpcWebSocketTransport", () => {
       throw new Error("request unexpectedly resolved");
     }
     expect(outcome.error).toBeInstanceOf(TransportError);
-    expect(outcome.error.message).toBe("workflow.task.resume request timed out.");
+    expect(outcome.error.message).toBe("workflow.task.get request timed out.");
   });
 
   it("ignores a stale null timeout argument on ordinary control calls", async () => {
@@ -314,7 +314,7 @@ describe("JsonRpcWebSocketTransport", () => {
       params: { task_id: string },
       staleOptions: { timeoutMs: null },
     ) => Promise<unknown> = transport.call.bind(transport);
-    const request = callWithStaleTimeout("workflow.task.resume", { task_id: "task-1" }, { timeoutMs: null });
+    const request = callWithStaleTimeout("workflow.task.get", { task_id: "task-1" }, { timeoutMs: null });
     const outcome = request.then(
       () => ({ kind: "resolved" as const }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -332,7 +332,7 @@ describe("JsonRpcWebSocketTransport", () => {
     if (result.kind !== "rejected" || !(result.error instanceof Error)) {
       throw new Error("request unexpectedly resolved or rejected without an error");
     }
-    expect(result.error.message).toBe("workflow.task.resume request timed out.");
+    expect(result.error.message).toBe("workflow.task.get request timed out.");
   });
 
   it("installs subscription event listener before subscribe ack can race with first event", async () => {
