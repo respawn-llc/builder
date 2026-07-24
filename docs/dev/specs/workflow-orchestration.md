@@ -30,7 +30,7 @@
 - Label names are case-insensitively unique within a Project. Capitalization-only rename is allowed without changing identity or task assignments.
 - A Project can have at most 100 Labels. Clients load the complete catalog without pagination.
 - A task may use any subset of its Project's catalog; there is no separate per-task label limit.
-- Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected Tasks are Backlog, active, running, interrupted, done, or legacy canceled.
+- Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected Tasks are Backlog, active, running, interrupted, or done.
 - Label changes do not change a Task's update time, reorder Tasks, or move pagination anchors.
 - Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
 - Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count. Desktop deletion uses explicit confirmation; invoking the explicit CLI delete command is sufficient confirmation and does not prompt or require a separate confirmation flag.
@@ -115,7 +115,7 @@
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
 - Manual interruption releases the specialized Exact Execution Scope.
 - If the retained Workflow Session still belongs to the interrupted Current Node, a later ordinary interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
-- Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same current Run. The interactive activation does not create a second Transition authority.
+- Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same Current Node. The interactive activation does not create a second Transition authority.
 - Resume starts a fresh Exact Execution Scope and resolves the latest Workflow completion policy.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
@@ -181,9 +181,14 @@
 - A Task awaiting Approval remains at the source current Node and exposes `waiting_approval` status; target Nodes are not current.
 - Manually moving a Task that is awaiting Approval clears the proposed Transition and replaces the source current Node with the chosen target.
 - Manual movement acts on the Task, never on one Current Node.
-- Manual Move does not cancel or join a waiting Question scope. The operator must use Task Interrupt or wait for scope retirement before moving the Task.
-- After Task-wide Interrupt fully stops a Task with several Current Nodes, a manual move may atomically replace all of them with a Start/backlog or Terminal Node. Direct movement from parallel work to an executable target is rejected.
-- Missing-edge manual overrides cannot target executable Nodes. Manual movement into an agent or Script Node requires a concrete Workflow Edge so the target has a real prompt and completion contract.
+- Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
+- After Task-wide Interrupt fully stops a Task with several Current Nodes, a
+  manual move may atomically replace all of them with a Start/backlog or
+  Terminal Node. Direct movement from parallel work to an executable target is
+  rejected.
+- A quiescent serial Task may move forward to an Agent or Script Node only
+  through one concrete current Workflow Edge. Missing-edge, history-derived,
+  and backward executable movement are rejected.
 - Task start and manual movement into an executable node apply no movement or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
 - Approvals occur only after a task has reached an executable node and therefore always reuse the task's locked execution target.
 
@@ -244,7 +249,7 @@
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
 - Saved state without matching live execution never becomes interruptible as a fallback. Kent must prevent the mismatch, surface the lifecycle failure, or convert the affected Current Node to interrupted during restart recovery.
 - Kent rejects a manual move while an agent or Script is executing or while another lifecycle operation conflicts with movement.
-- Manual Move does not cancel or join a waiting Question scope. The operator must use Task Interrupt or wait for scope retirement before moving the Task.
+- Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
 - Completion can change a Task only from the matching Exact Execution Scope or from one unambiguous idle executable Current Node. A stopped scope and a non-current Node cannot change Task state.
 - Completion replaces source Current Nodes, materializes target inputs, and adds target Current Nodes as one atomic change.
 - Runtime failures, crashes, interruptions, and fixable start-validation blockers leave the affected Current Node interrupted with a reason.
@@ -373,12 +378,14 @@
 
 ## Durable Workflow State
 
-- A Task owns its Current Nodes, their current inputs, optional Session associations, and pending Approval.
+- A Task owns its Current Nodes, any entering Transition Branch, current inputs, optional Session associations, and pending Approval.
 - Current Nodes have no independent product identity.
 - An executable Current Node retains only the state needed to execute or resume. A Script Node has no Session.
 - Applying a Transition replaces the source Current Nodes, supplies target inputs, and adds target Current Nodes as one atomic change.
 - Kent does not retain applied or rejected Transition history, completed Current Nodes, or execution-attempt records.
-- A pending Approval is the only retained frozen Transition. Kent removes it after approval, rejection, or a superseding manual move.
+- A pending Approval is the only retained frozen Transition. Kent removes it
+  after approval or a superseding manual move. Kent has no public Transition
+  Approval Reject action.
 - A retained Session identifies its Workflow Node and, during parallel work, its Transition Branch Key.
 - Project Workflow Links represent active membership only. Unlinking removes an unused link completely.
 - A Project cannot unlink a Workflow while Tasks use that link. The error reports blockers with counts and references.
@@ -401,7 +408,12 @@
 ## Compatibility Data
 
 - A legacy canceled Task moves to terminal Node `done` when that Node exists.
-- If its invalid Workflow has no `done` Node, Kent removes only the Task's Workflow state and preserves its Sessions, worktrees, and other external artifacts.
+- If that Workflow has terminal Nodes but no `done` Node, Kent preserves the
+  Task's unique valid active terminal when one exists. Otherwise Kent chooses
+  one terminal Node deterministically.
+- If its Workflow has no terminal Node, Kent removes the Task after making its
+  Sessions workflow-neutral and preserves its worktrees and other external
+  artifacts.
 - `source_url` remains an optional structured Task field.
 - Task Short ID remains durable product data.
 - Context Source selection uses retained Sessions and does not depend on discarded execution records.

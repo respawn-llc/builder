@@ -180,6 +180,7 @@ type TaskCurrentNode struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EnteredByEdgeID        sql.NullString
 }
 
 type TaskLabelAssignment struct {
@@ -461,7 +462,7 @@ type WorkflowTaskStatusRecord struct {
 	Kind               string
 	PrimaryStatusRank  int64
 	NodeIdsJson        interface{}
-	RunIdsJson         interface{}
+	RunIdsJson         string
 	AttentionTypesJson interface{}
 }
 

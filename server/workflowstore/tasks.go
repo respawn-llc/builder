@@ -44,10 +44,7 @@ type UpdateTaskRequest struct {
 }
 
 type StartTaskResult struct {
-	Mutation     workflow.CurrentNodeMutationResult
-	TransitionID string
-	PlacementID  workflow.PlacementID
-	RunID        workflow.RunID
+	Mutation workflow.CurrentNodeMutationResult
 }
 
 type CompleteRunRequest struct {
@@ -559,7 +556,7 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 		}
 	}
 	now := s.now().UnixMilli()
-	targetCurrentNode, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target))
+	targetCurrentNode, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
@@ -610,6 +607,7 @@ type preparedTaskStart struct {
 	task             sqlitegen.TaskRecord
 	start            workflow.Node
 	target           workflow.Node
+	startEdge        workflow.Edge
 	startCurrentNode workflow.CurrentNode
 }
 
@@ -643,11 +641,11 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err := s.preflightInitialExecution(def); err != nil {
 		return preparedTaskStart{}, err
 	}
-	_, _, target, err := startTransition(def, workflow.NodeIDOf(start))
+	_, edge, target, err := startTransition(def, workflow.NodeIDOf(start))
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	return preparedTaskStart{task: task, start: start, target: target, startCurrentNode: startCurrentNode}, nil
+	return preparedTaskStart{task: task, start: start, target: target, startEdge: edge, startCurrentNode: startCurrentNode}, nil
 }
 
 func (s *Store) preflightInitialExecution(def workflow.Definition) error {

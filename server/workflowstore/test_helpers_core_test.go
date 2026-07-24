@@ -338,3 +338,36 @@ func mutateWorkflowGraphSaveTransitionGroup(groups []TransitionGroupRecord, grou
 	}
 	return changed
 }
+
+func nodeByKey(t *testing.T, def workflow.Definition, key string) workflow.Node {
+	t.Helper()
+	for _, node := range def.Nodes {
+		if string(workflow.NodeKey(node)) == key {
+			return node
+		}
+	}
+	t.Fatalf("missing node key %q", key)
+	return nil
+}
+
+func edgeByKey(t *testing.T, def workflow.Definition, key string) workflow.Edge {
+	t.Helper()
+	for _, edge := range def.Edges {
+		if string(edge.Key) == key {
+			return edge
+		}
+	}
+	t.Fatalf("missing edge key %q", key)
+	return workflow.Edge{}
+}
+
+func nodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
+	t.Helper()
+	for _, node := range def.Nodes {
+		if node.Kind() == kind {
+			return node
+		}
+	}
+	t.Fatalf("missing node kind %q", kind)
+	return nil
+}

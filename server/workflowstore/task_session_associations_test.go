@@ -52,6 +52,78 @@ func TestAssociateTaskSessionBindsFreshSessionToCurrentNode(t *testing.T) {
 	}
 }
 
+func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+
+	association, err := store.BindSessionToCurrentNode(ctx, TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  started.Mutation.Created[0].Reference,
+		AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].SessionID == nil || *currentNodes[0].SessionID != sessionID {
+		t.Fatalf("current nodes = %+v, want one node bound to %q", currentNodes, sessionID)
+	}
+	if association.SessionID != sessionID || !association.CurrentNode.Equal(started.Mutation.Created[0].Reference) {
+		t.Fatalf("live binding association = %+v", association)
+	}
+	latest, err := store.LatestTaskSessionForNode(ctx, started.Mutation.Created[0].Reference)
+	if err != nil {
+		t.Fatalf("LatestTaskSessionForNode: %v", err)
+	}
+	if latest.SessionID != sessionID {
+		t.Fatalf("latest association = %+v, want %q", latest, sessionID)
+	}
+	if count, err := store.CountTaskSessions(ctx, task.ID); err != nil || count != 1 {
+		t.Fatalf("CountTaskSessions = %d, %v, want 1", count, err)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, started.Mutation.Created[0].Reference); err != nil {
+		t.Fatalf("ValidateCurrentNodeSessionBinding: %v", err)
+	}
+}
+
+func TestResolveCurrentSessionStartContextTreatsRetainedNonCurrentSessionAsOrdinary(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  started.Mutation.Created[0].Reference,
+		AssociatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AssociateTaskSession: %v", err)
+	}
+
+	_, err = store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("ResolveCurrentSessionStartContext error = %v, want retained non-current absence", err)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, started.Mutation.Created[0].Reference); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("ValidateCurrentNodeSessionBinding error = %v, want retained non-current absence", err)
+	}
+}
+
 func TestAssociateTaskSessionUpsertsRepeatedSerialAssociation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

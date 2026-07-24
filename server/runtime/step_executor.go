@@ -706,13 +706,11 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 
 func (s *defaultStepExecutor) completeWorkflowRunFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
 	e := s.engine
-	_, completeErr := e.cfg.WorkflowRun.Controller.CompleteWorkflowRun(ctx, workflowruntime.CompletionRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
-		TransitionID:       parsed.TransitionID,
-		OutputValues:       parsed.OutputValues,
-		Commentary:         parsed.Commentary,
+	_, completeErr := e.cfg.WorkflowRun.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+		ScopeID:      e.cfg.WorkflowRun.ScopeID,
+		TransitionID: parsed.TransitionID,
+		OutputValues: parsed.OutputValues,
+		Commentary:   parsed.Commentary,
 	})
 	return completeErr
 }

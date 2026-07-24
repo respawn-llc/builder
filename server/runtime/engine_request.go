@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -50,7 +51,7 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 
 	var workflowMode workflowruntime.CompletionMode
-	if e.workflowRunActive() {
+	if e.workflowPromptActive() {
 		resolved, modeErr := e.workflowCompletionMode(ctx)
 		if modeErr != nil {
 			return requestBuildPlan{}, modeErr
@@ -104,7 +105,11 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 	if workflowMode != "" {
 		if workflowMode == workflowruntime.CompletionModeStructuredOutput {
-			output, outputErr := workflowruntime.StructuredOutput(e.cfg.WorkflowRun.Contract)
+			prompt, promptConfigured := e.workflowPrompt()
+			if !promptConfigured {
+				return requestBuildPlan{}, errors.New("workflow prompt is unavailable")
+			}
+			output, outputErr := workflowruntime.StructuredOutput(workflowruntime.CompletionContract{Transitions: prompt.Transitions})
 			if outputErr != nil {
 				return requestBuildPlan{}, outputErr
 			}
@@ -133,7 +138,8 @@ func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode, us
 }
 
 func (e *Engine) workflowUseRequiredToolCalls() bool {
-	return e.workflowRunActive() && !e.cfg.WorkflowRun.UseAutomaticToolChoice
+	prompt, configured := e.workflowPrompt()
+	return configured && !prompt.UseAutomaticToolChoice
 }
 
 func (e *Engine) validateToolChoiceSupport(ctx context.Context, mode llm.ToolChoiceMode) error {
@@ -186,7 +192,32 @@ func (e *Engine) enableNativeWebSearch(ctx context.Context) (bool, error) {
 }
 
 func (e *Engine) workflowRunActive() bool {
-	return e != nil && e.cfg.WorkflowRun != nil && strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)) != ""
+	return e != nil && e.cfg.WorkflowRun != nil && !e.cfg.WorkflowRun.ScopeID.IsZero()
+}
+
+func (e *Engine) workflowPromptActive() bool {
+	_, configured := e.workflowPrompt()
+	return configured
+}
+
+func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
+	if e == nil {
+		return nil, false
+	}
+	if e.cfg.WorkflowPrompt != nil {
+		return e.cfg.WorkflowPrompt, true
+	}
+	if !e.workflowRunActive() {
+		return nil, false
+	}
+	run := e.cfg.WorkflowRun
+	return &workflowruntime.PromptContract{
+		Identity:               run.ScopeID.String(),
+		CompletionMode:         run.CompletionMode,
+		UseAutomaticToolChoice: run.UseAutomaticToolChoice,
+		Instructions:           run.Instructions,
+		Transitions:            append([]workflowruntime.CompletionTransition(nil), run.Contract.Transitions...),
+	}, true
 }
 
 func (e *Engine) WorkflowRunConfigured() bool {
@@ -194,10 +225,11 @@ func (e *Engine) WorkflowRunConfigured() bool {
 }
 
 func (e *Engine) workflowCompletionMode(ctx context.Context) (workflowruntime.CompletionMode, error) {
-	if !e.workflowRunActive() {
+	prompt, configured := e.workflowPrompt()
+	if !configured {
 		return "", nil
 	}
-	return workflowruntime.ParseCompletionMode(string(e.cfg.WorkflowRun.CompletionMode))
+	return workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
 }
 
 func (e *Engine) systemPrompt(locked session.LockedContract) (string, error) {
@@ -338,7 +370,11 @@ func (e *Engine) requestTools(ctx context.Context, workflowMode workflowruntime.
 	for _, d := range defs {
 		tool := llm.Tool{Name: string(d.ID), Description: d.Description, Schema: d.Schema}
 		if d.ID == toolspec.ToolCompleteNode {
-			schema, err := workflowruntime.CompletionJSONSchema(e.cfg.WorkflowRun.Contract)
+			prompt, configured := e.workflowPrompt()
+			if !configured {
+				return nil, errors.New("workflow prompt is unavailable")
+			}
+			schema, err := workflowruntime.CompletionJSONSchema(workflowruntime.CompletionContract{Transitions: prompt.Transitions})
 			if err != nil {
 				continue
 			}

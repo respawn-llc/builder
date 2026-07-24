@@ -36,27 +36,20 @@ func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskEx
 	return snapshots[taskID], nil
 }
 
-func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+// CurrentWorkflowTaskExecutionSnapshots captures every live workflow Exact
+// Execution Scope once. Read models use this bounded process-local snapshot as
+// liveness evidence; SQLite never substitutes for it.
+func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	wanted := make(map[workflow.TaskID]struct{}, len(taskIDs))
-	snapshots := make(map[workflow.TaskID]TaskExecutionSnapshot, len(taskIDs))
-	for _, taskID := range taskIDs {
-		if strings.TrimSpace(string(taskID)) == "" {
-			return nil, errors.New("workflow task id is required")
-		}
-		if _, exists := wanted[taskID]; exists {
-			return nil, errors.New("workflow task id is duplicated")
-		}
-		wanted[taskID] = struct{}{}
-		snapshots[taskID] = TaskExecutionSnapshot{Executions: []TaskExecution{}}
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for ref, execution := range a.byWorkflow {
-		if _, exists := wanted[ref.TaskID]; !exists {
-			continue
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	for _, execution := range a.byWorkflow {
+		ref, ok := execution.scope.Workflow()
+		if !ok {
+			return nil, errors.New("workflow execution index contains a non-workflow scope")
 		}
 		target := TaskExecution{
 			Ref:             ref,
@@ -73,20 +66,59 @@ func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (ma
 		if err := target.validate(); err != nil {
 			return nil, err
 		}
-		snapshot := snapshots[ref.TaskID]
+		snapshot := snapshots[ref.CurrentNode.TaskID]
 		snapshot.Executions = append(snapshot.Executions, target)
-		snapshots[ref.TaskID] = snapshot
+		snapshots[ref.CurrentNode.TaskID] = snapshot
 	}
 	for taskID, snapshot := range snapshots {
 		sort.Slice(snapshot.Executions, func(i, j int) bool {
-			if snapshot.Executions[i].Ref.RunID != snapshot.Executions[j].Ref.RunID {
-				return snapshot.Executions[i].Ref.RunID < snapshot.Executions[j].Ref.RunID
-			}
-			return snapshot.Executions[i].Ref.Generation < snapshot.Executions[j].Ref.Generation
+			return workflowExecutionLess(snapshot.Executions[i], snapshot.Executions[j])
 		})
 		snapshots[taskID] = snapshot
 	}
 	return snapshots, nil
+}
+
+func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	wanted := make(map[workflow.TaskID]struct{}, len(taskIDs))
+	snapshots := make(map[workflow.TaskID]TaskExecutionSnapshot, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if strings.TrimSpace(string(taskID)) == "" {
+			return nil, errors.New("workflow task id is required")
+		}
+		if _, exists := wanted[taskID]; exists {
+			return nil, errors.New("workflow task id is duplicated")
+		}
+		wanted[taskID] = struct{}{}
+		snapshots[taskID] = TaskExecutionSnapshot{Executions: []TaskExecution{}}
+	}
+	all, err := a.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return nil, err
+	}
+	for taskID := range wanted {
+		if snapshot, exists := all[taskID]; exists {
+			snapshots[taskID] = snapshot
+		}
+	}
+	return snapshots, nil
+}
+
+func workflowExecutionLess(leftExecution TaskExecution, rightExecution TaskExecution) bool {
+	left := leftExecution.Ref.CurrentNode
+	right := rightExecution.Ref.CurrentNode
+	if left.NodeID != right.NodeID {
+		return left.NodeID < right.NodeID
+	}
+	leftBranch, leftScoped := left.TransitionBranchKey()
+	rightBranch, rightScoped := right.TransitionBranchKey()
+	if leftScoped != rightScoped {
+		return !leftScoped
+	}
+	return leftBranch < rightBranch
 }
 
 func (e TaskExecution) validate() error {

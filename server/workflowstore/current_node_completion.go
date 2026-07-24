@@ -26,6 +26,91 @@ type CurrentNodeCompletionResult struct {
 	PendingApproval  *workflow.PendingApproval
 }
 
+// ErrCurrentNodeCompletionSelectorAmbiguous means a completion selector
+// matches several Current Nodes. Callers must choose a narrower Session or
+// Task selector; Current Nodes are intentionally not external completion
+// selectors.
+var ErrCurrentNodeCompletionSelectorAmbiguous = errors.New("current node completion selector is ambiguous")
+
+type IdleCurrentNodeSelector struct {
+	TaskID    *workflow.TaskID
+	SessionID *runtimeids.SessionID
+}
+
+// ResolveIdleExecutableCurrentNode selects exactly one current executable node
+// for forced completion. It only considers ready or interrupted nodes with no
+// pending Approval; admitted work is deliberately excluded because it may
+// still be preparing a live Exact Execution Scope.
+func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
+	if (selector.TaskID == nil) == (selector.SessionID == nil) {
+		return workflow.CurrentNode{}, errors.New("exactly one idle current node selector is required")
+	}
+	var taskID workflow.TaskID
+	if selector.TaskID != nil {
+		taskID = *selector.TaskID
+		if strings.TrimSpace(string(taskID)) == "" {
+			return workflow.CurrentNode{}, errors.New("task id is required")
+		}
+	} else {
+		if selector.SessionID == nil || selector.SessionID.IsZero() {
+			return workflow.CurrentNode{}, errors.New("session id is required")
+		}
+		taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, selector.SessionID.String())
+		if err != nil {
+			return workflow.CurrentNode{}, err
+		}
+		if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
+			return workflow.CurrentNode{}, sql.ErrNoRows
+		}
+		taskID = workflow.TaskID(taskIDs[0].String)
+	}
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	matches := make([]workflow.CurrentNode, 0, len(currentNodes))
+	for _, currentNode := range currentNodes {
+		if selector.SessionID != nil && (currentNode.SessionID == nil || *currentNode.SessionID != *selector.SessionID) {
+			continue
+		}
+		if currentNode.Scheduling == nil ||
+			(currentNode.Scheduling.State != workflow.CurrentNodeSchedulingReady &&
+				currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted) {
+			continue
+		}
+		node, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
+		if err != nil {
+			return workflow.CurrentNode{}, err
+		}
+		if !executableNodeKind(node.Kind()) {
+			continue
+		}
+		eligible, err := s.IsCurrentNodeExecutionEligible(ctx, currentNode.Reference)
+		if err != nil {
+			return workflow.CurrentNode{}, err
+		}
+		if eligible {
+			matches = append(matches, currentNode)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return workflow.CurrentNode{}, sql.ErrNoRows
+	case 1:
+		return matches[0], nil
+	default:
+		return workflow.CurrentNode{}, ErrCurrentNodeCompletionSelectorAmbiguous
+	}
+}
+
 func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (CurrentNodeCompletionResult, error) {
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
@@ -400,6 +485,7 @@ func materializeCompletionTargetCurrentNode(
 		currentInputValues,
 		priorNodeValues,
 		sessionID,
+		edge.ID,
 	)
 }
 
@@ -479,6 +565,7 @@ func completionTargetCurrentNode(
 	currentInputValues map[string]string,
 	priorNodeValues map[string]map[string]string,
 	sessionID *runtimeids.SessionID,
+	enteredByEdgeID workflow.EdgeID,
 ) (workflow.CurrentNode, error) {
 	var scheduling *workflow.CurrentNodeScheduling
 	switch target.Kind() {
@@ -493,7 +580,7 @@ func completionTargetCurrentNode(
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, sessionID, scheduling)
+	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, currentInputValues, priorNodeValues, sessionID, scheduling)
 }
 
 func currentNodeReferenceBranchKey(reference workflow.CurrentNodeReference) *workflow.TransitionBranchKey {

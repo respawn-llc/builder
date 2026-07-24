@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
 	"core/shared/serverapi"
 )
 
@@ -17,9 +18,10 @@ type TaskList struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
 	projector   *TaskProjector
+	authority   *sessionruntime.Authority
 }
 
-func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector) (*TaskList, error) {
+func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskList, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -29,11 +31,15 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
+	if authority == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
 	return &TaskList{
 		metadata:    metadataStore,
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
 		projector:   projector,
+		authority:   authority,
 	}, nil
 }
 
@@ -135,11 +141,14 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	var narrowedQuery *workflowTaskListNarrowedQueryFacts
 	if workflowID != nil {
 		narrowedQuery = &workflowTaskListNarrowedQueryFacts{
-			workflowID:             *workflowID,
-			canceledTerminalNodeID: canceledBoardTerminalNodeID(definition),
-			columns:                columns,
-			columnKeys:             req.ColumnKeys,
+			workflowID: *workflowID,
+			columns:    columns,
+			columnKeys: req.ColumnKeys,
 		}
+	}
+	liveSnapshots, err := l.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	rows, err := l.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:      projectID,
@@ -151,6 +160,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		cursor:         cursor,
 		cursorSet:      hasPageToken,
 		limit:          pageSize + 1,
+		liveSnapshots:  liveSnapshots,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err

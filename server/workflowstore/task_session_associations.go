@@ -25,6 +25,40 @@ type TaskSessionAssociation struct {
 	AssociatedAt time.Time
 }
 
+// ErrSessionNotCurrentWorkflowNode means that a retained Task-owned Session is
+// not the Session of a currently executable workflow node. It is an ordinary
+// retained-session state, not a data-integrity failure.
+var ErrSessionNotCurrentWorkflowNode = errors.New("session is not bound to a current workflow node")
+
+// BindSessionToCurrentNode atomically establishes the live agent-session
+// binding for an exact Current Node and records its retained provenance.
+// AssociateTaskSession intentionally does not make a Current Node live.
+func (s *Store) BindSessionToCurrentNode(ctx context.Context, req TaskSessionAssociationRequest) (TaskSessionAssociation, error) {
+	normalized, err := normalizeTaskSessionAssociationRequest(req)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if err := bindSessionToTask(ctx, q, normalized); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if err := bindSessionToExactCurrentNode(ctx, q, normalized); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	return taskSessionAssociationFromRequest(normalized), nil
+}
+
 func (s *Store) AssociateTaskSession(ctx context.Context, req TaskSessionAssociationRequest) (TaskSessionAssociation, error) {
 	normalized, err := normalizeTaskSessionAssociationRequest(req)
 	if err != nil {
@@ -36,41 +70,82 @@ func (s *Store) AssociateTaskSession(ctx context.Context, req TaskSessionAssocia
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	bound, err := q.BindSessionToTask(ctx, sqlitegen.BindSessionToTaskParams{
-		TaskID:    sql.NullString{String: string(normalized.CurrentNode.TaskID), Valid: true},
-		SessionID: normalized.SessionID.String(),
-	})
-	if err != nil {
+	if err := bindSessionToTask(ctx, q, normalized); err != nil {
 		return TaskSessionAssociation{}, err
 	}
-	if bound != 1 {
-		return TaskSessionAssociation{}, errors.New("session cannot be bound to task")
-	}
-	if branchKey, branchScoped := normalized.CurrentNode.TransitionBranchKey(); branchScoped {
-		err = q.UpsertBranchSessionWorkflowNodeAssociation(ctx, sqlitegen.UpsertBranchSessionWorkflowNodeAssociationParams{
-			SessionID:           normalized.SessionID.String(),
-			NodeID:              string(normalized.CurrentNode.NodeID),
-			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
-			AssociatedAtUnixMs:  normalized.AssociatedAt.UnixMilli(),
-		})
-	} else {
-		err = q.UpsertSerialSessionWorkflowNodeAssociation(ctx, sqlitegen.UpsertSerialSessionWorkflowNodeAssociationParams{
-			SessionID:          normalized.SessionID.String(),
-			NodeID:             string(normalized.CurrentNode.NodeID),
-			AssociatedAtUnixMs: normalized.AssociatedAt.UnixMilli(),
-		})
-	}
-	if err != nil {
+	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
 		return TaskSessionAssociation{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return TaskSessionAssociation{}, err
 	}
+	return taskSessionAssociationFromRequest(normalized), nil
+}
+
+func bindSessionToTask(ctx context.Context, q *sqlitegen.Queries, req TaskSessionAssociationRequest) error {
+	bound, err := q.BindSessionToTask(ctx, sqlitegen.BindSessionToTaskParams{
+		TaskID:    sql.NullString{String: string(req.CurrentNode.TaskID), Valid: true},
+		SessionID: req.SessionID.String(),
+	})
+	if err != nil {
+		return err
+	}
+	if bound != 1 {
+		return errors.New("session cannot be bound to task")
+	}
+	return nil
+}
+
+func bindSessionToExactCurrentNode(ctx context.Context, q *sqlitegen.Queries, req TaskSessionAssociationRequest) error {
+	var (
+		bound int64
+		err   error
+	)
+	if branchKey, branchScoped := req.CurrentNode.TransitionBranchKey(); branchScoped {
+		bound, err = q.BindSessionToBranchCurrentNode(ctx, sqlitegen.BindSessionToBranchCurrentNodeParams{
+			TaskID:              string(req.CurrentNode.TaskID),
+			NodeID:              string(req.CurrentNode.NodeID),
+			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+			SessionID:           sql.NullString{String: req.SessionID.String(), Valid: true},
+		})
+	} else {
+		bound, err = q.BindSessionToSerialCurrentNode(ctx, sqlitegen.BindSessionToSerialCurrentNodeParams{
+			TaskID:    string(req.CurrentNode.TaskID),
+			NodeID:    string(req.CurrentNode.NodeID),
+			SessionID: sql.NullString{String: req.SessionID.String(), Valid: true},
+		})
+	}
+	if err != nil {
+		return err
+	}
+	if bound != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func upsertTaskSessionAssociation(ctx context.Context, q *sqlitegen.Queries, req TaskSessionAssociationRequest) error {
+	if branchKey, branchScoped := req.CurrentNode.TransitionBranchKey(); branchScoped {
+		return q.UpsertBranchSessionWorkflowNodeAssociation(ctx, sqlitegen.UpsertBranchSessionWorkflowNodeAssociationParams{
+			SessionID:           req.SessionID.String(),
+			NodeID:              string(req.CurrentNode.NodeID),
+			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+			AssociatedAtUnixMs:  req.AssociatedAt.UnixMilli(),
+		})
+	}
+	return q.UpsertSerialSessionWorkflowNodeAssociation(ctx, sqlitegen.UpsertSerialSessionWorkflowNodeAssociationParams{
+		SessionID:          req.SessionID.String(),
+		NodeID:             string(req.CurrentNode.NodeID),
+		AssociatedAtUnixMs: req.AssociatedAt.UnixMilli(),
+	})
+}
+
+func taskSessionAssociationFromRequest(req TaskSessionAssociationRequest) TaskSessionAssociation {
 	return TaskSessionAssociation{
-		SessionID:    normalized.SessionID,
-		CurrentNode:  normalized.CurrentNode,
-		AssociatedAt: normalized.AssociatedAt,
-	}, nil
+		SessionID:    req.SessionID,
+		CurrentNode:  req.CurrentNode,
+		AssociatedAt: req.AssociatedAt,
+	}
 }
 
 func (s *Store) CountTaskSessions(ctx context.Context, taskID workflow.TaskID) (int64, error) {
@@ -84,27 +159,27 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 	return latestTaskSessionForNode(ctx, s.queries, currentNode)
 }
 
-// ResolveCurrentSessionStartContext reconstructs a legacy runner input from the
-// Session's direct current-state ownership. It deliberately does not read
-// durable Session metadata or accept a Run ID from Session persistence.
-func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (RunStartContext, error) {
+// ResolveCurrentSessionStartContext resolves prompt state only from direct
+// Session ownership, the matching Current Node, and the latest definition.
+// It intentionally never reads a Run, placement, or frozen execution snapshot.
+func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (CurrentNodeStartContext, error) {
 	if sessionID.IsZero() {
-		return RunStartContext{}, errors.New("session id is required")
+		return CurrentNodeStartContext{}, errors.New("session id is required")
 	}
 	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
 	if err != nil {
-		return RunStartContext{}, err
+		return CurrentNodeStartContext{}, err
 	}
 	if len(taskIDs) == 0 {
-		return RunStartContext{}, sql.ErrNoRows
+		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
 	}
 	if len(taskIDs) != 1 || !taskIDs[0].Valid {
-		return RunStartContext{}, fmt.Errorf("session %q has invalid task ownership", sessionID)
+		return CurrentNodeStartContext{}, fmt.Errorf("session %q has invalid task ownership", sessionID)
 	}
 	taskID := workflow.TaskID(taskIDs[0].String)
 	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
 	if err != nil {
-		return RunStartContext{}, err
+		return CurrentNodeStartContext{}, err
 	}
 	var currentNode *workflow.CurrentNode
 	for i := range currentNodes {
@@ -112,39 +187,233 @@ func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID
 			continue
 		}
 		if currentNode != nil {
-			return RunStartContext{}, fmt.Errorf("session %q is bound to multiple current nodes for task %q", sessionID, taskID)
+			return CurrentNodeStartContext{}, fmt.Errorf("session %q is bound to multiple current nodes for task %q", sessionID, taskID)
 		}
 		currentNode = &currentNodes[i]
 	}
 	if currentNode == nil {
-		return RunStartContext{}, sql.ErrNoRows
+		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
 	}
 	association, err := s.LatestTaskSessionForNode(ctx, currentNode.Reference)
 	if err != nil {
-		return RunStartContext{}, fmt.Errorf("resolve current session node association: %w", err)
+		return CurrentNodeStartContext{}, fmt.Errorf("resolve current session node association: %w", err)
 	}
 	if association.SessionID != sessionID {
-		return RunStartContext{}, fmt.Errorf("current node %v is associated with session %q, want %q", currentNode.Reference, association.SessionID, sessionID)
+		return CurrentNodeStartContext{}, fmt.Errorf("current node %v is associated with session %q, want %q", currentNode.Reference, association.SessionID, sessionID)
 	}
-	runs, err := s.ListRuns(ctx, taskID)
+	return s.resolveCurrentNodeStartContext(ctx, *currentNode)
+}
+
+// ValidateCurrentNodeSessionBinding proves that a volatile exact workflow
+// scope still belongs to the Task-owned Session and its exact Current Node.
+// It intentionally reads no Run history or execution snapshot.
+func (s *Store) ValidateCurrentNodeSessionBinding(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	reference workflow.CurrentNodeReference,
+) error {
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
 	if err != nil {
-		return RunStartContext{}, err
+		return err
 	}
-	var matchingRun *RunRecord
-	for i := range runs {
-		run := &runs[i]
-		if run.SessionID != sessionID.String() || run.NodeID != currentNode.Reference.NodeID || run.CompletedAt != nil {
+	if len(taskIDs) != 1 || !taskIDs[0].Valid || workflow.TaskID(taskIDs[0].String) != reference.TaskID {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	if err != nil {
+		return err
+	}
+	if currentNode.SessionID == nil || *currentNode.SessionID != sessionID {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	association, err := s.LatestTaskSessionForNode(ctx, reference)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	if err != nil {
+		return err
+	}
+	if association.SessionID != sessionID || !association.CurrentNode.Equal(reference) {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	return nil
+}
+
+// ResolveCurrentNodeStartContext prepares an admitted executable Current Node
+// from its own materialized values and the latest definition. It has no
+// historical Run/Placement input and never reconstructs discarded execution
+// history.
+func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference workflow.CurrentNodeReference) (CurrentNodeStartContext, error) {
+	if err := reference.Validate(); err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	return s.resolveCurrentNodeStartContext(ctx, currentNode)
+}
+
+func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode workflow.CurrentNode) (CurrentNodeStartContext, error) {
+	if currentNode.EnteredByEdgeID == nil {
+		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v has no entering edge", currentNode.Reference)
+	}
+	taskRow, err := s.queries.GetTask(ctx, string(currentNode.Reference.TaskID))
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	task, err := taskRecordFromTask(taskRow)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	definition, workflowRecord, err := s.GetDefinition(ctx, task.WorkflowID)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	node, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	if !executableNodeKind(node.Kind()) {
+		return CurrentNodeStartContext{}, fmt.Errorf("current node %v is not executable", currentNode.Reference)
+	}
+	var enteringEdge *workflow.Edge
+	for i := range definition.Edges {
+		if definition.Edges[i].ID != *currentNode.EnteredByEdgeID {
 			continue
 		}
-		if matchingRun != nil {
-			return RunStartContext{}, fmt.Errorf("session %q has multiple unfinished runs for current node %v", sessionID, currentNode.Reference)
+		enteringEdge = &definition.Edges[i]
+		break
+	}
+	if enteringEdge == nil {
+		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v entering edge %q is absent from workflow %q", currentNode.Reference, *currentNode.EnteredByEdgeID, definition.ID)
+	}
+	if enteringEdge.TargetNodeID != currentNode.Reference.NodeID {
+		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v entering edge %q targets node %q", currentNode.Reference, enteringEdge.ID, enteringEdge.TargetNodeID)
+	}
+	transitionIDs, transitionOptions, err := currentNodeTransitionOptions(definition, node)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	var executionRoot *ExecutionRoot
+	if task.ExecutionTarget != nil {
+		root, err := executionRootForTask(ctx, s.queries, taskRow)
+		if err != nil {
+			return CurrentNodeStartContext{}, err
 		}
-		matchingRun = run
+		executionRoot = &root
 	}
-	if matchingRun == nil {
-		return RunStartContext{}, sql.ErrNoRows
+	values := cloneCurrentNodeOutputValues(currentNode.CurrentInputValues)
+	if _, ok := values[workflow.RuntimePromptParameterCommentary]; !ok {
+		values[workflow.RuntimePromptParameterCommentary] = ""
 	}
-	return s.GetRunStartContext(ctx, matchingRun.ID)
+	var sourceSessionID *runtimeids.SessionID
+	if enteringEdge.ContextMode != workflow.ContextModeNewSession {
+		if currentNode.SessionID == nil {
+			return CurrentNodeStartContext{}, fmt.Errorf("continuation current node %v has no retained session", currentNode.Reference)
+		}
+		value := *currentNode.SessionID
+		sourceSessionID = &value
+	}
+	sourceNode, err := currentNodeDefinitionNode(definition, transitionGroupSourceNodeID(definition, enteringEdge.TransitionGroupID))
+	if err != nil {
+		return CurrentNodeStartContext{}, fmt.Errorf("resolve entering source node for current node %v: %w", currentNode.Reference, err)
+	}
+	return CurrentNodeStartContext{
+		Task:            task,
+		Workflow:        workflowRecord,
+		Node:            nodeRecordFromCurrentDefinition(node),
+		CurrentNode:     currentNode,
+		EnteringEdge:    *enteringEdge,
+		ContextMode:     enteringEdge.ContextMode,
+		SourceSessionID: sourceSessionID,
+		IsFanoutBranch:  currentNode.Reference.IsBranchScoped(),
+		AcceptedTransitionPath: AcceptedTransitionPath{
+			SourceNodeDisplayName: workflow.NodeDisplayName(sourceNode),
+			TargetNodeDisplayName: workflow.NodeDisplayName(node),
+		},
+		TransitionIDs:        transitionIDs,
+		TransitionOptions:    transitionOptions,
+		PromptTemplate:       strings.TrimSpace(enteringEdge.PromptTemplate),
+		ParameterValues:      values,
+		PriorParameterValues: clonePriorParameterValues(currentNode.PriorNodeValues),
+		ExecutionRoot:        executionRoot,
+	}, nil
+}
+
+func transitionGroupSourceNodeID(definition workflow.Definition, groupID workflow.TransitionGroupID) workflow.NodeID {
+	for _, group := range definition.TransitionGroups {
+		if group.ID == groupID {
+			return group.SourceNodeID
+		}
+	}
+	return ""
+}
+
+func currentNodeTransitionOptions(definition workflow.Definition, source workflow.Node) ([]string, []TransitionOption, error) {
+	transitionIDs := make([]string, 0)
+	options := make([]TransitionOption, 0)
+	for _, group := range definition.TransitionGroups {
+		if group.SourceNodeID != workflow.NodeIDOf(source) {
+			continue
+		}
+		transitionID := strings.TrimSpace(string(group.TransitionID))
+		if transitionID == "" {
+			return nil, nil, fmt.Errorf("workflow %q has a blank transition id for current node %q", definition.ID, workflow.NodeIDOf(source))
+		}
+		transitionIDs = append(transitionIDs, transitionID)
+		options = append(options, TransitionOption{
+			ID:          transitionID,
+			DisplayName: strings.TrimSpace(group.DisplayName),
+			Description: strings.TrimSpace(group.Description),
+			Parameters:  currentNodeTransitionParameters(definition, group),
+		})
+	}
+	return transitionIDs, options, nil
+}
+
+func currentNodeTransitionParameters(definition workflow.Definition, group workflow.TransitionGroup) []workflow.Parameter {
+	wiring := workflow.DeriveWiring(definition)
+	if source, err := currentNodeDefinitionNode(definition, group.SourceNodeID); err == nil && source.Kind() == workflow.NodeKindJoin {
+		return parametersFromOutputFields(wiring.JoinOutputFieldsForNode(group.SourceNodeID))
+	}
+	for _, edge := range definition.Edges {
+		if edge.TransitionGroupID == group.ID {
+			return append([]workflow.Parameter(nil), edge.Parameters...)
+		}
+	}
+	return nil
+}
+
+func nodeRecordFromCurrentDefinition(node workflow.Node) NodeRecord {
+	scriptPath := ""
+	if path := workflow.NodeScriptPath(node); path.IsPresent() {
+		scriptPath = path.String()
+	}
+	return NodeRecord{
+		ID:                 workflow.NodeIDOf(node),
+		WorkflowID:         workflow.NodeWorkflowID(node),
+		Key:                workflow.NodeKey(node),
+		Kind:               node.Kind(),
+		DisplayName:        workflow.NodeDisplayName(node),
+		GroupID:            workflow.NodeGroupID(node),
+		SubagentRole:       workflow.NodeSubagentRole(node),
+		PromptTemplate:     workflow.NodePromptTemplate(node),
+		CompletionMode:     workflow.NodeCompletionMode(node),
+		ScriptPath:         scriptPath,
+		InputFields:        workflow.NodeInputFields(node),
+		JoinInputProviders: workflow.NodeJoinInputProviders(node),
+		OutputFields:       workflow.NodeOutputFields(node),
+	}
 }
 
 func latestTaskSessionForNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {

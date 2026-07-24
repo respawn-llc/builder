@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -181,7 +182,7 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	opts := baseMetaContextBuildOptions(true)
-	if e.workflowRunActive() {
+	if e.workflowPromptActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 	}
 	metaResult, err := builder.Build(opts)
@@ -213,7 +214,7 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 // so repeated `--continue` launches do not duplicate the enter prompt.
 // Interactive is the default, so no reminder is injected while both are false.
 func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
-	if e.workflowRunActive() {
+	if e.workflowPromptActive() {
 		return nil
 	}
 	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
@@ -241,13 +242,16 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 }
 
 func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) error {
-	if !e.workflowRunActive() {
+	if !e.workflowPromptActive() {
 		return nil
 	}
-	runID := strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID))
+	prompt, configured := e.workflowPrompt()
+	if !configured {
+		return errors.New("workflow prompt is unavailable")
+	}
 	kind, shouldInject := selectWorkflowTaskPrompt(
 		e.transcriptRuntimeState().SnapshotItems(),
-		runID,
+		prompt.Identity,
 		workflowTaskPromptTriggerTaskDelivery,
 	)
 	if !shouldInject {
@@ -264,7 +268,7 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(metaContextBuildOptions{
 		IncludeWorkflow:          true,
 		WorkflowCompletionMode:   mode,
-		WorkflowRun:              e.cfg.WorkflowRun,
+		WorkflowPrompt:           prompt,
 		WorkflowTaskCommentCount: commentCount,
 		WorkflowTaskPromptKind:   kind,
 	})
@@ -295,7 +299,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		kind, shouldInject := selectWorkflowTaskPrompt(
 			e.transcriptRuntimeState().SnapshotItems(),
-			strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
+			e.cfg.WorkflowRun.ScopeID.String(),
 			workflowTaskPromptTriggerCompaction,
 		)
 		if !shouldInject {
@@ -307,7 +311,11 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		}
 		opts.IncludeWorkflow = true
 		opts.WorkflowCompletionMode = mode
-		opts.WorkflowRun = e.cfg.WorkflowRun
+		prompt, configured := e.workflowPrompt()
+		if !configured {
+			return nil, errors.New("workflow prompt is unavailable")
+		}
+		opts.WorkflowPrompt = prompt
 		opts.WorkflowTaskPromptKind = kind
 		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
 		if err != nil {

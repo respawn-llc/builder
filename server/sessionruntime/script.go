@@ -28,7 +28,7 @@ type ScriptCommand struct {
 }
 
 type ScriptExecutionRequest struct {
-	Workflow *WorkflowExecutionRef
+	Workflow *WorkflowExecutionLease
 	Command  ScriptCommand
 	Finalize func(context.Context, ExecutionScope, ScriptResult, error) error
 }
@@ -73,9 +73,6 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 
 	a.mu.Lock()
 	execution, err := a.reserveScriptExecutionLocked(req)
-	if err == nil {
-		err = process.cmd.Start()
-	}
 	if err != nil {
 		a.mu.Unlock()
 		return nil, err
@@ -83,11 +80,30 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	handle := executionHandle{execution: execution}
 	a.byScope[execution.scope.ID()] = execution
 	if workflowRef, ok := execution.scope.Workflow(); ok {
-		a.byWorkflow[workflowRef] = execution
+		workflowKey, keyErr := workflowExecutionKeyFor(workflowRef)
+		if keyErr != nil {
+			a.mu.Unlock()
+			return nil, keyErr
+		}
+		a.byWorkflow[workflowKey] = execution
 	}
 	a.mu.Unlock()
 
 	go func() {
+		if req.Workflow != nil {
+			if waitErr := req.Workflow.wait(execution.ctx); waitErr != nil {
+				execution.finish(ExecutionResult{}, waitErr, nil)
+				return
+			}
+		}
+		if startErr := process.cmd.Start(); startErr != nil {
+			var finalizeErr error
+			if req.Finalize != nil {
+				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
+			}
+			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
+			return
+		}
 		result, runErr, stopErr := process.wait(execution.ctx)
 		execution.retire()
 		var finalizeErr error

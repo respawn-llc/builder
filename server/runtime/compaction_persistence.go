@@ -21,7 +21,7 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	e := p.engine
 	workflowRunID := ""
 	if e.cfg.WorkflowRun != nil {
-		workflowRunID = strings.TrimSpace(string(e.cfg.WorkflowRun.RunID))
+		workflowRunID = e.cfg.WorkflowRun.ScopeID.String()
 	}
 	pendingHandoffFutureMessage := ""
 	if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {

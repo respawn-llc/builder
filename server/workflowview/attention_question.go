@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -17,6 +18,7 @@ type SessionActiveTranscriptProvider interface {
 
 type PendingPromptSnapshot struct {
 	ID                     string
+	CreatedAt              time.Time
 	Question               string
 	Suggestions            []string
 	RecommendedOptionIndex *int
@@ -38,11 +40,6 @@ type PendingPromptSource interface {
 // ErrPendingQuestionNotFound is returned when the newest active transcript
 // segment has no pending question matching the requested ask ID.
 var ErrPendingQuestionNotFound = errors.New("pending question was not found")
-
-func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID *string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
-	workflowIDValue := workflowID
-	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: textutil.Pointer(&runID), SessionID: textutil.Pointer(sessionID), AskID: textutil.Pointer(&askID), Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: textutil.Pointer(question.recommendedOptionIndex), Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
-}
 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
 

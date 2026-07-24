@@ -1388,78 +1388,22 @@ LIMIT 1;
 SELECT
     task_id,
     is_done,
-    kind,
+    CAST(kind AS TEXT) AS kind,
     primary_status_rank,
-    node_ids_json,
-    run_ids_json,
-    attention_types_json
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
 FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
-
--- name: ListWorkflowTaskCurrentRunFacts :many
-SELECT
-    r.id,
-    r.run_generation,
-    r.waiting_ask_id
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.task_id = sqlc.arg(task_id)
-  AND r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND p.state = 'active'
-ORDER BY r.id ASC;
-
--- name: ListWorkflowTaskCurrentRunFactsByTasks :many
-SELECT
-    r.task_id,
-    r.id,
-    r.run_generation,
-    r.waiting_ask_id
-FROM task_run_records r
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.task_id IN (sqlc.slice('task_ids'))
-  AND r.started_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND p.state = 'active'
-ORDER BY r.task_id ASC, r.id ASC;
-
--- name: ListWorkflowTaskRunActionFactsByTasks :many
-SELECT
-    p.task_id,
-    CAST(MAX(CASE
-        WHEN r.started_at_unix_ms IS NOT NULL
-         AND r.interrupted_at_unix_ms IS NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_running,
-    CAST(MAX(CASE
-        WHEN r.interrupted_at_unix_ms IS NOT NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_interrupted,
-    CAST(MAX(CASE
-        WHEN r.waiting_ask_id IS NOT NULL
-        THEN 1 ELSE 0
-    END) AS INTEGER) AS has_waiting_question
-FROM task_node_placements p
-LEFT JOIN task_runs r
-    ON r.placement_id = p.id
-   AND r.completed_at_unix_ms IS NULL
-WHERE p.task_id IN (sqlc.slice('task_ids'))
-  AND p.state IN ('active', 'waiting_approval')
-GROUP BY p.task_id
-ORDER BY p.task_id ASC;
 
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,
     is_done,
-    kind,
+    CAST(kind AS TEXT) AS kind,
     primary_status_rank,
-    node_ids_json,
-    run_ids_json,
-    attention_types_json
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
 FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id ASC;
@@ -1579,51 +1523,11 @@ label_filter_args AS (
 effective_board_placements AS (
     SELECT
         t.id AS task_id,
-        p.node_id AS node_id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
-    JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE (
-          p.state IN ('active', 'waiting_approval')
-      )
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR n.kind = 'terminal'
-          OR sqlc.narg(canceled_terminal_node_id) IS NULL
-      )
-    UNION
-    SELECT
-        t.id AS task_id,
-        sqlc.narg(canceled_terminal_node_id) AS node_id
-    FROM task_records t
+        current_node.node_id
+    FROM task_current_nodes current_node
+    JOIN task_records t ON t.id = current_node.task_id
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
-      AND t.canceled_at_unix_ms IS NOT NULL
-      AND sqlc.narg(canceled_terminal_node_id) IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state = 'active'
-            AND n.kind = 'terminal'
-      )
-    UNION
-    SELECT
-        t.id AS task_id,
-        tt.source_node_id AS node_id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE tt.state = 'pending_approval'
-      AND t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR sqlc.narg(canceled_terminal_node_id) IS NULL
-      )
-      AND trim(tt.source_node_id) != ''
 )
 SELECT
     node_id,
@@ -1675,7 +1579,6 @@ args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
         CAST(sqlc.narg(workflow_id) AS TEXT) AS workflow_id,
-        CAST(sqlc.narg(canceled_terminal_node_id) AS TEXT) AS canceled_terminal_node_id,
         CAST(sqlc.narg(visible_columns_json) AS TEXT) AS visible_columns_json,
         CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
@@ -1691,7 +1594,6 @@ args AS (
         CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
         CAST(sqlc.arg(cursor_primary_status_rank) AS INTEGER) AS cursor_primary_status_rank,
         CAST(sqlc.narg(cursor_column_rank) AS INTEGER) AS cursor_column_rank,
-        CAST(sqlc.arg(cursor_run_count) AS INTEGER) AS cursor_run_count,
         CAST(sqlc.arg(cursor_title_sort) AS TEXT) AS cursor_title_sort,
         CAST(sqlc.arg(cursor_task_id) AS TEXT) AS cursor_task_id,
         CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
@@ -1704,6 +1606,7 @@ args AS (
         CAST(sqlc.arg(sort_4_desc) AS INTEGER) AS sort_4_desc,
         CAST(sqlc.arg(sort_5_field) AS TEXT) AS sort_5_field,
         CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
+        CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
@@ -1715,55 +1618,14 @@ visible_columns AS (
     FROM args, json_each(args.visible_columns_json)
 ),
 current_positions AS (
-    SELECT p.task_id, p.node_id
+    SELECT current_node.task_id, current_node.node_id
     FROM args
     CROSS JOIN project_workflow_links task_link
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    JOIN task_node_placements p ON p.task_id = t.id
-    JOIN workflow_nodes n ON n.id = p.node_id
+    JOIN task_current_nodes current_node ON current_node.task_id = t.id
     WHERE task_link.project_id = args.project_id
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND t.project_workflow_link_id = task_link.id
-      AND p.state IN ('active', 'waiting_approval')
-      AND (
-          t.canceled_at_unix_ms IS NULL
-          OR n.kind = 'terminal'
-      )
-
-    UNION
-
-    SELECT tt.task_id, tt.source_node_id
-    FROM args
-    CROSS JOIN project_workflow_links task_link
-    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    JOIN task_transition_records tt ON tt.task_id = t.id
-    WHERE task_link.project_id = args.project_id
-      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
-      AND t.project_workflow_link_id = task_link.id
-      AND tt.state = 'pending_approval'
-      AND tt.source_node_id IS NOT NULL
-      AND trim(tt.source_node_id) != ''
-      AND t.canceled_at_unix_ms IS NULL
-
-    UNION
-
-    SELECT t.id, args.canceled_terminal_node_id AS node_id
-    FROM args
-    CROSS JOIN project_workflow_links task_link
-    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    WHERE task_link.project_id = args.project_id
-      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
-      AND t.project_workflow_link_id = task_link.id
-      AND t.canceled_at_unix_ms IS NOT NULL
-      AND args.canceled_terminal_node_id IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state = 'active'
-            AND n.kind = 'terminal'
-      )
 ),
 column_positions AS (
     SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank
@@ -1782,16 +1644,45 @@ column_facts AS (
     )
     GROUP BY task_id
 ),
-run_counts AS (
-    SELECT r.task_id, CAST(COUNT(*) AS INTEGER) AS run_count
-    FROM args
-    CROSS JOIN project_workflow_links task_link
-    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    JOIN task_run_records r ON r.task_id = t.id
-    WHERE task_link.project_id = args.project_id
-      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
-      AND t.project_workflow_link_id = task_link.id
-    GROUP BY r.task_id
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_execution') AS INTEGER) AS has_execution,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM args, json_each(args.live_task_states_json)
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_execution, 0) != 0 THEN 'running'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_execution, 0) != 0 THEN 5
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            ELSE COALESCE((
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT value AS attention_type
+                    FROM json_each(durable.attention_types_json)
+                    UNION
+                    SELECT 'question'
+                    ORDER BY attention_type
+                )
+            ), '["question"]')
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
 selected_rows AS (
     SELECT
@@ -1813,26 +1704,21 @@ selected_rows AS (
         t.execution_target_resolved_ref,
         t.execution_target_commit_oid,
         t.execution_target_provenance,
-        t.canceled_at_unix_ms,
-        t.cancellation_reason,
         t.created_at_unix_ms,
         t.updated_at_unix_ms,
         t.metadata_json,
         column_facts.column_rank,
         column_facts.column_keys_json,
-        status.kind,
+        CAST(status.kind AS TEXT) AS kind,
         CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
         CAST(status.node_ids_json AS TEXT) AS node_ids_json,
-        CAST(status.run_ids_json AS TEXT) AS run_ids_json,
         CAST(status.attention_types_json AS TEXT) AS attention_types_json,
-        CAST(COALESCE(run_counts.run_count, 0) AS INTEGER) AS run_count,
         LOWER(t.title) AS title_sort,
         CASE args.sort_1_field
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_1_value,
@@ -1841,7 +1727,6 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_2_value,
@@ -1850,7 +1735,6 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_3_value,
@@ -1859,7 +1743,6 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_4_value,
@@ -1868,7 +1751,6 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_5_value
@@ -1876,11 +1758,10 @@ selected_rows AS (
     CROSS JOIN project_workflow_links pwl
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
     JOIN workflows w ON w.id = pwl.workflow_id
-    JOIN workflow_task_status_records status ON status.task_id = t.id
+    JOIN effective_status status ON status.task_id = t.id
     LEFT JOIN column_facts
         ON args.workflow_id IS NOT NULL
        AND column_facts.task_id = t.id
-    LEFT JOIN run_counts ON run_counts.task_id = t.id
     WHERE pwl.project_id = args.project_id
       AND (args.workflow_id IS NULL OR pwl.workflow_id = args.workflow_id)
       AND t.project_workflow_link_id = pwl.id
@@ -1962,7 +1843,6 @@ cursor_values AS (
             WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
             WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
             WHEN 'title' THEN args.cursor_title_sort
             ELSE ''
         END AS sort_1_value,
@@ -1971,7 +1851,6 @@ cursor_values AS (
             WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
             WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
             WHEN 'title' THEN args.cursor_title_sort
             ELSE ''
         END AS sort_2_value,
@@ -1980,7 +1859,6 @@ cursor_values AS (
             WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
             WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
             WHEN 'title' THEN args.cursor_title_sort
             ELSE ''
         END AS sort_3_value,
@@ -1989,7 +1867,6 @@ cursor_values AS (
             WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
             WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
             WHEN 'title' THEN args.cursor_title_sort
             ELSE ''
         END AS sort_4_value,
@@ -1998,7 +1875,6 @@ cursor_values AS (
             WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
             WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
             WHEN 'title' THEN args.cursor_title_sort
             ELSE ''
         END AS sort_5_value
@@ -2023,8 +1899,6 @@ SELECT
     rows.execution_target_resolved_ref,
     rows.execution_target_commit_oid,
     rows.execution_target_provenance,
-    rows.canceled_at_unix_ms,
-    rows.cancellation_reason,
     rows.created_at_unix_ms,
     rows.updated_at_unix_ms,
     rows.metadata_json,
@@ -2033,9 +1907,7 @@ SELECT
     rows.kind,
     rows.primary_status_rank,
     rows.node_ids_json,
-    rows.run_ids_json,
     rows.attention_types_json,
-    rows.run_count,
     rows.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count
 FROM selected_rows rows
@@ -2066,7 +1938,27 @@ LIMIT (SELECT limit_rows FROM args);
 
 -- name: ListBoardNodeTasks :many
 WITH board_node_tasks AS (
-    SELECT t.*
+    SELECT
+        t.id,
+        t.project_id,
+        t.project_workflow_link_id,
+        t.workflow_id,
+        t.workflow_revision_seen,
+        t.task_seq,
+        t.short_id,
+        t.title,
+        t.body,
+        t.source_url,
+        t.source_workspace_id,
+        t.managed_worktree_id,
+        t.execution_target_mode,
+        t.execution_target_requested_ref,
+        t.execution_target_resolved_ref,
+        t.execution_target_commit_oid,
+        t.execution_target_provenance,
+        t.created_at_unix_ms,
+        t.updated_at_unix_ms,
+        t.metadata_json
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
@@ -2109,41 +2001,9 @@ WITH board_node_tasks AS (
       AND (
           EXISTS (
               SELECT 1
-              FROM task_node_placements p
-              JOIN workflow_nodes n ON n.id = p.node_id
-              WHERE p.task_id = t.id
-                AND p.node_id = sqlc.arg(node_id)
-                AND p.state IN ('active', 'waiting_approval')
-                AND (
-                    t.canceled_at_unix_ms IS NULL
-                    OR n.kind = 'terminal'
-                )
-          )
-          OR EXISTS (
-              SELECT 1
-              FROM task_transition_records tt
-              WHERE tt.task_id = t.id
-                AND tt.source_node_id = sqlc.arg(node_id)
-                AND tt.state = 'pending_approval'
-                AND t.canceled_at_unix_ms IS NULL
-          )
-          OR (
-              t.canceled_at_unix_ms IS NOT NULL
-              AND sqlc.arg(node_id) = sqlc.arg(canceled_terminal_node_id)
-              AND EXISTS (
-                  SELECT 1
-                  FROM workflow_nodes n
-                  WHERE n.id = sqlc.arg(node_id)
-                    AND n.kind = 'terminal'
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_node_placements p
-                  JOIN workflow_nodes n ON n.id = p.node_id
-                  WHERE p.task_id = t.id
-                    AND p.state = 'active'
-                    AND n.kind = 'terminal'
-              )
+              FROM task_current_nodes current_node
+              WHERE current_node.task_id = t.id
+                AND current_node.node_id = sqlc.arg(node_id)
           )
       )
 ),
@@ -3795,6 +3655,28 @@ WHERE sessions.id = sqlc.arg(session_id)
       OR task_id = sqlc.arg(task_id)
   );
 
+-- name: BindSessionToSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = sqlc.arg(session_id)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND (
+      session_id IS NULL
+      OR session_id = sqlc.arg(session_id)
+  );
+
+-- name: BindSessionToBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = sqlc.arg(session_id)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND (
+      session_id IS NULL
+      OR session_id = sqlc.arg(session_id)
+  );
+
 -- name: UpsertSerialSessionWorkflowNodeAssociation :exec
 INSERT INTO session_workflow_node_associations (
     session_id,
@@ -3944,6 +3826,119 @@ FROM (
 )
 ORDER BY sequence ASC;
 
+-- name: ListWorkflowDurableAttentionCandidates :many
+WITH durable_attention (
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    approval_id,
+    node_id,
+    transition_branch_key,
+    session_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+) AS (
+    SELECT
+        'approval' AS kind,
+        CAST('approval:' || approval.id AS TEXT) AS id,
+        task.project_id,
+        task.workflow_id,
+        task.id AS task_id,
+        task.short_id,
+        task.title,
+        approval.id AS approval_id,
+        CAST(NULL AS TEXT) AS node_id,
+        CAST(NULL AS TEXT) AS transition_branch_key,
+        approval.source_session_id AS session_id,
+        CAST(NULL AS TEXT) AS interruption_reason,
+        CAST(NULL AS TEXT) AS interruption_detail_json,
+        approval.created_at_unix_ms AS occurred_at_unix_ms
+    FROM task_pending_approvals approval
+    JOIN task_records task ON task.id = approval.source_task_id
+    WHERE (
+        sqlc.narg(selected_task_id) IS NULL
+        OR task.id = sqlc.narg(selected_task_id)
+    )
+      AND (
+        CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
+        OR approval.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
+        OR (
+            approval.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms)
+            AND ('approval:' || approval.id) < sqlc.arg(cursor_item_id)
+        )
+      )
+
+    UNION ALL
+
+    SELECT
+        'interrupted' AS kind,
+        CAST('interrupted:' || json_object(
+            'task_id', current_node.task_id,
+            'node_id', current_node.node_id,
+            'transition_branch_key', current_node.transition_branch_key
+        ) AS TEXT) AS id,
+        task.project_id,
+        task.workflow_id,
+        task.id AS task_id,
+        task.short_id,
+        task.title,
+        CAST(NULL AS TEXT) AS approval_id,
+        CAST(current_node.node_id AS TEXT) AS node_id,
+        CAST(current_node.transition_branch_key AS TEXT) AS transition_branch_key,
+        current_node.session_id,
+        CAST(current_node.interruption_reason AS TEXT) AS interruption_reason,
+        CAST(current_node.interruption_detail_json AS TEXT) AS interruption_detail_json,
+        current_node.interrupted_at_unix_ms AS occurred_at_unix_ms
+    FROM task_current_nodes current_node
+    JOIN task_records task ON task.id = current_node.task_id
+    WHERE current_node.scheduling_state = 'interrupted'
+      AND current_node.interruption_reason NOT IN ('user_interrupted', 'workflow_runtime_canceled')
+      AND (
+          sqlc.narg(selected_task_id) IS NULL
+          OR task.id = sqlc.narg(selected_task_id)
+      )
+      AND (
+          CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
+          OR current_node.interrupted_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
+          OR (
+              current_node.interrupted_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms)
+              AND (
+                  'interrupted:' || json_object(
+                      'task_id', current_node.task_id,
+                      'node_id', current_node.node_id,
+                      'transition_branch_key', current_node.transition_branch_key
+                  )
+              ) < sqlc.arg(cursor_item_id)
+          )
+      )
+)
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    approval_id,
+    node_id,
+    transition_branch_key,
+    session_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM durable_attention
+ORDER BY 14 DESC, 2 DESC
+LIMIT CASE
+    WHEN sqlc.arg(page_limit) = 0 THEN -1
+    ELSE sqlc.arg(page_limit)
+END;
+
 -- name: ListWorkflowAttentionCandidates :many
 SELECT
     kind,
@@ -4080,7 +4075,7 @@ WITH activity(
     source_id,
     occurred_at_unix_ms,
     updated_at_unix_ms,
-    actor
+    session_name
 ) AS (
     SELECT
         CAST('comment:' || c.id AS TEXT) AS activity_id,
@@ -4088,7 +4083,7 @@ WITH activity(
         c.id AS source_id,
         c.updated_at_unix_ms AS occurred_at_unix_ms,
         c.updated_at_unix_ms AS updated_at_unix_ms,
-        c.author_kind AS actor
+        CAST(NULL AS TEXT) AS session_name
     FROM task_comments c
     WHERE c.task_id = sqlc.arg(task_id)
       AND (
@@ -4100,93 +4095,21 @@ WITH activity(
     UNION ALL
 
     SELECT
-        CAST('transition:' || tt.id AS TEXT) AS activity_id,
-        'transition' AS kind,
-        tt.id AS source_id,
-        tt.created_at_unix_ms AS occurred_at_unix_ms,
-        COALESCE(tt.applied_at_unix_ms, tt.created_at_unix_ms) AS updated_at_unix_ms,
-        tt.actor AS actor
-    FROM task_transitions tt
-    WHERE tt.task_id = sqlc.arg(task_id)
+        CAST('session_started:' || s.id AS TEXT) AS activity_id,
+        'session_started' AS kind,
+        s.id AS source_id,
+        s.created_at_unix_ms AS occurred_at_unix_ms,
+        s.created_at_unix_ms AS updated_at_unix_ms,
+        s.name AS session_name
+    FROM sessions s
+    WHERE s.task_id = sqlc.arg(task_id)
       AND (
           sqlc.arg(cursor_active) = 0
-          OR tt.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (tt.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('transition:' || tt.id) < sqlc.arg(cursor_activity_id))
-      )
-
-    UNION ALL
-
-    SELECT
-        CAST('run_started:' || r.id AS TEXT) AS activity_id,
-        'run_started' AS kind,
-        r.id AS source_id,
-        r.started_at_unix_ms AS occurred_at_unix_ms,
-        r.updated_at_unix_ms AS updated_at_unix_ms,
-        '' AS actor
-    FROM task_run_records r
-    WHERE r.task_id = sqlc.arg(task_id)
-      AND r.started_at_unix_ms IS NOT NULL
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR r.started_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (r.started_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('run_started:' || r.id) < sqlc.arg(cursor_activity_id))
-      )
-
-    UNION ALL
-
-    SELECT
-        CAST('run_completed:' || r.id AS TEXT) AS activity_id,
-        'run_completed' AS kind,
-        r.id AS source_id,
-        r.completed_at_unix_ms AS occurred_at_unix_ms,
-        r.updated_at_unix_ms AS updated_at_unix_ms,
-        '' AS actor
-    FROM task_run_records r
-    WHERE r.task_id = sqlc.arg(task_id)
-      AND r.completed_at_unix_ms IS NOT NULL
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR r.completed_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (r.completed_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('run_completed:' || r.id) < sqlc.arg(cursor_activity_id))
-      )
-
-    UNION ALL
-
-    SELECT
-        CAST('run_interrupted:' || r.id AS TEXT) AS activity_id,
-        'run_interrupted' AS kind,
-        r.id AS source_id,
-        r.interrupted_at_unix_ms AS occurred_at_unix_ms,
-        r.updated_at_unix_ms AS updated_at_unix_ms,
-        '' AS actor
-    FROM task_run_records r
-    WHERE r.task_id = sqlc.arg(task_id)
-      AND r.interrupted_at_unix_ms IS NOT NULL
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR r.interrupted_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (r.interrupted_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('run_interrupted:' || r.id) < sqlc.arg(cursor_activity_id))
-      )
-
-    UNION ALL
-
-    SELECT
-        CAST('task_canceled:' || t.id AS TEXT) AS activity_id,
-        'task_canceled' AS kind,
-        t.id AS source_id,
-        t.canceled_at_unix_ms AS occurred_at_unix_ms,
-        t.updated_at_unix_ms AS updated_at_unix_ms,
-        '' AS actor
-    FROM task_records t
-    WHERE t.id = sqlc.arg(task_id)
-      AND t.canceled_at_unix_ms IS NOT NULL
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR t.canceled_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (t.canceled_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('task_canceled:' || t.id) < sqlc.arg(cursor_activity_id))
+          OR s.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
+          OR (s.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('session_started:' || s.id) < sqlc.arg(cursor_activity_id))
       )
 )
-SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, actor
+SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, session_name
 FROM activity
 ORDER BY occurred_at_unix_ms DESC, activity_id DESC
 LIMIT sqlc.arg(page_limit);
@@ -4764,6 +4687,7 @@ SELECT
     task_id,
     node_id,
     transition_branch_key,
+    entered_by_edge_id,
     current_input_values_json,
     prior_node_values_json,
     session_id,
@@ -4777,11 +4701,150 @@ ORDER BY
     CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
     transition_branch_key;
 
+-- name: ListTaskCurrentNodesByTasks :many
+SELECT
+    task_id,
+    node_id,
+    transition_branch_key,
+    entered_by_edge_id,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+FROM task_current_nodes
+WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY
+    task_id,
+    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    transition_branch_key;
+
+-- name: AdmitSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'admitted'
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND scheduling_state = 'ready'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND approval.source_transition_branch_key IS NULL
+  );
+
+-- name: AdmitBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'admitted'
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND scheduling_state = 'ready'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND approval.source_transition_branch_key = task_current_nodes.transition_branch_key
+  );
+
+-- name: ResumeSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'ready',
+    interruption_reason = NULL,
+    interruption_detail_json = NULL,
+    interrupted_at_unix_ms = NULL
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND scheduling_state = 'interrupted'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND approval.source_transition_branch_key IS NULL
+  );
+
+-- name: ResumeBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'ready',
+    interruption_reason = NULL,
+    interruption_detail_json = NULL,
+    interrupted_at_unix_ms = NULL
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND scheduling_state = 'interrupted'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND approval.source_transition_branch_key = task_current_nodes.transition_branch_key
+  );
+
+-- name: InterruptSerialAdmittedCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND scheduling_state = 'admitted';
+
+-- name: InterruptBranchAdmittedCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND scheduling_state = 'admitted';
+
+-- name: InterruptSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND scheduling_state IN ('ready', 'admitted');
+
+-- name: InterruptBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND scheduling_state IN ('ready', 'admitted');
+
+-- name: RecoverAdmittedCurrentNodes :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE scheduling_state = 'admitted';
+
 -- name: InsertTaskCurrentNode :exec
 INSERT INTO task_current_nodes (
     task_id,
     node_id,
     transition_branch_key,
+    entered_by_edge_id,
     current_input_values_json,
     prior_node_values_json,
     session_id,
@@ -4793,6 +4856,7 @@ INSERT INTO task_current_nodes (
     sqlc.arg(task_id),
     sqlc.arg(node_id),
     sqlc.arg(transition_branch_key),
+    sqlc.arg(entered_by_edge_id),
     sqlc.arg(current_input_values_json),
     sqlc.arg(prior_node_values_json),
     sqlc.arg(session_id),

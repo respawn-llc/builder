@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -155,7 +156,7 @@ type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestion
 type AgentExecutionRequest struct {
 	Descriptor session.SessionDescriptor
 	Runtime    *AgentRuntimePlan
-	Workflow   *WorkflowExecutionRef
+	Workflow   *WorkflowExecutionLease
 	Resource   AgentResourceSelection
 	Ask        ExecutionAskHandler
 	Runner     AgentRunner
@@ -628,11 +629,6 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if request.Runner == nil {
 		return nil, errors.New("agent runner is required")
 	}
-	if request.Workflow != nil {
-		if err := request.Workflow.Validate(); err != nil {
-			return nil, err
-		}
-	}
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
@@ -648,9 +644,28 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
-	if request.Workflow != nil && a.byWorkflow[*request.Workflow] != nil {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("workflow execution %q generation %d is already live", request.Workflow.RunID, request.Workflow.Generation)
+	var workflowKey workflow.CurrentNodeReferenceKey
+	var workflowRef *WorkflowExecutionRef
+	var scopeID runtimeids.ExecutionScopeID
+	var executionGeneration ExecutionGeneration
+	if request.Workflow != nil {
+		ref, leaseErr := a.validateWorkflowExecutionLeaseLocked(request.Workflow)
+		if leaseErr != nil {
+			a.mu.Unlock()
+			return nil, leaseErr
+		}
+		workflowRef = &ref
+		scopeID = request.Workflow.scopeID
+		executionGeneration = request.Workflow.executionGeneration
+		workflowKey, err = workflowExecutionKeyFor(ref)
+		if err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		if a.byWorkflow[workflowKey] != nil {
+			a.mu.Unlock()
+			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
+		}
 	}
 	resource.mu.Lock()
 	if resource.current != nil {
@@ -663,8 +678,11 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, err
 	}
-	executionGeneration := a.nextExecutionGenerationLocked()
-	scope := newAgentExecutionScope(runtimeids.NewExecutionScopeID(), executionGeneration, resource.ref, request.Workflow)
+	if scopeID.IsZero() {
+		scopeID = runtimeids.NewExecutionScopeID()
+		executionGeneration = a.nextExecutionGenerationLocked()
+	}
+	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, workflowRef)
 	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
 	if err != nil {
 		resource.pins--
@@ -710,12 +728,18 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
-	if request.Workflow != nil {
-		a.byWorkflow[*request.Workflow] = execution
+	if workflowRef != nil {
+		a.byWorkflow[workflowKey] = execution
 	}
 	a.mu.Unlock()
 
 	go func() {
+		if request.Workflow != nil {
+			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
+				execution.finish(ExecutionResult{}, waitErr, nil)
+				return
+			}
+		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,
 			resource:  resource.ref,

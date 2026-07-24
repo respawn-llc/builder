@@ -1,9 +1,7 @@
 package startup
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"sync"
 
 	"core/server/auth"
@@ -19,10 +17,7 @@ type EmbeddedServer struct {
 	rpcMu sync.Mutex
 	rpc   *runningRPC
 
-	fatalCancel context.CancelFunc
-	fatalWG     sync.WaitGroup
-	fatalErr    error
-	failures    chan error
+	failures chan error
 
 	closeOnce sync.Once
 	closeErr  error
@@ -98,22 +93,6 @@ func (s *EmbeddedServer) ServeBackground() error {
 		return err
 	}
 	s.rpc = rpc
-	fatalCtx, fatalCancel := context.WithCancel(context.Background())
-	s.fatalCancel = fatalCancel
-	if failures := workflowExecutionFailures(s.Core, s.deps); failures != nil {
-		s.fatalWG.Add(1)
-		go s.superviseWorkflowExecutionFailures(fatalCtx, rpc, failures)
-	}
-	return nil
-}
-
-func workflowExecutionFailures(appCore *core.Core, deps *startupGatewayDependencies) <-chan error {
-	if appCore != nil {
-		return appCore.WorkflowExecutionFailures()
-	}
-	if deps != nil {
-		return deps.workflowExecutionFailures()
-	}
 	return nil
 }
 
@@ -127,25 +106,6 @@ func (s *EmbeddedServer) Failures() <-chan error {
 		s.failures = make(chan error, 1)
 	}
 	return s.failures
-}
-
-func (s *EmbeddedServer) superviseWorkflowExecutionFailures(ctx context.Context, rpc *runningRPC, failures <-chan error) {
-	defer s.fatalWG.Done()
-	select {
-	case <-ctx.Done():
-		return
-	case fatalErr := <-failures:
-		reported := fmt.Errorf("embedded server stopped after fatal workflow execution failure: %w", fatalErr)
-		s.rpcMu.Lock()
-		s.fatalErr = reported
-		if s.failures == nil {
-			s.failures = make(chan error, 1)
-		}
-		s.failures <- reported
-		s.rpcMu.Unlock()
-		rpc.shutdown()
-		s.closeUnderlying()
-	}
 }
 
 func (s *EmbeddedServer) closeUnderlying() error {
@@ -168,20 +128,11 @@ func (s *EmbeddedServer) Close() error {
 	s.rpcMu.Lock()
 	rpc := s.rpc
 	s.rpc = nil
-	fatalCancel := s.fatalCancel
-	s.fatalCancel = nil
 	s.rpcMu.Unlock()
-	if fatalCancel != nil {
-		fatalCancel()
-	}
 	if rpc != nil {
 		rpc.shutdown()
 		rpc.wait()
 	}
-	s.fatalWG.Wait()
 	closeErr := s.closeUnderlying()
-	s.rpcMu.Lock()
-	fatalErr := s.fatalErr
-	s.rpcMu.Unlock()
-	return errors.Join(closeErr, fatalErr)
+	return closeErr
 }

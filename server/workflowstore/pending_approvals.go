@@ -33,6 +33,7 @@ type pendingApprovalTransitionSnapshot struct {
 type pendingApprovalTargetSnapshot struct {
 	NodeID              workflow.NodeID                      `json:"node_id"`
 	TransitionBranchKey *workflow.TransitionBranchKey        `json:"transition_branch_key,omitempty"`
+	EnteredByEdgeID     *workflow.EdgeID                     `json:"entered_by_edge_id,omitempty"`
 	DisplayName         string                               `json:"display_name"`
 	CurrentInputValues  map[string]string                    `json:"current_input_values"`
 	PriorNodeValues     map[string]map[string]string         `json:"prior_node_values"`
@@ -544,6 +545,11 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 		value := currentNode.SessionID.String()
 		sessionID = &value
 	}
+	var enteredByEdgeID *workflow.EdgeID
+	if currentNode.EnteredByEdgeID != nil {
+		value := *currentNode.EnteredByEdgeID
+		enteredByEdgeID = &value
+	}
 	var schedulingState *workflow.CurrentNodeSchedulingState
 	if currentNode.Scheduling != nil {
 		if currentNode.Scheduling.Interruption != nil {
@@ -555,6 +561,7 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 	return workflow.MarshalString(pendingApprovalTargetSnapshot{
 		NodeID:              currentNode.Reference.NodeID,
 		TransitionBranchKey: branchKey,
+		EnteredByEdgeID:     enteredByEdgeID,
 		DisplayName:         target.DisplayName,
 		CurrentInputValues:  cloneCurrentNodeOutputValues(currentNode.CurrentInputValues),
 		PriorNodeValues:     clonePendingApprovalPriorNodeValues(currentNode.PriorNodeValues),
@@ -583,8 +590,9 @@ func pendingApprovalTargetFromSnapshot(taskID workflow.TaskID, snapshot pendingA
 	if snapshot.SchedulingState != nil {
 		scheduling = &workflow.CurrentNodeScheduling{State: *snapshot.SchedulingState}
 	}
-	currentNode, err := workflow.NewCurrentNodeWithMaterializedValues(
+	currentNode, err := workflow.NewCurrentNodeWithEntry(
 		reference,
+		snapshot.EnteredByEdgeID,
 		snapshot.CurrentInputValues,
 		snapshot.PriorNodeValues,
 		sessionID,

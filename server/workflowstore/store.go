@@ -327,6 +327,27 @@ type RunStartContext struct {
 	ExecutionRoot        *ExecutionRoot
 }
 
+// CurrentNodeStartContext is the live execution contract derived from one
+// Current Node and the latest Workflow definition. It deliberately has no
+// historical execution identity or frozen execution snapshot.
+type CurrentNodeStartContext struct {
+	Task                   TaskRecord
+	Workflow               WorkflowRecord
+	Node                   NodeRecord
+	CurrentNode            workflow.CurrentNode
+	EnteringEdge           workflow.Edge
+	ContextMode            workflow.ContextMode
+	SourceSessionID        *runtimeids.SessionID
+	IsFanoutBranch         bool
+	AcceptedTransitionPath AcceptedTransitionPath
+	TransitionIDs          []string
+	TransitionOptions      []TransitionOption
+	PromptTemplate         string
+	ParameterValues        map[string]string
+	PriorParameterValues   map[string]map[string]string
+	ExecutionRoot          *ExecutionRoot
+}
+
 type AcceptedTransitionPath struct {
 	SourceNodeDisplayName string
 	TargetNodeDisplayName string

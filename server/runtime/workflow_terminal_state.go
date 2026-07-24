@@ -34,7 +34,7 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	}
 	if e.workflowRunActive() {
 		return WorkflowSessionState{
-			RunID:      strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
+			RunID:      e.cfg.WorkflowRun.ScopeID.String(),
 			TaskID:     strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID),
 			WorkflowID: strings.TrimSpace(e.cfg.WorkflowRun.Instructions.WorkflowID),
 		}
@@ -82,8 +82,7 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bo
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
-		Generation:  e.cfg.WorkflowRun.Contract.ExpectedGeneration,
+		RunID:       e.cfg.WorkflowRun.ScopeID.String(),
 		Source:      source,
 		CompletedAt: time.Now(),
 	}

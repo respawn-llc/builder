@@ -66,6 +66,42 @@ func (r CurrentNodeReference) IsBranchScoped() bool {
 	return ok
 }
 
+// CurrentNodeReferenceKey is the canonical comparable identity of a Current
+// Node reference. The two concrete variants make branch absence structural:
+// callers never invent an empty branch-key sentinel to index live state.
+type CurrentNodeReferenceKey interface {
+	currentNodeReferenceKey()
+}
+
+type serialCurrentNodeReferenceKey struct {
+	taskID TaskID
+	nodeID NodeID
+}
+
+func (serialCurrentNodeReferenceKey) currentNodeReferenceKey() {}
+
+type branchCurrentNodeReferenceKey struct {
+	taskID    TaskID
+	nodeID    NodeID
+	branchKey TransitionBranchKey
+}
+
+func (branchCurrentNodeReferenceKey) currentNodeReferenceKey() {}
+
+func (r CurrentNodeReference) Key() (CurrentNodeReferenceKey, error) {
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	if branchKey, branchScoped := r.TransitionBranchKey(); branchScoped {
+		return branchCurrentNodeReferenceKey{
+			taskID:    r.TaskID,
+			nodeID:    r.NodeID,
+			branchKey: branchKey,
+		}, nil
+	}
+	return serialCurrentNodeReferenceKey{taskID: r.TaskID, nodeID: r.NodeID}, nil
+}
+
 type CurrentNodeSchedulingState string
 
 const (
@@ -95,6 +131,7 @@ type CurrentNodeScheduling struct {
 
 type CurrentNode struct {
 	Reference          CurrentNodeReference
+	EnteredByEdgeID    *EdgeID
 	CurrentInputValues map[string]string
 	PriorNodeValues    map[string]map[string]string
 	SessionID          *runtimeids.SessionID
@@ -131,6 +168,29 @@ func NewCurrentNodeWithMaterializedValues(
 		SessionID:          cloneCurrentNodeSessionID(sessionID),
 		Scheduling:         cloneCurrentNodeScheduling(scheduling),
 	}
+	return node, nil
+}
+
+func NewCurrentNodeWithEntry(
+	reference CurrentNodeReference,
+	enteredByEdgeID *EdgeID,
+	currentInputValues map[string]string,
+	priorNodeValues map[string]map[string]string,
+	sessionID *runtimeids.SessionID,
+	scheduling *CurrentNodeScheduling,
+) (CurrentNode, error) {
+	node, err := NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, sessionID, scheduling)
+	if err != nil {
+		return CurrentNode{}, err
+	}
+	if enteredByEdgeID == nil {
+		return node, nil
+	}
+	edgeID := EdgeID(strings.TrimSpace(string(*enteredByEdgeID)))
+	if edgeID == "" {
+		return CurrentNode{}, fmt.Errorf("current node entering edge id must be non-empty when present")
+	}
+	node.EnteredByEdgeID = &edgeID
 	return node, nil
 }
 

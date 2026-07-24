@@ -48,6 +48,7 @@ type RuntimeWiringOptions struct {
 	ClientFactory                       RuntimeClientFactory
 	ReviewerClientFactory               RuntimeClientFactory
 	WorkflowRun                         *workflowruntime.Config
+	WorkflowPrompt                      *workflowruntime.PromptContract
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
@@ -233,6 +234,7 @@ func NewRuntimeWiringWithBackground(
 		HeadlessMode:                  opts.Headless,
 		ToolPreambles:                 active.ToolPreambles,
 		WorkflowRun:                   opts.WorkflowRun,
+		WorkflowPrompt:                opts.WorkflowPrompt,
 		AskQuestionBatchSkipped:       opts.AskQuestionBatchSkipped,
 		TranscriptWorkingDir:          workspaceRoot,
 		GlobalConfigDir:               opts.GlobalConfigDir,

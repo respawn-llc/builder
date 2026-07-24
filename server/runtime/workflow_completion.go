@@ -50,13 +50,11 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 		"kind":   string(kind),
 		"detail": strings.TrimSpace(detail),
 	})
-	return e.cfg.WorkflowRun.Controller.RecordWorkflowProtocolViolation(ctx, workflowruntime.ViolationRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		Kind:               kind,
-		MaxCount:           maxCount,
-		Detail:             string(payload),
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	return e.cfg.WorkflowRun.Controller.RecordProtocolViolation(ctx, workflowruntime.ViolationRequest{
+		ScopeID:  e.cfg.WorkflowRun.ScopeID,
+		Kind:     kind,
+		MaxCount: maxCount,
+		Detail:   string(payload),
 	})
 }
 
@@ -64,10 +62,8 @@ func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return nil
 	}
-	return e.cfg.WorkflowRun.Controller.ResetWorkflowProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	return e.cfg.WorkflowRun.Controller.ResetProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
+		ScopeID: e.cfg.WorkflowRun.ScopeID,
 	})
 }
 
@@ -75,10 +71,8 @@ func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, er
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return false, nil
 	}
-	result, err := e.cfg.WorkflowRun.Controller.ObserveWorkflowRunCompletion(ctx, workflowruntime.CompletionObservationRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	result, err := e.cfg.WorkflowRun.Controller.ObserveCurrentNodeCompletion(ctx, workflowruntime.CompletionObservationRequest{
+		ScopeID: e.cfg.WorkflowRun.ScopeID,
 	})
 	if err != nil {
 		return false, err

@@ -90,15 +90,17 @@ type AttentionNotificationInterruptedRunState struct {
 }
 
 type AttentionNotificationTarget struct {
-	Kind        AttentionNotificationTargetKind       `json:"kind"`
-	ProjectID   string                                `json:"project_id,omitempty"`
-	WorkflowID  string                                `json:"workflow_id,omitempty"`
-	TaskID      string                                `json:"task_id,omitempty"`
-	TaskShortID string                                `json:"task_short_id,omitempty"`
-	TaskTitle   string                                `json:"task_title,omitempty"`
-	SessionID   string                                `json:"session_id,omitempty"`
-	RunID       string                                `json:"run_id,omitempty"`
-	Focus       *AttentionNotificationTaskDetailFocus `json:"focus,omitempty"`
+	Kind                 AttentionNotificationTargetKind       `json:"kind"`
+	ProjectID            string                                `json:"project_id,omitempty"`
+	WorkflowID           string                                `json:"workflow_id,omitempty"`
+	TaskID               string                                `json:"task_id,omitempty"`
+	TaskShortID          string                                `json:"task_short_id,omitempty"`
+	TaskTitle            string                                `json:"task_title,omitempty"`
+	SessionID            string                                `json:"session_id,omitempty"`
+	RunID                string                                `json:"run_id,omitempty"`
+	CurrentNodeID        *string                               `json:"current_node_id,omitempty"`
+	CurrentNodeBranchKey *string                               `json:"current_node_branch_key,omitempty"`
+	Focus                *AttentionNotificationTaskDetailFocus `json:"focus,omitempty"`
 }
 
 type AttentionNotificationTaskDetailFocus struct {

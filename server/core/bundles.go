@@ -108,9 +108,8 @@ type WorktreeBundle struct {
 }
 
 type WorkflowBundle struct {
-	workflows apicontract.WorkflowService
-	scheduler *workflowexecution.SchedulerService
-	fatal     *workflowexecution.FatalSignal
+	workflows  apicontract.WorkflowService
+	controller *workflowexecution.CurrentNodeController
 }
 
 func (s *Core) safeBundles() *Bundles {
@@ -194,8 +193,7 @@ type bundleCompositionInput struct {
 	sessionLifecycleService *sessionservice.SessionLifecycleService
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
-	workflowScheduler       *workflowexecution.SchedulerService
-	workflowFatal           *workflowexecution.FatalSignal
+	workflowController      *workflowexecution.CurrentNodeController
 	workflowRuntimeStarter  *workflowrunner.Starter
 	worktreeService         *worktree.Service
 	sleepManager            *sleepguard.Manager
@@ -222,17 +220,17 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return in.workflowRuntimeStarter.Close()
 			}},
+			{name: "workflow execution controller", close: func() error {
+				if in.workflowController == nil {
+					return nil
+				}
+				return in.workflowController.Close()
+			}},
 			{name: "session runtime authority", close: func() error {
 				if in.runtimeAuthority == nil {
 					return nil
 				}
 				return in.runtimeAuthority.Close(context.Background())
-			}},
-			{name: "workflow scheduler", close: func() error {
-				if in.workflowScheduler == nil {
-					return nil
-				}
-				return in.workflowScheduler.Close()
 			}},
 			{name: "sleep manager", close: func() error {
 				if in.sleepManager != nil {
@@ -247,7 +245,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeAuthority, in.runtimeControlService, in.sessionRuntimeAPI),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
-		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler, in.workflowFatal),
+		Workflows:   newWorkflowBundle(in.workflowService, in.workflowController),
 		Worktrees:   &WorktreeBundle{worktrees: in.worktreeService},
 	}
 }
@@ -313,8 +311,8 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 	}
 }
 
-func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowexecution.SchedulerService, fatal *workflowexecution.FatalSignal) *WorkflowBundle {
-	return &WorkflowBundle{workflows: workflowService, scheduler: scheduler, fatal: fatal}
+func newWorkflowBundle(workflowService *workflowsvc.Service, controller *workflowexecution.CurrentNodeController) *WorkflowBundle {
+	return &WorkflowBundle{workflows: workflowService, controller: controller}
 }
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService) *SessionBundle {

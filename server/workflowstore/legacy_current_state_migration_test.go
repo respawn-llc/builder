@@ -246,6 +246,14 @@ INSERT INTO workflow_nodes (
 		workflowID,
 		workflowID,
 	)
+	execLegacyMigrationSeed(t, db, "workflow transition group", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES ('group-start', 'node-start', 'start', 'Start')`)
+	execLegacyMigrationSeed(t, db, "workflow start edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, requires_approval,
+    context_mode, input_bindings_json, output_requirements_json
+) VALUES ('edge-start', 'group-start', 'start', 'node-agent', 0, 'new_session', '[]', '[]')`)
 	execLegacyMigrationSeed(t, db, "workflow link", `
 INSERT INTO project_workflow_links (
     id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms
@@ -271,6 +279,37 @@ INSERT INTO task_node_placements (
 		now,
 		now+1,
 	)
+	execLegacyMigrationSeed(t, db, "start transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-migrated-session-context', ?, NULL, 'backlog', 'Backlog',
+    'start', 'Start', 1, 'user', 'applied', '', '{}', ?
+)`, taskID, now)
+	execLegacyMigrationSeed(t, db, "start transition edge", `
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key, target_placement_id,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-migrated-session-context',
+    'transition-migrated-session-context',
+    'edge-start',
+    'start',
+    'placement-migrated-session-context',
+    'node-agent',
+    'agent',
+    'Agent',
+    'agent',
+    'applied',
+    'new_session',
+    0,
+    '[]',
+    '[]',
+    '{}'
+)`)
 	execLegacyMigrationSeed(t, db, "agent run", `
 INSERT INTO task_runs (
     id, placement_id, session_id, workflow_revision_seen,
@@ -308,13 +347,16 @@ INSERT INTO task_runs (
 	if !workflowOwned {
 		t.Fatal("migrated session direct task ownership was not retained")
 	}
+	if _, err := metadataStore.DB().ExecContext(t.Context(), `DELETE FROM task_runs`); err != nil {
+		t.Fatalf("remove obsolete run records before direct resolution: %v", err)
+	}
 
 	input, err := store.ResolveCurrentSessionStartContext(t.Context(), parsedSessionID)
 	if err != nil {
 		t.Fatalf("ResolveCurrentSessionStartContext: %v", err)
 	}
-	if input.Run.ID != workflow.RunID(runID) || input.Task.ID != workflow.TaskID(taskID) || input.Node.ID != workflow.NodeID("node-agent") {
-		t.Fatalf("resolved migrated context = run=%q task=%q node=%q, want direct current ownership", input.Run.ID, input.Task.ID, input.Node.ID)
+	if input.Task.ID != workflow.TaskID(taskID) || input.Node.ID != workflow.NodeID("node-agent") || input.CurrentNode.EnteredByEdgeID == nil || *input.CurrentNode.EnteredByEdgeID != workflow.EdgeID("edge-start") {
+		t.Fatalf("resolved migrated context = %+v, want direct current ownership and entering edge", input)
 	}
 }
 

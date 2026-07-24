@@ -1,5 +1,8 @@
 # Rust TUI Demolition + Merge-to-Main
 
+> [!CAUTION]
+> Rust work is frozen. This document is a historical record and does not authorize implementation or verification in `tui-rs/`.
+
 Operator decisions (2026-07-04, chat):
 - Merge rust-harness → main so Kent workflow tasks (which can only base off main) can drive the rebuild. Nothing ships to production until dogfood threshold.
 - Nuke, don't operate: condemned structures are deleted outright so task agents never see the bad exemplar on main. Platform A reworded from "de-block the existing loop" to "build the loop from first principles"; kill gate unchanged.

@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -392,22 +393,33 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 }
 
 func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.PlacementID) == "" || strings.TrimSpace(applied.RunID) == "" {
-		return errors.New("start applied payload requires transition_id, placement_id, and run_id")
+	if len(applied.CurrentNodes) == 0 {
+		return errors.New("start applied payload requires current_nodes")
+	}
+	for index, currentNode := range applied.CurrentNodes {
+		if strings.TrimSpace(currentNode.NodeID) == "" {
+			return fmt.Errorf("start applied current node at index %d requires node_id", index)
+		}
+		if currentNode.TransitionBranchKey != nil && strings.TrimSpace(*currentNode.TransitionBranchKey) == "" {
+			return fmt.Errorf("start applied current node at index %d has blank transition_branch_key", index)
+		}
+		if currentNode.SessionID != nil && strings.TrimSpace(*currentNode.SessionID) == "" {
+			return fmt.Errorf("start applied current node at index %d has blank session_id", index)
+		}
 	}
 	return nil
 }
 
 func validateWorkflowTaskApproveApplied(applied WorkflowTaskApproveApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.TaskID) == "" || strings.TrimSpace(applied.State) == "" {
-		return errors.New("approve applied payload requires transition_id, task_id, and state")
+	if strings.TrimSpace(applied.TaskID) == "" || len(applied.CurrentNodes) == 0 {
+		return errors.New("approve applied payload requires task_id and current_nodes")
 	}
 	return nil
 }
 
 func validateWorkflowTaskMoveApplied(applied WorkflowTaskMoveApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.State) == "" {
-		return errors.New("move applied payload requires transition_id and state")
+	if len(applied.CurrentNodes) == 0 {
+		return errors.New("move applied payload requires current_nodes")
 	}
 	return nil
 }

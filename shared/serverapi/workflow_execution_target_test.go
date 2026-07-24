@@ -17,8 +17,6 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 
 	for _, request := range []interface{ Validate() error }{
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
-		WorkflowTaskApproveRequest{TransitionID: "transition", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
-		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
 	} {
 		if err := request.Validate(); err != nil {
 			t.Fatalf("%T valid selection rejected: %v", request, err)
@@ -87,14 +85,15 @@ func TestWorkflowExecutionTargetSelectionRequirementValidation(t *testing.T) {
 }
 
 func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
-	startApplied := WorkflowTaskStartApplied{TransitionID: "transition", PlacementID: "placement", RunID: "run"}
+	currentNodes := []WorkflowTaskCurrentNode{{NodeID: "node-agent"}}
+	startApplied := WorkflowTaskStartApplied{CurrentNodes: currentNodes}
 	requirement := WorkflowExecutionTargetSelectionRequirement{
 		Reason: WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
 	}
 	for _, response := range []interface{ Validate() error }{
 		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied},
 		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
-		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TransitionID: "transition", TaskID: "task", State: "applied"}},
+		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 	} {
 		if err := response.Validate(); err != nil {
@@ -266,9 +265,10 @@ func TestWorkflowTaskDetailKeepsRecordedWorktreePathOffBoardCards(t *testing.T) 
 
 func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
-		Summary:           WorkflowTaskSummary{ID: "task-1"},
-		CurrentSessionIDs: []string{},
-		CurrentScripts:    []WorkflowTaskCurrentScript{},
+		Summary:        WorkflowTaskSummary{ID: "task-1"},
+		CurrentNodes:   []WorkflowTaskCurrentNode{},
+		LiveSessionIDs: []string{},
+		CurrentScripts: []WorkflowTaskCurrentScript{},
 		ExecutionTarget: &WorkflowExecutionTarget{
 			Mode:       WorkflowExecutionTargetModeNone,
 			Provenance: WorkflowExecutionTargetProvenanceResolved,
@@ -293,31 +293,35 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	}
 
 	invalid = valid
-	invalid.Task.CurrentSessionIDs = nil
+	invalid.Task.LiveSessionIDs = nil
 	if err := invalid.Validate(); err == nil {
-		t.Fatal("task detail response accepted a null current_session_ids collection")
+		t.Fatal("task detail response accepted a null live_session_ids collection")
 	}
 	invalid = valid
-	invalid.Task.CurrentScripts = []WorkflowTaskCurrentScript{{RunID: "run-b", Path: "script"}, {RunID: "run-a", Path: "script"}}
+	invalid.Task.CurrentScripts = []WorkflowTaskCurrentScript{
+		{CurrentNode: WorkflowTaskCurrentNode{NodeID: "node-b"}, Path: "script"},
+		{CurrentNode: WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "script"},
+	}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted non-deterministic current scripts")
 	}
 }
 
 func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T) {
-	currentSessionIDs := make([]string, 0, 201)
+	liveSessionIDs := make([]string, 0, 201)
 	currentScripts := make([]WorkflowTaskCurrentScript, 0, 201)
 	for index := range 201 {
-		currentSessionIDs = append(currentSessionIDs, fmt.Sprintf("session-%03d", index))
+		liveSessionIDs = append(liveSessionIDs, fmt.Sprintf("session-%03d", index))
 		currentScripts = append(currentScripts, WorkflowTaskCurrentScript{
-			RunID: fmt.Sprintf("run-%03d", index),
-			Path:  "script",
+			CurrentNode: WorkflowTaskCurrentNode{NodeID: fmt.Sprintf("node-%03d", index)},
+			Path:        "script",
 		})
 	}
 	response := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
-		Summary:           WorkflowTaskSummary{ID: "task-1"},
-		CurrentSessionIDs: currentSessionIDs,
-		CurrentScripts:    currentScripts,
+		Summary:        WorkflowTaskSummary{ID: "task-1"},
+		CurrentNodes:   []WorkflowTaskCurrentNode{},
+		LiveSessionIDs: liveSessionIDs,
+		CurrentScripts: currentScripts,
 	}}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("all current execution targets rejected: %v", err)

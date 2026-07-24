@@ -2,6 +2,8 @@ package workflowstore
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
 	"core/server/workflow"
@@ -102,5 +104,28 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 				t.Fatalf("current nodes after start = %+v, want one ready unbound target node", after)
 			}
 		})
+	}
+}
+
+func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started, err := store.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+	nodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Scheduling == nil || nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingAdmitted {
+		t.Fatalf("current nodes = %+v, want one admitted node in workflow %q", nodes, workflowID)
+	}
+	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("second AdmitCurrentNode error = %v, want stale-ready absence", err)
 	}
 }
