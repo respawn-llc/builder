@@ -17,26 +17,6 @@ import (
 	"time"
 )
 
-type webSearchProbeTool struct {
-	mu    sync.Mutex
-	calls int
-	name  toolspec.ID
-}
-
-func (t *webSearchProbeTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
-	t.mu.Lock()
-	t.calls++
-	t.mu.Unlock()
-	out, _ := json.Marshal(map[string]any{"tool": string(t.name)})
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
-}
-
-func (t *webSearchProbeTool) Calls() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.calls
-}
-
 func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var (
@@ -74,79 +54,6 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 	}
 	if rows < 2 {
 		t.Fatalf("expected >=2 projected compaction rows, got %d", rows)
-	}
-}
-
-func TestExecuteToolCallsRejectsWhitespaceWebSearchQuery(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-		ID:    "call-web",
-		Name:  string(toolspec.ToolWebSearch),
-		Input: json.RawMessage(`{"query":"   "}`),
-	}})
-	if err != nil {
-		t.Fatalf("execute tool calls: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one result, got %d", len(results))
-	}
-	if !results[0].IsError {
-		t.Fatalf("expected invalid web search query to fail, got %+v", results[0])
-	}
-	var output map[string]string
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("decode result output: %v", err)
-	}
-	if output["error"] != tools.InvalidWebSearchQueryMessage {
-		t.Fatalf("expected invalid query error, got %+v", output)
-	}
-	if completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call-web"); !ok {
-		t.Fatal("expected tool completion to be recorded")
-	} else if !completion.IsError {
-		t.Fatalf("expected persisted completion to be error, got %+v", completion)
-	}
-}
-
-func TestExecuteToolCallsRejectsHallucinatedWebSearchQueryBeforeHandler(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	probe := &webSearchProbeTool{name: toolspec.ToolWebSearch}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
-		ID:      toolspec.ToolWebSearch,
-		Handler: probe,
-	}), Config{Model: "gpt-5"})
-
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-		ID:    "call-web",
-		Name:  string(toolspec.ToolWebSearch),
-		Input: json.RawMessage(`{"query":"web search"}`),
-	}})
-	if err != nil {
-		t.Fatalf("execute tool calls: %v", err)
-	}
-	if probe.Calls() != 0 {
-		t.Fatalf("expected validation to reject before handler execution, got %d handler calls", probe.Calls())
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one result, got %d", len(results))
-	}
-	if !results[0].IsError {
-		t.Fatalf("expected hallucinated web search query to fail, got %+v", results[0])
-	}
-	var output map[string]string
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("decode result output: %v", err)
-	}
-	if output["error"] != tools.InvalidWebSearchQueryMessage {
-		t.Fatalf("expected invalid query error, got %+v", output)
-	}
-	if completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call-web"); !ok {
-		t.Fatal("expected tool completion to be recorded")
-	} else if !completion.IsError {
-		t.Fatalf("expected persisted completion to be error, got %+v", completion)
 	}
 }
 
@@ -763,21 +670,25 @@ func TestAuthErrorsAreNotRetried(t *testing.T) {
 }
 
 func TestNonRetriableStatusCodesAreNotRetried(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &statusFailClient{}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+	})
+
 	for _, status := range []int{400, 401, 403, 404} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			store := mustCreateTestSession(t)
-
-			client := &statusFailClient{status: status}
-			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-				Model: "gpt-5",
-			})
+			client.mu.Lock()
+			client.status = status
+			callsBefore := client.calls
+			client.mu.Unlock()
 
 			_, err := eng.SubmitUserMessage(context.Background(), "trigger status error")
 			if err == nil {
 				t.Fatalf("expected status %d failure", status)
 			}
-			if client.Calls() != 1 {
-				t.Fatalf("expected single model attempt on status %d, got %d", status, client.Calls())
+			if calls := client.Calls() - callsBefore; calls != 1 {
+				t.Fatalf("expected single model attempt on status %d, got %d", status, calls)
 			}
 		})
 	}

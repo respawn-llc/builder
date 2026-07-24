@@ -65,6 +65,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path: buildPTYFixtureBinary(t, ctx),
+		Args: []string{appfixture.LifecycleProcessTestRunArgument},
 		Env: []string{
 			"TERM=xterm-256color",
 			"COLORTERM=truecolor",
@@ -137,7 +138,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 	serverCtx, stopServer := context.WithCancel(ctx)
 	defer stopServer()
 	var serverOutput bytes.Buffer
-	serverCommand := exec.CommandContext(serverCtx, bin)
+	serverCommand := exec.CommandContext(serverCtx, bin, appfixture.LifecycleServerTestRunArgument)
 	serverCommand.Env = append(os.Environ(), appfixture.LifecycleServerProcessConfigEnvName+"="+serverConfigPath)
 	serverCommand.Stdout = &serverOutput
 	serverCommand.Stderr = &serverOutput
@@ -176,6 +177,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       bin,
+		Args:       []string{appfixture.LifecycleProcessTestRunArgument},
 		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{{
@@ -232,6 +234,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       buildPTYFixtureBinary(t, ctx),
+		Args:       []string{appfixture.LifecycleProcessTestRunArgument},
 		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{{

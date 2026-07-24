@@ -30,6 +30,11 @@ type appMetadataTemplateFile struct {
 	data         []byte
 }
 
+var appTestServerPortReservations struct {
+	sync.Mutex
+	releases map[string]func()
+}
+
 var appMetadataTemplate struct {
 	once  sync.Once
 	files []appMetadataTemplateFile
@@ -135,7 +140,19 @@ func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL
 }
 
 func serveAppServer(t *testing.T, srv *serverstartup.ServeServer) func() {
-	return serveAppServerAfter(t, srv, func() {})
+	return serveAppServerAfter(t, srv, releaseConfiguredAppTestServerPort)
+}
+
+func startAppTestEmbeddedServer(
+	t *testing.T,
+	ctx context.Context,
+	opts Options,
+	interactor authInteractor,
+	interactive bool,
+) (*embeddedAppServer, error) {
+	t.Helper()
+	releaseConfiguredAppTestServerPort()
+	return startEmbeddedServer(ctx, opts, interactor, interactive)
 }
 
 func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeServe func()) func() {
@@ -156,19 +173,58 @@ func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeSer
 
 func reserveAppDirectServePort(t *testing.T) func() {
 	t.Helper()
+	return reserveAppTestServerPort(t)
+}
+
+func configureAppTestServerPort(t *testing.T) {
+	t.Helper()
+	_ = reserveAppTestServerPort(t)
+}
+
+func reserveAppTestServerPort(t *testing.T) func() {
+	t.Helper()
+	releaseConfiguredAppTestServerPort()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("reserve direct serve port: %v", err)
+		t.Fatalf("reserve server port: %v", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	address := listener.Addr().String()
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
 	var once sync.Once
 	release := func() {
-		once.Do(func() { _ = listener.Close() })
+		once.Do(func() {
+			_ = listener.Close()
+			appTestServerPortReservations.Lock()
+			if appTestServerPortReservations.releases[address] != nil {
+				delete(appTestServerPortReservations.releases, address)
+			}
+			appTestServerPortReservations.Unlock()
+		})
 	}
+	appTestServerPortReservations.Lock()
+	if appTestServerPortReservations.releases == nil {
+		appTestServerPortReservations.releases = make(map[string]func())
+	}
+	appTestServerPortReservations.releases[address] = release
+	appTestServerPortReservations.Unlock()
 	t.Cleanup(release)
 	return release
+}
+
+func releaseConfiguredAppTestServerPort() {
+	host, hostFound := os.LookupEnv("KENT_SERVER_HOST")
+	port, portFound := os.LookupEnv("KENT_SERVER_PORT")
+	if !hostFound || !portFound {
+		return
+	}
+	address := net.JoinHostPort(host, port)
+	appTestServerPortReservations.Lock()
+	release := appTestServerPortReservations.releases[address]
+	appTestServerPortReservations.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
@@ -234,18 +290,24 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	return eng
 }
 
-func configureAppTestServerPort(t *testing.T) {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func TestConfigureAppTestServerPortKeepsAddressBoundUntilServerStarts(t *testing.T) {
+	release := reserveAppTestServerPort(t)
+	address := net.JoinHostPort(
+		os.Getenv("KENT_SERVER_HOST"),
+		os.Getenv("KENT_SERVER_PORT"),
+	)
+	if listener, err := net.Listen("tcp", address); err == nil {
+		_ = listener.Close()
+		t.Fatalf("test server port %q was not held", address)
+	}
+	release()
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		t.Fatalf("reserve server port: %v", err)
+		t.Fatalf("bind released test server port %q: %v", address, err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
 	if err := listener.Close(); err != nil {
-		t.Fatalf("release server port probe: %v", err)
+		t.Fatalf("close released test server port %q: %v", address, err)
 	}
-	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
 }
 
 func mustRegisterAppBinding(t *testing.T, persistenceRoot string, workspaceRoot string) metadata.Binding {

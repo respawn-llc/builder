@@ -145,7 +145,19 @@ if [ "$go_test_package_parallelism" -le 0 ]; then
     printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
     exit 2
 fi
-server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
+if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+    server_test_command=(
+        go run ./tools/testshard
+        --workers "$go_test_package_parallelism"
+    )
+else
+    server_test_command=(
+        go test -json
+        -count=1
+        -p "$go_test_package_parallelism"
+        "${server_test_args[@]}"
+    )
+fi
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
     '' | *[!0-9]*)
@@ -172,9 +184,18 @@ fi
 go_log_file="$(mktemp -t kent-go-test.XXXXXX.log)"
 tui_log_file="$(mktemp -t kent-tui-test.XXXXXX.log)"
 frontend_log_file="$(mktemp -t kent-frontend-test.XXXXXX.log)"
+pty_fixture_build_dir=""
 test_pid=""
 cleanup() {
     rm -f "$go_log_file" "$tui_log_file" "$frontend_log_file"
+    if [ -n "$pty_fixture_build_dir" ]; then
+        unlink "$pty_fixture_build_dir/kent-pty-fixture.test" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/kent" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/ansi-writer" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/phase-input-writer" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/phase-writer" 2>/dev/null || true
+        rmdir "$pty_fixture_build_dir" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -333,9 +354,25 @@ run_desktop_tests() {
 }
 
 run_server_tests() {
+    local pty_fixture_binary=""
+    if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+        pty_fixture_build_dir="$(mktemp -d -t kent-pty-fixture.XXXXXX)"
+        pty_fixture_binary="$pty_fixture_build_dir/kent-pty-fixture.test"
+        go test -c -o "$pty_fixture_binary" core/cli/app
+        ./scripts/build.sh server --output "$pty_fixture_build_dir/kent"
+        go build -o "$pty_fixture_build_dir/ansi-writer" core/internal/testharness/pty/testdata/cmd/ansi-writer
+        go build -o "$pty_fixture_build_dir/phase-input-writer" core/internal/testharness/pty/testdata/cmd/phase-input-writer
+        go build -o "$pty_fixture_build_dir/phase-writer" core/internal/testharness/pty/testdata/cmd/phase-writer
+        export KENT_PTY_FIXTURE_BINARY="$pty_fixture_binary"
+        export KENT_PTY_KENT_BINARY="$pty_fixture_build_dir/kent"
+        export KENT_PTY_ANSI_WRITER_BINARY="$pty_fixture_build_dir/ansi-writer"
+        export KENT_PTY_PHASE_INPUT_WRITER_BINARY="$pty_fixture_build_dir/phase-input-writer"
+        export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_build_dir/phase-writer"
+    fi
+
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        go test "${server_go_test_args[@]}" >"$go_log_file" 2>&1
+        "${server_test_command[@]}" >"$go_log_file" 2>&1
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
@@ -346,7 +383,7 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$go_log_file" "$timeout_seconds" "${server_go_test_args[@]}" <<'PY' &
+    python3 - "$go_log_file" "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
 import json
 import os
 import selectors
@@ -357,13 +394,15 @@ import time
 
 log_file = sys.argv[1]
 runtime_limit_seconds = float(sys.argv[2])
-test_args = sys.argv[3:]
+test_command = sys.argv[3:]
+test_env = os.environ.copy()
 process = subprocess.Popen(
-    ["go", "test", "-json", *test_args],
+    test_command,
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
     bufsize=0,
     start_new_session=True,
+    env=test_env,
 )
 
 def terminate_test_process():

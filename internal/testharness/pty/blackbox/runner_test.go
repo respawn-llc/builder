@@ -22,13 +22,7 @@ import (
 const cleanupTeardownTestMargin = time.Second
 
 func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "kent")
-	build := exec.CommandContext(context.Background(), "./scripts/build.sh", "server", "--output", binary)
-	build.Dir = filepath.Join("..", "..", "..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Logf("build output:\n%s", output)
-		t.Fatalf("build compiled Kent client: %v", err)
-	}
+	binary := productionKentBinary(t)
 	scenario, err := LoadScenario("testdata/go-model-boundary.json")
 	if err != nil {
 		t.Fatalf("LoadScenario: %v", err)
@@ -48,6 +42,26 @@ func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
 	if !result.Observation.ClientExited {
 		t.Fatal("client did not exit after declared termination action")
 	}
+}
+
+func productionKentBinary(t *testing.T) string {
+	t.Helper()
+
+	binary, configured, err := pty.PrebuiltExecutable(pty.KentBinaryEnvName)
+	if err != nil {
+		t.Fatalf("resolve prebuilt Kent binary: %v", err)
+	}
+	if configured {
+		return binary
+	}
+	binary = filepath.Join(t.TempDir(), "kent")
+	build := exec.CommandContext(context.Background(), "./scripts/build.sh", "server", "--output", binary)
+	build.Dir = filepath.Join("..", "..", "..", "..")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Logf("build output:\n%s", output)
+		t.Fatalf("build compiled Kent client: %v", err)
+	}
+	return binary
 }
 
 func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) {
@@ -93,8 +107,13 @@ func TestTerminateProcessActionForceKillsTermIgnoringClient(t *testing.T) {
 
 func startTermIgnoringSession(t *testing.T) *driver.Session {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "ansi-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/ansi-writer", binary); err != nil {
+	binary, err := pty.BuildOrUsePrebuiltPackage(
+		context.Background(),
+		pty.AnsiWriterBinaryEnvName,
+		"core/internal/testharness/pty/testdata/cmd/ansi-writer",
+		filepath.Join(t.TempDir(), "ansi-writer"),
+	)
+	if err != nil {
 		t.Fatalf("build PTY helper: %v", err)
 	}
 	session, err := driver.StartSession(driver.SessionSpec{

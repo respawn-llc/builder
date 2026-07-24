@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/internal/testharness/scriptedllm"
+	"core/internal/testharness/testsetup"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
@@ -244,11 +245,7 @@ func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch
 func newStarterFactoryStores(t *testing.T) (*metadata.Store, *workflowstore.Store, *sessionruntime.Authority) {
 	t.Helper()
 	root := t.TempDir()
-	metadataStore, err := metadata.Open(root)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, root)
 	workflowStore, err := workflowstore.New(metadataStore)
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)

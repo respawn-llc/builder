@@ -374,68 +374,64 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 	}
 }
 
-func TestCreateWorktreeSetupDirectoryScriptKeepsWorktreeAndSessionTarget(t *testing.T) {
+func TestCreateWorktreeInvalidSetupScriptsKeepWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
-	scriptRelpath := filepath.Join("scripts", "directory")
-	if err := os.MkdirAll(filepath.Join(env.workspaceRoot, scriptRelpath), 0o755); err != nil {
-		t.Fatalf("MkdirAll script dir: %v", err)
-	}
-	env.service.setupScript = scriptRelpath
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
-	if err != nil {
-		t.Fatalf("SubscribeWorktreeSetup: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-directory",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       "feature/setup-directory",
-	})
-	if err == nil {
-		t.Fatal("CreateWorktree succeeded, want directory setup script error")
-	}
-	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
-	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
-		t.Fatalf("directory setup event = %+v", evt)
-	}
-}
-
-func TestCreateWorktreeMissingSetupScriptKeepsWorktreeAndSessionTarget(t *testing.T) {
-	env := newServiceTestEnv(t)
-	env.service.setupScript = filepath.Join("scripts", "missing.sh")
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
-	if err != nil {
-		t.Fatalf("SubscribeWorktreeSetup: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/setup-missing"})
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-missing",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       "feature/setup-missing",
-	})
-	if err == nil {
-		t.Fatal("CreateWorktree succeeded, want missing setup script error")
-	}
-	if _, statErr := os.Stat(expectedRoot); statErr != nil {
-		t.Fatalf("expected missing-setup worktree kept, stat err=%v", statErr)
-	}
-	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
-	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
-		t.Fatalf("missing setup event = %+v", evt)
+	for _, tc := range []struct {
+		name       string
+		scriptPath string
+		branchName string
+		prepare    func(*testing.T)
+	}{
+		{
+			name:       "directory",
+			scriptPath: filepath.Join("scripts", "directory"),
+			branchName: "feature/setup-directory",
+			prepare: func(t *testing.T) {
+				if err := os.MkdirAll(filepath.Join(env.workspaceRoot, "scripts", "directory"), 0o755); err != nil {
+					t.Fatalf("MkdirAll script dir: %v", err)
+				}
+			},
+		},
+		{
+			name:       "missing",
+			scriptPath: filepath.Join("scripts", "missing.sh"),
+			branchName: "feature/setup-missing",
+			prepare:    func(*testing.T) {},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.prepare(t)
+			env.service.setupScript = tc.scriptPath
+			setupID := serverapi.NewWorktreeSetupOperationID()
+			sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+			if err != nil {
+				t.Fatalf("SubscribeWorktreeSetup: %v", err)
+			}
+			defer func() { _ = sub.Close() }()
+			expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: tc.branchName})
+			if err != nil {
+				t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
+			}
+			_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+				SetupOperationID: setupID,
+				ClientRequestID:  "req-" + tc.name,
+				SessionID:        env.session.Meta().SessionID,
+				BaseRef:          "HEAD",
+				CreateBranch:     true,
+				BranchName:       tc.branchName,
+			})
+			if err == nil {
+				t.Fatal("CreateWorktree succeeded, want invalid setup script error")
+			}
+			if _, statErr := os.Stat(expectedRoot); statErr != nil {
+				t.Fatalf("expected setup-failed worktree kept, stat err=%v", statErr)
+			}
+			assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
+			evt := nextSetupTerminalEvent(t, sub)
+			if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
+				t.Fatalf("invalid setup event = %+v", evt)
+			}
+		})
 	}
 }
 

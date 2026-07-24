@@ -34,7 +34,7 @@ func appStringPointer(value string) *string {
 func TestBackParentPrefillTransportParity(t *testing.T) {
 	t.Run("embedded loopback", func(t *testing.T) {
 		_, workspace := newRegisteredAppWorkspace(t)
-		server, err := startEmbeddedServer(context.Background(), Options{
+		server, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 			WorkspaceRoot:         workspace,
 			WorkspaceRootExplicit: true,
 			Model:                 "gpt-5",
@@ -93,7 +93,7 @@ func TestBackParentPrefillTransportParity(t *testing.T) {
 
 func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 	_, workspaceA := newRegisteredAppWorkspace(t)
-	server, err := startEmbeddedServer(context.Background(), Options{
+	server, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 		WorkspaceRoot:         workspaceA,
 		WorkspaceRootExplicit: true,
 	}, readyMemoryAuthHandler(), false)

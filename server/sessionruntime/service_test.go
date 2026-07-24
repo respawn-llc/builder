@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	runtimepkg "core/server/runtime"
@@ -411,11 +412,7 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	metadataStore, err := metadata.Open(appCfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, appCfg.PersistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), appCfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)

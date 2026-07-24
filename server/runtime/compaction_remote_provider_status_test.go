@@ -14,21 +14,6 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestRemoteCompactionFailsNonOverflowProvider400WithoutReplacementOrFallback(t *testing.T) {
-	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
-		ProviderID: "openai",
-		StatusCode: 400,
-		Code:       llm.UnifiedErrorCodeUnknown,
-	})
-
-	assertRemoteCompactionFailureWithoutReplacementOrFallback(
-		t,
-		store,
-		client,
-		engine.CompactContext(context.Background(), ""),
-	)
-}
-
 func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
@@ -104,31 +89,34 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	t.Fatal("overflow retry omitted collapsed typed tool output")
 }
 
-func TestRemoteCompactionFails404WithoutReplacementOrFallback(t *testing.T) {
-	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
-		ProviderID: "openai",
-		StatusCode: 404,
-		Code:       llm.UnifiedErrorCodeUnknown,
-	})
-
-	err := engine.CompactContext(context.Background(), "")
-	var providerErr *llm.ProviderAPIError
-	if !errors.As(err, &providerErr) {
-		t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
-	}
-	if providerErr.StatusCode != 404 {
-		t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
-	}
-	assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err)
-}
-
-func mustNewRemoteCompactionFailureTestEngine(
-	t *testing.T,
-	compactionErr error,
-) (*session.Store, *fakeCompactionClient, *Engine) {
-	t.Helper()
+func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 	store := mustCreateTestSession(t)
-	client := &fakeCompactionClient{compactionErrors: []error{compactionErr}}
+	client := &fakeCompactionClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+		}},
+		compactionErrors: []error{
+			&llm.ProviderAPIError{
+				ProviderID: "openai",
+				StatusCode: 400,
+				Code:       llm.UnifiedErrorCodeUnknown,
+			},
+			&llm.ProviderAPIError{
+				ProviderID: "openai",
+				StatusCode: 404,
+				Code:       llm.UnifiedErrorCodeUnknown,
+			},
+			nil,
+		},
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{{
+				Type:    llm.ResponseItemTypeMessage,
+				Role:    textutil.Value(llm.RoleUser),
+				Content: textutil.Value("summary"),
+			}},
+			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+		}},
+	}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
@@ -141,7 +129,50 @@ func mustNewRemoteCompactionFailureTestEngine(
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	return store, client, engine
+
+	t.Run("non-overflow provider 400 fails without replacement or fallback", func(t *testing.T) {
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(
+			t,
+			store,
+			client,
+			engine.CompactContext(context.Background(), ""),
+			1,
+		)
+	})
+
+	t.Run("404 fails without replacement or fallback", func(t *testing.T) {
+		err := engine.CompactContext(context.Background(), "")
+		var providerErr *llm.ProviderAPIError
+		if !errors.As(err, &providerErr) {
+			t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
+		}
+		if providerErr.StatusCode != 404 {
+			t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
+		}
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err, 2)
+	})
+
+	t.Run("missing checkpoint falls back to local", func(t *testing.T) {
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("compact context: %v", err)
+		}
+		summaries := 0
+		for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
+			if item.Type == llm.ResponseItemTypeMessage &&
+				item.MessageType != nil &&
+				*item.MessageType == llm.MessageTypeCompactionSummary {
+				summaries++
+			}
+		}
+		if len(client.compactionCalls) != 3 || len(client.calls) != 1 || summaries != 1 {
+			t.Fatalf(
+				"remote/local/summary calls = %d/%d/%d, want three/one/one",
+				len(client.compactionCalls),
+				len(client.calls),
+				summaries,
+			)
+		}
+	})
 }
 
 func assertRemoteCompactionFailureWithoutReplacementOrFallback(
@@ -149,16 +180,18 @@ func assertRemoteCompactionFailureWithoutReplacementOrFallback(
 	store *session.Store,
 	client *fakeCompactionClient,
 	err error,
+	wantRemoteCalls int,
 ) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("compact context succeeded after provider failure")
 	}
-	if len(client.compactionCalls) != 1 || len(client.calls) != 0 {
+	if len(client.compactionCalls) != wantRemoteCalls || len(client.calls) != 0 {
 		t.Fatalf(
-			"remote/local compaction calls = %d/%d, want one/zero",
+			"remote/local compaction calls = %d/%d, want %d/zero",
 			len(client.compactionCalls),
 			len(client.calls),
+			wantRemoteCalls,
 		)
 	}
 	recent, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)

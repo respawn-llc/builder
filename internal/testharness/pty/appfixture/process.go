@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const ProcessConfigEnvName = "KENT_PTY_FIXTURE_CONFIG"
+const (
+	ProcessConfigEnvName   = "KENT_PTY_FIXTURE_CONFIG"
+	ProcessTestRunArgument = "-test.run=^TestPTYFixtureProcess$"
+)
 
 type ProcessConfig struct {
 	WorkspaceRoot   string `json:"workspace_root"`

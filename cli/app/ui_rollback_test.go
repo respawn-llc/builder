@@ -798,16 +798,23 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	blockingClient := &rollbackInterruptBlockingClient{started: make(chan struct{})}
 	store, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
 	firstEngine := newAppRuntimeEngineWithStore(t, store, blockingClient, runtime.Config{})
+	t.Cleanup(func() {
+		_ = firstEngine.Close()
+	})
+	watchdog, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
 	submitDone := make(chan error, 1)
 	go func() {
-		_, err := firstEngine.SubmitUserMessage(context.Background(), "interrupted prompt survives restart")
+		_, err := firstEngine.SubmitUserMessage(watchdog, "interrupted prompt survives restart")
 		submitDone <- err
 	}()
 
 	select {
 	case <-blockingClient.started:
-	case <-time.After(time.Second):
-		t.Fatal("runtime did not reach the interruptible model request")
+	case err := <-submitDone:
+		t.Fatalf("runtime completed before reaching the interruptible model request: %v", err)
+	case <-watchdog.Done():
+		t.Fatalf("timed out waiting for the interruptible model request: %v", watchdog.Err())
 	}
 	if err := firstEngine.Interrupt(); err != nil {
 		t.Fatalf("interrupt runtime: %v", err)
@@ -817,8 +824,8 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("interrupted submit error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("interrupted runtime did not become idle")
+	case <-watchdog.Done():
+		t.Fatalf("timed out waiting for interrupted runtime to become idle: %v", watchdog.Err())
 	}
 	if err := firstEngine.Close(); err != nil {
 		t.Fatalf("close interrupted runtime: %v", err)

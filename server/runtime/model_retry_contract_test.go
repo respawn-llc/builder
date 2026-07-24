@@ -10,6 +10,13 @@ import (
 )
 
 func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.T) {
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
 	tests := []struct {
 		name           string
 		cause          error
@@ -84,13 +91,6 @@ func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeClient{errors: []error{test.cause}}
-			engine := mustNewTestEngine(
-				t,
-				mustCreateTestSession(t),
-				client,
-				tools.NewRegistry(),
-				Config{Model: "gpt-5"},
-			)
 
 			_, err := engine.generateWithRetryClient(
 				context.Background(),

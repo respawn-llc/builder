@@ -218,66 +218,58 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	}
 }
 
-func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
+func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
+	for _, test := range []struct {
+		name        string
+		options     exclusiveStepOptions
+		wantActive  bool
+		waitMessage string
+	}{
+		{
+			name:        "emit run state",
+			options:     exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+			wantActive:  true,
+			waitMessage: "live run step",
+		},
+		{
+			name:        "maintenance",
+			options:     exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance},
+			wantActive:  false,
+			waitMessage: "maintenance step",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- lifecycle.Run(context.Background(), test.options, func(context.Context, string) error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatalf("timed out waiting for %s", test.waitMessage)
+			}
+			if active := eng.HasActiveLiveRunGroup(); active != test.wantActive {
+				t.Fatalf("active live-run group = %t, want %t", active, test.wantActive)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("%s: %v", test.waitMessage, err)
+			}
+			if eng.HasActiveLiveRunGroup() {
+				t.Fatal("live-run group stayed active after idle completion")
+			}
 		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live run step")
-	}
-	if !eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=true step did not open active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("live run step: %v", err)
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("live-run group stayed active after idle completion")
-	}
-}
-
-func TestMaintenanceStepDoesNotOpenActiveLiveRunGroup(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for maintenance step")
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=false step opened active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("maintenance step: %v", err)
 	}
 }
 

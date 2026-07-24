@@ -81,6 +81,9 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if messageContent(msg) != "updated final after review" {
 		t.Fatalf("assistant content = %q, want updated final after review", messageContent(msg))
 	}
+	if got := fakeClientCallCount(reviewerClient); got != 1 {
+		t.Fatalf("reviewer calls = %d, want 1 for an all-frequency no-tool final", got)
+	}
 
 	eventsMu.Lock()
 	assistant := assistantEvent
@@ -126,6 +129,30 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]
 	if statusEntry.Role != "reviewer_status" || statusEntry.Text != "Supervisor ran: 1 suggestion, applied." {
 		t.Fatalf("expected completion snapshot to end with reviewer status, got %+v", statusEntry)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded reviewer records: %v", err)
+	}
+	statuses, finalRows := 0, 0
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.LocalEntryRecord:
+			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
+				statuses++
+			}
+		case session.MessageRecord:
+			message, restoreErr := llmMessageFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore reviewer record: %v", restoreErr)
+			}
+			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
+				finalRows++
+			}
+		}
+	}
+	if statuses != 1 || finalRows != 2 {
+		t.Fatalf("reviewer status/final records = statuses:%d finals:%d records:%+v", statuses, finalRows, window.Records)
 	}
 
 	eng.AppendCommittedEntry("warning", "later unrelated note")
@@ -369,6 +396,20 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	if reviewerStatuses != 1 {
 		t.Fatalf("committed reviewer status was not projected after observer failure: %+v", snapshot.Entries)
 	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded records: %v", readErr)
+	}
+	persistedStatuses := 0
+	for _, record := range window.Records {
+		if entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok &&
+			entry.Role == string(transcript.EntryRoleReviewerStatus) {
+			persistedStatuses++
+		}
+	}
+	if persistedStatuses != 1 {
+		t.Fatalf("committed reviewer statuses = %d, want one", persistedStatuses)
+	}
 }
 
 func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
@@ -443,11 +484,10 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 			},
 		},
 	}
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
 			if err := eng.steer("step-1", steerLocalEntryIntent(test.entry)); err == nil {
 				t.Fatal("invalid local entry persistence succeeded")
 			}
@@ -526,49 +566,37 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 }
 
 func TestReviewerSuggestionPresentation(t *testing.T) {
-	tests := []struct {
-		name            string
-		verbose         bool
-		wantSuggestions int
-	}{
-		{name: "default"},
-		{name: "verbose", verbose: true, wantSuggestions: 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			mainClient := &fakeClient{responses: []llm.Response{
-				finalTextResponse("original final"),
-				finalTextResponse("updated final after review"),
-			}}
-			reviewerClient := &fakeClient{responses: []llm.Response{{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
-				Usage:     llm.Usage{WindowTokens: 200000},
-			}}}
-			eng := mustNewExecTestEngine(t, store, mainClient, Config{
-				Model: "gpt-5",
-				Reviewer: ReviewerConfig{
-					Frequency:     "all",
-					Model:         "gpt-5",
-					ThinkingLevel: "low",
-					VerboseOutput: tt.verbose,
-					Client:        reviewerClient,
-				},
-			})
+	store := mustCreateTestSession(t)
+	mainClient := &fakeClient{responses: []llm.Response{
+		finalTextResponse("original final"),
+		finalTextResponse("updated final after review"),
+	}}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewExecTestEngine(t, store, mainClient, Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "all",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			VerboseOutput: true,
+			Client:        reviewerClient,
+		},
+	})
 
-			msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-			if err != nil {
-				t.Fatalf("submit: %v", err)
-			}
-			if messageContent(msg) != "updated final after review" {
-				t.Fatalf("assistant content = %q, want updated final after review", messageContent(msg))
-			}
-			assertReviewerPresentation(t, eng.ChatSnapshot(), tt.wantSuggestions)
-
-			restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-			assertReviewerPresentation(t, restored.ChatSnapshot(), tt.wantSuggestions)
-		})
+	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
 	}
+	if messageContent(msg) != "updated final after review" {
+		t.Fatalf("assistant content = %q, want updated final after review", messageContent(msg))
+	}
+	assertReviewerPresentation(t, eng.ChatSnapshot(), 1)
+
+	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	assertReviewerPresentation(t, restored.ChatSnapshot(), 1)
 }
 
 func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggestions int) {

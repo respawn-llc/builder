@@ -468,17 +468,64 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	}
 }
 
-func TestSetThinkingLevelRejectsInvalidValue(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-		ThinkingLevel: "high",
+func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{caps: llm.ProviderCapabilities{
+			ProviderID:           "azure-openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		}},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{
+			Model:         "gpt-5.3-codex",
+			ThinkingLevel: "high",
+			Reviewer: ReviewerConfig{
+				Frequency:     "off",
+				Model:         "gpt-5",
+				ThinkingLevel: "low",
+			},
+		},
+	)
+
+	t.Run("invalid thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel("unsupported"); err == nil {
+			t.Fatal("expected invalid thinking level error")
+		}
+		if got := eng.ThinkingLevel(); got != "high" {
+			t.Fatalf("thinking level after invalid set = %q, want high", got)
+		}
 	})
-	if err := eng.SetThinkingLevel("unsupported"); err == nil {
-		t.Fatal("expected invalid thinking level error")
-	}
-	if got := eng.ThinkingLevel(); got != "high" {
-		t.Fatalf("thinking level after invalid set = %q, want high", got)
-	}
+
+	t.Run("unsupported fast mode", func(t *testing.T) {
+		changed, err := eng.SetFastModeEnabled(true)
+		if err == nil {
+			t.Fatal("expected fast mode unsupported error")
+		}
+		if changed {
+			t.Fatal("did not expect changed=true for unsupported fast mode")
+		}
+		if eng.FastModeEnabled() {
+			t.Fatal("did not expect fast mode enabled after failure")
+		}
+	})
+
+	t.Run("missing reviewer client", func(t *testing.T) {
+		changed, mode, err := eng.SetReviewerEnabled(true)
+		if err == nil {
+			t.Fatal("expected enable reviewer error when reviewer client is missing")
+		}
+		if changed {
+			t.Fatal("did not expect changed=true when reviewer client is missing")
+		}
+		if mode != "off" {
+			t.Fatalf("expected mode off on failure, got %q", mode)
+		}
+	})
 }
 
 func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {
@@ -558,23 +605,6 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 	}
 	if !client.calls[1].FastMode {
 		t.Fatal("expected second request to enable fast mode")
-	}
-}
-
-func TestSetFastModeRejectsUnsupportedProvider(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "azure-openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: false}}, Config{
-		Model: "gpt-5.3-codex",
-	})
-	changed, err := eng.SetFastModeEnabled(true)
-	if err == nil {
-		t.Fatal("expected fast mode unsupported error")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true for unsupported fast mode")
-	}
-	if eng.FastModeEnabled() {
-		t.Fatal("did not expect fast mode enabled after failure")
 	}
 }
 
@@ -792,30 +822,6 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 	restarted := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	if got := restarted.ReviewerFrequency(); got != "off" {
 		t.Fatalf("reviewer frequency after restart = %q, want off", got)
-	}
-}
-
-func TestSetReviewerEnabledFailsWhenReviewerClientMissing(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
-	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "off",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        nil,
-		},
-	})
-	changed, mode, err := eng.SetReviewerEnabled(true)
-	if err == nil {
-		t.Fatal("expected enable reviewer error when reviewer client is missing")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true when reviewer client is missing")
-	}
-	if mode != "off" {
-		t.Fatalf("expected mode off on failure, got %q", mode)
 	}
 }
 

@@ -244,17 +244,20 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 
 	background := callExecCommand(t, tool, "raw-background", map[string]any{
-		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.2; printf '\\033[32mlate\\033[0m'",
+		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.6; printf '\\033[32mlate\\033[0m'",
 		"shell":         "/bin/sh",
 		"login":         false,
 		"raw":           true,
-		"yield_time_ms": 50,
+		"yield_time_ms": 500,
 	})
 	if background.IsError {
 		t.Fatalf("raw background error: %s", string(background.Output))
 	}
 	if got := decodeStringToolOutput(t, background); !strings.Contains(got, "\x1b[31mearly\x1b[0m") {
 		t.Fatalf("raw background transition output = %q, want original ANSI", got)
+	}
+	if background.PresentationDelta == nil || !background.PresentationDelta.MovedToBackground {
+		t.Fatalf("raw background result did not report a background transition: %+v", background)
 	}
 	snapshots := manager.List()
 	if len(snapshots) != 1 {

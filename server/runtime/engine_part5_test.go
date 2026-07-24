@@ -16,50 +16,6 @@ import (
 	"testing"
 )
 
-func TestReviewerRunsOnAllFrequencyWithoutToolCalls(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			VerboseOutput: true,
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(msg) != "done" {
-		t.Fatalf("assistant content = %q, want done", messageContent(msg))
-	}
-	if len(reviewerClient.calls) != 1 {
-		t.Fatalf("expected reviewer to be called once for frequency=all, got %d", len(reviewerClient.calls))
-	}
-	statuses := 0
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if transcript.EntryRole(entry.Role) == transcript.EntryRoleReviewerStatus {
-			statuses++
-		}
-	}
-	if statuses != 1 {
-		t.Fatalf("reviewer status entries = %d, want 1", statuses)
-	}
-}
-
 func reviewerPromptConfig(path string) Config {
 	return Config{Reviewer: ReviewerConfig{
 		Model:            "gpt-5",
@@ -380,10 +336,10 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		finalTextResponse("original final"),
 		finalTextResponse(reviewerNoopToken),
 	}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
+	reviewerClient := &streamRequiredClient{response: llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Double-check test output before final handoff."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
+	}}
 	eng := mustNewExecTestEngine(t, store, mainClient, Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
@@ -401,7 +357,9 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 	if messageContent(msg) != "original final" {
 		t.Fatalf("assistant content = %q, want original final", messageContent(msg))
 	}
-	assertModelCallCount(t, reviewerClient, 1)
+	if reviewerClient.StreamCalls() != 1 {
+		t.Fatalf("reviewer stream calls = %d, want 1", reviewerClient.StreamCalls())
+	}
 	assertModelCallCount(t, mainClient, 3)
 
 	feedback := 0
@@ -430,54 +388,9 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 	if statuses != 1 {
 		t.Fatalf("reviewer status entries = %d, want 1; entries=%+v", statuses, snapshot.Entries)
 	}
-}
-
-func TestReviewerUsesStreamingClientWhenAvailable(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
-			ToolCalls: []llm.ToolCall{
-				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	reviewerClient := &streamRequiredClient{response: llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Check output formatting."]}`)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(msg) != "original final" {
-		t.Fatalf("assistant content = %q, want original final", messageContent(msg))
-	}
-	if reviewerClient.StreamCalls() != 1 {
-		t.Fatalf("expected one reviewer stream call, got %d", reviewerClient.StreamCalls())
-	}
+	assertReviewerPresentation(t, snapshot, 0)
+	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	assertReviewerPresentation(t, restored.ChatSnapshot(), 0)
 }
 
 func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {

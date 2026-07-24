@@ -174,8 +174,20 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 	}
 
 	const activeEntryCount = 650
+	activeMessages := make([]session.EventRecordPayload, 0, activeEntryCount)
 	for index := 0; index < activeEntryCount; index++ {
-		appendSegmentTestMessage(t, store, llm.RoleUser, fmt.Sprintf("active-%03d", index))
+		message, err := sessionMessageRecordFromLLM(llm.Message{
+			Role:    llm.RoleUser,
+			Content: textutil.Value(fmt.Sprintf("active-%03d", index)),
+		})
+		if err != nil {
+			t.Fatalf("build active message %d: %v", index, err)
+		}
+		activeMessages = append(activeMessages, message)
+	}
+	stepID := "step"
+	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecordsAtomic(&stepID, activeMessages); err != nil {
+		t.Fatalf("append active segment: %v", err)
 	}
 
 	page := mustEngineNewestSegmentPage(t, eng)

@@ -19,7 +19,10 @@ type ptyFixtureBinaryBuild struct {
 	err    error
 }
 
-const ptyFixtureBuildTimeout = 2 * time.Minute
+const (
+	ptyFixtureBuildTimeout = 2 * time.Minute
+	ptyFixtureBinaryEnv    = "KENT_PTY_FIXTURE_BINARY"
+)
 
 var (
 	ptyFixtureBinaryBuildOnce sync.Once
@@ -28,6 +31,14 @@ var (
 
 func buildPTYFixtureBinary(t *testing.T, _ context.Context) string {
 	t.Helper()
+
+	binary, configured, err := pty.PrebuiltExecutable(ptyFixtureBinaryEnv)
+	if err != nil {
+		t.Fatalf("resolve configured PTY fixture binary: %v", err)
+	}
+	if configured {
+		return binary
+	}
 
 	ptyFixtureBinaryBuildOnce.Do(func() {
 		root, err := os.MkdirTemp("", "kent-pty-fixture-")
@@ -73,6 +84,23 @@ func cleanupPTYFixtureBinaryBuild() error {
 		return fmt.Errorf("remove fixture build root %q: %w", *ptyFixtureCachedBuild.root, err)
 	}
 	return nil
+}
+
+func TestBuildPTYFixtureBinaryUsesConfiguredBinary(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "fixture")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fixture binary: %v", err)
+	}
+	t.Setenv(ptyFixtureBinaryEnv, binary)
+
+	got := buildPTYFixtureBinary(t, context.Background())
+	want, err := filepath.Abs(binary)
+	if err != nil {
+		t.Fatalf("resolve fixture binary path: %v", err)
+	}
+	if got != want {
+		t.Fatalf("fixture binary mismatch: got %q, want %q", got, want)
+	}
 }
 
 func ptyFixtureProcessEnv(

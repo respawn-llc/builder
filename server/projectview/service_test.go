@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -800,11 +801,7 @@ func newProjectViewMetadataStoreForWorkspace(t testing.TB, workspace string) (*m
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	store, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := store.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
