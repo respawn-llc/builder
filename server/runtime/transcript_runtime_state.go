@@ -209,8 +209,12 @@ func (s *transcriptRuntimeState) ToolCompletionCount() int {
 	return 0
 }
 
-func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message) {
-	s.chatProjection().appendMessage(stepID, msg)
+func (s *transcriptRuntimeState) ValidateMessage(stepID string, msg llm.Message) error {
+	return s.chatProjection().validateMessage(stepID, msg)
+}
+
+func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message) error {
+	return s.chatProjection().appendMessage(stepID, msg)
 }
 
 func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry, afterToolCallID *string) {

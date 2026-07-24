@@ -136,10 +136,20 @@ func newChatStoreWithCWD(cwd string) *chatStore {
 	}
 }
 
-func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
+func (s *chatStore) validateMessage(stepID string, msg llm.Message) error {
+	msg = normalizeMessageForTranscript(msg, s.cwd)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.validateMessageLocked(stepID, msg)
+}
+
+func (s *chatStore) appendMessage(stepID string, msg llm.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg = normalizeMessageForTranscript(msg, s.cwd)
+	if err := s.validateMessageLocked(stepID, msg); err != nil {
+		return err
+	}
 	s.messageRecords = append(s.messageRecords, chatMessageRecord{
 		StepID:        strings.TrimSpace(stepID),
 		Message:       cloneChatStoreMessage(msg),
@@ -148,6 +158,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 	s.applyMessageStatsLocked(stepID, msg)
 	s.placeAttachedLocalEntriesAfterMaterializedToolLocked(msg)
 	s.providerTokenEstimateDirty = true
+	return nil
 }
 func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
 	s.replaceHistoryAtCommittedEntryStart(stepID, items, nil)
@@ -716,6 +727,31 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func (s *chatStore) validateMessageLocked(stepID string, msg llm.Message) error {
+	if msg.Role != llm.RoleAssistant {
+		return nil
+	}
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return nil
+	}
+	for _, call := range msg.ToolCalls {
+		callID := strings.TrimSpace(call.ID)
+		if callID == "" {
+			continue
+		}
+		if existing, present := s.assistantToolCallStepIDs[callID]; present && existing != stepID {
+			return fmt.Errorf(
+				"assistant tool call %q changed step identity from %q to %q",
+				callID,
+				existing,
+				stepID,
+			)
+		}
+	}
+	return nil
+}
+
 func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
 	s.applyLastCommittedAssistantFinalAnswerLocked(msg)
 	delta := len(VisibleChatEntriesFromMessage(msg))
@@ -728,9 +764,6 @@ func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
 				continue
 			}
 			if stepID != "" {
-				if existing, present := s.assistantToolCallStepIDs[callID]; present && existing != stepID {
-					panic(fmt.Sprintf("assistant tool call %q changed step identity from %q to %q", callID, existing, stepID))
-				}
 				s.assistantToolCallStepIDs[callID] = stepID
 			}
 			s.assistantToolCalls[callID] = struct{}{}
