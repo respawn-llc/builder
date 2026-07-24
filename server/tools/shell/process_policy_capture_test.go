@@ -248,7 +248,7 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 		"shell":         "/bin/sh",
 		"login":         false,
 		"raw":           true,
-		"yield_time_ms": 500,
+		"yield_time_ms": 250,
 	})
 	if background.IsError {
 		t.Fatalf("raw background error: %s", string(background.Output))

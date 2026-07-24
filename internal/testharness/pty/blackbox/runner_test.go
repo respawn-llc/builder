@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -22,7 +21,10 @@ import (
 const cleanupTeardownTestMargin = time.Second
 
 func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
-	binary := productionKentBinary(t)
+	binary, err := pty.BuildOrUsePrebuiltKent(context.Background(), filepath.Join(t.TempDir(), "kent"))
+	if err != nil {
+		t.Fatalf("build compiled Kent client: %v", err)
+	}
 	scenario, err := LoadScenario("testdata/go-model-boundary.json")
 	if err != nil {
 		t.Fatalf("LoadScenario: %v", err)
@@ -42,26 +44,6 @@ func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
 	if !result.Observation.ClientExited {
 		t.Fatal("client did not exit after declared termination action")
 	}
-}
-
-func productionKentBinary(t *testing.T) string {
-	t.Helper()
-
-	binary, configured, err := pty.PrebuiltExecutable(pty.KentBinaryEnvName)
-	if err != nil {
-		t.Fatalf("resolve prebuilt Kent binary: %v", err)
-	}
-	if configured {
-		return binary
-	}
-	binary = filepath.Join(t.TempDir(), "kent")
-	build := exec.CommandContext(context.Background(), "./scripts/build.sh", "server", "--output", binary)
-	build.Dir = filepath.Join("..", "..", "..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Logf("build output:\n%s", output)
-		t.Fatalf("build compiled Kent client: %v", err)
-	}
-	return binary
 }
 
 func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) {

@@ -16,7 +16,10 @@ func TestProductionKentBinaryPTYSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bin := productionKentBinary(t, ctx)
+	bin, err := pty.BuildOrUsePrebuiltKent(ctx, filepath.Join(t.TempDir(), "kent"))
+	if err != nil {
+		t.Fatalf("build production Kent: %v", err)
+	}
 	environment, err := blackbox.NewIsolatedEnvironment(bin, nil)
 	if err != nil {
 		t.Fatalf("start isolated configured server: %v", err)
@@ -60,19 +63,4 @@ func TestProductionKentBinaryPTYSmoke(t *testing.T) {
 	if capture.ProcessExit.Code != 0 && !capture.ProcessExit.Signaled {
 		t.Fatalf("process exit = %#v, want zero exit or interrupt signal", capture.ProcessExit)
 	}
-}
-
-func productionKentBinary(t *testing.T, ctx context.Context) string {
-	t.Helper()
-
-	binary, err := pty.BuildOrUsePrebuiltPackage(
-		ctx,
-		pty.KentBinaryEnvName,
-		"core/cli/kent",
-		filepath.Join(t.TempDir(), "kent"),
-	)
-	if err != nil {
-		t.Fatalf("build production kent: %v", err)
-	}
-	return binary
 }

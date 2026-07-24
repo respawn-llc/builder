@@ -70,6 +70,26 @@ func TestBuildOrUsePrebuiltPackage(t *testing.T) {
 	}
 }
 
+func TestBuildOrUsePrebuiltKent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kent")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write Kent executable: %v", err)
+	}
+	t.Setenv(KentBinaryEnvName, path)
+
+	got, err := BuildOrUsePrebuiltKent(context.Background(), filepath.Join(t.TempDir(), "must-not-build"))
+	if err != nil {
+		t.Fatalf("use prebuilt Kent executable: %v", err)
+	}
+	want, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve Kent executable path: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Kent executable mismatch: got %q, want %q", got, want)
+	}
+}
+
 func unsetEnvironment(t *testing.T, name string) {
 	t.Helper()
 

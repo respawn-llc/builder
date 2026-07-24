@@ -8,7 +8,17 @@ import (
 )
 
 func (s Seed) Materialize(persistenceRoot string, databaseRelativePath string) error {
-	databasePath := filepath.Join(persistenceRoot, databaseRelativePath)
+	if persistenceRoot == "" {
+		return errors.New("database persistence root is required")
+	}
+	if databaseRelativePath == "" || !filepath.IsLocal(databaseRelativePath) {
+		return fmt.Errorf("invalid database relative path %q", databaseRelativePath)
+	}
+	cleanRelativePath := filepath.Clean(databaseRelativePath)
+	if cleanRelativePath == "." {
+		return fmt.Errorf("invalid database relative path %q", databaseRelativePath)
+	}
+	databasePath := filepath.Join(persistenceRoot, cleanRelativePath)
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}

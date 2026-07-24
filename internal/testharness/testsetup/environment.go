@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -32,6 +33,9 @@ func AssertEnvironmentUnsetAtProcessStart(
 	environmentName string,
 ) {
 	t.Helper()
+	if err := validateProcessEnvironmentProbe(rootTestName, environmentName); err != nil {
+		t.Fatal(err)
+	}
 	if probe, runningProbe := os.LookupEnv(processEnvironmentProbeName); runningProbe {
 		if probe != environmentName {
 			t.Fatalf("environment probe = %q, want %q", probe, environmentName)
@@ -46,7 +50,7 @@ func AssertEnvironmentUnsetAtProcessStart(
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	command := exec.Command(executable, "-test.run=^"+rootTestName+"$")
+	command := exec.Command(executable, testRunArgument(rootTestName))
 	command.Env = replaceEnvironment(
 		os.Environ(),
 		processEnvironmentProbeName+"="+environmentName,
@@ -56,6 +60,20 @@ func AssertEnvironmentUnsetAtProcessStart(
 	if err != nil {
 		t.Fatalf("verify %s is cleared at process start: %v output=%q", environmentName, err, output)
 	}
+}
+
+func validateProcessEnvironmentProbe(rootTestName string, environmentName string) error {
+	if rootTestName == "" {
+		return fmt.Errorf("test process root test name is required")
+	}
+	if environmentName == "" {
+		return fmt.Errorf("test process environment name is required")
+	}
+	return nil
+}
+
+func testRunArgument(rootTestName string) string {
+	return "-test.run=^" + regexp.QuoteMeta(rootTestName) + "$"
 }
 
 func replaceEnvironment(environment []string, replacements ...string) []string {

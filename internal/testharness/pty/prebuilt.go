@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 )
 
 const (
@@ -50,4 +52,39 @@ func BuildOrUsePrebuiltPackage(
 		return "", err
 	}
 	return outputPath, nil
+}
+
+func BuildOrUsePrebuiltKent(ctx context.Context, outputPath string) (string, error) {
+	binary, configured, err := PrebuiltExecutable(KentBinaryEnvName)
+	if err != nil {
+		return "", err
+	}
+	if configured {
+		return binary, nil
+	}
+	buildScript, err := kentBuildScriptPath()
+	if err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, buildScript, "server", "--output", outputPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("build production Kent: %w output=%q", err, output)
+	}
+	return outputPath, nil
+}
+
+func kentBuildScriptPath() (string, error) {
+	_, sourcePath, _, found := runtime.Caller(0)
+	if !found {
+		return "", fmt.Errorf("resolve PTY prebuild source path")
+	}
+	buildScript := filepath.Clean(filepath.Join(filepath.Dir(sourcePath), "..", "..", "..", "scripts", "build.sh"))
+	info, err := os.Stat(buildScript)
+	if err != nil {
+		return "", fmt.Errorf("inspect Kent build script %q: %w", buildScript, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return "", fmt.Errorf("Kent build script %q is not executable", buildScript)
+	}
+	return buildScript, nil
 }
