@@ -40,7 +40,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 					t,
 					store,
 					client,
-					&workflowruntime.Config{
+					&workflowruntime.CurrentNodeExecutionConfig{
 						ScopeID:        runtimeids.NewExecutionScopeID(),
 						CompletionMode: workflowruntime.CompletionModeTool,
 						Controller:     &externallyCompletedWorkflowController{},

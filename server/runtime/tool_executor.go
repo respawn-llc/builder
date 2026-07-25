@@ -30,7 +30,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
 	workingDir := e.transcriptWorkingDir()
-	workflowActive := e.workflowRunActive()
+	workflowActive := e.currentNodeExecutionActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
 	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
@@ -245,18 +245,18 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) tools.Result {
 	e := t.engine
 	result := tools.Result{CallID: call.ID, Name: toolspec.ToolCompleteNode}
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
 		result.IsError = true
-		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during a workflow run"})
-		result.Summary = textutil.Value("not in workflow run")
+		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
+		result.Summary = textutil.Value("not in current-node execution")
 		return result
 	}
-	parsed, err := workflowruntime.DecodeCompletion(call.Input, e.cfg.WorkflowRun.Contract)
+	parsed, err := workflowruntime.DecodeCompletion(call.Input, e.cfg.CurrentNodeExecution.Contract)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
-	completed, err := e.cfg.WorkflowRun.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      e.cfg.WorkflowRun.ScopeID,
+	completed, err := e.cfg.CurrentNodeExecution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+		ScopeID:      e.cfg.CurrentNodeExecution.ScopeID,
 		TransitionID: parsed.TransitionID,
 		OutputValues: parsed.OutputValues,
 		Commentary:   parsed.Commentary,

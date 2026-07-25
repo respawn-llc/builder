@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/launch"
 	"core/server/llm"
@@ -24,12 +23,12 @@ func BuildCurrentNodeRuntimeConfig(
 	useRequiredToolCalls bool,
 	controller workflowruntime.Controller,
 	taskCommentCounter workflowruntime.TaskCommentCounter,
-) (*workflowruntime.Config, error) {
+) (*workflowruntime.CurrentNodeExecutionConfig, error) {
 	instructions, err := BuildCurrentSessionTaskInstructions(input)
 	if err != nil {
 		return nil, err
 	}
-	return &workflowruntime.Config{
+	return &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID:                      lease.ScopeID(),
 		Contract:                     workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)},
 		CompletionMode:               completionMode,
@@ -93,7 +92,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	return PersistedWorkflowInspection{
 		Plan: plan,
 		Prompt: &workflowruntime.PromptContract{
-			Identity:               workflowPromptIdentity(instructions),
+			Identity:               workflowruntime.CurrentNodePromptIdentity(instructions.CurrentNode),
 			CompletionMode:         mode,
 			UseAutomaticToolChoice: !plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 			Instructions:           instructions,
@@ -101,15 +100,6 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		},
 		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil
-}
-
-func workflowPromptIdentity(instructions workflowruntime.TaskInstructions) string {
-	taskID := strings.TrimSpace(instructions.TaskID)
-	nodeID := strings.TrimSpace(instructions.NodeID)
-	if taskID == "" || nodeID == "" {
-		return ""
-	}
-	return taskID + "/" + nodeID
 }
 
 func requireCurrentNodeExecutionRoot(input workflowstore.CurrentNodeStartContext) (workflowstore.ExecutionRoot, error) {

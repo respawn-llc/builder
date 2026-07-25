@@ -23,7 +23,7 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
@@ -76,7 +76,7 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 				t,
 				mustCreateTestSession(t),
 				client,
-				&workflowruntime.Config{
+				&workflowruntime.CurrentNodeExecutionConfig{
 					ScopeID:                scopeID,
 					Contract:               workflowruntime.CompletionContract{},
 					CompletionMode:         mode,
@@ -137,7 +137,7 @@ func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -171,7 +171,7 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:        scopeID,
 				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -198,7 +198,7 @@ func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -225,7 +225,7 @@ func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t 
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionMode("unknown"),
@@ -283,7 +283,7 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 				results = append(results, *event.ToolResult)
 				resultMu.Unlock()
 			},
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID: scopeID,
 				Contract: workflowruntime.CompletionContract{
 					Transitions: []workflowruntime.CompletionTransition{{
@@ -348,7 +348,7 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
 				Transitions: []workflowruntime.CompletionTransition{{
@@ -391,7 +391,7 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
 				Transitions: []workflowruntime.CompletionTransition{{

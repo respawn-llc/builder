@@ -56,7 +56,7 @@ func TestOpenSuppressesGooseStatusLogging(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunHistoryCutoverMigrationRollsBackOnLateFailureAndRejectsDown(t *testing.T) {
+func TestCurrentNodeExecutionHistoryCutoverMigrationRollsBackOnLateFailureAndRejectsDown(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 64)

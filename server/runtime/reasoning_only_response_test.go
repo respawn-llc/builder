@@ -46,7 +46,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
@@ -103,7 +103,7 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {

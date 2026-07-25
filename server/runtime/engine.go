@@ -122,7 +122,7 @@ type Config struct {
 	Reviewer                      ReviewerConfig
 	HeadlessMode                  bool
 	ToolPreambles                 bool
-	WorkflowRun                   *workflowruntime.Config
+	CurrentNodeExecution          *workflowruntime.CurrentNodeExecutionConfig
 	WorkflowPrompt                *workflowruntime.PromptContract
 	AskQuestionBatchSkipped       func(tools.AskQuestionBatchMetadata)
 	TranscriptWorkingDir          string
@@ -673,7 +673,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 }
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
-	if !e.workflowRunActive() {
+	if !e.currentNodeExecutionActive() {
 		return llm.Message{}, errors.New("workflow turn requires an active workflow run")
 	}
 	if e.closed.Load() {

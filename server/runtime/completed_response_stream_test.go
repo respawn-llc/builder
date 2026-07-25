@@ -165,7 +165,7 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 		t,
 		mustCreateTestSession(t),
 		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{rejected, accepted}}),
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
 				Transitions: []workflowruntime.CompletionTransition{{
@@ -616,7 +616,7 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:        scopeID,
 				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -693,7 +693,7 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:        scopeID,
 				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -743,7 +743,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 		Config{
 			Model:        "gpt-5",
 			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:        scopeID,
 				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
@@ -806,7 +806,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:                      scopeID,
 				Contract:                     workflowruntime.CompletionContract{},
 				CompletionMode:               workflowruntime.CompletionModeTool,
@@ -854,7 +854,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 		}},
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID: scopeID,
 				Contract: workflowruntime.CompletionContract{
 					Transitions: []workflowruntime.CompletionTransition{{
@@ -908,7 +908,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID:        scopeID,
 				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,

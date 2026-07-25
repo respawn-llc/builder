@@ -21,9 +21,9 @@ const (
 )
 
 type RequestExposure struct {
-	Enabled             bool
-	RequiresVision      bool
-	RequiresWorkflowRun bool
+	Enabled                      bool
+	RequiresVision               bool
+	RequiresCurrentNodeExecution bool
 }
 
 type RequestExposureContext struct {
@@ -38,7 +38,7 @@ func (r RequestExposure) Allowed(ctx RequestExposureContext) bool {
 	if r.RequiresVision && !ctx.SupportsVision {
 		return false
 	}
-	if r.RequiresWorkflowRun && !ctx.WorkflowCompletion {
+	if r.RequiresCurrentNodeExecution && !ctx.WorkflowCompletion {
 		return false
 	}
 	return true

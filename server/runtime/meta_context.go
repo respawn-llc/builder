@@ -471,13 +471,13 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		return "", nil
 	}
 	return prompts.RenderWorkflowTaskInstructions(kind, prompts.WorkflowNodeContextArgs{
-		TaskId:               instructions.TaskID,
+		TaskId:               string(instructions.CurrentNode.TaskID),
 		TaskShortId:          instructions.TaskShortID,
 		TaskTitle:            instructions.TaskTitle,
 		TaskBody:             instructions.TaskBody,
 		WorkflowId:           instructions.WorkflowID,
 		WorkflowShortId:      instructions.WorkflowShortID,
-		NodeId:               instructions.NodeID,
+		NodeId:               string(instructions.CurrentNode.NodeID),
 		NodeKey:              instructions.NodeKey,
 		NodeDisplayName:      instructions.NodeDisplayName,
 		ContextMode:          instructions.ContextMode,

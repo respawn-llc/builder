@@ -153,8 +153,8 @@ func (t *externalCompletionTool) Call(_ context.Context, c tools.Call) (tools.Re
 	return tools.Result{CallID: c.ID, Name: c.Name, Output: json.RawMessage(`{"completed":true}`)}, nil
 }
 
-func testWorkflowConfig(controller workflowruntime.Controller, mode config.WorkflowCompletionMode) *workflowruntime.Config {
-	return &workflowruntime.Config{
+func testWorkflowConfig(controller workflowruntime.Controller, mode config.WorkflowCompletionMode) *workflowruntime.CurrentNodeExecutionConfig {
+	return &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID: runtimeids.NewExecutionScopeID(),
 		Contract: workflowruntime.CompletionContract{
 			Transitions: []workflowruntime.CompletionTransition{{
@@ -166,13 +166,15 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 		MaxInvalidCompletionAttempts: 2,
 		Controller:                   controller,
 		Instructions: workflowruntime.TaskInstructions{
-			TaskID:          "task-1",
+			CurrentNode: workflow.CurrentNodeReference{
+				TaskID: "task-1",
+				NodeID: "node-1",
+			},
 			TaskShortID:     "BUI-1",
 			TaskTitle:       "Workflow task",
 			TaskBody:        "Task body.",
 			WorkflowID:      "workflow-1",
 			WorkflowShortID: "workflow-1",
-			NodeID:          "node-1",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",
 			ContextMode:     "new_session",
@@ -320,10 +322,10 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
-		Model:         "gpt-5",
-		WorkflowRun:   testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
-		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
-		WebSearchMode: "native",
+		Model:                "gpt-5",
+		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+		WebSearchMode:        "native",
 	})
 	req, err := eng.buildRequest(context.Background(), "step", true)
 	if err != nil {
@@ -342,10 +344,10 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
-		Model:         "gpt-5",
-		WorkflowRun:   testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
-		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
-		WebSearchMode: "native",
+		Model:                "gpt-5",
+		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		EnabledTools:         []toolspec.ID{toolspec.ToolWebSearch},
+		WebSearchMode:        "native",
 	})
 	req, err := eng.buildRequest(context.Background(), "step", true)
 	if err != nil {
@@ -359,8 +361,8 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model:       "gpt-5",
-		WorkflowRun: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		Model:                "gpt-5",
+		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
 	})
 	_, err := eng.buildRequest(context.Background(), "step", true)
 	if !errors.Is(err, llm.ErrInvalidRequest) {
@@ -490,7 +492,7 @@ func TestWorkflowModePromptExistingCurrentNodeMessageSkipsCommentCountQuery(t *t
 	counter := &fakeTaskCommentCounter{count: 2}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = counter
-	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowPromptIdentity(workflowCfg.Instructions)), Content: textutil.Value("existing workflow instructions")}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)), Content: textutil.Value("existing workflow instructions")}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
@@ -608,7 +610,7 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 		commentaryResponse("complete", completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1024,8 +1026,8 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		structuredFinalResponse("unexpected"),
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-		OnEvent:     events.accept,
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		OnEvent:              events.accept,
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
@@ -1100,7 +1102,7 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
 				shellTool := &externalCompletionTool{controller: controller}
 				return mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
-					WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+					CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 				})
 			},
 		},

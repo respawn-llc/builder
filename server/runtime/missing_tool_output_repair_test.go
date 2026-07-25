@@ -169,7 +169,7 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 		t,
 		store,
 		client,
-		Config{WorkflowRun: &workflowruntime.Config{
+		Config{CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        runtimeids.NewExecutionScopeID(),
 			CompletionMode: workflowruntime.CompletionModeTool,
 		}},

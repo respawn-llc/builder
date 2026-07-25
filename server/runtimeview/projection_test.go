@@ -9,6 +9,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -21,7 +22,6 @@ const (
 	projectionRunID        = "10000000-0000-4000-8000-000000000002"
 	projectionStepID       = "10000000-0000-4000-8000-000000000003"
 	projectionParentID     = "10000000-0000-4000-8000-000000000006"
-	projectionWorkflowRun  = "10000000-0000-4000-8000-000000000007"
 	projectionWorkflowTask = "10000000-0000-4000-8000-000000000008"
 	projectionWorkflowID   = "10000000-0000-4000-8000-000000000009"
 )
@@ -254,10 +254,13 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
-		WorkflowRun: &workflowruntime.Config{
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
-				TaskID:     projectionWorkflowTask,
+				CurrentNode: workflow.CurrentNodeReference{
+					TaskID: workflow.TaskID(projectionWorkflowTask),
+					NodeID: workflow.NodeID("10000000-0000-4000-8000-000000000007"),
+				},
 				WorkflowID: projectionWorkflowID,
 			},
 		},

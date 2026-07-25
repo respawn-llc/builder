@@ -276,7 +276,7 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 				SubagentCatalogSettings: tt.settings,
 			}
 			if tt.workflow {
-				cfg.WorkflowRun = testWorkflowConfig(nil, config.WorkflowCompletionModeTool)
+				cfg.CurrentNodeExecution = testWorkflowConfig(nil, config.WorkflowCompletionModeTool)
 			}
 			eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {

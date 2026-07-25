@@ -802,13 +802,13 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
 	}
-	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.Config{
+	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID:            scopeID,
 		Contract:           workflowruntime.CompletionContract{},
 		CompletionMode:     workflowruntime.CompletionModeTool,
 		Controller:         &externallyCompletedWorkflowController{},
 		TaskCommentCounter: failingWorkflowTaskCommentCounter{err: countErr},
-		Instructions:       workflowruntime.TaskInstructions{TaskID: "task-1"},
+		Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task-1", "node-1", nil)},
 	}, Config{Model: "gpt-5"})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -921,7 +921,7 @@ func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 	var events []Event
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		Model: "gpt-5",
-		WorkflowRun: &workflowruntime.Config{
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,

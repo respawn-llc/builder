@@ -157,7 +157,7 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(plan.EnabledTools), Workdir: root.EffectiveRoot(),
 		ManagedWorktreePathContext: pathContext, Sources: plan.Source.Sources, Headless: true, Client: client,
-		ReviewerClientFactory: s.runtimeClientFactory, WorkflowRun: runtimeConfig,
+		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
 		SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny(),
 		StartLogLines:                       []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, plan.Descriptor.SessionID(), input.Node.ID, root.EffectiveRoot(), plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
@@ -303,7 +303,7 @@ func renderCurrentNodePrompt(text string, input workflowstore.CurrentNodeStartCo
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
 }
 
 func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
@@ -509,13 +509,14 @@ func BuildCurrentSessionTaskInstructions(input workflowstore.CurrentNodeStartCon
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
 }
 
 type workflowPromptInput struct {
 	Task                 workflowstore.TaskRecord
 	Workflow             workflowstore.WorkflowRecord
 	Node                 workflowstore.NodeRecord
+	CurrentNode          workflow.CurrentNodeReference
 	ContextMode          workflow.ContextMode
 	SourceSessionID      string
 	TransitionOptions    []workflowstore.TransitionOption
@@ -534,7 +535,7 @@ func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.T
 	if shortID == "" {
 		shortID = string(input.Task.ID)
 	}
-	return workflowruntime.TaskInstructions{TaskID: string(input.Task.ID), TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: string(input.Task.WorkflowID), WorkflowShortID: string(input.Workflow.ID), NodeID: string(input.Node.ID), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
+	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: string(input.Task.WorkflowID), WorkflowShortID: string(input.Workflow.ID), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
 }
 
 func workflowTransitions(options []workflowstore.TransitionOption, ids []string) []prompts.WorkflowTransition {

@@ -95,7 +95,7 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 		t,
 		clone,
 		&fakeClient{},
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:        scopeID,
 			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,

@@ -11,7 +11,6 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -279,13 +278,11 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		Workdir:      workdir,
-		Client:       goalAuthorityClient{},
-		WorkflowRun: &workflowruntime.Config{Contract: workflowruntime.CompletionContract{
-			RunID: workflow.RunID("goal-authority-workflow"),
-		}},
+		Settings:             settings,
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+		Workdir:              workdir,
+		Client:               goalAuthorityClient{},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

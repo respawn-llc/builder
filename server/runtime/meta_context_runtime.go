@@ -9,7 +9,6 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -295,7 +294,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts := baseMetaContextBuildOptions(false)
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
-	if e.workflowRunActive() {
+	if e.currentNodeExecutionActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		prompt, configured := e.workflowPrompt()
 		if !configured {
@@ -333,12 +332,12 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 }
 
 func (e *Engine) currentWorkflowTaskCommentCount(ctx context.Context) (int64, error) {
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.TaskCommentCounter == nil {
+	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.TaskCommentCounter == nil {
 		return 0, nil
 	}
-	taskID := strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID)
+	taskID := e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID
 	if taskID == "" {
 		return 0, nil
 	}
-	return e.cfg.WorkflowRun.TaskCommentCounter.CountTaskComments(ctx, workflow.TaskID(taskID))
+	return e.cfg.CurrentNodeExecution.TaskCommentCounter.CountTaskComments(ctx, taskID)
 }

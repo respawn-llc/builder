@@ -64,8 +64,8 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		WorkflowRun:  &workflowruntime.Config{ScopeID: runtimeids.NewExecutionScopeID()},
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID()},
 	})
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
 
@@ -427,8 +427,8 @@ func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T
 func TestWorkflowActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
-		WorkflowRun:  &workflowruntime.Config{ScopeID: runtimeids.NewExecutionScopeID()},
+		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID()},
 	})
 	engine.SetQuestionsEnabled(false)
 	if _, err := engine.SetGoal("ship workflow goal", session.GoalActorUser); err != nil {

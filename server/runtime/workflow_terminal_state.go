@@ -30,10 +30,10 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	if e == nil {
 		return WorkflowSessionState{}
 	}
-	if e.workflowRunActive() {
+	if e.currentNodeExecutionActive() {
 		return WorkflowSessionState{
-			TaskID:     strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID),
-			WorkflowID: strings.TrimSpace(e.cfg.WorkflowRun.Instructions.WorkflowID),
+			TaskID:     string(e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID),
+			WorkflowID: strings.TrimSpace(e.cfg.CurrentNodeExecution.Instructions.WorkflowID),
 		}
 	}
 	return WorkflowSessionState{}
@@ -62,7 +62,7 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 }
 
 func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
-	if e == nil || !e.workflowRunActive() {
+	if e == nil || !e.currentNodeExecutionActive() {
 		return
 	}
 	transitioned := e.recordWorkflowTerminalState(source)

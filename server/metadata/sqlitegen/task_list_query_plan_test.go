@@ -72,6 +72,7 @@ FROM tasks t
 JOIN project_workflow_links pwl ON pwl.id = t.project_workflow_link_id;
 CREATE TABLE workflow_task_status_records (
 	task_id TEXT PRIMARY KEY,
+	is_done INTEGER NOT NULL,
 	kind TEXT NOT NULL,
 	primary_status_rank INTEGER NOT NULL,
 	node_ids_json TEXT NOT NULL,

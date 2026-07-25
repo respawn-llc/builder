@@ -260,7 +260,7 @@ func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult,
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
-	if engine.WorkflowRunConfigured() {
+	if engine.CurrentNodeExecutionConfigured() {
 		result, err := engine.SetGoal(command.Objective, command.Actor)
 		return fromRuntimeResult(result, err), err
 	}
@@ -297,11 +297,11 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
 	if current := engine.Goal(); current != nil && current.Status == command.Status {
-		if command.Status != session.GoalStatusActive || engine.WorkflowRunConfigured() || engine.GoalLoopContinuationEnforced() {
+		if command.Status != session.GoalStatusActive || engine.CurrentNodeExecutionConfigured() || engine.GoalLoopContinuationEnforced() {
 			return noopGoalResult(*current), nil
 		}
 	}
-	if engine.WorkflowRunConfigured() {
+	if engine.CurrentNodeExecutionConfigured() {
 		result, err := engine.SetGoalStatusWithoutGoalLoopStart(command.Status, command.Actor)
 		return fromRuntimeResult(result, err), err
 	}

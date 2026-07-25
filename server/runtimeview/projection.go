@@ -86,7 +86,7 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 		Goal:            GoalFromSessionState(engine.Goal(), engine.GoalLoopSuspended()),
 	}
 	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
-		status.WorkflowActive = engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed
+		status.WorkflowActive = engine.CurrentNodeExecutionConfigured() && !engine.WorkflowTerminalState().Completed
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
 			TaskID:     workflowState.TaskID,
 			WorkflowID: workflowState.WorkflowID,
@@ -114,7 +114,7 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 	}
 	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
 		status.Workflow = &clientui.TranscriptWorkflowSession{
-			Active:     engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed,
+			Active:     engine.CurrentNodeExecutionConfigured() && !engine.WorkflowTerminalState().Completed,
 			TaskID:     workflowState.TaskID,
 			WorkflowID: workflowState.WorkflowID,
 		}

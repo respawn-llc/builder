@@ -191,8 +191,8 @@ func (e *Engine) enableNativeWebSearch(ctx context.Context) (bool, error) {
 	return caps.SupportsNativeWebSearch, nil
 }
 
-func (e *Engine) workflowRunActive() bool {
-	return e != nil && e.cfg.WorkflowRun != nil && !e.cfg.WorkflowRun.ScopeID.IsZero()
+func (e *Engine) currentNodeExecutionActive() bool {
+	return e != nil && e.cfg.CurrentNodeExecution != nil && !e.cfg.CurrentNodeExecution.ScopeID.IsZero()
 }
 
 func (e *Engine) workflowPromptActive() bool {
@@ -207,30 +207,21 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 	if e.cfg.WorkflowPrompt != nil {
 		return e.cfg.WorkflowPrompt, true
 	}
-	if !e.workflowRunActive() {
+	if !e.currentNodeExecutionActive() {
 		return nil, false
 	}
-	run := e.cfg.WorkflowRun
+	execution := e.cfg.CurrentNodeExecution
 	return &workflowruntime.PromptContract{
-		Identity:               workflowPromptIdentity(run.Instructions),
-		CompletionMode:         run.CompletionMode,
-		UseAutomaticToolChoice: run.UseAutomaticToolChoice,
-		Instructions:           run.Instructions,
-		Transitions:            append([]workflowruntime.CompletionTransition(nil), run.Contract.Transitions...),
+		Identity:               workflowruntime.CurrentNodePromptIdentity(execution.Instructions.CurrentNode),
+		CompletionMode:         execution.CompletionMode,
+		UseAutomaticToolChoice: execution.UseAutomaticToolChoice,
+		Instructions:           execution.Instructions,
+		Transitions:            append([]workflowruntime.CompletionTransition(nil), execution.Contract.Transitions...),
 	}, true
 }
 
-func workflowPromptIdentity(instructions workflowruntime.TaskInstructions) string {
-	taskID := strings.TrimSpace(instructions.TaskID)
-	nodeID := strings.TrimSpace(instructions.NodeID)
-	if taskID == "" || nodeID == "" {
-		panic("workflow prompt identity requires direct task and current node facts")
-	}
-	return taskID + "/" + nodeID
-}
-
-func (e *Engine) WorkflowRunConfigured() bool {
-	return e.workflowRunActive()
+func (e *Engine) CurrentNodeExecutionConfigured() bool {
+	return e.currentNodeExecutionActive()
 }
 
 func (e *Engine) workflowCompletionMode(ctx context.Context) (workflowruntime.CompletionMode, error) {

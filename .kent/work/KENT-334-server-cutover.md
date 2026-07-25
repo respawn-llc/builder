@@ -1,5 +1,23 @@
 # KENT-334 server/API cutover
 
+## Review round 3 continuation — July 25, 2026
+
+- [x] Remove stale Task Cancel/Run help text and stale sqlitegen `GetTaskRun`
+      diagnostics tests.
+- [x] Rename remaining workflow-specific runtime `WorkflowRun` seams to
+      Current-Node execution configuration without changing generic runtime
+      Run terminology.
+- [x] Make workflow prompt source identity branch-aware for parallel Current
+      Nodes and cover compaction/reopen assignment behavior.
+- [x] Bring the broad runtime/runtimeview/session/projectview/client-ui suite
+      below the required 180-second cap.
+- [ ] Regenerate, re-run focused/full verification, update the ledger, and
+      commit the third review-fix round.
+
+Decision: the inherited `AGENTS.md` Frozen Rust diff is an explicitly
+human-approved edit as of July 25, 2026. Preserve it unchanged; do not revert
+or otherwise alter `AGENTS.md` without a new explicit human authorization.
+
 ## Review round 2 completion — July 24, 2026
 
 - [x] Make the hard cutover migration transactional and reject irreversible

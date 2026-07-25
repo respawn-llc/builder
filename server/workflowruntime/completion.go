@@ -56,7 +56,9 @@ type CompletionTransition struct {
 	Parameters  []workflow.Parameter
 }
 
-type Config struct {
+// CurrentNodeExecutionConfig is the live, process-local control contract for
+// one admitted Current Node.
+type CurrentNodeExecutionConfig struct {
 	ScopeID                      runtimeids.ExecutionScopeID
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
@@ -68,8 +70,8 @@ type Config struct {
 }
 
 // PromptContract is the workflow prompt surface used to assemble a model
-// request. It intentionally excludes Run identity, generation, and completion
-// control. Those belong only to a live Config.
+// request. It intentionally excludes live execution control, which belongs
+// only to CurrentNodeExecutionConfig.
 type PromptContract struct {
 	Identity               string
 	CompletionMode         CompletionMode
@@ -84,19 +86,32 @@ type TaskCommentCounter interface {
 }
 
 type TaskInstructions struct {
-	TaskID          string
+	CurrentNode     workflow.CurrentNodeReference
 	TaskShortID     string
 	TaskTitle       string
 	TaskBody        string
 	WorkflowID      string
 	WorkflowShortID string
-	NodeID          string
 	NodeKey         string
 	NodeDisplayName string
 	ContextMode     string
 	SourceSessionID string
 	Transitions     []TransitionInstruction
 	NodePrompt      string
+}
+
+// CurrentNodePromptIdentity gives one stable prompt SourcePath to the full
+// natural Current Node reference. A branch-scoped Current Node must never
+// share its prompt identity with a serial node or another fan-out branch.
+func CurrentNodePromptIdentity(reference workflow.CurrentNodeReference) string {
+	if err := reference.Validate(); err != nil {
+		panic(fmt.Sprintf("current-node prompt identity requires a valid current node reference: %v", err))
+	}
+	identity := "workflow-current-node/" + string(reference.TaskID) + "/" + string(reference.NodeID)
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		return identity + "/branch/" + string(branchKey)
+	}
+	return identity
 }
 
 type TransitionInstruction struct {

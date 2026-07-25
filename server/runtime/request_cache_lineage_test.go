@@ -41,7 +41,7 @@ func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossCont
 			if err != nil {
 				t.Fatalf("build before request: %v", err)
 			}
-			eng.cfg.WorkflowRun.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
+			eng.cfg.CurrentNodeExecution.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
 			reqAfter, err := eng.buildRequest(context.Background(), "step-after", true)
 			if err != nil {
 				t.Fatalf("build after request: %v", err)

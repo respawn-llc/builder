@@ -15,6 +15,7 @@ import (
 
 func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
+	branchKey := workflow.TransitionBranchKey("implementation")
 	counter := &workflowTaskCommentCounterProbe{count: 3}
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
@@ -23,12 +24,12 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:            scopeID,
 			CompletionMode:     workflowruntime.CompletionModeTool,
 			Controller:         &externallyCompletedWorkflowController{},
 			TaskCommentCounter: counter,
-			Instructions:       workflowruntime.TaskInstructions{TaskID: "task", NodeID: "node"},
+			Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &branchKey)},
 		},
 		Config{Model: "gpt-5"},
 	)
@@ -62,8 +63,8 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeWorkflowMode {
-			if item.SourcePath == nil || *item.SourcePath != "task/node" {
-				t.Fatalf("workflow replacement source identity = %+v, want task/node", item)
+			if item.SourcePath == nil || *item.SourcePath != "workflow-current-node/task/node/branch/implementation" {
+				t.Fatalf("workflow replacement source identity = %+v, want branch-scoped Current Node", item)
 			}
 			workflowModes++
 		}
@@ -82,6 +83,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 	tests := []struct {
 		name                string
 		existingCurrentNode bool
+		existingBranchKey   *workflow.TransitionBranchKey
 		compact             func(context.Context, *Engine) error
 	}{
 		{
@@ -97,10 +99,21 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 				return engine.CompactContextForWorkflowContinuation(ctx)
 			},
 		},
+		{
+			name: "parallel same-node branch reassignment after compaction",
+			existingBranchKey: func() *workflow.TransitionBranchKey {
+				key := workflow.TransitionBranchKey("implementation")
+				return &key
+			}(),
+			compact: func(ctx context.Context, engine *Engine) error {
+				return engine.CompactContextForWorkflowContinuation(ctx)
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			scopeID := runtimeids.NewExecutionScopeID()
+			currentBranchKey := workflow.TransitionBranchKey("review")
 			client := &fakeCompactionClient{
 				compactionResponses: []llm.CompactionResponse{
 					remoteCompactionReplacement(1_000, 100, 200_000),
@@ -120,7 +133,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 				t,
 				mustCreateTestSession(t),
 				client,
-				&workflowruntime.Config{
+				&workflowruntime.CurrentNodeExecutionConfig{
 					ScopeID: scopeID,
 					Contract: workflowruntime.CompletionContract{
 						Transitions: []workflowruntime.CompletionTransition{{
@@ -130,14 +143,19 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					},
 					CompletionMode: workflowruntime.CompletionModeTool,
 					Controller:     &externallyCompletedWorkflowController{},
-					Instructions:   workflowruntime.TaskInstructions{TaskID: "task", NodeID: "node"},
+					Instructions:   workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &currentBranchKey)},
 				},
 				Config{Model: "gpt-5"},
 			)
-			currentNodeIdentity := workflowPromptIdentity(engine.cfg.WorkflowRun.Instructions)
+			currentNodeIdentity := workflowruntime.CurrentNodePromptIdentity(engine.cfg.CurrentNodeExecution.Instructions.CurrentNode)
 			existingIdentity := "previous-task/previous-node"
 			if test.existingCurrentNode {
 				existingIdentity = currentNodeIdentity
+			}
+			if test.existingBranchKey != nil {
+				existingIdentity = workflowruntime.CurrentNodePromptIdentity(
+					mustTestCurrentNodeReference(t, "task", "node", test.existingBranchKey),
+				)
 			}
 			if err := engine.steer("input", steerMessagesWithPersistenceIntent(
 				steeringPriorityNormal,
@@ -194,7 +212,7 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
+		&workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID:                      runtimeids.NewExecutionScopeID(),
 			CompletionMode:               workflowruntime.CompletionModeTool,
 			MaxInvalidCompletionAttempts: 3,
