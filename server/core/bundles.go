@@ -214,6 +214,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return in.worktreeService.Close()
 			}},
+			{name: "session runtime authority", close: func() error {
+				if in.runtimeAuthority == nil {
+					return nil
+				}
+				return in.runtimeAuthority.Close(context.Background())
+			}},
 			{name: "workflow runtime starter", close: func() error {
 				if in.workflowRuntimeStarter == nil {
 					return nil
@@ -225,12 +231,6 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 					return nil
 				}
 				return in.workflowController.Close()
-			}},
-			{name: "session runtime authority", close: func() error {
-				if in.runtimeAuthority == nil {
-					return nil
-				}
-				return in.runtimeAuthority.Close(context.Background())
 			}},
 			{name: "sleep manager", close: func() error {
 				if in.sleepManager != nil {

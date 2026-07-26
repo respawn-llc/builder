@@ -44,7 +44,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{CurrentNode: reference})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: "workflow-1", CurrentNode: reference})
 	if err != nil {
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}

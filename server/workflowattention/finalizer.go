@@ -66,10 +66,7 @@ type Finalizer struct {
 }
 
 type interruptedCurrentNodeOccurrenceKey struct {
-	taskID           workflow.TaskID
-	nodeID           workflow.NodeID
-	branchKey        workflow.TransitionBranchKey
-	branchScoped     bool
+	currentNode      workflow.CurrentNodeReferenceKey
 	occurredAtUnixMs int64
 }
 
@@ -203,16 +200,14 @@ func interruptedCurrentNodeOccurrence(projection InterruptedCurrentNodeProjectio
 	if projection.OccurredAtUnixMs <= 0 {
 		return interruptedCurrentNodeOccurrenceKey{}, fmt.Errorf("interrupted current node occurrence time is required")
 	}
-	key := interruptedCurrentNodeOccurrenceKey{
-		taskID:           projection.CurrentNode.TaskID,
-		nodeID:           projection.CurrentNode.NodeID,
+	currentNodeKey, err := projection.CurrentNode.Key()
+	if err != nil {
+		return interruptedCurrentNodeOccurrenceKey{}, err
+	}
+	return interruptedCurrentNodeOccurrenceKey{
+		currentNode:      currentNodeKey,
 		occurredAtUnixMs: projection.OccurredAtUnixMs,
-	}
-	if branchKey, branchScoped := projection.CurrentNode.TransitionBranchKey(); branchScoped {
-		key.branchKey = branchKey
-		key.branchScoped = true
-	}
-	return key, nil
+	}, nil
 }
 
 func approvalNotification(projection ApprovalProjection) clientui.AttentionNotification {

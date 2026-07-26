@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/shared/serverapi"
 )
 
@@ -146,7 +147,12 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			columnKeys: req.ColumnKeys,
 		}
 	}
-	liveSnapshots, err := l.authority.CurrentWorkflowTaskExecutionSnapshots()
+	var liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	if workflowID == nil {
+		liveSnapshots, err = l.authority.CurrentProjectTaskExecutionSnapshots(projectID)
+	} else {
+		liveSnapshots, err = l.authority.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, workflow.WorkflowID(*workflowID))
+	}
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}

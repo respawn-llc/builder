@@ -1375,7 +1375,7 @@ label_filter_args AS (
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
 ),
-effective_board_placements AS (
+effective_current_nodes AS (
     SELECT
         t.id AS task_id,
         current_node.node_id
@@ -1387,10 +1387,10 @@ effective_board_placements AS (
 SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
-FROM effective_board_placements
+FROM effective_current_nodes
 JOIN label_filter_args
 WHERE (
-{{taskLabelFilter "    " "effective_board_placements.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json"}}
+{{taskLabelFilter "    " "effective_current_nodes.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json"}}
 )
 GROUP BY node_id
 ORDER BY node_id ASC;

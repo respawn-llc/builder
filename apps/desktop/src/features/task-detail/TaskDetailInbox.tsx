@@ -3,7 +3,7 @@ import type { AttentionItem, TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
-import { ApprovalBox, InterruptedRunBox, QuestionBox } from "./TaskDetailAttention";
+import { ApprovalBox, InterruptedCurrentNodeBox, QuestionBox } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -68,9 +68,9 @@ function initialFocusLogContext(focus: TaskDetailInitialFocus): Readonly<Record<
     return { focusAskIDs: focus.askIDs.join(","), focusKind: focus.kind };
   }
   if (focus.kind === "approval") {
-    return { focusKind: focus.kind, focusTaskTransitionID: focus.taskTransitionID };
+    return { focusKind: focus.kind, focusApprovalID: focus.approvalID };
   }
-  return { focusKind: focus.kind, focusRunID: focus.runID };
+  return { focusKind: focus.kind };
 }
 
 function focusedAttentionItemID(
@@ -83,8 +83,8 @@ function focusedAttentionItemID(
   if (initialFocus.kind === "question") {
     const itemIDByAskID = new Map<string, string>();
     for (const item of attentionItems) {
-      if (item.kind === "question" && !itemIDByAskID.has(item.askID)) {
-        itemIDByAskID.set(item.askID, item.id);
+      if (item.kind === "question" && !itemIDByAskID.has(item.questionID)) {
+        itemIDByAskID.set(item.questionID, item.id);
       }
     }
     return initialFocus.askIDs
@@ -93,11 +93,10 @@ function focusedAttentionItemID(
   }
   if (initialFocus.kind === "approval") {
     return attentionItems.find(
-      (item) => item.kind === "approval" && item.taskTransitionID === initialFocus.taskTransitionID,
+      (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_run" && item.runID === initialFocus.runID)
-    ?.id;
+  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
 }
 
 function InboxItem({
@@ -141,7 +140,7 @@ function InboxItem({
 
   if (attention.kind === "question") {
     const questionSelection =
-      questionSelections.get(attention.askID) ?? emptyQuestionSelection(attention.askID);
+      questionSelections.get(attention.questionID) ?? emptyQuestionSelection(attention.questionID);
     return (
       <div ref={focusTargetRef}>
         <QuestionBox
@@ -149,7 +148,7 @@ function InboxItem({
           answerQuestion={mutations.answerQuestion}
           disabled={disabled}
           onSelectionStateChange={(selection) => {
-            onQuestionSelectionChange(attention.askID, selection);
+            onQuestionSelectionChange(attention.questionID, selection);
           }}
           selectionState={questionSelection}
           taskId={taskId}
@@ -171,7 +170,7 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
+      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} mutations={mutations} />
     </div>
   );
 }

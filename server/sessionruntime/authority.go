@@ -46,7 +46,7 @@ type Authority struct {
 	nextExecution      ExecutionGeneration
 	nextResource       runtimeids.ResourceGeneration
 	byScope            map[runtimeids.ExecutionScopeID]*execution
-	byWorkflow         map[workflow.CurrentNodeReferenceKey]*execution
+	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
 	executionFinalized ExecutionFinalized
@@ -57,7 +57,7 @@ type Authority struct {
 func NewAuthority(options AuthorityOptions) *Authority {
 	authority := &Authority{
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
-		byWorkflow:         make(map[workflow.CurrentNodeReferenceKey]*execution),
+		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
 		executionFinalized: options.ExecutionFinalized,
@@ -137,11 +137,83 @@ func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHand
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	execution := a.byWorkflow[key]
+	execution := a.workflowExecutionLocked(ref, key)
 	if execution == nil {
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
+}
+
+func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		return nil
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		return nil
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil {
+		return nil
+	}
+	return byTask[key]
+}
+
+func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		byProject = make(map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
+		a.workflowExecutions[ref.ProjectID] = byProject
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		byWorkflow = make(map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
+		byProject[ref.WorkflowID] = byWorkflow
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil {
+		byTask = make(map[workflow.CurrentNodeReferenceKey]*execution)
+		byWorkflow[ref.CurrentNode.TaskID] = byTask
+	}
+	byTask[key] = item
+}
+
+func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		return
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		return
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil || byTask[key] != item {
+		return
+	}
+	delete(byTask, key)
+	if len(byTask) == 0 {
+		delete(byWorkflow, ref.CurrentNode.TaskID)
+	}
+	if len(byWorkflow) == 0 {
+		delete(byProject, ref.WorkflowID)
+	}
+	if len(byProject) == 0 {
+		delete(a.workflowExecutions, ref.ProjectID)
+	}
+}
+
+func (a *Authority) forEachWorkflowExecutionLocked(fn func(*execution)) {
+	for _, byWorkflow := range a.workflowExecutions {
+		for _, byTask := range byWorkflow {
+			for _, byCurrentNode := range byTask {
+				for _, execution := range byCurrentNode {
+					fn(execution)
+				}
+			}
+		}
+	}
 }
 
 func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionHandle, bool) {
@@ -204,10 +276,10 @@ func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {
 		return nil
 	}
 	a.mu.Lock()
-	executions := make(map[runtimeids.ExecutionScopeID]ExecutionHandle, len(a.byWorkflow))
-	for _, running := range a.byWorkflow {
+	executions := make(map[runtimeids.ExecutionScopeID]ExecutionHandle)
+	a.forEachWorkflowExecutionLocked(func(running *execution) {
 		executions[running.scope.ID()] = executionHandle{execution: running}
-	}
+	})
 	a.mu.Unlock()
 	var stopErrs []error
 	for _, running := range executions {
@@ -280,7 +352,7 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		if err != nil {
 			return nil, err
 		}
-		if existing := a.byWorkflow[workflowKey]; existing != nil {
+		if existing := a.workflowExecutionLocked(ref, workflowKey); existing != nil {
 			return nil, fmt.Errorf(
 				"workflow current node %v is already live",
 				ref.CurrentNode,

@@ -72,6 +72,99 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 }
 
+func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "automatic proposal"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("CompleteCurrentNode returned no pending Approval")
+	}
+	supersededApprovalID := completed.PendingApproval.ID
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		OutputValues: map[string]string{"prior_summary": "manual proposal"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.PendingApproval == nil || moved.PendingApproval.ID == supersededApprovalID {
+		t.Fatalf("manual move pending Approval = %+v, want replacement", moved.PendingApproval)
+	}
+	if len(moved.Retained) != 1 || !moved.Retained[0].Reference.Equal(source.Reference) {
+		t.Fatalf("manual move retained = %+v, want source Current Node", moved.Retained)
+	}
+	if len(moved.Removed) != 0 || len(moved.Created) != 0 {
+		t.Fatalf("manual move mutation = %+v, want no Current Node replacement before Approval", moved.CurrentNodeMutationResult)
+	}
+	if moved.PendingApproval.OutputValues["prior_summary"] != "manual proposal" ||
+		len(moved.PendingApproval.Branches) != 1 ||
+		moved.PendingApproval.Branches[0].Target.CurrentNode.CurrentInputValues["prior_summary"] != "manual proposal" {
+		t.Fatalf("manual move pending Approval = %+v, want frozen manual values", moved.PendingApproval)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes before Approval: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("current nodes before Approval = %+v, want source only", currentNodes)
+	}
+	approvals, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if len(approvals) != 1 || approvals[0].ID != moved.PendingApproval.ID {
+		t.Fatalf("pending Approvals = %+v, want only replacement Approval", approvals)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
+	}
+
+	approved, err := store.ApplyPendingApproval(ctx, moved.PendingApproval.ID)
+	if err != nil {
+		t.Fatalf("ApplyPendingApproval: %v", err)
+	}
+	if len(approved.Mutation.Removed) != 1 || !approved.Mutation.Removed[0].Equal(source.Reference) ||
+		len(approved.Mutation.Created) != 1 ||
+		approved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) {
+		t.Fatalf("Approval mutation = %+v, want source replaced with target", approved.Mutation)
+	}
+}
+
 func TestManualMoveForwardExecutableScriptValidatesAndMaterializesTarget(t *testing.T) {
 	fixture := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
 	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)

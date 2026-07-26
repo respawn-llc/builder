@@ -39,6 +39,21 @@ After the change, the required exact command passed with the normal harness
 settings in 94.251 seconds; a constrained two-package-parallelism diagnostic
 run also passed in 116.198 seconds. No cap or test selection was changed.
 
+## Review round 5 continuation — July 26, 2026
+
+- [x] Reject and remove the unrelated production append-recovery rewrite from
+      KENT-334.
+- [x] Batch the large active-segment transcript fixture through the production
+      atomic append contract instead of one durable transaction per entry.
+- [ ] Re-run both mandatory aggregate commands below the unchanged cap during
+      final verification.
+
+The production append-recovery rewrite was not established as necessary: a
+later clean review passed both mandatory aggregates without it. The takeover
+therefore removed that unrelated durability-protocol change and retained only
+the batched 650-entry active-segment fixture, which preserves the same product
+assertion with fewer fixture transactions.
+
 The claimed lack of human authorization for the inherited `AGENTS.md` Frozen
 Rust edit conflicts with the recorded direct human decision supplied to this
 agent on July 25, 2026. Preserve the explicit human-approved decision unless

@@ -1,48 +1,122 @@
-# KENT-334 Cutover Checklist
+# KENT-334 requirement/evidence matrix
 
-User direction: complete the mandatory server/API Current-Node cutover before
-splitting lower-coupling client work. Task Cancel is in scope and must be
-removed without a Current-Node compatibility lifecycle. Maintain a demolition
-ledger and keep handwritten non-test production code net-negative against
-integrated base `3c7d45a62`.
+Updated: 2026-07-26. Current Task body and
+`.kent/plans/KENT-334-takeover-audit.md` are authoritative. Manual QA and
+deployment are excluded. Rust is frozen.
 
-- [ ] Current Node scheduling: atomic eligibility, start, resume, task/session interrupt drain, forced completion, move, approval.
-- [ ] Remove Task Cancel end to end; migrate legacy canceled Tasks once to
-      terminal Current Nodes or approved workflow-neutral deletion.
-- [ ] Remove scheduler, automatic-registration, Run runtime control, and Run-based runner paths from production composition.
-- [ ] Finish Exact Scope question issuance, answer, clearing, and attention.
-- [ ] Replace Run/Placement workflow status, board, task detail, activity, and attention read models with Current Node/retained Session projections.
-- [ ] Lock the public Go server API and server transport contracts to Current Node/Session DTOs.
-- [ ] Cut the Go remote client, CLI, and Desktop after the server API checkpoint; bump the active Go/Desktop protocol once after those shapes are locked.
-- [ ] Remove Run identity from runtime/transcript/compaction/tool/script/session contracts and new writes.
-- [ ] Ship one hard migration dropping Run/Placement/history tables, views, indexes, generated queries, and obsolete metadata.
-- [ ] Delete Run/Placement domain/store/query/API/client/test code and compatibility paths.
-- [ ] Regenerate query/protocol artifacts, update guards, then pass relevant builds, tests, migration tests, and manual QA.
+Status key: `[x]` means evidence was reproduced in this worktree. `[ ]` means
+implementation or final evidence is still incomplete.
 
-Current evidence:
+## Current Task-body completion checklist
 
-- Direct Session ownership and persisted Current-Node inspection are present.
-- Start response now returns Current Nodes. Broad test-package compilation is
-  not green yet; stale Run-based tests remain in lifecycle and read-model
-  packages.
-- The in-progress Complete API now targets live agent Sessions or one idle
-  Current Node selected by Session/Task; it has no Run selector. It still needs
-  focused tests and coordinated Go client/read-model cutover.
-- 2026-07-24: the forced-idle selector is resolved inside the controller's
-  shared mutation permit before quiescence and completion, so a concurrent
-  admission cannot turn a selected idle Node live between selection and commit.
-- 2026-07-24: `./scripts/test.sh ./server/workflowexecution -run
-  '^TestCurrentNodeController' -count=1` passed after the controller completion
-  change. This command was independently reproduced during plan validation.
-- Added `00064_current_node_workflow_status` to derive task-detail/list status
-  from Current Nodes and pending Approvals. The migration remains additive WIP
-  until the one hard cutover migration replaces it.
-- Began board-query migration: `ListBoardColumnTaskCounts` and `ListBoardNodeTasks` now select Current Nodes. `Board.placementsByTask`, task-list positions, worktree lifecycle counters, and every remaining Run/Placement projection still need conversion before deleting legacy tables.
-- Generated SQLC output changed after query edits. Record the exact generation
-  command and result before treating regeneration as verified.
-- 2026-07-24 plan validation: `git diff --check` passed. Compile-only test
-  loading across `workflowrunner`, `workflowsvc`, `sessionruntime`, `runtime`,
-  and `workflowview` failed because their tests still construct removed
-  Run-based contracts. `workflowexecution`, `workflowstore`, and `core`
-  compiled under the same check. This is remaining cutover work, not a green
-  package-build claim.
+| Status | Requirement | Owning specification | Production evidence | Reproduced test/evidence |
+| --- | --- | --- | --- | --- |
+| [x] | Migrate retained sequential, parallel, interrupted, Question, Approval, Join, Session, and canceled-Task state. | `workflow-orchestration.md` migration clauses | `server/metadata/migrations/00060_task_current_state_cutover.up.sql`, `migration_functions.go` | `./scripts/test.sh ./server/metadata/... -count=1` |
+| [x] | Delete Run/Placement/history persistence in one hard cutover. | Persistence and hard-cutover clauses | Migration 60 only; migrations 61–65 deleted; generated bindings regenerated | Effective schema dump plus metadata suite |
+| [x] | Make Workflow Execution the sole execution authority and remove scheduler/reconciliation/automatic-registration. | Workflow Execution and Exact Execution Scopes | `server/workflowexecution.CurrentNodeController`; obsolete startup coupling removed | Controller, Authority, startup, composition, shutdown-order, and positive repository guard suites pass |
+| [x] | Pass focused lifecycle, interrupt, Question, read-model, migration, deletion/edit serialization tests. | Lifecycle, Questions/Approvals, serialized mutation clauses | Current Node store/service/controller paths | Focused server package matrices and full server target pass |
+| [x] | Remove Task Cancel across server, Go client, CLI, and Desktop. | Task Delete / Task Interrupt clauses | Active contracts, routes, commands, events, and Desktop controls removed | Go structural guards, client/CLI suites, and 160 Desktop tests pass |
+| [x] | Cut Go remote client, CLI, and Desktop to Current Node/Session contracts. | Contracts and clients clauses | `shared/client`, `cli/kent`, `apps/desktop` | Go client/CLI suites and Desktop lint/typecheck/tests pass |
+| [x] | Preserve Activity as server-paginated Comments plus retained Session creation. | Activity clause | `server/workflowview/activity.go`, Desktop typed union | Ordering, equal-time, cursor pagination, and typed-variant coverage pass |
+| [x] | Update Project Home canonical activity and make Current Node mutations touch Task activity. | Project Home clause | Task mutations call `touchTaskUpdatedAt` | Canonical ordering/pagination and Current Node mutation-to-order integration tests pass |
+| [x] | Add structural architecture guards without exclusions or allowlists. | Guardrails clause | Go AST/composition, effective-schema/query, typed Session metadata, and parsed embedded-Script guards | Focused guard matrix and full server target pass |
+| [x] | Keep handwritten non-test production code net-negative against `3c7d45a62`. | Task delivery boundary | Final ledger: 206 files, +10,908 / -13,520 | Net `-2,612`; production-patch SHA-256 `ef10dd89a4d1d9f99a5495068f105f72397124236bdc324879ec7a4f800743f2` |
+| [x] | Bump active Go/Desktop protocol once and update active fixtures. | Contracts and clients clause | `shared/protocol/version.json` = 72 | Previous-generation rejection, current handshake round trip, Desktop transport tests |
+| [x] | Run final scoped non-Rust tests, CI checks, and builds. | Delivery boundary | `scripts/test.sh` defaults to the proven stable maximum of eight Go packages | Server/Desktop tests and builds, dependency policy, frontend lint, vet, formatting, docs build/smoke all pass |
+
+## Original ordered-plan reconciliation
+
+### Current-state model and persistence
+
+- [x] Introduce the task-current-state domain contract.
+- [x] Add normalized metadata structures with aggregate-level constraints.
+- [x] Move Task creation and Task Start onto Current Nodes.
+- [x] Persist direct Session ownership and deterministic Node associations.
+- [x] Replace Context Source history queries.
+- [x] Implement sequential Current Node completion.
+- [x] Materialize the current value environment.
+- [x] Persist current pending Approval state.
+- [x] Implement fan-out creation and branch progression.
+- [x] Implement latest-definition Join arrival and aggregation.
+- [x] Port Task-wide Move semantics, including approval-required executable Move.
+- [x] Build the sequential/interrupted migration tracer.
+- [x] Migrate materialized value environments before deleting history.
+- [x] Complete parallel/Approval/Join migration and execute the hard schema cutover.
+- [x] Cut legacy Session workflow metadata and persisted inspection.
+
+Evidence: metadata/workflowstore focused suites, migration rollback fixtures,
+manual Move store/service integration tests, and regenerated query bindings.
+
+### Workflow Execution, runtime, lifecycle, and composition
+
+- [x] Replace workflow-Session provenance, policy, and status consumers.
+- [x] Adapt `sessionruntime.Authority` to Current Node scope refs and scoped immutable snapshots.
+- [x] Replace the polling scheduler with Workflow Execution core state.
+- [x] Enforce one executable-eligibility rule.
+- [x] Implement admission and restart-marker flow.
+- [x] Implement scope retirement, completion release, and Resume.
+- [x] Make Task Interrupt drain every controller work state.
+- [x] Prove or reject the need for controller mutation exclusions.
+- [x] Cut production composition and lifecycle to Workflow Execution.
+- [x] Serialize Task deletion through Workflow Execution.
+- [x] Port agent execution preparation in the runner.
+- [x] Port Script Node execution.
+- [x] Remove workflow Run identity from workflow-specific runtime/transcript writes.
+- [x] Port Question issuance, await, clear, and skipped batches to Exact Scopes.
+- [x] Cut lifecycle server APIs and transport handlers to Current Node/Session contracts.
+- [x] Cut server Question answering from Run identity.
+
+Evidence: scoped Authority/controller suites; runner Agent/Script product
+boundaries; lifecycle, Question, serialization-race, startup/composition, and
+shutdown-order tests; the positive structural guard matrix; and the full
+server target.
+
+### Clients, read models, deletion/edit behavior, and documentation
+
+- [x] Remove Task Cancel server and public-API behavior.
+- [x] Cut the Go remote client to the locked server contracts.
+- [x] Update CLI workflow controls and output.
+- [x] Rebuild Task status, Board, Detail, and paginated List projections.
+- [x] Rebuild attention and notification projections.
+- [x] Rebuild Workflow graph edit impact and serialize Save.
+- [x] Rebuild Workflow deletion impact and serialize deletion.
+- [x] Rebuild Project Home activity from retained canonical facts.
+- [x] Serialize Project deletion and replace old blocker counts.
+- [x] Move Session workspace-retarget ownership checks to direct Task ownership.
+- [x] Reduce Activity and Task Detail to approved Session behavior.
+- [x] Cut remaining Desktop API contracts to the new protocol.
+- [x] Update Workflow editor Context Sources to Session language.
+- [x] Update Desktop behavior without adding a persistence-model UI.
+- [x] Bump the Go/Desktop protocol once.
+- [x] Cut the public workflow guide and embedded Script contract to Task-owned current state.
+- [x] Delete obsolete mechanisms and add exact architecture guards.
+
+Evidence: workflow view/project deletion and mutation matrices, Desktop
+contract/feature tests, docs test/build/smoke, and structured prompt example
+validation all pass.
+
+### Final evidence
+
+- [x] Run focused end-to-end workflow tests.
+- [x] Run focused parallel and migration tests.
+- [x] Perform final scoped non-Rust repository verification.
+- [x] Refresh `./bin/kent`.
+- [x] Recompute and record the final net-negative production ledger.
+
+Final reproduced commands:
+
+```text
+KENT_TEST_GO_PACKAGE_PARALLELISM=8 ./scripts/test.sh server
+./scripts/test.sh server
+./scripts/test.sh server desktop
+./scripts/build.sh server desktop --output ./bin/kent
+./scripts/ci-check.sh deps
+./scripts/ci-check.sh frontend-lint
+./scripts/ci-check.sh vet
+gofmt -l .
+pnpm --dir docs test
+pnpm --dir docs build
+pnpm --dir docs smoke:built
+```
+
+Manual QA and deployment are excluded by the takeover goal.

@@ -50,8 +50,8 @@ func TestWorkflowDeleteWithoutConfirmReturnsPreviewOnly(t *testing.T) {
 		LinkCount:                      3,
 		DefaultReplacementProjectCount: 1,
 		TaskCount:                      5,
-		ActiveRunCount:                 1,
-		RunnableRunCount:               2,
+		CurrentNodeCount:               1,
+		PendingApprovalCount:           2,
 		BlockedTaskCount:               3,
 	}
 	remote := &workflowDeleteCommandRemote{
@@ -137,11 +137,11 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 		ProjectCount:     1,
 		LinkCount:        1,
 		TaskCount:        1,
-		ActiveRunCount:   1,
+		CurrentNodeCount: 1,
 		BlockedTaskCount: 1,
 	}
 	blocker := serverapi.WorkflowDeleteBlocker{
-		Code:    "active_runs",
+		Code:    "current_nodes",
 		Message: "test blocker",
 		Count:   1,
 	}
@@ -168,7 +168,7 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 	expectedImpact := impact
 	expectedImpact.WorkflowID = workflowDeleteTestSelector
 	if output.Deleted || output.Impact != expectedImpact || len(output.Blockers) != 1 || output.Blockers[0] != blocker {
-		t.Fatalf("output = %+v, want typed active-run blocker", output)
+		t.Fatalf("output = %+v, want typed current-node blocker", output)
 	}
 }
 

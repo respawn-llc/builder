@@ -85,7 +85,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			a.mu.Unlock()
 			return nil, keyErr
 		}
-		a.byWorkflow[workflowKey] = execution
+		a.addWorkflowExecutionLocked(workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
 

@@ -343,8 +343,11 @@ func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing
 	if completed.PendingApproval == nil {
 		t.Fatal("completion did not create pending approval")
 	}
-	blockers, err := store.metadata.DeleteProject(ctx, binding.ProjectID, func(metadata.ProjectSessionArtifact, bool) error {
-		return nil
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID: binding.ProjectID,
+		DeleteArtifact: func(ProjectSessionArtifact, bool) error {
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)

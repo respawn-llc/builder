@@ -1,7 +1,7 @@
 import { Bot, Save, Trash2, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskComment } from "@/api";
+import type { ActivityItem, TaskComment } from "@/api";
 import { errorMessage } from "@/api";
 import { formatRelativeTime } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
@@ -203,7 +203,9 @@ function EllipsisText({ className, text }: Readonly<{ className?: string | undef
 
 export function ActivityRow({
   item,
-}: Readonly<{ item: { id: string; summary: string; occurredAt: number } }>) {
+}: Readonly<{ item: ActivityItem }>) {
+  const { t } = useTranslation();
+  const summary = item.type === "comment" ? item.comment.body : t("task.sessionStarted");
   return (
     <IslandSurface
       as="article"
@@ -213,7 +215,7 @@ export function ActivityRow({
       )}
       level={1}
     >
-      <span>{item.summary}</span>
+      <span>{summary}</span>
       <time className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</time>
     </IslandSurface>
   );

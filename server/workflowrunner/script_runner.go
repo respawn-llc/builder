@@ -82,18 +82,23 @@ func (s *Starter) startCurrentNodeScript(
 }
 
 func currentNodeScriptStdin(input workflowstore.CurrentNodeStartContext) ([]byte, error) {
-	payload := make(map[string]any, len(input.ParameterValues)+1)
+	payload := make(map[string]json.RawMessage, len(input.ParameterValues)+1)
 	for key, value := range input.ParameterValues {
-		payload[key] = value
+		encodedValue, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		payload[key] = encodedValue
 	}
-	kent := map[string]any{
-		"task_id": string(input.Task.ID),
-		"node_id": string(input.Node.ID),
+	identity, err := workflowscript.IdentityForCurrentNode(input.CurrentNode.Reference)
+	if err != nil {
+		return nil, err
 	}
-	if branchKey, branchScoped := input.CurrentNode.Reference.TransitionBranchKey(); branchScoped {
-		kent["transition_branch_key"] = string(branchKey)
+	encodedIdentity, err := json.Marshal(identity)
+	if err != nil {
+		return nil, err
 	}
-	payload["_kent"] = kent
+	payload["_kent"] = encodedIdentity
 	return json.Marshal(payload)
 }
 

@@ -51,14 +51,12 @@ const card = {
     kind: "backlog",
     native_state: "active",
     node_ids: [],
-    run_ids: [],
     attention_types: [],
   },
   actions: {
     can_start: true,
     can_interrupt: false,
     can_resume: false,
-    can_cancel: true,
     manual_move_target_node_ids: [],
   },
   label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
@@ -236,91 +234,64 @@ describe("workflow board schemas", () => {
   });
 });
 
-describe("task activity attention schema", () => {
-  const interruptedAttention = {
-    id: "interrupted_run:run-1",
-    kind: "interrupted_run",
-    project_id: "project-1",
-    workflow_id: "workflow-1",
-    task_id: "task-1",
-    task_short_id: "KNT-1",
-    task_title: "Task",
-    run_id: "run-1",
-    message: "Run interrupted",
-    occurred_at_unix_ms: 1,
-  };
-
-  const interruptedActivity = {
-    activity_id: "run_interrupted:run-1",
-    type: "run_interrupted",
+describe("task activity schema", () => {
+  const commentActivity = {
+    activity_id: "activity-comment-1",
+    type: "comment",
     task_id: "task-1",
     occurred_at_unix_ms: 1,
     updated_at_unix_ms: 1,
-    actor: "",
-    summary: "Run interrupted",
-    attention: interruptedAttention,
+    comment: {
+      id: "comment-1",
+      task_id: "task-1",
+      body: "Operator note",
+      author: "user",
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+    },
   };
 
-  it("accepts coherent interrupted-run attention only on interrupted-run activity", () => {
+  const sessionStartedActivity = {
+    activity_id: "activity-session-1",
+    type: "session_started",
+    task_id: "task-1",
+    occurred_at_unix_ms: 2,
+    updated_at_unix_ms: 2,
+    session_started: {
+      session_id: "session-1",
+      name: "Implementation",
+    },
+  };
+
+  it("accepts only comment and session-started activity variants", () => {
     expect(
       activityPageSchema.parse({
-        items: [interruptedActivity],
+        items: [commentActivity, sessionStartedActivity],
         next_page_token: "",
-        generated_at_unix_ms: 1,
+        generated_at_unix_ms: 2,
       }),
     ).toMatchObject({
-      items: [{ type: "run_interrupted", taskID: "task-1", attention: { kind: "interrupted_run" } }],
+      items: [
+        { type: "comment", comment: { id: "comment-1" } },
+        { type: "session_started", sessionID: "session-1", sessionName: "Implementation" },
+      ],
     });
   });
 
-  it("rejects incoherent nested attention", () => {
-    const rejected = [
-      {
-        ...interruptedActivity,
-        attention: { ...interruptedAttention, task_id: "task-2" },
-      },
-      {
-        ...interruptedActivity,
-        type: "comment",
-      },
-      {
-        ...interruptedActivity,
-        attention: {
-          ...interruptedAttention,
-          kind: "question",
-          ask_id: "ask-1",
-        },
-      },
-      {
-        ...interruptedActivity,
-        attention: {
-          id: "approval:transition-1",
-          kind: "approval",
-          project_id: "project-1",
-          workflow_id: "workflow-1",
-          task_id: "task-1",
-          task_short_id: "KNT-1",
-          task_title: "Task",
-          task_transition_id: "transition-1",
-          message: "Approval required",
-          approval_snapshot: {
-            source_node_display_name: "Review",
-            targets: [],
-            commentary: "",
-            output_values: {},
-            workflow_revision_seen: 1,
-          },
-          occurred_at_unix_ms: 1,
-        },
-      },
+  it("rejects removed persistence and history activity variants", () => {
+    const legacyActivities = [
+      { ...commentActivity, type: "run_interrupted", run: { id: "run-1" } },
+      { ...commentActivity, type: "transition_applied", transition: { id: "transition-1" } },
+      { ...commentActivity, type: "comment", actor: "GUI", summary: "Comment added" },
+      { ...sessionStartedActivity, type: "session_started", history: { id: "history-1" } },
     ];
 
-    for (const item of rejected) {
+    for (const item of legacyActivities) {
       expect(() =>
         activityPageSchema.parse({
           items: [item],
           next_page_token: "",
-          generated_at_unix_ms: 1,
+          generated_at_unix_ms: 2,
         }),
       ).toThrow();
     }

@@ -482,6 +482,53 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	})
 }
 
+func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" task interrupt", stderr, taskInterruptUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	sessionID := fs.String("session", "", "live Agent session ID to interrupt; otherwise interrupts the whole task")
+	reason := fs.String("reason", "", "operator-visible reason for the interruption")
+	positionals, flagArgs := takeLeadingPositionals(args, 1)
+	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
+		return exitCode
+	}
+	positionals = append(positionals, fs.Args()...)
+	if len(positionals) != 1 {
+		fmt.Fprintln(stderr, "task interrupt requires <short-id-or-task-id>")
+		return 2
+	}
+	if flagWasProvided(fs, "session") && strings.TrimSpace(*sessionID) == "" {
+		fmt.Fprintln(stderr, "--session requires a non-blank session ID")
+		return 2
+	}
+	if denyAgentHumanOnlyTaskAction(stderr) {
+		return 1
+	}
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+		defer cancel()
+		if _, err := remote.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{
+			TaskID:    taskID,
+			SessionID: strings.TrimSpace(*sessionID),
+			Reason:    *reason,
+		}); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+		if err != nil {
+			fmt.Fprintf(stderr, "interrupted task %s but failed to load task detail for output: %v\n", taskID, err)
+			return 1
+		}
+		writeTaskLifecycleResult(stdout, "Interrupted", detail)
+		return 0
+	})
+}
+
 func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskApproveUsage)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
@@ -531,6 +578,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task move", stderr, taskMoveUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
+	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
 	outputs := stringMapFlag{}
 	fs.Var(&outputs, "output", "transition value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
@@ -545,21 +593,38 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
+		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
+			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+				TaskID:           taskID,
+				TargetNodeID:     positionals[1],
+				OutputValues:     outputs.values,
+				Commentary:       *commentary,
+				SetupOperationID: setupOperationID,
+				ExecutionTarget:  executionTarget,
+			})
+		})
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			if !writeWorkflowExecutionTargetError(stderr, err) {
+				fmt.Fprintln(stderr, err)
+			}
 			return 1
 		}
 		if err := resp.Validate(); err != nil {
 			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
 			return 1
 		}
 		if _, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied); err != nil {

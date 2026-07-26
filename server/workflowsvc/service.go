@@ -1187,7 +1187,21 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
 	}
 	moved := *coordinated.applied
-	if prepared.RequiresExecutionTarget() {
+	currentNodes := moved.Created
+	if moved.PendingApproval != nil {
+		if len(moved.Created) != 0 || len(moved.Retained) == 0 {
+			return serverapi.WorkflowTaskMoveResponse{}, errors.New("approval-required task move did not retain its source current node")
+		}
+		currentNodes = moved.Retained
+		if s.attentionFinalizer != nil {
+			finalizeCtx, cancel := workflowAttentionContext(ctx)
+			defer cancel()
+			s.attentionFinalizer.PublishPendingApproval(finalizeCtx, moved.PendingApproval.ID)
+		}
+	} else if len(moved.Retained) != 0 {
+		return serverapi.WorkflowTaskMoveResponse{}, errors.New("applied task move unexpectedly retained current nodes")
+	}
+	if prepared.RequiresExecutionTarget() && moved.PendingApproval == nil {
 		if len(moved.Created) != 1 {
 			return serverapi.WorkflowTaskMoveResponse{}, errors.New("executable task move did not create exactly one current node")
 		}
@@ -1201,7 +1215,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
-			CurrentNodes: workflowCurrentNodes(moved.Created),
+			CurrentNodes: workflowCurrentNodes(currentNodes),
 		},
 	}, nil
 }

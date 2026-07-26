@@ -19,6 +19,26 @@ func appendSegmentTestMessage(t *testing.T, store *session.Store, role llm.Role,
 	}
 }
 
+func appendSegmentTestMessages(t *testing.T, store *session.Store, role llm.Role, contents []string) {
+	t.Helper()
+	payloads := make([]session.EventRecordPayload, 0, len(contents))
+	for _, content := range contents {
+		message, err := sessionMessageRecordFromLLM(llm.Message{Role: role, Content: textutil.Value(content)})
+		if err != nil {
+			t.Fatalf("adapt message %q: %v", content, err)
+		}
+		payloads = append(payloads, message)
+	}
+	stepID := "step"
+	events, receipt, err := mustMaterializeTestEventLog(t, store).AppendRecordsAtomic(&stepID, payloads)
+	if err != nil {
+		t.Fatalf("append messages: %v", err)
+	}
+	if !receipt.Committed || len(events) != len(contents) {
+		t.Fatalf("append messages receipt=%+v events=%d, want committed %d events", receipt, len(events), len(contents))
+	}
+}
+
 func mustEngineSegmentPage(t *testing.T, eng *Engine, cursor int64) TranscriptSegmentPage {
 	t.Helper()
 	page, err := eng.TranscriptSegmentPage(cursor)
@@ -174,9 +194,11 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 	}
 
 	const activeEntryCount = 650
+	activeEntries := make([]string, activeEntryCount)
 	for index := 0; index < activeEntryCount; index++ {
-		appendSegmentTestMessage(t, store, llm.RoleUser, fmt.Sprintf("active-%03d", index))
+		activeEntries[index] = fmt.Sprintf("active-%03d", index)
 	}
+	appendSegmentTestMessages(t, store, llm.RoleUser, activeEntries)
 
 	page := mustEngineNewestSegmentPage(t, eng)
 	if !page.HasMoreAbove {

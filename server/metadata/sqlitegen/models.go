@@ -8,8 +8,31 @@ import (
 	"database/sql"
 )
 
+type MigrationCurrentNodeValueEnvironment struct {
+	PlacementID            string
+	CurrentInputValuesJson string
+	PriorNodeValuesJson    string
+	EnteredByEdgeID        string
+}
+
+type MigrationCurrentNodeValueSourceError struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	PlacementID         string
+	EnteringEdgeCount   int64
+}
+
 type MigrationInvalidCanceledTask struct {
 	TaskID string
+}
+
+type MigrationParallelProjectionError struct {
+	TaskID              string
+	NodeID              sql.NullString
+	TransitionBranchKey sql.NullString
+	ErrorKind           string
+	ErrorDetail         string
 }
 
 type MigrationPendingApprovalID struct {
@@ -30,6 +53,29 @@ type MigrationPendingApprovalSourceError struct {
 	TransitionID string
 }
 
+type MigrationPendingApprovalTargetValueEnvironment struct {
+	TransitionEdgeID          string
+	TargetTransitionBranchKey sql.NullString
+	CurrentInputValuesJson    string
+	PriorNodeValuesJson       string
+	EnteredByEdgeID           string
+}
+
+type MigrationPriorValueCandidate struct {
+	TaskID                    string
+	ParallelBatchTransitionID sql.NullString
+	TransitionBranchKey       sql.NullString
+	NodeKey                   string
+	OutputValuesJson          string
+	AppliedAtUnixMs           int64
+	CreatedAtUnixMs           int64
+	TransitionID              string
+}
+
+type MigrationSessionMetadataError struct {
+	SessionID string
+}
+
 type MigrationSessionTaskError struct {
 	SessionID string
 	TaskCount int64
@@ -40,6 +86,14 @@ type MigrationUnfinishedCurrentNodeError struct {
 	NodeID              string
 	TransitionBranchKey sql.NullString
 	UnfinishedRunCount  int64
+}
+
+type MigrationWorkflowGraphEdge struct {
+	WorkflowID     string
+	SourceNodeID   string
+	TargetNodeID   string
+	EdgeID         string
+	PromptTemplate string
 }
 
 type Project struct {

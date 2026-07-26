@@ -662,7 +662,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			a.mu.Unlock()
 			return nil, err
 		}
-		if a.byWorkflow[workflowKey] != nil {
+		if a.workflowExecutionLocked(ref, workflowKey) != nil {
 			a.mu.Unlock()
 			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
 		}
@@ -729,7 +729,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
 	if workflowRef != nil {
-		a.byWorkflow[workflowKey] = execution
+		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
 

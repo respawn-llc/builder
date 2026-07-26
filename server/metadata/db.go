@@ -91,6 +91,9 @@ func runMigrations(db *sql.DB) error {
 	if err := registerMetadataSQLiteCollations(); err != nil {
 		return err
 	}
+	if err := registerMetadataSQLiteFunctions(); err != nil {
+		return err
+	}
 	goose.SetBaseFS(migrationsFS)
 	var logger goose.Logger = goose.NopLogger()
 	if metadataMigrationDebugLogs && metadataMigrationLogWriter != nil {

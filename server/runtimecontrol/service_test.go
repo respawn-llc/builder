@@ -1088,6 +1088,7 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:  runtimeids.NewExecutionScopeID(),
 			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},

@@ -865,7 +865,6 @@ type WorkflowTaskMoveRequest struct {
 	Commentary       string                            `json:"commentary,omitempty"`
 	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
 	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
-	AllowMissingEdge bool                              `json:"allow_missing_edge,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {

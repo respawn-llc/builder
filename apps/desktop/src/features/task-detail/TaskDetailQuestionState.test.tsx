@@ -70,14 +70,14 @@ describe("questionPresentation", () => {
 
   it("waits for pending-ask hydration before anchoring an empty ordinary question", () => {
     const attention = ordinaryAttention([], 0);
-    const uninitialized = emptyQuestionSelection(attention.askID);
+    const uninitialized = emptyQuestionSelection(attention.questionID);
     const pendingPresentation = questionPresentation(attention, undefined, false);
 
     expect(pendingPresentation.defaultSelection).toBeNull();
     expect(anchorQuestionSelection(uninitialized, pendingPresentation.defaultSelection)).toBe(uninitialized);
 
     const pendingAsk: PendingAsk = {
-      askID: attention.askID,
+      askID: attention.questionID,
       createdAt: "2026-07-23T00:00:00Z",
       question: attention.message,
       recommendedOptionIndex: 2,
@@ -107,7 +107,7 @@ describe("questionPresentation", () => {
     const attention = ordinaryAttention([], 0);
     expect(
       anchorQuestionSelection(
-        emptyQuestionSelection(attention.askID),
+        emptyQuestionSelection(attention.questionID),
         questionPresentation(attention, undefined, true).defaultSelection,
       ),
     ).toMatchObject({
@@ -120,7 +120,7 @@ describe("questionPresentation", () => {
     const attention = ordinaryAttention(["one", "two"], 2);
     const presentation = questionPresentation(attention, undefined, false);
     const selection = anchorQuestionSelection(
-      emptyQuestionSelection(attention.askID),
+      emptyQuestionSelection(attention.questionID),
       presentation.defaultSelection,
     );
     const inputs: QuestionAnswerInput[] = [];
@@ -152,7 +152,7 @@ describe("questionPresentation", () => {
       const attention = ordinaryAttention(["one", "two"], recommendation);
       const presentation = questionPresentation(attention, undefined, false);
       const selection = anchorQuestionSelection(
-        emptyQuestionSelection(attention.askID),
+        emptyQuestionSelection(attention.questionID),
         presentation.defaultSelection,
       );
       const inputs: QuestionAnswerInput[] = [];
@@ -177,7 +177,7 @@ describe("questionPresentation", () => {
     const attention = ordinaryAttention([], 0);
     const presentation = questionPresentation(attention, undefined, true);
     const selection = anchorQuestionSelection(
-      emptyQuestionSelection(attention.askID),
+      emptyQuestionSelection(attention.questionID),
       presentation.defaultSelection,
     );
     const inputs: QuestionAnswerInput[] = [];
@@ -275,7 +275,7 @@ describe("questionPresentation", () => {
     const initialAttention = ordinaryAttention(["one", "two", "three"], 2);
     const initialPresentation = questionPresentation(initialAttention, undefined, false);
     const selection = anchorQuestionSelection(
-      emptyQuestionSelection(initialAttention.askID),
+      emptyQuestionSelection(initialAttention.questionID),
       initialPresentation.defaultSelection,
     );
     const inputs: QuestionAnswerInput[] = [];
@@ -336,7 +336,7 @@ describe("questionPresentation", () => {
     const initialAttention = approvalAttention(["deny", "allow_session", "allow_once"]);
     const initialPresentation = questionPresentation(initialAttention, undefined, false);
     const selection = anchorQuestionSelection(
-      emptyQuestionSelection(initialAttention.askID),
+      emptyQuestionSelection(initialAttention.questionID),
       initialPresentation.defaultSelection,
     );
     const inputs: QuestionAnswerInput[] = [];
@@ -398,7 +398,7 @@ describe("questionPresentation", () => {
 async function expectPendingAskHydrationFromFreshCache(): Promise<void> {
   const attention = ordinaryAttention([], 0);
   const hydratedAsk: PendingAsk = {
-    askID: attention.askID,
+    askID: attention.questionID,
     createdAt: "2026-07-23T00:00:00Z",
     question: attention.message,
     recommendedOptionIndex: 2,
@@ -525,7 +525,7 @@ function ordinaryAttention(
   recommendedOptionIndex: number,
 ): FixtureQuestionAttention {
   return {
-    askID: "ask-1",
+    questionID: "ask-1",
     id: "attention-1",
     kind: "question",
     message: "Choose an option",
@@ -537,7 +537,11 @@ function ordinaryAttention(
       suggestions,
     },
     recommendedOptionIndex,
-    runID: "run-1",
+    currentNode: {
+      nodeID: "node-1",
+      transitionBranchKey: null,
+      sessionID: "session-1",
+    },
     sessionID: "session-1",
     suggestions,
     taskID: "task-1",
@@ -666,7 +670,7 @@ function QuestionBoxHarness({
   attention: QuestionAttentionItem;
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void;
 }>) {
-  const [selection, setSelection] = useState(emptyQuestionSelection(attention.askID));
+  const [selection, setSelection] = useState(emptyQuestionSelection(attention.questionID));
   return (
     <QuestionBox
       attention={attention}

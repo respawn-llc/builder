@@ -89,6 +89,7 @@ type CurrentNodeController struct {
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
+		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner    CurrentNodeRunner
 	authority *sessionruntime.Authority
@@ -126,6 +127,7 @@ func NewCurrentNodeController(
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
+		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
 	runner CurrentNodeRunner,
 	authority *sessionruntime.Authority,
@@ -257,7 +259,13 @@ func (c *CurrentNodeController) admit(ctx context.Context, reference workflow.Cu
 
 	var lease sessionruntime.WorkflowExecutionLease
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
-		next, err := c.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{CurrentNode: reference})
+		scope, err := c.store.TaskExecutionScope(ctx, reference.TaskID)
+		if err != nil {
+			return err
+		}
+		next, err := c.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+			ProjectID: scope.ProjectID, WorkflowID: scope.WorkflowID, CurrentNode: reference,
+		})
 		if err != nil {
 			return err
 		}

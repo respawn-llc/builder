@@ -283,6 +283,7 @@ func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEve
 }
 
 func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
+	currentNodeID := "node-1"
 	return askquestion.AskQuestionRequest{
 		ID:       id,
 		StepID:   registryTestStepID,
@@ -298,10 +299,10 @@ func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
 			PreparedPromptCount: 2,
 		},
 		AttentionTarget: &clientui.AttentionNotificationTarget{
-			Kind:      clientui.AttentionNotificationTargetWorkflowTask,
-			TaskID:    "task-1",
-			SessionID: "session-1",
-			RunID:     "run-1",
+			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			TaskID:        "task-1",
+			SessionID:     "session-1",
+			CurrentNodeID: &currentNodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
 				Kind:   clientui.AttentionNotificationFocusQuestion,
 				AskIDs: []string{"ask-1", "ask-2"},

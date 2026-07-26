@@ -36,7 +36,6 @@ export type TaskListItem = Readonly<{
   updatedAt: number;
   columnKeys: readonly string[] | null;
   status: TaskStatus;
-  runCount: number;
   labelIDs: readonly string[];
 }>;
 

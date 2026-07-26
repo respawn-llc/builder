@@ -231,9 +231,7 @@ func (e *execution) retireWorkflowLocked() {
 	if err != nil {
 		panic(fmt.Sprintf("retire workflow execution scope %s: %v", e.scope.ID(), err))
 	}
-	if e.authority.byWorkflow[workflowKey] == e {
-		delete(e.authority.byWorkflow, workflowKey)
-	}
+	e.authority.removeWorkflowExecutionLocked(workflowRef, workflowKey, e)
 }
 
 func (e *execution) cleanup() error {

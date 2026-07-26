@@ -133,7 +133,7 @@ export function cardBelongsToColumn(column: BoardColumn, card: KanbanCardVM): bo
   }
   if (column.isDone) {
     return (
-      card.statusKind === "done" || card.statusKind === "canceled" || card.activeNodeIDs.includes(column.id)
+      card.statusKind === "done" || card.activeNodeIDs.includes(column.id)
     );
   }
   return card.activeNodeIDs.includes(column.id);
@@ -158,7 +158,6 @@ function cardContentEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.preview.truncated === right.preview.truncated &&
     left.updatedAt === right.updatedAt &&
     left.statusKind === right.statusKind &&
-    arrayEqual(left.statusRunIDs, right.statusRunIDs) &&
     labelsEqual(left.labels, right.labels) &&
     left.workspaceChipLabel === right.workspaceChipLabel &&
     left.borderTone === right.borderTone &&

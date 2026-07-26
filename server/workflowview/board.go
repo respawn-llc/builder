@@ -181,7 +181,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	liveExecutionsByTaskID, err := b.liveExecutionsByTask(ctx, taskIDs)
+	liveExecutionsByTaskID, err := b.liveExecutionsByTask(ctx, projectID, workflowID, taskIDs)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -218,7 +218,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
+func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID string, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
 	if len(taskIDs) == 0 {
 		return map[string][]sessionruntime.TaskExecution{}, nil
 	}
@@ -226,7 +226,9 @@ func (b *Board) liveExecutionsByTask(ctx context.Context, taskIDs []string) (map
 	for _, taskID := range taskIDs {
 		domainTaskIDs = append(domainTaskIDs, workflow.TaskID(taskID))
 	}
-	snapshots, err := b.authority.CurrentTaskExecutionSnapshots(domainTaskIDs)
+	snapshots, err := b.authority.CurrentScopedTaskExecutionSnapshots(
+		projectID, workflow.WorkflowID(workflowID), domainTaskIDs,
+	)
 	if err != nil {
 		return nil, err
 	}

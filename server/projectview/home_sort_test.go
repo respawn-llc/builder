@@ -10,6 +10,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -126,6 +127,39 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 	}
 }
 
+func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
+	ctx := context.Background()
+	fixture := newProjectHomeActivityFixture(t, ctx)
+	assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectID, fixture.older.ProjectID})
+
+	definition, _, err := fixture.workflowStore.GetDefinition(ctx, fixture.task.WorkflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var terminalNodeID string
+	for _, node := range definition.Nodes {
+		if node.Kind() == workflow.NodeKindTerminal {
+			terminalNodeID = string(workflow.NodeIDOf(node))
+			break
+		}
+	}
+	if terminalNodeID == "" {
+		t.Fatal("terminal Node is missing")
+	}
+	fixture.setNow(fixture.highUnixMs)
+	if _, err := fixture.workflowStore.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
+		TaskID:       fixture.task.ID,
+		TargetNodeID: workflow.NodeID(terminalNodeID),
+	}); err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+
+	home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectID})
+	if home.Projects[0].UpdatedAtUnixMs != fixture.highUnixMs {
+		t.Fatalf("Current Node mutation activity timestamp = %d, want %d", home.Projects[0].UpdatedAtUnixMs, fixture.highUnixMs)
+	}
+}
+
 func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 	ctx := context.Background()
 	store, _, first := newProjectViewMetadataStore(b)
@@ -180,12 +214,14 @@ func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 }
 
 type projectHomeActivityFixture struct {
-	store      *metadata.Store
-	svc        *Service
-	older      metadata.Binding
-	newer      serverapi.ProjectCreateResponse
-	task       workflowstore.TaskRecord
-	highUnixMs int64
+	store         *metadata.Store
+	svc           *Service
+	older         metadata.Binding
+	newer         serverapi.ProjectCreateResponse
+	task          workflowstore.TaskRecord
+	workflowStore *workflowstore.Store
+	setNow        func(int64)
+	highUnixMs    int64
 }
 
 func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHomeActivityFixture {
@@ -203,8 +239,9 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
+	nowUnixMs := int64(1)
 	workflowStore, err := workflowstore.New(store, workflowstore.WithNow(func() time.Time {
-		return time.UnixMilli(1)
+		return time.UnixMilli(nowUnixMs)
 	}))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
@@ -221,12 +258,14 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 		t.Fatalf("CreateTask: %v", err)
 	}
 	return projectHomeActivityFixture{
-		store:      store,
-		svc:        svc,
-		older:      older,
-		newer:      newer,
-		task:       task,
-		highUnixMs: time.Now().UTC().UnixMilli() + 10_000,
+		store:         store,
+		svc:           svc,
+		older:         older,
+		newer:         newer,
+		task:          task,
+		workflowStore: workflowStore,
+		setNow:        func(value int64) { nowUnixMs = value },
+		highUnixMs:    time.Now().UTC().UnixMilli() + 10_000,
 	}
 }
 
@@ -246,16 +285,6 @@ func assertProjectHomeOrder(t testing.TB, ctx context.Context, svc *Service, wan
 		}
 	}
 	return home
-}
-
-func taskPlacement(t testing.TB, ctx context.Context, store *metadata.Store, taskID string) (string, string) {
-	t.Helper()
-	var placementID string
-	var nodeID string
-	if err := store.DB().QueryRowContext(ctx, `SELECT id, node_id FROM task_node_placements WHERE task_id = ? LIMIT 1`, taskID).Scan(&placementID, &nodeID); err != nil {
-		t.Fatalf("get task placement: %v", err)
-	}
-	return placementID, nodeID
 }
 
 func projectHomeIDs(projects []serverapi.ProjectHomeSummary) []string {

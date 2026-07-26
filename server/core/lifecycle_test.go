@@ -43,6 +43,28 @@ func TestCoreCloseClosesResourcesOnceInReverseRegistrationOrder(t *testing.T) {
 	}
 }
 
+func TestComposeBundlesClosesWorkflowExecutionBeforeAuthorityAndPersistence(t *testing.T) {
+	bundles := composeBundles(bundleCompositionInput{})
+	registrationIndex := make(map[string]int, len(bundles.cleanup))
+	for index, resource := range bundles.cleanup {
+		registrationIndex[resource.name] = index
+	}
+
+	metadataIndex, hasMetadata := registrationIndex["metadata store"]
+	authorityIndex, hasAuthority := registrationIndex["session runtime authority"]
+	starterIndex, hasStarter := registrationIndex["workflow runtime starter"]
+	controllerIndex, hasController := registrationIndex["workflow execution controller"]
+	if !hasMetadata || !hasAuthority || !hasStarter || !hasController {
+		t.Fatalf("cleanup resources = %+v, want metadata, authority, starter, and controller", registrationIndex)
+	}
+	if !(metadataIndex < authorityIndex && authorityIndex < starterIndex && starterIndex < controllerIndex) {
+		t.Fatalf(
+			"cleanup registration = %+v, want reverse close order controller, starter, authority, metadata",
+			registrationIndex,
+		)
+	}
+}
+
 func TestCoreCloseNamesFailedResources(t *testing.T) {
 	wantErr := errors.New("boom")
 	appCore := &Core{
@@ -111,7 +133,8 @@ func TestNewWithContextCleansPersistenceOnAuthBundleFailure(t *testing.T) {
 	cfg := config.App{
 		PersistenceRoot: t.TempDir(),
 		Settings: config.Settings{
-			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+			Workflow: config.WorkflowSettings{Concurrency: 1},
 		},
 	}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)

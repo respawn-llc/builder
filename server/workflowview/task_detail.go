@@ -133,7 +133,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	snapshot, err := d.authority.CurrentTaskExecutionSnapshot(workflow.TaskID(task.ID))
+	snapshot, err := d.authority.CurrentScopedTaskExecutionSnapshot(task.ProjectID, workflow.WorkflowID(task.WorkflowID), workflow.TaskID(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}

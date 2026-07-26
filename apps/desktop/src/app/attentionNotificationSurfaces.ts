@@ -166,9 +166,9 @@ export function taskDetailInitialFocus(focus: AttentionNotificationTaskDetailFoc
     return { kind: "question", askIDs: focus.askIDs };
   }
   if (focus.kind === "approval") {
-    return { kind: "approval", taskTransitionID: focus.taskTransitionID };
+    return { kind: "approval", approvalID: focus.approvalID };
   }
-  return { kind: "interrupted_run", runID: focus.runID };
+  return { kind: "interrupted_current_node" };
 }
 
 export function notificationTitle(notification: AttentionNotification, t: Translate): string {
@@ -192,7 +192,7 @@ export function notificationBody(notification: AttentionNotification, t: Transla
   if (notification.kind === "approval") {
     return nonEmpty(notification.approval?.message) ?? t("app.attention.approvalFallback");
   }
-  return nonEmpty(notification.interruptedRun?.message) ?? interruptedRunFallback(notification, t);
+  return nonEmpty(notification.interruptedCurrentNode?.message) ?? interruptedCurrentNodeFallback(notification, t);
 }
 
 export function attentionToastID(id: string): string {
@@ -305,18 +305,24 @@ function attentionTargetIsActive(
     return attention.some(
       (item) =>
         item.kind === "question" &&
-        target.runID !== undefined &&
-        item.runID === target.runID &&
+        item.currentNode.nodeID === target.currentNodeID &&
+        item.currentNode.transitionBranchKey === (target.currentNodeBranchKey ?? null) &&
         item.sessionID === (target.sessionID ?? null) &&
-        askIDs.has(item.askID),
+        askIDs.has(item.questionID),
     );
   }
   if (focus.kind === "approval") {
     return attention.some(
-      (item) => item.kind === "approval" && item.taskTransitionID === focus.taskTransitionID,
+      (item) => item.kind === "approval" && item.approvalID === focus.approvalID,
     );
   }
-  return attention.some((item) => item.kind === "interrupted_run" && item.runID === focus.runID);
+  return attention.some(
+    (item) =>
+      item.kind === "interrupted_current_node" &&
+      item.currentNode.nodeID === target.currentNodeID &&
+      item.currentNode.transitionBranchKey === (target.currentNodeBranchKey ?? null) &&
+      item.sessionID === (target.sessionID ?? null),
+  );
 }
 
 function nativeNotification(notification: AttentionNotification, t: Translate): NativeNotification {
@@ -340,9 +346,6 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
   if (focus.kind === "question" && focus.askIDs.length === 0) {
     return null;
   }
-  if (focus.kind === "interrupted_run" && focus.runID.length === 0) {
-    return null;
-  }
   return {
     kind: "task_detail",
     taskID: target.taskID,
@@ -358,9 +361,9 @@ function nonEmpty(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function interruptedRunFallback(notification: AttentionNotification, t: Translate): string {
+function interruptedCurrentNodeFallback(notification: AttentionNotification, t: Translate): string {
   const fallback = t("app.attention.interruptedRunFallback");
-  const reason = nonEmpty(notification.interruptedRun?.reason);
+  const reason = nonEmpty(notification.interruptedCurrentNode?.reason);
   return reason === undefined ? fallback : `${fallback}: ${reason}`;
 }
 

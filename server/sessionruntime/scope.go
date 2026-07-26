@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"core/server/workflow"
@@ -13,10 +14,18 @@ import (
 type ExecutionGeneration uint64
 
 type WorkflowExecutionRef struct {
+	ProjectID   string
+	WorkflowID  workflow.WorkflowID
 	CurrentNode workflow.CurrentNodeReference
 }
 
 func (r WorkflowExecutionRef) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("workflow project id is required")
+	}
+	if strings.TrimSpace(string(r.WorkflowID)) == "" {
+		return errors.New("workflow id is required")
+	}
 	if err := r.CurrentNode.Validate(); err != nil {
 		return fmt.Errorf("workflow current node: %w", err)
 	}

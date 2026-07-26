@@ -268,45 +268,6 @@ VALUES ('task-active-workspace', 'link-1', 1, 1, 'BLD-1', 'Active', '', ?, ?, ?,
 	assertWorkspaceUnlinkBlocker(t, pendingApprovalBlockers, "non_terminal_tasks")
 }
 
-func TestDeleteProjectBlocksWorkflowWork(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	ctx, now := context.Background(), time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowTaskWithID(t, store, "task-delete-active", "link-1", 1, "BLD-1", "placement-delete-active", "node-agent")
-	seedWorkflowTaskWithID(t, store, "task-delete-running", "link-1", 2, "BLD-2", "placement-delete-running", "node-agent")
-	seedWorkflowTaskWithID(t, store, "task-delete-runnable", "link-1", 3, "BLD-3", "placement-delete-runnable", "node-agent")
-	for _, taskID := range []string{"task-delete-active", "task-delete-running", "task-delete-runnable"} {
-		insertTaskCurrentNode(t, store.db, taskID, "node-agent", nil)
-	}
-	blockers, err := store.DeleteProject(ctx, binding.ProjectID, func(ProjectSessionArtifact, bool) error { return nil })
-	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
-	}
-	counts := map[string]int{}
-	for _, blocker := range blockers {
-		counts[blocker.Code] = blocker.Count
-	}
-	if len(blockers) != 1 || counts["non_terminal_tasks"] != 3 {
-		t.Fatalf("delete blockers = %+v, want Current Node quiescence blocker", blockers)
-	}
-}
-
-func TestDeleteProjectAllowsBacklogTasks(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	ctx, now := context.Background(), time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowTaskWithID(t, store, "task-delete-backlog", "link-1", 1, "BLD-1", "placement-delete-backlog", "node-start")
-	insertTaskCurrentNode(t, store.db, "task-delete-backlog", "node-start", nil)
-
-	blockers, err := store.DeleteProject(ctx, binding.ProjectID, func(ProjectSessionArtifact, bool) error { return nil })
-	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
-	}
-	if len(blockers) != 0 {
-		t.Fatalf("delete blockers = %+v, want none for backlog-only task", blockers)
-	}
-}
-
 func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)

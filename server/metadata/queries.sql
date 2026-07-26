@@ -1375,7 +1375,7 @@ label_filter_args AS (
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
 ),
-effective_board_placements AS (
+effective_current_nodes AS (
     SELECT
         t.id AS task_id,
         current_node.node_id
@@ -1387,7 +1387,7 @@ effective_board_placements AS (
 SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
-FROM effective_board_placements
+FROM effective_current_nodes
 JOIN label_filter_args
 WHERE (
     label_filter_args.label_filter_kind = 'none'
@@ -1399,7 +1399,7 @@ WHERE (
             FROM json_each(label_filter_args.label_ids_json) selected_label
             JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
               ON assignment.label_id = selected_label.value
-            WHERE assignment.task_id = effective_board_placements.task_id
+            WHERE assignment.task_id = effective_current_nodes.task_id
         )
     )
     OR (
@@ -1412,7 +1412,7 @@ WHERE (
                 SELECT 1
                 FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                 WHERE assignment.label_id = selected_label.value
-                  AND assignment.task_id = effective_board_placements.task_id
+                  AND assignment.task_id = effective_current_nodes.task_id
             )
         )
     )
@@ -1421,7 +1421,7 @@ WHERE (
         AND NOT EXISTS (
             SELECT 1
             FROM task_label_assignments assignment
-            WHERE assignment.task_id = effective_board_placements.task_id
+            WHERE assignment.task_id = effective_current_nodes.task_id
         )
     )
 )

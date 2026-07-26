@@ -116,8 +116,7 @@ function OrdinaryQuestionForm({
         kind: "ordinary",
         clientRequestID,
         taskID: taskId,
-        runID: attention.runID,
-        askID: attention.askID,
+        askID: attention.questionID,
         selectedOptionNumber: selectedOption,
         freeformAnswer: answer,
       }),
@@ -230,8 +229,7 @@ function ApprovalQuestionForm({
         kind: "approval",
         clientRequestID,
         taskID: taskId,
-        runID: attention.runID,
-        askID: attention.askID,
+        askID: attention.questionID,
         decision: selectedDecision,
         commentary: answer,
       }),
@@ -410,7 +408,7 @@ async function submitQuestionAnswer({
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   selection: QuestionSelectionState;
 }>): Promise<void> {
-  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.askID);
+  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.questionID);
   const submittingSelection = { ...selection, clientRequestID, submission: "submitting" as const };
   onSelectionStateChange(submittingSelection);
   try {
@@ -420,7 +418,7 @@ async function submitQuestionAnswer({
     onSelectionStateChange({ ...submittingSelection, submission: "idle" });
     showStatusToast({
       body: errorMessage(error),
-      id: `task-question-answer-failed:${attention.askID}`,
+      id: `task-question-answer-failed:${attention.questionID}`,
       title: failureTitle,
       tone: "danger",
     });

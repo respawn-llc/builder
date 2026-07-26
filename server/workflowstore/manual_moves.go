@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
@@ -74,7 +75,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
+	definition, workflowRecord, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
@@ -131,6 +132,42 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, s.now().UnixMilli()); err != nil {
 			return ManualMoveResult{}, err
 		}
+		if edge.RequiresApproval {
+			group, err := manualMoveTransitionGroup(definition, edge)
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
+			if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(prepared.request.TaskID)); err != nil {
+				return ManualMoveResult{}, err
+			}
+			approval, err := newPendingApproval(
+				source,
+				workflowRecord.Version,
+				group,
+				workflow.NodeDisplayName(sourceDefinition),
+				edge,
+				targetDefinition,
+				target,
+				preparedOutput.OutputValues,
+				s.now().UTC(),
+			)
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
+			if err := insertPendingApproval(ctx, q, approval); err != nil {
+				return ManualMoveResult{}, err
+			}
+			if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
+				return ManualMoveResult{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return ManualMoveResult{}, err
+			}
+			return ManualMoveResult{
+				Retained:        currentNodes,
+				PendingApproval: &approval,
+			}, nil
+		}
 	} else {
 		currentNodes, err = listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
 		if err != nil {
@@ -177,6 +214,15 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		Removed: removedReferences,
 		Created: []workflow.CurrentNode{target},
 	}}, nil
+}
+
+func manualMoveTransitionGroup(definition workflow.Definition, edge workflow.Edge) (workflow.TransitionGroup, error) {
+	for _, group := range definition.TransitionGroups {
+		if group.ID == edge.TransitionGroupID {
+			return group, nil
+		}
+	}
+	return workflow.TransitionGroup{}, fmt.Errorf("manual move edge %q transition group %q is absent from workflow %q", edge.ID, edge.TransitionGroupID, definition.ID)
 }
 
 func resolveManualMoveExecutablePath(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID, definition workflow.Definition, targetNodeID workflow.NodeID) ([]workflow.CurrentNode, workflow.CurrentNode, workflow.Edge, workflow.Node, error) {

@@ -29,7 +29,7 @@ type ApprovalQuestionAttentionRegistry interface {
 }
 
 // TaskQuestionContext contains durable Task facts plus the exact Current Node
-// that owns a volatile prompt. It never contains a Run.
+// that owns a volatile prompt. It contains no persisted execution identity.
 type TaskQuestionContext struct {
 	Task        workflowstore.TaskRecord
 	CurrentNode workflow.CurrentNodeReference

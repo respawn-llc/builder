@@ -3396,7 +3396,7 @@ label_filter_args AS (
         CAST(?2 AS TEXT) AS label_filter_mode,
         CAST(?3 AS TEXT) AS label_ids_json
 ),
-effective_board_placements AS (
+effective_current_nodes AS (
     SELECT
         t.id AS task_id,
         current_node.node_id
@@ -3408,7 +3408,7 @@ effective_board_placements AS (
 SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
-FROM effective_board_placements
+FROM effective_current_nodes
 JOIN label_filter_args
 WHERE (
     label_filter_args.label_filter_kind = 'none'
@@ -3420,7 +3420,7 @@ WHERE (
             FROM json_each(label_filter_args.label_ids_json) selected_label
             JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
               ON assignment.label_id = selected_label.value
-            WHERE assignment.task_id = effective_board_placements.task_id
+            WHERE assignment.task_id = effective_current_nodes.task_id
         )
     )
     OR (
@@ -3433,7 +3433,7 @@ WHERE (
                 SELECT 1
                 FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                 WHERE assignment.label_id = selected_label.value
-                  AND assignment.task_id = effective_board_placements.task_id
+                  AND assignment.task_id = effective_current_nodes.task_id
             )
         )
     )
@@ -3442,7 +3442,7 @@ WHERE (
         AND NOT EXISTS (
             SELECT 1
             FROM task_label_assignments assignment
-            WHERE assignment.task_id = effective_board_placements.task_id
+            WHERE assignment.task_id = effective_current_nodes.task_id
         )
     )
 )
@@ -3480,15 +3480,15 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 	var items []ListBoardColumnTaskCountsRow
 	for rows.Next() {
 		var i ListBoardColumnTaskCountsRow
-		if err := rows.Scan(&i.NodeID, &i.TaskCount); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3658,7 +3658,7 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	var items []ListBoardNodeTasksRow
 	for rows.Next() {
 		var i ListBoardNodeTasksRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -3679,15 +3679,15 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		); err != nil {
+		), listBoardNodeTasks, 10); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 10); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 10); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3727,15 +3727,15 @@ func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) ([]ListMeta
 	var items []ListMetadataSchemaDefinitionsRow
 	for rows.Next() {
 		var i ListMetadataSchemaDefinitionsRow
-		if err := rows.Scan(&i.ObjectKind, &i.ObjectName, &i.Ddl); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ObjectKind, &i.ObjectName, &i.Ddl), listMetadataSchemaDefinitions, 0); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listMetadataSchemaDefinitions, 0); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listMetadataSchemaDefinitions, 0); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3796,21 +3796,21 @@ func (q *Queries) ListNewerSessionPage(ctx context.Context, arg ListNewerSession
 	var items []ListNewerSessionPageRow
 	for rows.Next() {
 		var i ListNewerSessionPageRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.FirstPromptPreview,
 			&i.Category,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listNewerSessionPage, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listNewerSessionPage, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listNewerSessionPage, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3855,21 +3855,21 @@ func (q *Queries) ListNewestSessionPage(ctx context.Context, arg ListNewestSessi
 	var items []ListNewestSessionPageRow
 	for rows.Next() {
 		var i ListNewestSessionPageRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.FirstPromptPreview,
 			&i.Category,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listNewestSessionPage, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listNewestSessionPage, 3); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listNewestSessionPage, 3); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3930,21 +3930,21 @@ func (q *Queries) ListOlderSessionPage(ctx context.Context, arg ListOlderSession
 	var items []ListOlderSessionPageRow
 	for rows.Next() {
 		var i ListOlderSessionPageRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.FirstPromptPreview,
 			&i.Category,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listOlderSessionPage, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listOlderSessionPage, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listOlderSessionPage, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4031,7 +4031,7 @@ func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectH
 	var items []ListProjectHomeSummariesRow
 	for rows.Next() {
 		var i ListProjectHomeSummariesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ProjectID,
 			&i.ProjectKey,
 			&i.DisplayName,
@@ -4045,15 +4045,15 @@ func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectH
 			&i.TaskCount,
 			&i.AttentionCount,
 			&i.WorkflowCount,
-		); err != nil {
+		), listProjectHomeSummaries, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectHomeSummaries, 3); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectHomeSummaries, 3); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4084,15 +4084,15 @@ func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsR
 	var items []ListProjectKeyRowsRow
 	for rows.Next() {
 		var i ListProjectKeyRowsRow
-		if err := rows.Scan(&i.ID, &i.DisplayName, &i.ProjectKey); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.DisplayName, &i.ProjectKey), listProjectKeyRows, 0); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectKeyRows, 0); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectKeyRows, 0); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4122,15 +4122,15 @@ func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]Li
 	var items []ListProjectLabelsRow
 	for rows.Next() {
 		var i ListProjectLabelsRow
-		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ProjectID, &i.Name), listProjectLabels, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectLabels, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectLabels, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4169,15 +4169,15 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 	var items []ListProjectLabelsByIDsRow
 	for rows.Next() {
 		var i ListProjectLabelsByIDsRow
-		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ProjectID, &i.Name), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4208,15 +4208,15 @@ func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID str
 	var items []ListProjectSessionArtifactsRow
 	for rows.Next() {
 		var i ListProjectSessionArtifactsRow
-		if err := rows.Scan(&i.ID, &i.ArtifactRelpath); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ArtifactRelpath), listProjectSessionArtifacts, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectSessionArtifacts, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectSessionArtifacts, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4239,15 +4239,15 @@ func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) (
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&id), listProjectSessionIDs, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectSessionIDs, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectSessionIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4269,15 +4269,15 @@ func (q *Queries) ListProjectTaskIDs(ctx context.Context, projectID string) ([]s
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&id), listProjectTaskIDs, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectTaskIDs, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectTaskIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4315,15 +4315,15 @@ func (q *Queries) ListProjectWorkflowLinkTaskReferences(ctx context.Context, arg
 	var items []ListProjectWorkflowLinkTaskReferencesRow
 	for rows.Next() {
 		var i ListProjectWorkflowLinkTaskReferencesRow
-		if err := rows.Scan(&i.ID, &i.ShortID, &i.Title); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ShortID, &i.Title), listProjectWorkflowLinkTaskReferences, 2); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinkTaskReferences, 2); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinkTaskReferences, 2); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4352,22 +4352,22 @@ func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listProjectWorkflowLinks, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinks, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinks, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4397,22 +4397,22 @@ func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, 
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowLinksForTaskSelection, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4443,15 +4443,15 @@ func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID
 	var items []ListProjectWorkflowTaskActivityRow
 	for rows.Next() {
 		var i ListProjectWorkflowTaskActivityRow
-		if err := rows.Scan(&i.WorkflowID, &i.LatestUpdatedAtUnixMs); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.WorkflowID, &i.LatestUpdatedAtUnixMs), listProjectWorkflowTaskActivity, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkflowTaskActivity, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkflowTaskActivity, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4490,21 +4490,21 @@ func (q *Queries) ListProjectWorkspaces(ctx context.Context, projectID string) (
 	var items []ListProjectWorkspacesRow
 	for rows.Next() {
 		var i ListProjectWorkspacesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.RootPath,
 			&i.IsPrimary,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		); err != nil {
+		), listProjectWorkspaces, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaces, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaces, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4551,21 +4551,21 @@ func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProject
 	var items []ListProjectWorkspacesPageRow
 	for rows.Next() {
 		var i ListProjectWorkspacesPageRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.RootPath,
 			&i.IsPrimary,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		); err != nil {
+		), listProjectWorkspacesPage, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspacesPage, 3); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspacesPage, 3); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4605,22 +4605,22 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	var items []ListProjectsRow
 	for rows.Next() {
 		var i ListProjectsRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.DisplayName,
 			&i.ProjectKey,
 			&i.RootPath,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		); err != nil {
+		), listProjects, 0); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjects, 0); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjects, 0); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4657,15 +4657,15 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 	var items []ListSessionNamesByIDsRow
 	for rows.Next() {
 		var i ListSessionNamesByIDsRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.Name), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4700,15 +4700,15 @@ func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSess
 	var items []string
 	for rows.Next() {
 		var text string
-		if err := rows.Scan(&text); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&text), listSessionPromptHistoryText, 2); err != nil {
 			return nil, err
 		}
 		items = append(items, text)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listSessionPromptHistoryText, 2); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listSessionPromptHistoryText, 2); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4732,15 +4732,15 @@ func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID stri
 	var items []sql.NullString
 	for rows.Next() {
 		var task_id sql.NullString
-		if err := rows.Scan(&task_id); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&task_id), listSessionWorkflowTaskIDs, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, task_id)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listSessionWorkflowTaskIDs, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listSessionWorkflowTaskIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4772,15 +4772,15 @@ func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID 
 	var items []ListSessionsTargetingWorktreeRow
 	for rows.Next() {
 		var i ListSessionsTargetingWorktreeRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.UpdatedAtUnixMs); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.Name, &i.UpdatedAtUnixMs), listSessionsTargetingWorktree, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listSessionsTargetingWorktree, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listSessionsTargetingWorktree, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4807,20 +4807,20 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 	var items []TaskActiveFanoutBranch
 	for rows.Next() {
 		var i TaskActiveFanoutBranch
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.TaskID,
 			&i.TransitionBranchKey,
 			&i.ArrivalState,
 			&i.ArrivalValuesJson,
-		); err != nil {
+		), listTaskActiveFanoutBranches, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskActiveFanoutBranches, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskActiveFanoutBranches, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4859,15 +4859,15 @@ func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds [
 	var items []ListTaskAssignedLabelIDsByTasksRow
 	for rows.Next() {
 		var i ListTaskAssignedLabelIDsByTasksRow
-		if err := rows.Scan(&i.TaskID, &i.LabelID); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.LabelID), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4905,7 +4905,7 @@ func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsPara
 	var items []TaskComment
 	for rows.Next() {
 		var i TaskComment
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.TaskID,
 			&i.Body,
@@ -4913,15 +4913,15 @@ func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsPara
 			&i.AuthorID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listTaskComments, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskComments, 3); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskComments, 3); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -4960,7 +4960,7 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 	var items []TaskComment
 	for rows.Next() {
 		var i TaskComment
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.TaskID,
 			&i.Body,
@@ -4968,15 +4968,15 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 			&i.AuthorID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5030,7 +5030,7 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 	var items []TaskComment
 	for rows.Next() {
 		var i TaskComment
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.TaskID,
 			&i.Body,
@@ -5038,15 +5038,15 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 			&i.AuthorID,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listTaskCommentsPage, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskCommentsPage, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskCommentsPage, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5096,7 +5096,7 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 	var items []ListTaskCurrentNodesRow
 	for rows.Next() {
 		var i ListTaskCurrentNodesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.TaskID,
 			&i.NodeID,
 			&i.TransitionBranchKey,
@@ -5108,15 +5108,15 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
-		); err != nil {
+		), listTaskCurrentNodes, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskCurrentNodes, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskCurrentNodes, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5177,7 +5177,7 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 	var items []ListTaskCurrentNodesByTasksRow
 	for rows.Next() {
 		var i ListTaskCurrentNodesByTasksRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.TaskID,
 			&i.NodeID,
 			&i.TransitionBranchKey,
@@ -5189,15 +5189,15 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
-		); err != nil {
+		), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5225,21 +5225,21 @@ func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalI
 	var items []TaskPendingApprovalBranch
 	for rows.Next() {
 		var i TaskPendingApprovalBranch
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ApprovalID,
 			&i.TransitionBranchKey,
 			&i.TargetSnapshotJson,
 			&i.EffectiveEdgeConfigurationJson,
 			&i.ContextSourceResolutionJson,
-		); err != nil {
+		), listTaskPendingApprovalBranches, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovalBranches, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovalBranches, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5271,7 +5271,7 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	var items []TaskPendingApproval
 	for rows.Next() {
 		var i TaskPendingApproval
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.SourceTaskID,
 			&i.SourceNodeID,
@@ -5281,15 +5281,15 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 			&i.TransitionSnapshotJson,
 			&i.MaterializedValuesJson,
 			&i.CreatedAtUnixMs,
-		); err != nil {
+		), listTaskPendingApprovals, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovals, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovals, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5340,7 +5340,7 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 	var items []TaskRecord
 	for rows.Next() {
 		var i TaskRecord
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -5361,15 +5361,15 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		); err != nil {
+		), listTasksByProject, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTasksByProject, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTasksByProject, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5425,7 +5425,7 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 	var items []ListTasksByShortIDRow
 	for rows.Next() {
 		var i ListTasksByShortIDRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -5441,15 +5441,15 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-		); err != nil {
+		), listTasksByShortID, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTasksByShortID, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5614,7 +5614,7 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 	var items []ListWorkflowDurableAttentionCandidatesRow
 	for rows.Next() {
 		var i ListWorkflowDurableAttentionCandidatesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.Kind,
 			&i.ID,
 			&i.ProjectID,
@@ -5629,15 +5629,15 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.OccurredAtUnixMs,
-		); err != nil {
+		), listWorkflowDurableAttentionCandidates, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowDurableAttentionCandidates, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowDurableAttentionCandidates, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5693,7 +5693,7 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID string) ([]L
 	var items []ListWorkflowEdgesRow
 	for rows.Next() {
 		var i ListWorkflowEdgesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.TransitionGroupID,
@@ -5708,15 +5708,15 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID string) ([]L
 			&i.InputBindingsJson,
 			&i.OutputRequirementsJson,
 			&i.SortOrder,
-		); err != nil {
+		), listWorkflowEdges, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowEdges, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowEdges, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5744,21 +5744,21 @@ func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID string)
 	var items []WorkflowNodeGroup
 	for rows.Next() {
 		var i WorkflowNodeGroup
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.GroupKey,
 			&i.DisplayName,
 			&i.SortOrder,
-		); err != nil {
+		), listWorkflowNodeGroups, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowNodeGroups, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowNodeGroups, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5812,7 +5812,7 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID string) ([]L
 	var items []ListWorkflowNodesRow
 	for rows.Next() {
 		var i ListWorkflowNodesRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.NodeKey,
@@ -5827,15 +5827,15 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID string) ([]L
 			&i.OutputFieldsJson,
 			&i.GroupID,
 			&i.SortOrder,
-		); err != nil {
+		), listWorkflowNodes, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowNodes, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowNodes, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5864,22 +5864,22 @@ func (q *Queries) ListWorkflowProjectLinks(ctx context.Context, workflowID strin
 	var items []ProjectWorkflowLinkRecord
 	for rows.Next() {
 		var i ProjectWorkflowLinkRecord
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.IsDefault,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listWorkflowProjectLinks, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowProjectLinks, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowProjectLinks, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6049,7 +6049,7 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 	var items []ListWorkflowRecordsPageRow
 	for rows.Next() {
 		var i ListWorkflowRecordsPageRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
@@ -6062,15 +6062,15 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.ProjectActivityAtUnixMs,
 			&i.ProjectLinkDefault,
 			&i.ProjectNameOrderKey,
-		); err != nil {
+		), listWorkflowRecordsPage, 9); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowRecordsPage, 9); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowRecordsPage, 9); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6157,22 +6157,22 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 	var items []ListWorkflowTaskActivityRowsRow
 	for rows.Next() {
 		var i ListWorkflowTaskActivityRowsRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ActivityID,
 			&i.Kind,
 			&i.SourceID,
 			&i.OccurredAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.SessionName,
-		); err != nil {
+		), listWorkflowTaskActivityRows, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 5); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6194,15 +6194,15 @@ func (q *Queries) ListWorkflowTaskIDs(ctx context.Context, workflowID string) ([
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&id), listWorkflowTaskIDs, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskIDs, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6681,7 +6681,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 	var items []ListWorkflowTaskListRowsRow
 	for rows.Next() {
 		var i ListWorkflowTaskListRowsRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
@@ -6711,15 +6711,15 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.AttentionTypesJson,
 			&i.TitleSort,
 			&i.MatchingWorkflowCount,
-		); err != nil {
+		), listWorkflowTaskListRows, 31); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 31); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 31); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6767,22 +6767,22 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 	var items []ListWorkflowTaskStatusRecordsByTasksRow
 	for rows.Next() {
 		var i ListWorkflowTaskStatusRecordsByTasksRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.TaskID,
 			&i.IsDone,
 			&i.Kind,
 			&i.PrimaryStatusRank,
 			&i.NodeIdsJson,
 			&i.AttentionTypesJson,
-		); err != nil {
+		), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), query, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6823,7 +6823,7 @@ func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID s
 	var items []ListWorkflowTransitionGroupsRow
 	for rows.Next() {
 		var i ListWorkflowTransitionGroupsRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
 			&i.SourceNodeID,
@@ -6831,15 +6831,15 @@ func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID s
 			&i.DisplayName,
 			&i.Description,
 			&i.SortOrder,
-		); err != nil {
+		), listWorkflowTransitionGroups, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTransitionGroups, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTransitionGroups, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6869,7 +6869,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 	var items []Workflow
 	for rows.Next() {
 		var i Workflow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
@@ -6878,15 +6878,15 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 			&i.ExecutionTargetCustomRef,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listWorkflows, 0); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflows, 0); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflows, 0); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6923,21 +6923,21 @@ func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, cano
 	var items []ListWorkspaceBindingsByCanonicalRootRow
 	for rows.Next() {
 		var i ListWorkspaceBindingsByCanonicalRootRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ProjectID,
 			&i.ProjectDisplayName,
 			&i.ProjectKey,
 			&i.WorkspaceID,
 			&i.WorkspaceRoot,
-		); err != nil {
+		), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkspaceBindingsByCanonicalRoot, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6960,15 +6960,15 @@ func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.N
 	var items []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&id), listWorkspaceSessionIDs, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkspaceSessionIDs, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkspaceSessionIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6997,22 +6997,22 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 	var items []Workspace
 	for rows.Next() {
 		var i Workspace
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
 			&i.CanonicalRootPath,
 			&i.GitMetadataJson,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listWorkspacesByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkspacesByCanonicalRoot, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkspacesByCanonicalRoot, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7061,7 +7061,7 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 	var items []ListWorktreesByWorkspaceIDRow
 	for rows.Next() {
 		var i ListWorktreesByWorkspaceIDRow
-		if err := rows.Scan(
+		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
 			&i.CanonicalRootPath,
@@ -7073,15 +7073,15 @@ func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID st
 			&i.CreationBaseCommitOid,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
-		); err != nil {
+		), listWorktreesByWorkspaceID, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := rows.Close(); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorktreesByWorkspaceID, 1); err != nil {
 		return nil, err
 	}
-	if err := rows.Err(); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorktreesByWorkspaceID, 1); err != nil {
 		return nil, err
 	}
 	return items, nil

@@ -61,7 +61,7 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	live, err := a.liveQuestionCandidates(ctx, nil)
+	live, err := a.liveQuestionCandidates(ctx, nil, nil)
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
@@ -94,14 +94,15 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
 	taskID := strings.TrimSpace(req.TaskID)
-	if _, err := a.queries.GetTask(ctx, taskID); err != nil {
+	task, err := a.queries.GetTask(ctx, taskID)
+	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
 	durable, err := a.durableCandidates(ctx, attentionPageCursor{}, &taskID, 0)
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	live, err := a.liveQuestionCandidates(ctx, &taskID)
+	live, err := a.liveQuestionCandidates(ctx, &taskID, &task)
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
@@ -250,8 +251,16 @@ func currentNodeFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentio
 	return currentNode, nil
 }
 
-func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *string) ([]attentionCandidate, error) {
-	snapshots, err := a.authority.CurrentWorkflowTaskExecutionSnapshots()
+func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *string, selectedTask *sqlitegen.TaskRecord) ([]attentionCandidate, error) {
+	var snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	var err error
+	if selectedTask == nil {
+		snapshots, err = a.authority.CurrentWorkflowTaskExecutionSnapshots()
+	} else {
+		snapshots, err = a.authority.CurrentScopedTaskExecutionSnapshots(
+			selectedTask.ProjectID, workflow.WorkflowID(selectedTask.WorkflowID), []workflow.TaskID{workflow.TaskID(selectedTask.ID)},
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

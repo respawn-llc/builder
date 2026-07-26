@@ -278,7 +278,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
-	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController)
+	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions: workflowDefinitions,
 		Board:       workflowBoard,

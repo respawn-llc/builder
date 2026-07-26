@@ -840,6 +840,10 @@ type currentNodeControllerStore struct {
 	interruptOnce    sync.Once
 }
 
+func (*currentNodeControllerStore) TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error) {
+	return workflowstore.TaskExecutionScope{ProjectID: "project-test", WorkflowID: "workflow-test"}, nil
+}
+
 type currentNodeInterruptionRecord struct {
 	reason workflow.CurrentNodeInterruptionReason
 	detail workflow.CurrentNodeInterruptionDetail
@@ -1044,7 +1048,7 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
-	lease, err := f.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{CurrentNode: reference})
+	lease, err := f.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: "workflow-test", CurrentNode: reference})
 	if err != nil {
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}

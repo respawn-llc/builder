@@ -39,30 +39,22 @@ describe("worktree setup API", () => {
         result: {
           outcome: "applied",
           applied: {
-            transition_id: "transition-1",
-            placement_id: "placement-1",
-            run_id: "run-1",
+            current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
           },
-        },
-      },
-      {
-        method: "workflow.task.approve",
-        result: {
-          outcome: "applied",
-          applied: { transition_id: "transition-1", task_id: "task-1", state: "approved" },
         },
       },
       {
         method: "workflow.task.move",
         result: {
           outcome: "applied",
-          applied: { transition_id: "transition-1", state: "approved", run_ids: [] },
+          applied: {
+            current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+          },
         },
       },
     ]);
     const client = new ApiClient(transport);
     const startSetupID = newSetupOperationID();
-    const approveSetupID = newSetupOperationID();
     const moveSetupID = newSetupOperationID();
 
     client.subscribeWorktreeSetup(startSetupID, {
@@ -77,12 +69,9 @@ describe("worktree setup API", () => {
       },
     });
     await client.startTask("task-1", startSetupID);
-    await client.approveTransition("transition-1", approveSetupID);
     await client.moveTask({
       taskID: "task-1",
       targetNodeID: "node-1",
-      allowMissingEdge: true,
-      autoApprove: true,
       setupOperationID: moveSetupID,
     });
 
@@ -92,7 +81,6 @@ describe("worktree setup API", () => {
     });
     for (const [method, expectedSetupID] of [
       ["workflow.task.start", startSetupID],
-      ["workflow.task.approve", approveSetupID],
       ["workflow.task.move", moveSetupID],
     ] as const) {
       const call = transport.calls.find((entry) => entry.method === method);

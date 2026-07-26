@@ -8,19 +8,19 @@ The final handwritten non-test production diff must be net-negative. Tests,
 generated SQL, migrations, documentation, and `.kent` working evidence are
 excluded from this calculation.
 
-## Current inventory — 2026-07-24
+## Final inventory — 2026-07-26
 
 - Recompute the ledger after every coherent commit from `3c7d45a62` with the
   command below. It includes untracked handwritten production files and
   excludes tests, generated SQL, migrations, documentation, `.kent`, and the
   frozen `tui-rs/` tree.
-- Current dirty-worktree snapshot at `2026-07-24T23:56:21Z`,
-  `HEAD=4d9c0fc2c977677ac6c425343ab7bbad41edba9f`, production-patch SHA-256
-  `9f7a311626cd0163fb9e1b87031cc55d0d99f777a6c10736a20680240676b8f9`:
-  121 included files, `+8613 / -11912`, net `-3299`.
-- The net-negative gate is passing. This is server/API checkpoint evidence,
-  not a claim that deferred Go-client, CLI, Desktop, protocol, documentation,
-  repository-wide verification, or manual QA work is complete.
+- Final dirty-worktree snapshot at `2026-07-26T18:05:02+0200`,
+  `HEAD=62a6e55775deee1b5e214a563ae420ffe0774ca0`, production-patch SHA-256
+  `ef10dd89a4d1d9f99a5495068f105f72397124236bdc324879ec7a4f800743f2`:
+  206 included files, `+10908 / -13520`, net `-2612`.
+- The net-negative gate passes. Manual QA and deployment are excluded from the
+  takeover goal; all scoped non-Rust tests, CI checks, docs verification, and
+  builds are recorded in `KENT-334-cutover-checklist.md`.
 
 ```sh
 set -eu -o pipefail

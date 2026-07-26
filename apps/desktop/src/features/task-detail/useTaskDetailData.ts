@@ -155,10 +155,6 @@ export function useTaskMutations(
       mutationFn: async (commentID: string) => api.deleteComment(commentID),
       onSuccess: refresh,
     }),
-    cancel: useMutation({
-      mutationFn: async () => api.cancelTask(taskID),
-      onSuccess: refresh,
-    }),
     interrupt: useMutation({
       mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),
       onError: (error) => {
@@ -171,6 +167,10 @@ export function useTaskMutations(
       onError: (error) => {
         onActionError?.("resume", error);
       },
+      onSuccess: refresh,
+    }),
+    approveApproval: useMutation({
+      mutationFn: async (approvalID: string) => api.approveApproval(approvalID),
       onSuccess: refresh,
     }),
     answerQuestion: useMutation({

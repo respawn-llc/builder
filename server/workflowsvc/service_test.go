@@ -282,6 +282,70 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 }
 
+func TestServiceManualMoveRequiredApprovalRetainsSourceUntilApprovalStartsTarget(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "next")
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	sourceNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "implement")
+	execution := &manualMoveExecutionStub{}
+	service.currentNodeExecution = execution
+	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	execution.started = nil
+
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           task.Task.ID,
+		TargetNodeID:     targetNodeID,
+		OutputValues:     map[string]string{"prior_summary": "manual plan"},
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if err := moved.Validate(); err != nil {
+		t.Fatalf("MoveWorkflowTask response validation: %v", err)
+	}
+	if moved.Applied == nil ||
+		len(moved.Applied.CurrentNodes) != 1 ||
+		moved.Applied.CurrentNodes[0].NodeID != sourceNodeID {
+		t.Fatalf("move response = %+v, want retained source Current Node", moved)
+	}
+	if len(execution.started) != 0 {
+		t.Fatalf("execution starts before Approval = %+v, want none", execution.started)
+	}
+	approvals, err := service.store.ListPendingApprovals(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if len(approvals) != 1 {
+		t.Fatalf("pending Approvals = %+v, want one", approvals)
+	}
+
+	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		ApprovalID: approvals[0].ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask: %v", err)
+	}
+	if err := approved.Validate(); err != nil {
+		t.Fatalf("ApproveWorkflowTask response validation: %v", err)
+	}
+	if approved.Applied == nil ||
+		len(approved.Applied.CurrentNodes) != 1 ||
+		approved.Applied.CurrentNodes[0].NodeID != targetNodeID {
+		t.Fatalf("Approval response = %+v, want target Current Node", approved)
+	}
+	if len(execution.started) != 1 || execution.started[0].NodeID != workflow.NodeID(targetNodeID) {
+		t.Fatalf("execution starts after Approval = %+v, want target Current Node", execution.started)
+	}
+}
+
 func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -533,7 +597,7 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 				Graph:           workflowGraphDraftFromDefinition(definition.Definition),
 			})
 			return err
-		})
+		}, nil)
 	})
 	t.Run("workflow delete", func(t *testing.T) {
 		ctx, service, _, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
@@ -551,8 +615,24 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 				ExpectedTaskCount:    preview.Impact.TaskCount,
 			})
 			return err
-		})
+		}, nil)
 	})
+}
+
+func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+
+	waitForWorkflowMutationPermit(t, service, func() error {
+		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
+	}, func() {
+		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
+			t.Fatalf("GetWorkflowTask while delete waits: %v", err)
+		}
+	})
+
+	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
+		t.Fatal("deleted workflow task remains readable after permit release")
+	}
 }
 
 func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T) {
@@ -1182,7 +1262,7 @@ func (s *manualMoveExecutionStub) EnsureTaskQuiescent(taskID workflow.TaskID) er
 	return s.quiescentErr
 }
 
-func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation func() error) {
+func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation func() error, whileBlocked func()) {
 	t.Helper()
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -1203,6 +1283,9 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	case err := <-finished:
 		t.Fatalf("workflow mutation escaped the shared permit: %v", err)
 	case <-time.After(25 * time.Millisecond):
+	}
+	if whileBlocked != nil {
+		whileBlocked()
 	}
 	close(release)
 	if err := <-held; err != nil {
@@ -1991,6 +2074,33 @@ func setWorkflowGraphDraftEdgePrompt(graph serverapi.WorkflowGraphDraft, edgeID 
 		updated.Edges = append(updated.Edges, edge)
 	}
 	return updated
+}
+
+func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID string, edgeKey string) {
+	t.Helper()
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow before Approval update: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	found := false
+	for index := range graph.Edges {
+		if graph.Edges[index].Key != edgeKey {
+			continue
+		}
+		graph.Edges[index].RequiresApproval = true
+		found = true
+	}
+	if !found {
+		t.Fatalf("workflow edge key %q not found", edgeKey)
+	}
+	if _, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	}); err != nil {
+		t.Fatalf("SaveWorkflowGraph Approval update: %v", err)
+	}
 }
 
 func setWorkflowGraphDraftTransitionDescription(graph serverapi.WorkflowGraphDraft, groupID string, description string) serverapi.WorkflowGraphDraft {

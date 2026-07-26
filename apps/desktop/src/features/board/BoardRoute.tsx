@@ -25,7 +25,6 @@ import { ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
-import { useBoardMoveRunFeedback } from "./BoardMoveRunFeedback";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
@@ -35,7 +34,6 @@ import { BoardBackgroundRefreshNotice } from "./BoardBackgroundRefreshNotice";
 import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
 import {
   classifyDrop,
-  isExecutableAutomationColumn,
   missingInputValues,
   type PendingDrop,
   type PendingMissingInputDrop,
@@ -227,13 +225,9 @@ function BoardContent({
   const { openSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const moveRunFeedback = useBoardMoveRunFeedback();
   const executionTargetContinuation = useExecutionTargetContinuation({
     execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
-    onApplied: async (result) => {
-      if (result.kind === "move" && result.response.outcome === "applied") {
-        moveRunFeedback.trackMoveRunIDs(result.response.applied);
-      }
+    onApplied: async () => {
       await actions.refresh();
     },
     onAppliedError: (error) => {
@@ -366,10 +360,6 @@ function BoardContent({
       const moveInput = {
         taskID: dragPayload.taskID,
         targetNodeID: column.id,
-        ...(dropAction.allowMissingEdge === undefined
-          ? {}
-          : { allowMissingEdge: dropAction.allowMissingEdge }),
-        ...(dropAction.autoApprove === undefined ? {} : { autoApprove: dropAction.autoApprove }),
       };
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
       runCardAction(moveExecutionTargetAction(moveInput), pendingMove);
@@ -486,7 +476,6 @@ function BoardContent({
       moveExecutionTargetAction({
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
-        autoApprove: true,
       }),
       pendingMove,
     );
@@ -505,8 +494,6 @@ function BoardContent({
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
         outputValues: drop.values,
-        allowMissingEdge: true,
-        autoApprove: isExecutableAutomationColumn(drop.targetColumn),
       }),
       pendingMove,
     );
@@ -593,7 +580,6 @@ function BoardContent({
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
             onExpandColumn={expandColumn}
-            onInterruptedRunObserved={moveRunFeedback.observeInterruptedRun}
             onInterruptTask={interruptTask}
             onRegisterColumnScrollport={dragAutoScroll.registerColumnScrollport}
             pendingCardMove={pendingCardMove}

@@ -351,7 +351,7 @@ const TaskCard = memo(function TaskCard({
     },
     [instanceColumnID, instanceTaskID, registerMotionCard],
   );
-  const canDrag = !actionsDisabled && card.statusKind !== "canceled";
+  const canDrag = !actionsDisabled;
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
   const availableActions = taskCardActionAvailability(card);
   const labelItems = useMemo(

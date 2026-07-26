@@ -28,7 +28,7 @@ export type TaskListInput = Readonly<{
   labelFilter: TaskLabelFilter;
   sort?:
     | readonly Readonly<{
-        field: "created" | "updated" | "status" | "column" | "run_count" | "title";
+        field: "created" | "updated" | "status" | "column" | "title";
         direction: "asc" | "desc";
       }>[]
     | undefined;
@@ -116,8 +116,6 @@ export type TaskMoveInput = Readonly<{
   taskID: string;
   targetNodeID: string;
   outputValues?: Readonly<Record<string, string>>;
-  allowMissingEdge?: boolean;
-  autoApprove?: boolean;
   setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
 }>;
@@ -126,7 +124,6 @@ export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
   clientRequestID: string;
   taskID: string;
-  runID: string;
   askID: string;
   selectedOptionNumber: number | null;
   freeformAnswer: string;
@@ -136,7 +133,6 @@ export type ApprovalQuestionAnswerInput = Readonly<{
   kind: "approval";
   clientRequestID: string;
   taskID: string;
-  runID: string;
   askID: string;
   decision: ApprovalDecision;
   commentary: string;

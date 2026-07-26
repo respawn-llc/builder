@@ -1,14 +1,8 @@
 import { useTranslation } from "react-i18next";
 
-import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedRunAttentionItem } from "@/api";
+import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
-import {
-  approveExecutionTargetAction,
-  ExecutionTargetContinuationDialog,
-  executeExecutionTargetAction,
-  useExecutionTargetContinuation,
-} from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
@@ -29,24 +23,11 @@ export function ApprovalBox({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
-  const { api } = useAppServices();
-  const executionTargetContinuation = useExecutionTargetContinuation({
-    execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
-    onApplied: mutations.refresh,
-    onAppliedError: (error) => {
-      showStatusToast({
-        body: errorMessage(error),
-        id: "task-approval-refresh-failed",
-        title: t("task.refreshFailed"),
-        tone: "danger",
-      });
-    },
-  });
   const snapshot = attention.approvalSnapshot;
   const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void executionTargetContinuation
-      .run(approveExecutionTargetAction(attention.taskTransitionID))
+    void mutations.approveApproval
+      .mutateAsync(attention.approvalID)
       .catch((error: unknown) => {
         showStatusToast({
           body: errorMessage(error),
@@ -83,8 +64,7 @@ export function ApprovalBox({
               className="shrink-0"
               disabled={
                 disabled ||
-                executionTargetContinuation.running ||
-                executionTargetContinuation.pending !== null
+                mutations.approveApproval.isPending
               }
               onClick={approve}
               variant="primary"
@@ -103,17 +83,16 @@ export function ApprovalBox({
           ) : null}
         </div>
       </Island>
-      <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
     </>
   );
 }
 
-export function InterruptedRunBox({
+export function InterruptedCurrentNodeBox({
   attention,
   disabled,
   mutations,
 }: Readonly<{
-  attention: InterruptedRunAttentionItem;
+  attention: InterruptedCurrentNodeAttentionItem;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {

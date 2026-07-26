@@ -46,8 +46,6 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         task_id: input.taskID,
         target_node_id: input.targetNodeID,
         output_values: input.outputValues ?? {},
-        allow_missing_edge: input.allowMissingEdge,
-        auto_approve: input.autoApprove,
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
       }),
@@ -57,22 +55,16 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
   return response;
 }
 
-export async function approveTransition(
+export async function approveApproval(
   transport: RpcTransport,
-  taskTransitionID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-  executionTarget?: WorkflowExecutionTargetSelection,
+  approvalID: string,
 ): Promise<TaskApproveResponse> {
   return parseRpcResponse(
     "workflow.task.approve",
     taskApproveResponseSchema,
     await transport.call(
       "workflow.task.approve",
-      compactJsonObject({
-        task_transition_id: taskTransitionID,
-        setup_operation_id: setupOperationID.toJSONValue(),
-        execution_target: executionTargetPayload(executionTarget),
-      }),
+      { approval_id: approvalID },
       { timeoutMs: null },
     ),
   );

@@ -246,32 +246,6 @@ func (e TaskLabelMutationError) Unwrap() error {
 	return e.Cause
 }
 
-// ContextSourceKind identifies which context-source resolution failed to find a
-// completed run.
-type ContextSourceKind string
-
-const (
-	ContextSourceKindSelected       ContextSourceKind = "selected"
-	ContextSourceKindPreviousTarget ContextSourceKind = "previous_target"
-)
-
-// ContextSourceNoCompletedRunError is returned when a context source resolves to
-// a node that has no completed run for the task. It carries the node key and the
-// resolution kind so callers can inspect both without parsing the message.
-type ContextSourceNoCompletedRunError struct {
-	Kind    ContextSourceKind
-	NodeKey string
-}
-
-func (e ContextSourceNoCompletedRunError) Error() string {
-	switch e.Kind {
-	case ContextSourceKindPreviousTarget:
-		return fmt.Sprintf("previous target context source node %q has no completed run for task", e.NodeKey)
-	default:
-		return fmt.Sprintf("selected context source node %q has no completed run for task", e.NodeKey)
-	}
-}
-
 // ErrWorkflowValidationFailed marks any WorkflowValidationError so callers can
 // detect a validation failure generically with errors.Is.
 var ErrWorkflowValidationFailed = errors.New("workflow validation failed")
@@ -310,7 +284,7 @@ func (e WorkflowValidationError) HasCode(code workflow.ValidationErrorCode) bool
 	return false
 }
 
-// CompletionCode is the stable, structured identifier for a run-completion
+// CompletionCode is the stable, structured identifier for a Current Node completion
 // validation issue. The string values are a cross-package contract consumed by
 // server/workflowruntime and must not change.
 type CompletionCode = string

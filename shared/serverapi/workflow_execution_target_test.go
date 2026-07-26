@@ -123,6 +123,15 @@ func TestWorkflowExecutionTargetActionResponsesExposeOnlyDiscriminatedPayloads(t
 	}
 }
 
+func TestWorkflowTaskMoveRequestHasNoCompatibilityFields(t *testing.T) {
+	requestType := reflect.TypeOf(WorkflowTaskMoveRequest{})
+	for _, removedField := range []string{"AllowMissingEdge", "AutoApprove"} {
+		if _, exists := requestType.FieldByName(removedField); exists {
+			t.Fatalf("%s still exposes removed compatibility field %s", requestType.Name(), removedField)
+		}
+	}
+}
+
 func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) {
 	target := WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeCustomRef,

@@ -35,11 +35,11 @@ export function QuestionBox({
       ? null
       : attention.sessionID;
   const asks = usePendingAsks(pendingAskSessionID);
-  const pendingAsk = asks.data?.find((ask) => ask.askID === attention.askID);
+  const pendingAsk = asks.data?.find((ask) => ask.askID === attention.questionID);
   const pendingAskLookupSettled =
     asks.isSuccess && asks.isFetchedAfterMount && !asks.isFetching;
   const presentation = questionPresentation(attention, pendingAsk, pendingAskLookupSettled);
-  const selection = selectionForAsk(selectionState, attention.askID);
+  const selection = selectionForAsk(selectionState, attention.questionID);
   const effectiveSelection = anchorQuestionSelection(selection, presentation.defaultSelection);
   const openLink = useOpenExternalLink();
 

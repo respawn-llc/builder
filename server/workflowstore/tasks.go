@@ -46,6 +46,25 @@ type StartTaskResult struct {
 	Mutation workflow.CurrentNodeMutationResult
 }
 
+type TaskExecutionScope struct {
+	ProjectID  string
+	WorkflowID workflow.WorkflowID
+}
+
+func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) (TaskExecutionScope, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return TaskExecutionScope{}, errors.New("task id is required")
+	}
+	row, err := s.queries.GetTaskProjectWorkflowIDs(ctx, string(taskID))
+	if err != nil {
+		return TaskExecutionScope{}, err
+	}
+	if strings.TrimSpace(row.ProjectID) == "" || strings.TrimSpace(row.WorkflowID) == "" {
+		return TaskExecutionScope{}, fmt.Errorf("task %q has incomplete execution scope", taskID)
+	}
+	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: workflow.WorkflowID(row.WorkflowID)}, nil
+}
+
 type CompletionValidationIssue struct {
 	Code    string
 	Field   string
@@ -90,6 +109,8 @@ type ManualMoveRequest struct {
 
 type ManualMoveResult struct {
 	workflow.CurrentNodeMutationResult
+	Retained        []workflow.CurrentNode
+	PendingApproval *workflow.PendingApproval
 }
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {

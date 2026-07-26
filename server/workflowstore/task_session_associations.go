@@ -161,7 +161,7 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 
 // ResolveCurrentSessionStartContext resolves prompt state only from direct
 // Session ownership, the matching Current Node, and the latest definition.
-// It intentionally never reads a Run, placement, or frozen execution snapshot.
+// Discarded execution history is not an input.
 func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (CurrentNodeStartContext, error) {
 	if sessionID.IsZero() {
 		return CurrentNodeStartContext{}, errors.New("session id is required")
@@ -249,9 +249,8 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 }
 
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node
-// from its own materialized values and the latest definition. It has no
-// historical Run/Placement input and never reconstructs discarded execution
-// history.
+// from its own materialized values and the latest definition. It never
+// reconstructs discarded execution history.
 func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference workflow.CurrentNodeReference) (CurrentNodeStartContext, error) {
 	if err := reference.Validate(); err != nil {
 		return CurrentNodeStartContext{}, err

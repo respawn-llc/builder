@@ -15,6 +15,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -28,6 +29,7 @@ type Service struct {
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
 	}
+	workflowStore *workflowstore.Store
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -71,12 +73,13 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 
 func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
-}) *Service {
+}, store *workflowstore.Store) *Service {
 	if s == nil {
 		return nil
 	}
 	s.mutationPermit = permit
 	s.workflowExecution = execution
+	s.workflowStore = store
 	return s
 }
 
@@ -427,7 +430,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			return serverapi.ProjectDeleteResponse{}, err
 		}
 	}
-	var runtimeBlocker metadata.ProjectDeleteRuntimeBlocker
+	var runtimeBlocker workflowstore.ProjectDeleteRuntimeBlocker
 	if len(preflightBlockers) == 0 {
 		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
 			release, err := s.blockSessionStarts(ctx, sessionIDs)
@@ -452,8 +455,16 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 				return nil, err
 			}
 		}
-		return s.metadata.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, runtimeBlocker, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
-			return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
+		if s.workflowStore == nil {
+			return nil, errors.New("workflow store is required for project deletion")
+		}
+		return s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
+			ProjectID:         projectID,
+			PreflightBlockers: preflightBlockers,
+			RuntimeBlocker:    runtimeBlocker,
+			DeleteArtifact: func(artifact workflowstore.ProjectSessionArtifact, remove bool) error {
+				return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
+			},
 		})
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
