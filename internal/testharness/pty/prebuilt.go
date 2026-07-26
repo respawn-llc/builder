@@ -15,16 +15,16 @@ const (
 	PhaseWriterBinaryEnvName      = "KENT_PTY_PHASE_WRITER_BINARY"
 )
 
-func PrebuiltExecutable(environmentName string) (string, bool, error) {
+func PrebuiltExecutable(environmentName string) (*string, error) {
 	path, configured := os.LookupEnv(environmentName)
 	if !configured {
-		return "", false, nil
+		return nil, nil
 	}
 	absolutePath, err := executablePath(path)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
-	return absolutePath, true, nil
+	return &absolutePath, nil
 }
 
 func executablePath(path string) (string, error) {
@@ -52,21 +52,21 @@ func BuildOrUsePrebuiltPackage(
 	packagePath string,
 	outputPath string,
 ) (string, error) {
-	binary, configured, err := PrebuiltExecutable(environmentName)
+	binary, err := PrebuiltExecutable(environmentName)
 	if err != nil {
 		return "", err
 	}
-	if configured {
-		return binary, nil
+	if binary != nil {
+		return *binary, nil
 	}
 	if err := BuildPackage(ctx, packagePath, outputPath); err != nil {
 		return "", err
 	}
-	binary, err = executablePath(outputPath)
+	builtBinary, err := executablePath(outputPath)
 	if err != nil {
 		return "", fmt.Errorf("validate built package %q: %w", packagePath, err)
 	}
-	return binary, nil
+	return builtBinary, nil
 }
 
 func BuildOrUsePrebuiltKent(ctx context.Context, outputPath string) (string, error) {

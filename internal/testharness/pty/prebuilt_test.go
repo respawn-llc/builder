@@ -13,9 +13,11 @@ func TestPrebuiltExecutable(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		unsetEnvironment(t, environmentName)
 
-		if _, configured, err := PrebuiltExecutable(environmentName); err != nil {
+		executable, err := PrebuiltExecutable(environmentName)
+		if err != nil {
 			t.Fatalf("resolve absent executable: %v", err)
-		} else if configured {
+		}
+		if executable != nil {
 			t.Fatal("expected executable to remain unconfigured")
 		}
 	})
@@ -27,19 +29,19 @@ func TestPrebuiltExecutable(t *testing.T) {
 		}
 		t.Setenv(environmentName, path)
 
-		got, configured, err := PrebuiltExecutable(environmentName)
+		got, err := PrebuiltExecutable(environmentName)
 		if err != nil {
 			t.Fatalf("resolve executable: %v", err)
 		}
-		if !configured {
+		if got == nil {
 			t.Fatal("expected configured executable")
 		}
 		want, err := filepath.Abs(path)
 		if err != nil {
 			t.Fatalf("resolve executable path: %v", err)
 		}
-		if got != want {
-			t.Fatalf("executable mismatch: got %q, want %q", got, want)
+		if *got != want {
+			t.Fatalf("executable mismatch: got %q, want %q", *got, want)
 		}
 	})
 }
