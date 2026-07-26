@@ -513,21 +513,39 @@ func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *u
 	return e.transcriptRuntimeState().ClearStreamingAssistantState()
 }
 
-func (e *Engine) emitStreamingAssistantResetEventsRaw(
+func (e *Engine) emitStreamingAssistantTerminalRaw(
 	stepID string,
 	metadata *AssistantStreamMetadata,
-	streamID *uuid.UUID,
+	streamID uuid.UUID,
 	abortReason *AssistantStreamAbortReason,
 ) error {
 	abortReasonValue := ""
 	if abortReason != nil {
 		abortReasonValue = string(*abortReason)
 	}
-	return errors.Join(
+	return e.emitRaw(Event{
+		Kind:                        EventAssistantDeltaReset,
+		StepID:                      stepID,
+		AssistantStreamMetadata:     cloneAssistantStreamMetadata(metadata),
+		AssistantTranscriptStreamID: cloneTranscriptStreamID(&streamID),
+		AssistantStreamAbortReason:  abortReasonValue,
+	})
+}
+
+func (e *Engine) emitStreamingAssistantCleanupEventsRaw(
+	stepID string,
+	metadata *AssistantStreamMetadata,
+	streamID *uuid.UUID,
+	abortReason *AssistantStreamAbortReason,
+) error {
+	emissionErrors := []error{
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
-		e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata), AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID), AssistantStreamAbortReason: abortReasonValue}),
-		e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID}),
-	)
+	}
+	if streamID != nil {
+		emissionErrors = append(emissionErrors, e.emitStreamingAssistantTerminalRaw(stepID, metadata, *streamID, abortReason))
+	}
+	emissionErrors = append(emissionErrors, e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID}))
+	return errors.Join(emissionErrors...)
 }
 
 func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
@@ -591,7 +609,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 				committedAssistantEventPublished: true,
 			}, nil
 		}
-		if err := e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, nil); err != nil {
+		if err := e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, nil); err != nil {
 			return completedResponseResolutionOutcome{}, err
 		}
 		return completedResponseResolutionOutcome{
@@ -604,7 +622,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 	if clearedStreamID == nil {
 		return completedResponseResolutionOutcome{kind: completedResponseResolutionAbsent}, nil
 	}
-	if err := e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason); err != nil {
+	if err := e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason); err != nil {
 		return completedResponseResolutionOutcome{}, err
 	}
 	return completedResponseResolutionOutcome{
