@@ -386,7 +386,7 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 				continue
 			}
 			if !knownParameters[field] {
-				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by this workflow run"})
+				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"})
 				continue
 			}
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -536,13 +536,13 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 	case "transition_id_required":
 		return ValidationIssue{Code: "transition_required", Field: "transition", Message: "transition is required when multiple transitions are available"}
 	case "invalid_transition_id":
-		return ValidationIssue{Code: "invalid_transition", Field: "transition", Message: "transition is not available in the run-start snapshot"}
+		return ValidationIssue{Code: "invalid_transition", Field: "transition", Message: "transition is not available in the advertised completion contract"}
 	case "no_outgoing_transition":
-		return ValidationIssue{Code: code, Field: "transition", Message: "no outgoing transition is available in the run-start snapshot"}
+		return ValidationIssue{Code: code, Field: "transition", Message: "no outgoing transition is available in the advertised completion contract"}
 	case "required_output_missing":
 		return ValidationIssue{Code: "required_parameter_missing", Field: field, Message: "parameter is required by the selected transition"}
 	case "unknown_output_field":
-		return ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by this workflow run"}
+		return ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"}
 	case "output_field_required":
 		return ValidationIssue{Code: "parameter_required", Field: field, Message: "parameter name is required"}
 	case "output_too_large":
@@ -556,7 +556,7 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 
 func selectedTransition(value string, provided bool, transitions []CompletionTransition) (CompletionTransition, bool, []ValidationIssue) {
 	if len(transitions) == 0 {
-		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this workflow run"}}
+		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this Current Node execution"}}
 	}
 	transitionID := strings.TrimSpace(value)
 	if transitionID == "" {
@@ -574,7 +574,7 @@ func selectedTransition(value string, provided bool, transitions []CompletionTra
 			return transition, true, nil
 		}
 	}
-	return CompletionTransition{}, false, []ValidationIssue{{Code: "invalid_transition", Field: "transition", Message: "transition is not declared by this workflow run"}}
+	return CompletionTransition{}, false, []ValidationIssue{{Code: "invalid_transition", Field: "transition", Message: "transition is not declared by the advertised completion contract"}}
 }
 
 func normalizedTransitions(transitions []CompletionTransition) []CompletionTransition {

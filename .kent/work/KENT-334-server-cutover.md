@@ -11,8 +11,38 @@
       Nodes and cover compaction/reopen assignment behavior.
 - [x] Bring the broad runtime/runtimeview/session/projectview/client-ui suite
       below the required 180-second cap.
-- [ ] Regenerate, re-run focused/full verification, update the ledger, and
+- [x] Regenerate, re-run focused/full verification, update the ledger, and
       commit the third review-fix round.
+
+## Review round 4 continuation — July 26, 2026
+
+- [x] Replace remaining Current-Node runtime error and completion-contract
+      terminology that still says “workflow run” or “run-start snapshot”.
+- [x] Replace the negative identifier/path-exclusion architecture guard with
+      positive current-node control-contract and legacy-decoder fixtures.
+- [x] Restore pure completion-mode/schema/decoder coverage while deleting only
+      obsolete Run-controller tests.
+- [x] Reproduce and fix the exact broad-suite 180-second timeout.
+
+Evidence: the review reproduced an exact broad-suite cap failure after a fresh
+round-3 local pass. A subsequent focused runtime run measured
+`core/server/runtime` at 153.115 seconds; the named worktree-reminder test
+itself completed in 0.55 seconds, so it is only where the cumulative cap was
+reached, not the root cause. Profile the aggregate runtime test cost and
+remove the shared per-test delay/IO source rather than weakening the cap.
+
+The runtime fixture was performing a second, no-op `EnsureDurable` metadata
+mutation immediately after `session.Create`, which already returns a durable
+observed Store. Removing that duplicate persistence operation retains the
+durable production contract while removing its repeated test-fixture I/O.
+After the change, the required exact command passed with the normal harness
+settings in 94.251 seconds; a constrained two-package-parallelism diagnostic
+run also passed in 116.198 seconds. No cap or test selection was changed.
+
+The claimed lack of human authorization for the inherited `AGENTS.md` Frozen
+Rust edit conflicts with the recorded direct human decision supplied to this
+agent on July 25, 2026. Preserve the explicit human-approved decision unless
+the human revokes it directly.
 
 Decision: the inherited `AGENTS.md` Frozen Rust diff is an explicitly
 human-approved edit as of July 25, 2026. Preserve it unchanged; do not revert

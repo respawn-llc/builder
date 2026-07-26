@@ -436,6 +436,27 @@
   human. Preserve that existing diff unchanged; this authorization does not
   authorize further edits to `AGENTS.md`.
 
+### Review round 4 follow-up — 2026-07-26
+
+- [x] Remove current-path Workflow Run and run-start-snapshot messages from
+  runtime errors and advertised completion-contract validation.
+- [x] Replace the deleted AST identifier blacklist/path exclusion with positive
+  typed Current-Node configuration and Authority-to-runner wiring contracts;
+  keep legacy completion decoding under structured fixtures.
+- [x] Restore the pure completion mode, schema, and decoder edge matrix while
+  leaving obsolete Run-controller tests deleted.
+- [x] Remove the redundant test-fixture persistence mutation after
+  `session.Create`; the exact runtime/runtimeview/session/projectview/client-ui
+  suite passes under the mandatory cap without changing the cap or test
+  selection.
+
+Round-4 verification: the exact broad suite passed in 94.251 seconds;
+`./scripts/test.sh ./server/runtime ./server/workflowruntime
+./server/workflowrunner ./server/metadata/sqlitegen -count=1` passed in
+131.766 seconds; server build and metadata schema dump passed. The
+handwritten-production ledger is `added=8751 deleted=11983 net=-3232` against
+`3c7d45a62`.
+
 - [x] Remove Task Cancel from the server/store/public server API and consume
   its legacy columns only in the one-way migration.
 - [x] Drop Run, Placement, and applied/rejected Transition persistence,

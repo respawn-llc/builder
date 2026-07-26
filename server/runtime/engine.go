@@ -674,7 +674,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
 	if !e.currentNodeExecutionActive() {
-		return llm.Message{}, errors.New("workflow turn requires an active workflow run")
+		return llm.Message{}, errors.New("workflow turn requires an active Current Node execution")
 	}
 	if e.closed.Load() {
 		return llm.Message{}, ErrEngineClosed
