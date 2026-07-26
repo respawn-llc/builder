@@ -12,12 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { PlusIcon, SearchIcon } from "lucide-react";
 
-import {
-  decodeWorkflowLabelError,
-  errorMessage,
-  workflowLabelMaxIDs,
-  type ProjectLabel,
-} from "@/api";
+import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
 import {
   Button,
   IconTooltipButton,
@@ -33,6 +28,8 @@ import {
   LabelResultRow,
   UnlabeledResultRow,
   type DeleteState,
+  type LabelFilterCondition,
+  type LabelResultRowSelection,
   type RenameState,
 } from "./LabelChooserRows";
 import { labelNameContains, labelNamesEqual } from "./labelComparison";
@@ -56,9 +53,7 @@ export type LabelChooserProps = Readonly<{
   trigger: ReactElement;
 }>;
 
-type LabelChooserChoice =
-  | Readonly<{ kind: "unlabeled" }>
-  | Readonly<{ kind: "label"; label: ProjectLabel }>;
+type LabelChooserChoice = Readonly<{ kind: "unlabeled" }> | Readonly<{ kind: "label"; label: ProjectLabel }>;
 
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
@@ -120,9 +115,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const createLabel = async () => {
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
-      if (invocation.kind === "assignment") {
-        selectLabel(invocation, label.id, true);
-      }
+      selectLabel(invocation, label.id, true);
       setSearch("");
       setKeyboardHighlightedIndex(null);
       mutations.create.reset();
@@ -139,8 +132,8 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
       selectUnlabeled(invocation);
       return;
     }
-    const selected = isLabelSelected(invocation, choice.label.id);
-    selectLabel(invocation, choice.label.id, !selected);
+    const selection = labelResultRowSelection(invocation, choice.label.id);
+    selectLabel(invocation, choice.label.id, selection.kind === "binary" ? !selection.selected : true);
   };
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (handleLabelChoiceNavigation(event, choiceCount, setKeyboardHighlightedIndex)) {
@@ -373,9 +366,7 @@ function renderLabelChooserSearch({
               <IconTooltipButton
                 disabled={catalogAtLimit || createPending}
                 label={
-                  catalogAtLimit
-                    ? t("labels.catalogLimit")
-                    : t("labels.create", { name: preparedSearch })
+                  catalogAtLimit ? t("labels.catalogLimit") : t("labels.create", { name: preparedSearch })
                 }
                 onClick={onCreate}
                 size="icon-sm"
@@ -550,7 +541,7 @@ function renderLabelChooserChoiceRow({
       />
     );
   }
-  const selected = isLabelSelected(invocation, label.id);
+  const selection = labelResultRowSelection(invocation, label.id);
   const labelDeletion = deletion?.labelID === label.id ? deletion : null;
   return (
     <LabelResultRow
@@ -570,9 +561,7 @@ function renderLabelChooserChoiceRow({
           });
           return;
         }
-        setDeletion((current) =>
-          current?.labelID === label.id && current.pending ? current : null,
-        );
+        setDeletion((current) => (current?.labelID === label.id && current.pending ? current : null));
       }}
       onRename={() => {
         setRename({
@@ -583,22 +572,42 @@ function renderLabelChooserChoiceRow({
         });
       }}
       onSelect={() => {
-        selectLabel(invocation, label.id, !selected);
+        selectLabel(invocation, label.id, selection.kind === "binary" ? !selection.selected : true);
       }}
-      selected={selected}
+      selection={selection}
     />
   );
 }
 
-function isLabelSelected(invocation: LabelChooserInvocation, labelID: string): boolean {
-  return invocation.kind === "filter"
-    ? invocation.state.filter.kind === "named" && invocation.state.filter.labelIDs.includes(labelID)
-    : invocation.selectedLabelIDs.includes(labelID);
+function labelResultRowSelection(
+  invocation: LabelChooserInvocation,
+  labelID: string,
+): LabelResultRowSelection {
+  if (invocation.kind === "assignment") {
+    return {
+      kind: "binary",
+      selected: invocation.selectedLabelIDs.includes(labelID),
+    };
+  }
+  return {
+    kind: "condition",
+    state: labelFilterCondition(invocation.state, labelID),
+  };
+}
+
+function labelFilterCondition(state: LabelFilterState, labelID: string): LabelFilterCondition {
+  if (state.filter.kind !== "named") {
+    return "neutral";
+  }
+  if (state.filter.labelIDs.includes(labelID)) {
+    return "included";
+  }
+  return state.filter.excludedLabelIDs.includes(labelID) ? "excluded" : "neutral";
 }
 
 function selectLabel(invocation: LabelChooserInvocation, labelID: string, selected: boolean): void {
   if (invocation.kind === "filter") {
-    invocation.onAction({ type: "named.toggle", labelID });
+    invocation.onAction({ type: "named.cycle", labelID });
     return;
   }
   invocation.onSelectionChange(labelID, selected);

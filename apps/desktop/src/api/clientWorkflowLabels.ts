@@ -9,6 +9,7 @@ import {
 } from "./schemas/workflowLabels";
 import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflowBoard";
 import type { RpcTransport } from "./transport";
+import { canonicalTaskLabelFilter } from "./workflowLabels";
 import type {
   ProjectLabel,
   ProjectLabelCatalog,
@@ -18,17 +19,20 @@ import type {
 } from "./workflowLabels";
 
 export function taskLabelFilterPayload(filter: TaskLabelFilter): JsonObject {
-  switch (filter.kind) {
+  const canonical = canonicalTaskLabelFilter(filter);
+  switch (canonical.kind) {
     case "none":
     case "unlabeled":
-      return { kind: filter.kind };
+      return { kind: canonical.kind };
     case "named":
       return {
-        kind: filter.kind,
-        named: {
-          mode: filter.mode,
-          label_ids: filter.labelIDs,
-        },
+        kind: canonical.kind,
+        named: compactJsonObject({
+          mode: canonical.mode,
+          label_ids: canonical.labelIDs,
+          excluded_label_ids:
+            canonical.excludedLabelIDs.length === 0 ? undefined : canonical.excludedLabelIDs,
+        }),
       };
   }
 }

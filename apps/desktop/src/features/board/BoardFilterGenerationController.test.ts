@@ -5,6 +5,7 @@ import { createBoardFilterGenerationController } from "./BoardFilterGenerationCo
 
 const priorityID = "11111111-1111-4111-8111-111111111111";
 const urgentID = "22222222-2222-4222-8222-222222222222";
+const smallID = "33333333-3333-4333-8333-333333333333";
 
 describe("BoardFilterGenerationController", () => {
   it("promotes a desired filter immediately while the active generation is idle", () => {
@@ -17,6 +18,32 @@ describe("BoardFilterGenerationController", () => {
       active: {
         generation: 2,
         filter: priority,
+        retiring: false,
+      },
+      desiredFilter: null,
+    });
+  });
+
+  it("promotes when the excluded partition changes", () => {
+    const controller = createBoardFilterGenerationController({
+      kind: "named",
+      mode: "any",
+      labelIDs: [priorityID],
+      excludedLabelIDs: [urgentID],
+    });
+    const desired = {
+      kind: "named" as const,
+      mode: "any" as const,
+      labelIDs: [priorityID],
+      excludedLabelIDs: [smallID],
+    };
+
+    controller.setDesiredFilter(desired);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      active: {
+        generation: 2,
+        filter: desired,
         retiring: false,
       },
       desiredFilter: null,
@@ -279,6 +306,7 @@ function namedFilter(mode: "any" | "all", ...labelIDs: readonly string[]): TaskL
     kind: "named",
     mode,
     labelIDs: [...labelIDs].sort(),
+    excludedLabelIDs: [],
   };
 }
 

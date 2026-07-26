@@ -7,15 +7,59 @@ import {
   type BrowserStorageError,
   type BrowserStorageResult,
 } from "@/app-facade";
-import { workflowLabelMaxIDs } from "@/api";
+import { canonicalTaskLabelFilter, workflowLabelMaxIDs } from "@/api";
 import { createLabelFilterState, reconcileLabelFilterState, type LabelFilterState } from "./labelFilterState";
 
 const labelFilterStoragePrefix = "desktop.projectLabelFilter.v1";
 const labelFilterModeSchema = z.enum(["any", "all"]);
-const storedLabelIDsSchema = z
-  .array(z.uuidv4())
-  .max(workflowLabelMaxIDs)
-  .refine((labelIDs) => new Set(labelIDs).size === labelIDs.length);
+const storedLabelIDsSchema = z.array(z.uuidv4());
+const storedNamedLabelFilterSchema = z
+  .object({
+    version: z.literal(1),
+    kind: z.literal("named"),
+    mode: labelFilterModeSchema,
+    labelIDs: storedLabelIDsSchema,
+    excludedLabelIDs: storedLabelIDsSchema.optional(),
+  })
+  .strict()
+  .superRefine((record, context) => {
+    const excludedLabelIDs = record.excludedLabelIDs ?? [];
+    const included = new Set<string>();
+    for (const [index, labelID] of record.labelIDs.entries()) {
+      if (included.has(labelID)) {
+        context.addIssue({
+          code: "custom",
+          message: "included label IDs must be unique",
+          path: ["labelIDs", index],
+        });
+      }
+      included.add(labelID);
+    }
+    const excluded = new Set<string>();
+    for (const [index, labelID] of excludedLabelIDs.entries()) {
+      if (excluded.has(labelID)) {
+        context.addIssue({
+          code: "custom",
+          message: "excluded label IDs must be unique",
+          path: ["excludedLabelIDs", index],
+        });
+      }
+      if (included.has(labelID)) {
+        context.addIssue({
+          code: "custom",
+          message: "included and excluded label IDs must be disjoint",
+          path: ["excludedLabelIDs", index],
+        });
+      }
+      excluded.add(labelID);
+    }
+    if (record.labelIDs.length + excludedLabelIDs.length > workflowLabelMaxIDs) {
+      context.addIssue({
+        code: "custom",
+        message: `combined label IDs must not exceed ${String(workflowLabelMaxIDs)}`,
+      });
+    }
+  });
 const storedLabelFilterSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -24,14 +68,7 @@ const storedLabelFilterSchema = z.discriminatedUnion("kind", [
       mode: labelFilterModeSchema,
     })
     .strict(),
-  z
-    .object({
-      version: z.literal(1),
-      kind: z.literal("named"),
-      mode: labelFilterModeSchema,
-      labelIDs: storedLabelIDsSchema,
-    })
-    .strict(),
+  storedNamedLabelFilterSchema,
   z
     .object({
       version: z.literal(1),
@@ -136,12 +173,17 @@ function restoreLabelFilterState(stored: z.output<typeof storedLabelFilterSchema
         namedMode: stored.mode,
       };
     case "named": {
+      const filter = canonicalTaskLabelFilter({
+        kind: "named",
+        mode: stored.mode,
+        labelIDs: stored.labelIDs,
+        excludedLabelIDs: stored.excludedLabelIDs ?? [],
+      });
+      if (filter.kind !== "named") {
+        throw new Error("Named persisted label filter canonicalization returned a non-named filter.");
+      }
       return {
-        filter: {
-          kind: "named",
-          mode: stored.mode,
-          labelIDs: [...stored.labelIDs].sort(),
-        },
+        filter,
         namedMode: stored.mode,
       };
     }
@@ -157,12 +199,18 @@ function serializeLabelFilterState(state: LabelFilterState): z.input<typeof stor
         kind: state.filter.kind,
         mode: state.namedMode,
       };
-    case "named":
+    case "named": {
+      const filter = canonicalTaskLabelFilter(state.filter);
+      if (filter.kind !== "named") {
+        throw new Error("Named label filter serialization received a non-named filter.");
+      }
       return {
         version: 1,
         kind: "named",
         mode: state.namedMode,
-        labelIDs: [...state.filter.labelIDs].sort(),
+        labelIDs: [...filter.labelIDs],
+        ...(filter.excludedLabelIDs.length === 0 ? {} : { excludedLabelIDs: [...filter.excludedLabelIDs] }),
       };
+    }
   }
 }

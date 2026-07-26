@@ -301,6 +301,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		LabelFilterKind:         labelFilterArgs.kind,
 		LabelFilterMode:         labelFilterArgs.mode,
 		LabelIdsJson:            labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson:    labelFilterArgs.excludedLabelIDsJSON,
 		CursorSet:               boolInt64(req.cursorSet),
 		CursorCreatedAtUnixMs:   req.cursor.CreatedAtUnixMs,
 		CursorUpdatedAtUnixMs:   req.cursor.UpdatedAtUnixMs,

@@ -24,11 +24,13 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	var attentionFlags repeatedStringFlag
 	var sortFlags repeatedStringFlag
 	var labelFlags repeatedStringFlag
+	var notLabelFlags repeatedStringFlag
 	fs.Var(&statusFlags, "status", "task status filter; comma-separated or repeatable")
 	fs.Var(&columnFlags, "column", "workflow column key filter; comma-separated or repeatable")
 	fs.Var(&attentionFlags, "attention", "task attention filter; comma-separated or repeatable")
 	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
 	fs.Var(&labelFlags, "label", "label name or canonical UUIDv4; repeat for multiple labels")
+	fs.Var(&notLabelFlags, "not-label", "excluded label name or canonical UUIDv4; repeat for multiple labels")
 	labelMatchRaw := fs.String("label-match", string(serverapi.WorkflowTaskNamedLabelFilterModeAny), "label match mode: any or all")
 	unlabeled := fs.Bool("unlabeled", false, "only include tasks without labels")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
@@ -64,7 +66,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	labelMatchExplicit := flagWasProvided(fs, "label-match")
-	labelMatch, err := parseTaskListLabelMatch(*labelMatchRaw, labelMatchExplicit, len(labelFlags), *unlabeled)
+	labelMatch, err := parseTaskListLabelMatch(*labelMatchRaw, labelMatchExplicit, len(labelFlags)+len(notLabelFlags), *unlabeled)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -98,23 +100,16 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		labelFilter := serverapi.WorkflowTaskLabelFilterNone()
 		if *unlabeled {
 			labelFilter = serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindUnlabeled}
-		} else if len(labelFlags) > 0 {
+		} else if len(labelFlags)+len(notLabelFlags) > 0 {
 			_, snapshot, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
-			labelIDs, err := resolveWorkflowProjectLabelSelectors(snapshot, labelFlags)
+			labelFilter, err = resolveWorkflowProjectLabelFilter(snapshot, labelMatch, labelFlags, notLabelFlags)
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
-			}
-			labelFilter = serverapi.WorkflowTaskLabelFilter{
-				Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
-				Named: &serverapi.WorkflowTaskNamedLabelFilter{
-					Mode:     labelMatch,
-					LabelIDs: labelIDs,
-				},
 			}
 		}
 		request := serverapi.WorkflowTaskListRequest{
@@ -131,19 +126,20 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		resp, err := workflowTaskList(context.Background(), remote, request)
 		if err != nil {
 			writeTaskListError(stderr, err, taskListCommandContext{
-				ProjectRef:         *projectRef,
-				ResolvedProjectID:  projectID,
-				SelectedWorkflowID: selectedWorkflowSelector,
-				ColumnKeys:         columnKeys,
-				StatusKinds:        statusKinds,
-				AttentionKinds:     attentionKinds,
-				Sort:               sortSelectors,
-				LabelSelectors:     append([]string(nil), labelFlags...),
-				LabelMatch:         recoveryLabelMatch,
-				Unlabeled:          *unlabeled,
-				PageSize:           *pageSize,
-				PageToken:          *pageToken,
-				JSON:               *jsonOut,
+				ProjectRef:             *projectRef,
+				ResolvedProjectID:      projectID,
+				SelectedWorkflowID:     selectedWorkflowSelector,
+				ColumnKeys:             columnKeys,
+				StatusKinds:            statusKinds,
+				AttentionKinds:         attentionKinds,
+				Sort:                   sortSelectors,
+				LabelSelectors:         append([]string(nil), labelFlags...),
+				ExcludedLabelSelectors: append([]string(nil), notLabelFlags...),
+				LabelMatch:             recoveryLabelMatch,
+				Unlabeled:              *unlabeled,
+				PageSize:               *pageSize,
+				PageToken:              *pageToken,
+				JSON:                   *jsonOut,
 			})
 			return 1
 		}
@@ -164,10 +160,10 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 		return "", errors.New("--label-match is invalid")
 	}
 	if unlabeled && (selectorCount > 0 || explicit) {
-		return "", errors.New("--unlabeled cannot be combined with --label or --label-match")
+		return "", errors.New("--unlabeled cannot be combined with --label, --not-label, or --label-match")
 	}
 	if explicit && selectorCount == 0 {
-		return "", errors.New("--label-match requires at least one --label")
+		return "", errors.New("--label-match requires at least one --label or --not-label")
 	}
 	return mode, nil
 }

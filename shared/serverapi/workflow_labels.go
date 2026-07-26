@@ -98,8 +98,9 @@ const (
 )
 
 type WorkflowTaskNamedLabelFilter struct {
-	Mode     WorkflowTaskNamedLabelFilterMode `json:"mode"`
-	LabelIDs []string                         `json:"label_ids"`
+	Mode             WorkflowTaskNamedLabelFilterMode `json:"mode"`
+	LabelIDs         []string                         `json:"label_ids"`
+	ExcludedLabelIDs []string                         `json:"excluded_label_ids,omitempty"`
 }
 
 type WorkflowTaskLabelFilter struct {
@@ -398,11 +399,37 @@ func (r WorkflowTaskLabelFilter) Validate() error {
 		default:
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "label_filter.named.mode", "named filter mode must be any or all")
 		}
-		if len(r.Named.LabelIDs) == 0 {
+		if len(r.Named.LabelIDs)+len(r.Named.ExcludedLabelIDs) == 0 {
 			return workflowRequestError(WorkflowRequestErrorRequired, "label_filter.label_ids", "named filter label_ids is required")
 		}
-		_, err := validateUniqueLabelIDs("label_filter.label_ids", r.Named.LabelIDs)
-		return err
+		if len(r.Named.LabelIDs)+len(r.Named.ExcludedLabelIDs) > WorkflowLabelMaxIDs {
+			field := "label_filter.label_ids"
+			if len(r.Named.ExcludedLabelIDs) > 0 {
+				field = "label_filter.excluded_label_ids"
+			}
+			return workflowRequestError(
+				WorkflowRequestErrorTooLong,
+				field,
+				fmt.Sprintf("named filter must contain at most %d label IDs", WorkflowLabelMaxIDs),
+			)
+		}
+		included, err := validateUniqueLabelIDs("label_filter.label_ids", r.Named.LabelIDs)
+		if err != nil {
+			return err
+		}
+		if _, err := validateUniqueLabelIDs("label_filter.excluded_label_ids", r.Named.ExcludedLabelIDs); err != nil {
+			return err
+		}
+		for index, labelID := range r.Named.ExcludedLabelIDs {
+			if included[labelID] {
+				return workflowRequestError(
+					WorkflowRequestErrorInvalidValue,
+					fmt.Sprintf("label_filter.excluded_label_ids[%d]", index),
+					"label ID cannot be both included and excluded",
+				)
+			}
+		}
+		return nil
 	case "":
 		return workflowRequestError(WorkflowRequestErrorRequired, "label_filter.kind", "label filter kind is required")
 	default:

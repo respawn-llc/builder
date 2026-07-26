@@ -1,10 +1,29 @@
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
+import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
+const smallID = "11111111-1111-4111-8111-111111111111";
 
 describe("ApiClient workflow labels", () => {
+  it("omits an empty excluded partition from a named filter payload", () => {
+    expect(
+      taskLabelFilterPayload({
+        kind: "named",
+        mode: "any",
+        labelIDs: [priorityID],
+        excludedLabelIDs: [],
+      }),
+    ).toEqual({
+      kind: "named",
+      named: {
+        mode: "any",
+        label_ids: [priorityID],
+      },
+    });
+  });
+
   it("lists the complete bounded Project label catalog", async () => {
     const transport = new FakeRpcTransport([
       {
@@ -201,7 +220,12 @@ describe("ApiClient workflow labels", () => {
       client.listTasks({
         projectID: "project-1",
         workflowID: "workflow-1",
-        labelFilter: { kind: "named", mode: "any", labelIDs: [priorityID] },
+        labelFilter: {
+          kind: "named",
+          mode: "any",
+          labelIDs: [priorityID, urgentID],
+          excludedLabelIDs: [smallID],
+        },
         pageSize: 25,
       }),
     ).resolves.toMatchObject({
@@ -220,7 +244,11 @@ describe("ApiClient workflow labels", () => {
           attention_kinds: [],
           label_filter: {
             kind: "named",
-            named: { mode: "any", label_ids: [priorityID] },
+            named: {
+              mode: "any",
+              label_ids: [urgentID, priorityID],
+              excluded_label_ids: [smallID],
+            },
           },
           sort: [],
           page_size: 25,

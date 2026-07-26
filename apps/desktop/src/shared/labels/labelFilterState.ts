@@ -1,13 +1,13 @@
-import type { TaskLabelFilter } from "@/api";
+import { canonicalTaskLabelFilter, taskLabelFiltersEqual, type CanonicalTaskLabelFilter } from "@/api";
 
 export type LabelFilterState = Readonly<{
-  filter: TaskLabelFilter;
+  filter: CanonicalTaskLabelFilter;
   namedMode: "any" | "all";
 }>;
 
 export type LabelFilterAction =
   | Readonly<{
-      type: "named.toggle";
+      type: "named.cycle";
       labelID: string;
     }>
   | Readonly<{
@@ -34,8 +34,8 @@ export function createLabelFilterState(): LabelFilterState {
 
 export function reduceLabelFilterState(state: LabelFilterState, action: LabelFilterAction): LabelFilterState {
   switch (action.type) {
-    case "named.toggle":
-      return toggleNamedLabel(state, action.labelID);
+    case "named.cycle":
+      return cycleNamedLabel(state, action.labelID);
     case "named.mode":
       return setNamedMode(state, action.mode);
     case "unlabeled.toggle":
@@ -57,44 +57,31 @@ export function reconcileLabelFilterState(
   if (state.filter.kind !== "named") {
     return state;
   }
-  const selectedLabelIDs = state.filter.labelIDs;
   const available = new Set(catalogLabelIDs);
-  const labelIDs = selectedLabelIDs.filter((labelID) => available.has(labelID)).sort();
-  if (
-    labelIDs.length === selectedLabelIDs.length &&
-    labelIDs.every((labelID, index) => labelID === selectedLabelIDs[index])
-  ) {
+  const nextFilter = namedFilter(
+    state.filter.mode,
+    state.filter.labelIDs.filter((labelID) => available.has(labelID)),
+    state.filter.excludedLabelIDs.filter((labelID) => available.has(labelID)),
+  );
+  if (taskLabelFiltersEqual(state.filter, nextFilter)) {
     return state;
   }
   return {
-    filter:
-      labelIDs.length === 0
-        ? { kind: "none" }
-        : {
-            ...state.filter,
-            labelIDs,
-          },
+    filter: nextFilter,
     namedMode: state.namedMode,
   };
 }
 
-function toggleNamedLabel(state: LabelFilterState, labelID: string): LabelFilterState {
-  const selected = state.filter.kind === "named" ? new Set(state.filter.labelIDs) : new Set<string>();
-  if (selected.has(labelID)) {
-    selected.delete(labelID);
-  } else {
-    selected.add(labelID);
+function cycleNamedLabel(state: LabelFilterState, labelID: string): LabelFilterState {
+  const labelIDs = new Set(state.filter.kind === "named" ? state.filter.labelIDs : []);
+  const excludedLabelIDs = new Set(state.filter.kind === "named" ? state.filter.excludedLabelIDs : []);
+  if (labelIDs.delete(labelID)) {
+    excludedLabelIDs.add(labelID);
+  } else if (!excludedLabelIDs.delete(labelID)) {
+    labelIDs.add(labelID);
   }
-  const labelIDs = [...selected].sort();
   return {
-    filter:
-      labelIDs.length === 0
-        ? { kind: "none" }
-        : {
-            kind: "named",
-            mode: state.namedMode,
-            labelIDs,
-          },
+    filter: namedFilter(state.namedMode, labelIDs, excludedLabelIDs),
     namedMode: state.namedMode,
   };
 }
@@ -107,13 +94,38 @@ function setNamedMode(state: LabelFilterState, mode: "any" | "all"): LabelFilter
 }
 
 function pruneDeletedLabel(state: LabelFilterState, labelID: string): LabelFilterState {
-  if (state.filter.kind !== "named" || !state.filter.labelIDs.includes(labelID)) {
+  if (
+    state.filter.kind !== "named" ||
+    (!state.filter.labelIDs.includes(labelID) && !state.filter.excludedLabelIDs.includes(labelID))
+  ) {
     return state;
   }
-  const remainingLabelIDs = state.filter.labelIDs.filter((selectedLabelID) => selectedLabelID !== labelID);
   return {
-    filter:
-      remainingLabelIDs.length === 0 ? { kind: "none" } : { ...state.filter, labelIDs: remainingLabelIDs },
+    filter: namedFilter(
+      state.filter.mode,
+      state.filter.labelIDs.filter((selectedLabelID) => selectedLabelID !== labelID),
+      state.filter.excludedLabelIDs.filter((selectedLabelID) => selectedLabelID !== labelID),
+    ),
     namedMode: state.namedMode,
   };
+}
+
+function namedFilter(
+  mode: "any" | "all",
+  labelIDs: Iterable<string>,
+  excludedLabelIDs: Iterable<string>,
+): CanonicalTaskLabelFilter {
+  const canonical = canonicalTaskLabelFilter({
+    kind: "named",
+    mode,
+    labelIDs: [...new Set(labelIDs)],
+    excludedLabelIDs: [...new Set(excludedLabelIDs)],
+  });
+  if (canonical.kind !== "named") {
+    throw new Error("Named label filter canonicalization returned a non-named filter.");
+  }
+  if (canonical.labelIDs.length === 0 && canonical.excludedLabelIDs.length === 0) {
+    return { kind: "none" };
+  }
+  return canonical;
 }

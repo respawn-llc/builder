@@ -106,6 +106,92 @@ func TestBoardNamedAllLabelFilterMatchesCountsAndFirstPageCards(t *testing.T) {
 	requireBoardCardIDs(t, page.Cards, fixture.taskIDs["both"])
 }
 
+func TestBoardNamedFilterMatchesIncludedAndExcludedConditions(t *testing.T) {
+	fixture := newTaskListLabelFilterFixture(t)
+	for _, tt := range []struct {
+		name   string
+		filter serverapi.WorkflowTaskLabelFilter
+		want   []string
+	}{
+		{
+			name: "mixed OR",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAny,
+				[]string{fixture.gamma.String()},
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["alpha"],
+				fixture.taskIDs["beta"],
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+			},
+		},
+		{
+			name: "mixed AND",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAll,
+				[]string{fixture.gamma.String()},
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{fixture.taskIDs["gamma"]},
+		},
+		{
+			name: "excluded-only OR",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAny,
+				nil,
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["alpha"],
+				fixture.taskIDs["beta"],
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+			},
+		},
+		{
+			name: "excluded-only AND",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAll,
+				nil,
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			board, err := fixture.view.board(t).Get(fixture.ctx, serverapi.WorkflowBoardRequest{
+				ProjectID:   fixture.projectID,
+				LabelFilter: tt.filter,
+			})
+			if err != nil {
+				t.Fatalf("Get board: %v", err)
+			}
+			backlog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
+			if backlog.TaskCount != len(tt.want) {
+				t.Fatalf("filtered backlog count = %d, want %d", backlog.TaskCount, len(tt.want))
+			}
+			page, err := fixture.view.board(t).ListNodeCards(
+				fixture.ctx,
+				serverapi.WorkflowBoardNodeCardsListRequest{
+					ProjectID:   fixture.projectID,
+					WorkflowID:  string(fixture.workflowID),
+					NodeID:      backlog.Node.NodeID,
+					LabelFilter: tt.filter,
+				},
+			)
+			if err != nil {
+				t.Fatalf("ListNodeCards: %v", err)
+			}
+			requireBoardCardIDs(t, page.Cards, tt.want...)
+		})
+	}
+}
+
 func TestBoardUnlabeledFilterMatchesCountsAndFirstPageCards(t *testing.T) {
 	fixture := newTaskListLabelFilterFixture(t)
 	filter := serverapi.WorkflowTaskLabelFilter{
@@ -187,6 +273,58 @@ func TestBoardNodeCardsRejectPageTokenFromAnotherLabelExpression(t *testing.T) {
 	)
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("changed label expression error = %v, want ErrInvalidPageToken", err)
+	}
+}
+
+func TestBoardNodeCardsRejectPageTokenFromChangedExcludedConditions(t *testing.T) {
+	fixture := newTaskListLabelFilterFixture(t)
+	firstFilter := namedTaskLabelFilterWithExclusions(
+		serverapi.WorkflowTaskNamedLabelFilterModeAny,
+		nil,
+		[]string{fixture.alpha.String()},
+	)
+	board, err := fixture.view.board(t).Get(fixture.ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   fixture.projectID,
+		LabelFilter: firstFilter,
+	})
+	if err != nil {
+		t.Fatalf("Get board: %v", err)
+	}
+	backlog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
+	firstPage, err := fixture.view.board(t).ListNodeCards(
+		fixture.ctx,
+		serverapi.WorkflowBoardNodeCardsListRequest{
+			ProjectID:   fixture.projectID,
+			WorkflowID:  string(fixture.workflowID),
+			NodeID:      backlog.Node.NodeID,
+			PageSize:    1,
+			LabelFilter: firstFilter,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ListNodeCards first page: %v", err)
+	}
+	if firstPage.NextPageToken == nil {
+		t.Fatal("first page did not produce an older-page token")
+	}
+
+	_, err = fixture.view.board(t).ListNodeCards(
+		fixture.ctx,
+		serverapi.WorkflowBoardNodeCardsListRequest{
+			ProjectID:  fixture.projectID,
+			WorkflowID: string(fixture.workflowID),
+			NodeID:     backlog.Node.NodeID,
+			PageSize:   1,
+			PageToken:  firstPage.NextPageToken,
+			LabelFilter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAny,
+				nil,
+				[]string{fixture.beta.String()},
+			),
+		},
+	)
+	if !errors.Is(err, ErrInvalidPageToken) {
+		t.Fatalf("changed excluded conditions error = %v, want ErrInvalidPageToken", err)
 	}
 }
 
