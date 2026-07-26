@@ -1,15 +1,16 @@
 package workflowrunner
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1516,32 +1517,32 @@ func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
 	t.Cleanup(func() { _ = scheduler.Close() })
 
 	task := fixture.createStartedTask(t)
-	executor.allow("plan")
 	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process serial Node: %v", err)
+		t.Fatalf("Process Implementation: %v", err)
 	}
-	plan := executor.singleUnretired(t)
-	executor.allow("impl_a", "impl_b")
-	scheduler.RuntimeFinished(plan.RunID, plan.Generation)
+	for {
+		active := executor.activeExecutions()
+		if len(active) == 1 && active[0].NodeKey == "approval_gate" {
+			break
+		}
+		if len(active) == 0 {
+			t.Fatal("workflow stopped before Approval Gate")
+		}
+		executor.retire(scheduler, active...)
+		if err := scheduler.Process(context.Background()); err != nil {
+			t.Fatalf("Process review lifecycle: %v", err)
+		}
+	}
+	gate := executor.activeExecutions()
+	executor.retire(scheduler, gate...)
 	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process fan-out Nodes: %v", err)
+		t.Fatalf("Process rejected-review loop: %v", err)
 	}
-	branches := executor.unretired(t)
-	if len(branches) != 2 {
-		t.Fatalf("fan-out executions = %+v, want two", branches)
+	loopedImplementation := executor.activeExecutions()
+	if len(loopedImplementation) != 1 || loopedImplementation[0].NodeKey != "implementation" {
+		t.Fatalf("looped execution = %+v, want Implementation", loopedImplementation)
 	}
-	executor.allow("plan")
-	for _, branch := range branches {
-		scheduler.RuntimeFinished(branch.RunID, branch.Generation)
-	}
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process Join loop: %v", err)
-	}
-	loopedPlan := executor.singleUnretired(t)
-	scheduler.RuntimeFinished(loopedPlan.RunID, loopedPlan.Generation)
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process Terminal transition: %v", err)
-	}
+	executor.retire(scheduler, loopedImplementation...)
 
 	detail, err := fixture.view.GetTask(context.Background(), string(task.ID))
 	if err != nil {
@@ -1550,9 +1551,21 @@ func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
 	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone {
 		t.Fatalf("task did not reach done after fanout join loop: %+v", detail)
 	}
-	if got := executor.nodeStarts(); !reflect.DeepEqual(got, []workflow.ModelKey{"plan", "impl_a", "impl_b", "plan"}) {
-		t.Fatalf("started nodes = %+v, want plan, both fan-out branches, looped plan", got)
+	if got := executor.nodeStarts(); !reflect.DeepEqual(got, []workflow.ModelKey{
+		"implementation",
+		"code_review",
+		"qa",
+		"compliance_review",
+		"approval_gate",
+		"implementation",
+	}) {
+		t.Fatalf("started nodes = %+v, want one complete rejected review round followed by looped Implementation", got)
 	}
+}
+
+type deterministicExecution struct {
+	SchedulerStartRunRequest
+	NodeKey workflow.ModelKey
 }
 
 type deterministicCompletionStarter struct {
@@ -1561,9 +1574,8 @@ type deterministicCompletionStarter struct {
 	complete func(context.Context, SchedulerStartRunRequest, string, map[string]string)
 	mu       sync.Mutex
 	started  []workflow.ModelKey
-	plans    int
-	allowed  map[workflow.ModelKey]int
-	active   map[workflow.RunID]SchedulerStartRunRequest
+	active   map[workflow.RunID]deterministicExecution
+	loops    int
 }
 
 func (s *deterministicCompletionStarter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error {
@@ -1572,68 +1584,67 @@ func (s *deterministicCompletionStarter) StartWorkflowRun(ctx context.Context, r
 		return err
 	}
 	s.mu.Lock()
-	if s.allowed[input.Node.Key] == 0 {
-		s.mu.Unlock()
-		return fmt.Errorf("executable Node %q started before its source Exact Execution Scope retired", input.Node.Key)
+	if s.active == nil {
+		s.active = make(map[workflow.RunID]deterministicExecution)
 	}
-	s.allowed[input.Node.Key]--
 	s.started = append(s.started, input.Node.Key)
-	s.active[req.RunID] = req
-	if input.Node.Key == "plan" {
-		s.plans++
+	s.active[req.RunID] = deterministicExecution{SchedulerStartRunRequest: req, NodeKey: input.Node.Key}
+	if input.Node.Key == "implementation" {
+		s.loops++
 	}
-	planCount := s.plans
+	loopCount := s.loops
+	gateLive := false
+	for _, active := range s.active {
+		if active.NodeKey == "approval_gate" {
+			gateLive = true
+			break
+		}
+	}
 	s.mu.Unlock()
 	switch input.Node.Key {
-	case "plan":
-		if planCount == 1 {
+	case "implementation":
+		if loopCount == 1 {
 			s.complete(ctx, req, "split", map[string]string{"summary": "plan"})
 		} else {
+			if gateLive {
+				return errors.New("looped Implementation started before Approval Gate Exact Execution Scope retired")
+			}
 			s.complete(ctx, req, "done", nil)
 		}
-	case "impl_a":
+	case "code_review":
 		s.complete(ctx, req, "join", map[string]string{"joined": "branch a"})
-	case "impl_b":
+	case "qa", "compliance_review":
 		s.complete(ctx, req, "join", nil)
+	case "approval_gate":
+		s.complete(ctx, req, "review_rejected", nil)
 	default:
 		s.t.Fatalf("unexpected executable Node %q", input.Node.Key)
 	}
 	return nil
 }
 
-func (s *deterministicCompletionStarter) allow(nodeKeys ...workflow.ModelKey) {
+func (s *deterministicCompletionStarter) activeExecutions() []deterministicExecution {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.allowed == nil {
-		s.allowed = make(map[workflow.ModelKey]int)
+	out := make([]deterministicExecution, 0, len(s.active))
+	for _, execution := range s.active {
+		out = append(out, execution)
 	}
-	if s.active == nil {
-		s.active = make(map[workflow.RunID]SchedulerStartRunRequest)
-	}
-	for _, nodeKey := range nodeKeys {
-		s.allowed[nodeKey]++
-	}
-}
-
-func (s *deterministicCompletionStarter) unretired(t *testing.T) []SchedulerStartRunRequest {
-	t.Helper()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]SchedulerStartRunRequest, 0, len(s.active))
-	for runID, req := range s.active {
-		out = append(out, req)
-		delete(s.active, runID)
-	}
+	slices.SortFunc(out, func(a, b deterministicExecution) int {
+		return cmp.Compare(string(a.NodeKey), string(b.NodeKey))
+	})
 	return out
 }
 
-func (s *deterministicCompletionStarter) singleUnretired(t *testing.T) SchedulerStartRunRequest {
-	t.Helper()
-	active := s.unretired(t)
-	if len(active) != 1 {
-		t.Fatalf("unretired executions = %+v, want one", active)
+func (s *deterministicCompletionStarter) retire(scheduler *SchedulerService, executions ...deterministicExecution) {
+	s.mu.Lock()
+	for _, execution := range executions {
+		delete(s.active, execution.RunID)
 	}
-	return active[0]
+	s.mu.Unlock()
+	for _, execution := range executions {
+		scheduler.RuntimeFinished(execution.RunID, execution.Generation)
+	}
 }
 
 func (s *deterministicCompletionStarter) nodeStarts() []workflow.ModelKey {
@@ -3236,16 +3247,20 @@ func createFanoutJoinLoopStarterWorkflow(t *testing.T, store *workflowstore.Stor
 	}
 	start := starterNodeByKind(t, def, workflow.NodeKindStart)
 	done := starterNodeByKind(t, def, workflow.NodeKindTerminal)
-	planID := workflow.NodeID("node-plan-" + string(created.ID))
-	implAID := workflow.NodeID("node-impl-a-" + string(created.ID))
-	implBID := workflow.NodeID("node-impl-b-" + string(created.ID))
+	implementationID := workflow.NodeID("node-implementation-" + string(created.ID))
+	codeReviewID := workflow.NodeID("node-code-review-" + string(created.ID))
+	qaID := workflow.NodeID("node-qa-" + string(created.ID))
+	complianceReviewID := workflow.NodeID("node-compliance-review-" + string(created.ID))
 	joinID := workflow.NodeID("node-join-" + string(created.ID))
+	approvalGateID := workflow.NodeID("node-approval-gate-" + string(created.ID))
 	joinAEdgeID := workflow.EdgeID("edge-join-a-" + string(created.ID))
 	for _, node := range []workflowstore.NodeRecord{
-		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}},
-		{ID: implAID, WorkflowID: created.ID, Key: "impl_a", Kind: workflow.NodeKindAgent, DisplayName: "Implement A", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
-		{ID: implBID, WorkflowID: created.ID, Key: "impl_b", Kind: workflow.NodeKindAgent, DisplayName: "Implement B", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: implementationID, WorkflowID: created.ID, Key: "implementation", Kind: workflow.NodeKindAgent, DisplayName: "Implementation", SubagentRole: "coder", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}},
+		{ID: codeReviewID, WorkflowID: created.ID, Key: "code_review", Kind: workflow.NodeKindAgent, DisplayName: "Code Review", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: qaID, WorkflowID: created.ID, Key: "qa", Kind: workflow.NodeKindAgent, DisplayName: "QA", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: complianceReviewID, WorkflowID: created.ID, Key: "compliance_review", Kind: workflow.NodeKindAgent, DisplayName: "Compliance Review", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
 		{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
+		{ID: approvalGateID, WorkflowID: created.ID, Key: "approval_gate", Kind: workflow.NodeKindAgent, DisplayName: "Approval Gate", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "joined", Description: "Joined result."}}},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
 			t.Fatalf("AddNode %s: %v", node.Key, err)
@@ -3256,27 +3271,34 @@ func createFanoutJoinLoopStarterWorkflow(t *testing.T, store *workflowstore.Stor
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	joinAGroup := workflow.TransitionGroupID("group-join-a-" + string(created.ID))
 	joinBGroup := workflow.TransitionGroupID("group-join-b-" + string(created.ID))
-	loopGroup := workflow.TransitionGroupID("group-loop-" + string(created.ID))
+	joinCGroup := workflow.TransitionGroupID("group-join-c-" + string(created.ID))
+	joinGateGroup := workflow.TransitionGroupID("group-join-gate-" + string(created.ID))
+	rejectedGroup := workflow.TransitionGroupID("group-rejected-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
 		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
-		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
-		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "done", DisplayName: "Done"},
-		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
-		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
-		{ID: loopGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "loop", DisplayName: "Loop"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: implementationID, TransitionID: "split", DisplayName: "Review"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implementationID, TransitionID: "done", DisplayName: "Done"},
+		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: codeReviewID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: qaID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinCGroup, WorkflowID: created.ID, SourceNodeID: complianceReviewID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinGateGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "review", DisplayName: "Review Findings"},
+		{ID: rejectedGroup, WorkflowID: created.ID, SourceNodeID: approvalGateID, TransitionID: "review_rejected", DisplayName: "Rejected"},
 	} {
 		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
 			t.Fatalf("AddTransitionGroup %s: %v", group.TransitionID, err)
 		}
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
-		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
-		{ID: workflow.EdgeID("edge-split-a-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "split_a", TargetNodeID: implAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "A {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
-		{ID: workflow.EdgeID("edge-split-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "split_b", TargetNodeID: implBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "B {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: implementationID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
+		{ID: workflow.EdgeID("edge-split-a-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "code_review", TargetNodeID: codeReviewID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-split-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "qa", TargetNodeID: qaID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-split-c-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "compliance_review", TargetNodeID: complianceReviewID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Compliance {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
 		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 		{ID: joinAEdgeID, WorkflowID: created.ID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined result."}}},
 		{ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
-		{ID: workflow.EdgeID("edge-loop-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: loopGroup, Key: "loop", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Decide whether work is done."},
+		{ID: workflow.EdgeID("edge-join-c-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinCGroup, Key: "join_c", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-join-gate-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinGateGroup, Key: "approval_gate", TargetNodeID: approvalGateID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Decide {{.Params.joined}}."},
+		{ID: workflow.EdgeID("edge-rejected-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: rejectedGroup, Key: "implementation", TargetNodeID: implementationID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Address review findings."},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
