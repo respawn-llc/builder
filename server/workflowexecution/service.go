@@ -232,6 +232,7 @@ func (s *SchedulerService) RuntimeFinished(runID workflow.RunID, generation int6
 	s.mu.Lock()
 	current, ok := s.active[runID]
 	if ok && current.Generation == generation {
+		s.automaticIntents.SourceFinished(runID)
 		delete(s.active, runID)
 	}
 	s.mu.Unlock()
@@ -549,6 +550,7 @@ func (s *SchedulerService) claimRunWithPermit(ctx context.Context, candidate wor
 		Generation:  candidate.Generation,
 	}
 	s.active[candidate.ID] = reserved
+	s.automaticIntents.SourceStarted(candidate.ID)
 	s.mu.Unlock()
 
 	claimed, err := s.claimRunWithRetry(ctx, candidate)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1471,6 +1472,174 @@ func TestWorkflowRuntimeFanoutAutomaticallyStartsEverySuccessorAfterSourceRetire
 			t.Fatalf("run = %+v, want started and completed without interruption", run)
 		}
 	}
+}
+
+func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput)
+	workflowID := createFanoutJoinLoopStarterWorkflow(t, fixture.store)
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow fanout join loop: %v", err)
+	}
+
+	var scheduler *SchedulerService
+	executor := &deterministicCompletionStarter{
+		t:     t,
+		store: fixture.store,
+		complete: func(ctx context.Context, req SchedulerStartRunRequest, transitionID string, outputs map[string]string) {
+			controller := workflowruntime.StoreController{
+				Store:           fixture.store,
+				AutomaticStarts: fixture.automaticStarts,
+				MutationPermit:  fixture.starter.mutationPermit,
+			}
+			if _, err := controller.CompleteWorkflowRun(ctx, workflowruntime.CompletionRequest{
+				RunID:              req.RunID,
+				ExpectedGeneration: req.Generation,
+				RequireGeneration:  true,
+				TransitionID:       transitionID,
+				OutputValues:       outputs,
+			}); err != nil {
+				t.Fatalf("CompleteWorkflowRun %s: %v", transitionID, err)
+			}
+		},
+	}
+	var err error
+	scheduler, err = NewSchedulerService(
+		fixture.store,
+		executor,
+		fixture.starter.mutationPermit,
+		SchedulerConfig{Concurrency: 4},
+		WithAutomaticIntents(fixture.automaticIntents),
+	)
+	if err != nil {
+		t.Fatalf("NewSchedulerService: %v", err)
+	}
+	t.Cleanup(func() { _ = scheduler.Close() })
+
+	task := fixture.createStartedTask(t)
+	executor.allow("plan")
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process serial Node: %v", err)
+	}
+	plan := executor.singleUnretired(t)
+	executor.allow("impl_a", "impl_b")
+	scheduler.RuntimeFinished(plan.RunID, plan.Generation)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process fan-out Nodes: %v", err)
+	}
+	branches := executor.unretired(t)
+	if len(branches) != 2 {
+		t.Fatalf("fan-out executions = %+v, want two", branches)
+	}
+	executor.allow("plan")
+	for _, branch := range branches {
+		scheduler.RuntimeFinished(branch.RunID, branch.Generation)
+	}
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process Join loop: %v", err)
+	}
+	loopedPlan := executor.singleUnretired(t)
+	scheduler.RuntimeFinished(loopedPlan.RunID, loopedPlan.Generation)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process Terminal transition: %v", err)
+	}
+
+	detail, err := fixture.view.GetTask(context.Background(), string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone {
+		t.Fatalf("task did not reach done after fanout join loop: %+v", detail)
+	}
+	if got := executor.nodeStarts(); !reflect.DeepEqual(got, []workflow.ModelKey{"plan", "impl_a", "impl_b", "plan"}) {
+		t.Fatalf("started nodes = %+v, want plan, both fan-out branches, looped plan", got)
+	}
+}
+
+type deterministicCompletionStarter struct {
+	t        *testing.T
+	store    *workflowstore.Store
+	complete func(context.Context, SchedulerStartRunRequest, string, map[string]string)
+	mu       sync.Mutex
+	started  []workflow.ModelKey
+	plans    int
+	allowed  map[workflow.ModelKey]int
+	active   map[workflow.RunID]SchedulerStartRunRequest
+}
+
+func (s *deterministicCompletionStarter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error {
+	input, err := s.store.GetRunStartContext(ctx, req.RunID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.allowed[input.Node.Key] == 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("executable Node %q started before its source Exact Execution Scope retired", input.Node.Key)
+	}
+	s.allowed[input.Node.Key]--
+	s.started = append(s.started, input.Node.Key)
+	s.active[req.RunID] = req
+	if input.Node.Key == "plan" {
+		s.plans++
+	}
+	planCount := s.plans
+	s.mu.Unlock()
+	switch input.Node.Key {
+	case "plan":
+		if planCount == 1 {
+			s.complete(ctx, req, "split", map[string]string{"summary": "plan"})
+		} else {
+			s.complete(ctx, req, "done", nil)
+		}
+	case "impl_a":
+		s.complete(ctx, req, "join", map[string]string{"joined": "branch a"})
+	case "impl_b":
+		s.complete(ctx, req, "join", nil)
+	default:
+		s.t.Fatalf("unexpected executable Node %q", input.Node.Key)
+	}
+	return nil
+}
+
+func (s *deterministicCompletionStarter) allow(nodeKeys ...workflow.ModelKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.allowed == nil {
+		s.allowed = make(map[workflow.ModelKey]int)
+	}
+	if s.active == nil {
+		s.active = make(map[workflow.RunID]SchedulerStartRunRequest)
+	}
+	for _, nodeKey := range nodeKeys {
+		s.allowed[nodeKey]++
+	}
+}
+
+func (s *deterministicCompletionStarter) unretired(t *testing.T) []SchedulerStartRunRequest {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]SchedulerStartRunRequest, 0, len(s.active))
+	for runID, req := range s.active {
+		out = append(out, req)
+		delete(s.active, runID)
+	}
+	return out
+}
+
+func (s *deterministicCompletionStarter) singleUnretired(t *testing.T) SchedulerStartRunRequest {
+	t.Helper()
+	active := s.unretired(t)
+	if len(active) != 1 {
+		t.Fatalf("unretired executions = %+v, want one", active)
+	}
+	return active[0]
+}
+
+func (s *deterministicCompletionStarter) nodeStarts() []workflow.ModelKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]workflow.ModelKey(nil), s.started...)
 }
 
 func TestWorkflowRuntimeCompletionWakesSchedulerForSuccessor(t *testing.T) {
@@ -3046,6 +3215,68 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 		{ID: joinBEdgeID, WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-synth-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
 		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("AddEdge %s: %v", edge.Key, err)
+		}
+	}
+	return created.ID
+}
+
+func createFanoutJoinLoopStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Fanout Join Loop Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := starterNodeByKind(t, def, workflow.NodeKindStart)
+	done := starterNodeByKind(t, def, workflow.NodeKindTerminal)
+	planID := workflow.NodeID("node-plan-" + string(created.ID))
+	implAID := workflow.NodeID("node-impl-a-" + string(created.ID))
+	implBID := workflow.NodeID("node-impl-b-" + string(created.ID))
+	joinID := workflow.NodeID("node-join-" + string(created.ID))
+	joinAEdgeID := workflow.EdgeID("edge-join-a-" + string(created.ID))
+	for _, node := range []workflowstore.NodeRecord{
+		{ID: planID, WorkflowID: created.ID, Key: "plan", Kind: workflow.NodeKindAgent, DisplayName: "Plan", SubagentRole: "coder", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}},
+		{ID: implAID, WorkflowID: created.ID, Key: "impl_a", Kind: workflow.NodeKindAgent, DisplayName: "Implement A", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: implBID, WorkflowID: created.ID, Key: "impl_b", Kind: workflow.NodeKindAgent, DisplayName: "Implement B", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("AddNode %s: %v", node.Key, err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
+	splitGroup := workflow.TransitionGroupID("group-split-" + string(created.ID))
+	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	joinAGroup := workflow.TransitionGroupID("group-join-a-" + string(created.ID))
+	joinBGroup := workflow.TransitionGroupID("group-join-b-" + string(created.ID))
+	loopGroup := workflow.TransitionGroupID("group-loop-" + string(created.ID))
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "done", DisplayName: "Done"},
+		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
+		{ID: loopGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "loop", DisplayName: "Loop"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddTransitionGroup %s: %v", group.TransitionID, err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+		{ID: workflow.EdgeID("edge-split-a-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "split_a", TargetNodeID: implAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "A {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-split-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "split_b", TargetNodeID: implBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "B {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+		{ID: joinAEdgeID, WorkflowID: created.ID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined result."}}},
+		{ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-loop-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: loopGroup, Key: "loop", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Decide whether work is done."},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
