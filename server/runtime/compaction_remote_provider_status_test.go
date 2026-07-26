@@ -90,24 +90,74 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 }
 
 func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
+	t.Run("non-overflow provider 400 fails without replacement or fallback", func(t *testing.T) {
+		store, client, engine := newRemoteCompactionFixture(t, &llm.ProviderAPIError{
+			ProviderID: "openai",
+			StatusCode: 400,
+			Code:       llm.UnifiedErrorCodeUnknown,
+		})
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(
+			t,
+			store,
+			client,
+			engine.CompactContext(context.Background(), ""),
+			1,
+		)
+	})
+
+	t.Run("404 fails without replacement or fallback", func(t *testing.T) {
+		store, client, engine := newRemoteCompactionFixture(t, &llm.ProviderAPIError{
+			ProviderID: "openai",
+			StatusCode: 404,
+			Code:       llm.UnifiedErrorCodeUnknown,
+		})
+		err := engine.CompactContext(context.Background(), "")
+		var providerErr *llm.ProviderAPIError
+		if !errors.As(err, &providerErr) {
+			t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
+		}
+		if providerErr.StatusCode != 404 {
+			t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
+		}
+		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err, 1)
+	})
+
+	t.Run("missing checkpoint falls back to local", func(t *testing.T) {
+		_, client, engine := newRemoteCompactionFixture(t, nil)
+		if err := engine.CompactContext(context.Background(), ""); err != nil {
+			t.Fatalf("compact context: %v", err)
+		}
+		summaries := 0
+		for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
+			if item.Type == llm.ResponseItemTypeMessage &&
+				item.MessageType != nil &&
+				*item.MessageType == llm.MessageTypeCompactionSummary {
+				summaries++
+			}
+		}
+		if len(client.compactionCalls) != 1 || len(client.calls) != 1 || summaries != 1 {
+			t.Fatalf(
+				"remote/local/summary calls = %d/%d/%d, want one/one/one",
+				len(client.compactionCalls),
+				len(client.calls),
+				summaries,
+			)
+		}
+	})
+}
+
+func newRemoteCompactionFixture(
+	t *testing.T,
+	compactionError error,
+) (*session.Store, *fakeCompactionClient, *Engine) {
+	t.Helper()
+
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		}},
-		compactionErrors: []error{
-			&llm.ProviderAPIError{
-				ProviderID: "openai",
-				StatusCode: 400,
-				Code:       llm.UnifiedErrorCodeUnknown,
-			},
-			&llm.ProviderAPIError{
-				ProviderID: "openai",
-				StatusCode: 404,
-				Code:       llm.UnifiedErrorCodeUnknown,
-			},
-			nil,
-		},
+		compactionErrors: []error{compactionError},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{{
 				Type:    llm.ResponseItemTypeMessage,
@@ -129,50 +179,7 @@ func TestRemoteCompactionFailureAndCheckpointFallback(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-
-	t.Run("non-overflow provider 400 fails without replacement or fallback", func(t *testing.T) {
-		assertRemoteCompactionFailureWithoutReplacementOrFallback(
-			t,
-			store,
-			client,
-			engine.CompactContext(context.Background(), ""),
-			1,
-		)
-	})
-
-	t.Run("404 fails without replacement or fallback", func(t *testing.T) {
-		err := engine.CompactContext(context.Background(), "")
-		var providerErr *llm.ProviderAPIError
-		if !errors.As(err, &providerErr) {
-			t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
-		}
-		if providerErr.StatusCode != 404 {
-			t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
-		}
-		assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err, 2)
-	})
-
-	t.Run("missing checkpoint falls back to local", func(t *testing.T) {
-		if err := engine.CompactContext(context.Background(), ""); err != nil {
-			t.Fatalf("compact context: %v", err)
-		}
-		summaries := 0
-		for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
-			if item.Type == llm.ResponseItemTypeMessage &&
-				item.MessageType != nil &&
-				*item.MessageType == llm.MessageTypeCompactionSummary {
-				summaries++
-			}
-		}
-		if len(client.compactionCalls) != 3 || len(client.calls) != 1 || summaries != 1 {
-			t.Fatalf(
-				"remote/local/summary calls = %d/%d/%d, want three/one/one",
-				len(client.compactionCalls),
-				len(client.calls),
-				summaries,
-			)
-		}
-	})
+	return store, client, engine
 }
 
 func assertRemoteCompactionFailureWithoutReplacementOrFallback(
