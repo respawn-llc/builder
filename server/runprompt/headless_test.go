@@ -243,7 +243,13 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 	}
 }
 
-func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager, persistences ...*sessiontest.Persistence) *sessionlaunch.Service {
+func newTestHeadlessSessionLaunch(
+	cfg config.App,
+	containerDir string,
+	authManager *auth.Manager,
+	authority *sessionruntime.Authority,
+	persistences ...*sessiontest.Persistence,
+) *sessionlaunch.Service {
 	persistence := sessiontest.NewPersistence()
 	if len(persistences) > 0 && persistences[0] != nil {
 		persistence = persistences[0]
@@ -253,7 +259,7 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 		ContainerDir:      containerDir,
 		StoreOptions:      persistence.Options(),
 		PersistedSessions: persistence,
-	}).WithAuthStateReader(authManager)
+	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
 }
 
 func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, background *shelltool.Manager, storeOptions ...session.StoreOption) *sessionruntime.Authority {
@@ -302,7 +308,7 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 		store:     store,
 		authority: authority,
 		client: NewInProcessRunPromptClient(HeadlessBootstrap{
-			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 			RuntimeAuthority: authority,
 			PromptHistory:    history,
 		}),
@@ -413,14 +419,16 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
+	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, meta.AuthoritativeSessionStoreOptions()...)
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
 		Config:            cfg,
 		ContainerDir:      containerDir,
 		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions: meta,
-	})
+	}).WithRuntimeAuthority(authority)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: sessionLauncher,
+		SessionLaunch:    sessionLauncher,
+		RuntimeAuthority: authority,
 	})
 	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	role := "hidden"
@@ -612,7 +620,7 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			ContainerDir:      containerDir,
 			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions: meta,
-		}).WithAuthStateReader(authManager),
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
 	})
@@ -785,7 +793,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	history := &recordingPromptHistoryStore{}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 		PromptHistory:    history,
 	})
@@ -1105,7 +1113,7 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, background, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 
@@ -1276,8 +1284,10 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
+	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, nil, authority, persistence),
+		RuntimeAuthority: authority,
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -1335,7 +1345,7 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 
@@ -1420,7 +1430,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 

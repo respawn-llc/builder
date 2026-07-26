@@ -278,7 +278,8 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		},
 	}).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
-		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore)
+		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
+		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
 	s.safeBundles().Sessions.sessionServices[scopeKey] = service
 	return service
 }

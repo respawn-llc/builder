@@ -173,7 +173,12 @@ func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.turnQueueHook == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
+	if m.turnQueueHook == nil ||
+		m.blocksRuntimeInput() ||
+		len(m.queued) > 0 ||
+		m.injectedQueueBlocksDrain() ||
+		m.hasEnqueuedInjectedRuntimeWork() ||
+		m.ask.hasCurrent() {
 		return
 	}
 	m.turnQueueHook.OnTurnQueueDrained()
@@ -210,6 +215,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
 		}
 		c.restoreQueuedMessagesIntoInput()
+		c.notifyTurnQueueDrainedIfIdle()
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")

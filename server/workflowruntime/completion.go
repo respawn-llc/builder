@@ -92,6 +92,7 @@ type TaskInstructions struct {
 	TaskBody        string
 	WorkflowID      string
 	WorkflowShortID string
+	WorkflowName    string
 	NodeKey         string
 	NodeDisplayName string
 	ContextMode     string

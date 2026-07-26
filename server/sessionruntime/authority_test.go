@@ -1691,6 +1691,77 @@ func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackR
 	}
 }
 
+func TestWithSessionStoreSkipsCanceledWaiterAfterAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close authority: %v", closeErr)
+		}
+	})
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new open session descriptor: %v", err)
+	}
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- authority.WithSessionStore(context.Background(), descriptor, func(context.Context, *session.Store) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Store callback did not enter")
+	}
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	secondCalled := make(chan struct{}, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- authority.WithSessionStore(waiterCtx, descriptor, func(context.Context, *session.Store) error {
+			secondCalled <- struct{}{}
+			return nil
+		})
+	}()
+	cancelWaiter()
+	close(releaseFirst)
+
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first Store callback: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Store callback did not complete")
+	}
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Store waiter error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled Store waiter did not complete")
+	}
+	select {
+	case <-secondCalled:
+		t.Fatal("canceled Store waiter invoked its callback")
+	default:
+	}
+}
+
 func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := runtimeids.NewSessionID()

@@ -664,7 +664,14 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 		t.Fatalf("PlanSession child: %v", err)
 	}
 
-	updated, warnings, err := planner.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")}, auth.EmptyState())
+	childStore := testStoreForPlannerPlan(t, planner, plan)
+	updated, warnings, err := planner.ApplyRunPromptOverridesWithStore(
+		plan,
+		childStore,
+		serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}

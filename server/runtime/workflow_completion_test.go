@@ -175,6 +175,7 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 			TaskBody:        "Task body.",
 			WorkflowID:      "workflow-1",
 			WorkflowShortID: "workflow-1",
+			WorkflowName:    "Release preparation",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",
 			ContextMode:     "new_session",

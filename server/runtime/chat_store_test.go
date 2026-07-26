@@ -83,6 +83,110 @@ func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
 	}
 }
 
+func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
+	const replacementStepID = "22222222-2222-4222-8222-222222222222"
+	message := llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    "call-rebased",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}},
+	}
+	items := llm.ItemsFromMessages([]llm.Message{message})
+
+	live := newChatStoreWithCWD(t.TempDir())
+	if err := live.appendMessage(chatStoreTestStepID, message); err != nil {
+		t.Fatalf("append live message: %v", err)
+	}
+	live.replaceHistory(replacementStepID, items)
+
+	reopened := newChatStoreWithCWD(t.TempDir())
+	reopened.replaceHistory(replacementStepID, items)
+
+	for name, chat := range map[string]*chatStore{"live": live, "reopened": reopened} {
+		dangling := chat.danglingToolCalls()
+		if len(dangling) != 1 {
+			t.Fatalf("%s dangling calls = %+v, want one", name, dangling)
+		}
+		if dangling[0].stepID == nil || *dangling[0].stepID != replacementStepID {
+			t.Fatalf(
+				"%s dangling call step = %v, want replacement step %q",
+				name,
+				dangling[0].stepID,
+				replacementStepID,
+			)
+		}
+	}
+}
+
+func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
+	const conflictingStepID = "22222222-2222-4222-8222-222222222222"
+	message := llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    "call-conflict",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}},
+	}
+
+	t.Run("before persistence", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		intent := steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{message},
+		)
+		if err := engine.steer(chatStoreTestStepID, intent); err != nil {
+			t.Fatalf("append initial tool call: %v", err)
+		}
+		before, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+		if err != nil {
+			t.Fatalf("read records before conflict: %v", err)
+		}
+
+		if err := engine.steer(conflictingStepID, intent); err == nil {
+			t.Fatal("conflicting tool-call Step identity was accepted")
+		}
+		after, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+		if err != nil {
+			t.Fatalf("read records after conflict: %v", err)
+		}
+		if len(after.Records) != len(before.Records) {
+			t.Fatalf(
+				"conflicting tool call persisted records: before=%d after=%d",
+				len(before.Records),
+				len(after.Records),
+			)
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		for _, stepID := range []string{chatStoreTestStepID, conflictingStepID} {
+			if _, _, err := appendTestEvent(t, store, stepID, message); err != nil {
+				t.Fatalf("append conflicting persisted tool call: %v", err)
+			}
+		}
+		engine, err := New(
+			store,
+			mustMaterializeTestEventLog(t, store),
+			&fakeClient{},
+			tools.NewRegistry(),
+			Config{Model: "gpt-5"},
+		)
+		if err == nil {
+			if closeErr := engine.Close(); closeErr != nil {
+				t.Fatalf("close unexpectedly restored engine: %v", closeErr)
+			}
+			t.Fatal("restored conflicting tool-call Step identity")
+		}
+	})
+}
+
 func assertHistoryReplacementTail(t *testing.T, items []llm.ResponseItem) {
 	t.Helper()
 	if len(items) != 3 {

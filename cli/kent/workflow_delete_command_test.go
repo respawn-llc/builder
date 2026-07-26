@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -58,7 +57,7 @@ func TestWorkflowDeleteWithoutConfirmReturnsPreviewOnly(t *testing.T) {
 	remote := &workflowDeleteCommandRemote{
 		previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: impact},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -97,7 +96,7 @@ func TestWorkflowDeleteConfirmUsesPreviewedImpact(t *testing.T) {
 		previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: impact},
 		deleteResponse:  serverapi.WorkflowDeleteResponse{Deleted: true, Impact: impact},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -153,7 +152,7 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 			Blockers: []serverapi.WorkflowDeleteBlocker{blocker},
 		},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -173,13 +172,99 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 	}
 }
 
-func installWorkflowDeleteCommandRemote(t *testing.T, remote workflowCommandRemote) {
-	t.Helper()
-	previous := workflowCommandRemoteOpener
-	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-		return config.App{}, remote, nil
+func TestWorkflowDeleteRejectsMismatchedResponseIdentity(t *testing.T) {
+	validImpact := serverapi.WorkflowDeleteImpact{
+		WorkflowID: workflowDeleteTestID,
+		Version:    17,
 	}
-	t.Cleanup(func() {
-		workflowCommandRemoteOpener = previous
-	})
+	mismatchedImpact := validImpact
+	mismatchedImpact.WorkflowID = "workflow-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	tests := []struct {
+		name               string
+		previewImpact      serverapi.WorkflowDeleteImpact
+		deleteResponse     serverapi.WorkflowDeleteResponse
+		wantDeleteRequests int
+	}{
+		{
+			name:          "preview",
+			previewImpact: mismatchedImpact,
+		},
+		{
+			name:          "delete result",
+			previewImpact: validImpact,
+			deleteResponse: serverapi.WorkflowDeleteResponse{
+				Deleted: true,
+				Impact:  mismatchedImpact,
+			},
+			wantDeleteRequests: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remote := &workflowDeleteCommandRemote{
+				previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: test.previewImpact},
+				deleteResponse:  test.deleteResponse,
+			}
+			installWorkflowCommandRemote(t, remote)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := workflowSubcommand(
+				[]string{"delete", workflowDeleteTestSelector, "--confirm", "--json"},
+				&stdout,
+				&stderr,
+			)
+
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1", exitCode)
+			}
+			if len(remote.deleteRequests) != test.wantDeleteRequests {
+				t.Fatalf("delete requests = %d, want %d", len(remote.deleteRequests), test.wantDeleteRequests)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("unexpected successful output: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestWorkflowDeleteRejectsInconsistentDeletionResult(t *testing.T) {
+	impact := serverapi.WorkflowDeleteImpact{
+		WorkflowID: workflowDeleteTestID,
+		Version:    19,
+	}
+	blocker := serverapi.WorkflowDeleteBlocker{
+		Code:    "active_runs",
+		Message: "test blocker",
+		Count:   1,
+	}
+	tests := []serverapi.WorkflowDeleteResponse{
+		{Deleted: false, Impact: impact},
+		{Deleted: true, Impact: impact, Blockers: []serverapi.WorkflowDeleteBlocker{blocker}},
+	}
+
+	for _, response := range tests {
+		remote := &workflowDeleteCommandRemote{
+			previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: impact},
+			deleteResponse:  response,
+		}
+		installWorkflowCommandRemote(t, remote)
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := workflowSubcommand(
+			[]string{"delete", workflowDeleteTestSelector, "--confirm", "--json"},
+			&stdout,
+			&stderr,
+		)
+
+		if exitCode != 1 {
+			t.Fatalf("response %+v exit code = %d, want 1", response, exitCode)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("response %+v produced successful output %q", response, stdout.String())
+		}
+	}
 }

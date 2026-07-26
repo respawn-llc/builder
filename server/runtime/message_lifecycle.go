@@ -56,7 +56,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := rollbackLocator.ObserveMessage(record.Seq(), msg); err != nil {
 				return err
 			}
-			e.transcriptRuntimeState().AppendMessage(stepID, msg)
+			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg); err != nil {
+				return fmt.Errorf("restore session message projection: %w", err)
+			}
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true

@@ -476,7 +476,7 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		TaskTitle:            instructions.TaskTitle,
 		TaskBody:             instructions.TaskBody,
 		WorkflowId:           instructions.WorkflowID,
-		WorkflowShortId:      instructions.WorkflowShortID,
+		WorkflowName:         instructions.WorkflowName,
 		NodeId:               string(instructions.CurrentNode.NodeID),
 		NodeKey:              instructions.NodeKey,
 		NodeDisplayName:      instructions.NodeDisplayName,

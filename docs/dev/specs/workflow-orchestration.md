@@ -238,6 +238,8 @@
 - Requests to start eligible work automatically are temporary. Kent loses them on restart and does not reconstruct them from saved Task state.
 - Automatic starts use available capacity and prefer to continue related work on the same Task. `[workflow].concurrency` limits automatic starts only.
 - Explicit Start, Resume, approval, and executable manual move may exceed the automatic concurrency limit without preempting existing work.
+- Resume returns after it durably requeues the interrupted Runs and queues their explicit starts.
+- Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.

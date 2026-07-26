@@ -179,7 +179,7 @@ type WorkflowNodeContextArgs struct {
 	TaskTitle            string
 	TaskBody             string
 	WorkflowId           string
-	WorkflowShortId      string
+	WorkflowName         string
 	NodeId               string
 	NodeKey              string
 	NodeDisplayName      string

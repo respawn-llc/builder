@@ -92,7 +92,7 @@ func (e *Engine) compactWithContextRepairRetry(
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(stepID)
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
 		if repairErr != nil {
 			return resp, items, errors.Join(err, repairErr)
 		}
@@ -214,8 +214,14 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	return req, true, nil
 }
 
-func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, providerID string, instructions string, mode compactionMode) (compactionResult, error) {
-	summary, repairStats, err := e.localCompactionSummaryWithRepair(ctx, input, instructions, mode)
+func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, mode compactionMode) (compactionResult, error) {
+	summary, repairStats, err := e.localCompactionSummaryWithRepair(
+		ctx,
+		textutil.OptionalTrimmedString(stepID),
+		input,
+		instructions,
+		mode,
+	)
 	if err != nil {
 		return compactionResult{}, err
 	}
@@ -239,11 +245,11 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 }
 
 func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
-	summary, _, err := e.localCompactionSummaryWithRepair(ctx, input, instructions, mode)
+	summary, _, err := e.localCompactionSummaryWithRepair(ctx, nil, input, instructions, mode)
 	return summary, err
 }
 
-func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, compactionOverflowRepairStats, error) {
+func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairStepID *string, input []llm.ResponseItem, instructions string, mode compactionMode) (string, compactionOverflowRepairStats, error) {
 	locked, err := e.ensureLocked()
 	if err != nil {
 		return "", compactionOverflowRepairStats{}, err
@@ -275,7 +281,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []l
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending("")
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(repairStepID)
 		if repairErr != nil {
 			return "", w, errors.Join(err, repairErr)
 		}

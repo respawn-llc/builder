@@ -37,7 +37,7 @@ func annotateSource(source []byte) ([]byte, error) {
 		if !ok || !isQueriesMethod(function) || function.Body == nil {
 			continue
 		}
-		annotateBlock(function.Body)
+		annotateBlock(function.Body, nil)
 	}
 	var output bytes.Buffer
 	if err := format.Node(&output, fset, file); err != nil {
@@ -63,33 +63,40 @@ type queryCall struct {
 	args  []ast.Expr
 }
 
-func annotateBlock(block *ast.BlockStmt) {
+func annotateBlock(block *ast.BlockStmt, inheritedResults map[string]queryCall) {
 	if block == nil {
 		return
 	}
-	rows := map[string]queryCall{}
+	queryResults := copyQueryResults(inheritedResults)
 	annotated := make([]ast.Stmt, 0, len(block.List))
 	for index, statement := range block.List {
-		annotateNestedBlocks(statement)
+		annotateNestedBlocks(statement, queryResults)
 		assignment, isAssignment := statement.(*ast.AssignStmt)
 		if !isAssignment {
 			annotated = append(annotated, statement)
 			continue
 		}
 		if rowName, call, ok := queryRowAssignment(assignment); ok {
-			rows[rowName] = call
+			queryResults[rowName] = call
 		}
-		if rowName, scan, ok := rowScanAssignment(assignment); ok {
-			if call, found := rows[rowName]; found {
-				scan.Rhs[0] = diagnosticCall(scan.Rhs[0], call)
-			}
+		if rowsName, call, ok := queryRowsAssignment(assignment); ok {
+			queryResults[rowsName] = call
 		}
+		annotateQueryResultError(assignment, queryResults)
 		annotated = append(annotated, statement)
 		if call, ok := databaseCallAssignment(assignment); ok && !isDiagnosticAssignment(nextStatement(block.List, index)) {
 			annotated = append(annotated, wrapAssignedError(call))
 		}
 	}
 	block.List = annotated
+}
+
+func copyQueryResults(source map[string]queryCall) map[string]queryCall {
+	result := make(map[string]queryCall, len(source))
+	for name, call := range source {
+		result[name] = call
+	}
+	return result
 }
 
 func nextStatement(statements []ast.Stmt, index int) ast.Stmt {
@@ -117,26 +124,41 @@ func isDiagnosticAssignment(statement ast.Stmt) bool {
 	return ok && function.Name == "recordQueryError"
 }
 
-func annotateNestedBlocks(statement ast.Stmt) {
+func annotateNestedBlocks(statement ast.Stmt, queryResults map[string]queryCall) {
 	switch statement := statement.(type) {
 	case *ast.BlockStmt:
-		annotateBlock(statement)
+		annotateBlock(statement, queryResults)
 	case *ast.IfStmt:
-		annotateBlock(statement.Body)
-		annotateNestedBlocks(statement.Else)
+		annotateQueryResultErrorStatement(statement.Init, queryResults)
+		annotateBlock(statement.Body, queryResults)
+		annotateNestedBlocks(statement.Else, queryResults)
 	case *ast.ForStmt:
-		annotateBlock(statement.Body)
+		annotateQueryResultErrorStatement(statement.Init, queryResults)
+		annotateQueryResultErrorStatement(statement.Post, queryResults)
+		annotateBlock(statement.Body, queryResults)
 	case *ast.RangeStmt:
-		annotateBlock(statement.Body)
+		annotateBlock(statement.Body, queryResults)
 	case *ast.SwitchStmt:
-		annotateBlock(statement.Body)
+		annotateQueryResultErrorStatement(statement.Init, queryResults)
+		annotateBlock(statement.Body, queryResults)
 	case *ast.TypeSwitchStmt:
-		annotateBlock(statement.Body)
+		annotateQueryResultErrorStatement(statement.Init, queryResults)
+		annotateBlock(statement.Body, queryResults)
 	case *ast.SelectStmt:
-		annotateBlock(statement.Body)
+		annotateBlock(statement.Body, queryResults)
 	case *ast.CaseClause:
-		annotateBlock(&ast.BlockStmt{List: statement.Body})
+		block := &ast.BlockStmt{List: statement.Body}
+		annotateBlock(block, queryResults)
+		statement.Body = block.List
 	}
+}
+
+func annotateQueryResultErrorStatement(statement ast.Stmt, queryResults map[string]queryCall) {
+	assignment, ok := statement.(*ast.AssignStmt)
+	if !ok {
+		return
+	}
+	annotateQueryResultError(assignment, queryResults)
 }
 
 func queryRowAssignment(assignment *ast.AssignStmt) (string, queryCall, bool) {
@@ -154,27 +176,59 @@ func queryRowAssignment(assignment *ast.AssignStmt) (string, queryCall, bool) {
 	return rowName.Name, call, true
 }
 
-func rowScanAssignment(assignment *ast.AssignStmt) (string, *ast.AssignStmt, bool) {
+func queryRowsAssignment(assignment *ast.AssignStmt) (string, queryCall, bool) {
+	if len(assignment.Lhs) < 1 || len(assignment.Rhs) != 1 {
+		return "", queryCall{}, false
+	}
+	rowsName, ok := assignment.Lhs[0].(*ast.Ident)
+	if !ok {
+		return "", queryCall{}, false
+	}
+	call, ok := databaseMethodCall(assignment.Rhs[0], "QueryContext")
+	if !ok {
+		return "", queryCall{}, false
+	}
+	return rowsName.Name, call, true
+}
+
+func annotateQueryResultError(assignment *ast.AssignStmt, queryResults map[string]queryCall) {
+	resultName, ok := queryResultErrorAssignment(assignment)
+	if !ok {
+		return
+	}
+	query, found := queryResults[resultName]
+	if !found {
+		return
+	}
+	assignment.Rhs[0] = diagnosticCall(assignment.Rhs[0], query)
+}
+
+func queryResultErrorAssignment(assignment *ast.AssignStmt) (string, bool) {
 	if len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
-		return "", nil, false
+		return "", false
 	}
 	errName, ok := assignment.Lhs[0].(*ast.Ident)
 	if !ok || errName.Name != "err" {
-		return "", nil, false
+		return "", false
 	}
 	call, ok := assignment.Rhs[0].(*ast.CallExpr)
 	if !ok {
-		return "", nil, false
+		return "", false
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Scan" {
-		return "", nil, false
-	}
-	row, ok := selector.X.(*ast.Ident)
 	if !ok {
-		return "", nil, false
+		return "", false
 	}
-	return row.Name, assignment, true
+	switch selector.Sel.Name {
+	case "Scan", "Close", "Err":
+	default:
+		return "", false
+	}
+	result, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return result.Name, true
 }
 
 func databaseCallAssignment(assignment *ast.AssignStmt) (queryCall, bool) {

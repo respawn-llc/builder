@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -33,6 +35,7 @@ var missingToolOutputInterruptedOutput = json.RawMessage(`{"error":"Tool executi
 type danglingToolCall struct {
 	callID string
 	name   string
+	stepID *string
 }
 
 // repairMissingToolOutputsByAppending closes any tool calls in the live
@@ -45,13 +48,23 @@ type danglingToolCall struct {
 // the prompt-cache prefix through each repaired call stays intact. The provider
 // output item materialized for each completion automatically matches the
 // original call kind (function vs custom) via the projection.
+// Each completion retains its call's original Step identity. An explicit repair
+// Step owns only legacy calls whose persisted message has no Step; without
+// either identity, validation fails before any completion is appended.
 //
 // It is a fallback for the resume path, which re-executes interrupted tool calls
 // to obtain real outputs; when there are still pending tool-call starts to
 // re-execute, this no-ops so it never pre-empts a real result.
-func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error) {
+func (e *Engine) repairMissingToolOutputsByAppending(repairStepID *string) (int, error) {
 	if e == nil || e.store == nil {
 		return 0, nil
+	}
+	if repairStepID != nil {
+		normalized := strings.TrimSpace(*repairStepID)
+		if normalized == "" {
+			return 0, errors.New("repair step id must be non-empty when present")
+		}
+		repairStepID = textutil.Value(normalized)
 	}
 	if e.pendingToolCallStartStore().Len() > 0 {
 		return 0, nil
@@ -64,24 +77,41 @@ func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error)
 	if len(dangling) == 0 {
 		return 0, nil
 	}
-	intents := make([]steeringIntent, 0, len(dangling)+1)
+	for index := range dangling {
+		if dangling[index].stepID == nil {
+			dangling[index].stepID = textutil.Pointer(repairStepID)
+		}
+		if dangling[index].stepID == nil {
+			return 0, fmt.Errorf("repair dangling tool call %q: step id is required", dangling[index].callID)
+		}
+	}
+	repaired := 0
 	for _, call := range dangling {
-		intents = append(intents, steerToolCompletionIntent(tools.Result{
+		if err := e.steer(*call.stepID, steerToolCompletionIntent(tools.Result{
 			CallID:  call.callID,
 			Name:    toolspec.ID(call.name),
 			IsError: true,
 			Output:  append(json.RawMessage(nil), missingToolOutputInterruptedOutput...),
-		}))
+		})); err != nil {
+			return repaired, err
+		}
+		repaired++
 	}
-	intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
+	warning := steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       fmt.Sprintf(missingToolOutputRepairWarningTemplate, len(dangling)),
-	}))
-	if err := e.steer(stepID, intents...); err != nil {
-		return 0, err
+	})
+	if repairStepID == nil {
+		if err := e.steer("", warning); err != nil {
+			return repaired, err
+		}
+		return repaired, nil
 	}
-	return len(dangling), nil
+	if err := e.steer(*repairStepID, warning); err != nil {
+		return repaired, err
+	}
+	return repaired, nil
 }
 
 // itemsHaveDanglingToolCalls reports whether a prepared request item sequence
