@@ -3,7 +3,6 @@ package workflowrunner
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	stdruntime "runtime"
 	"sync"
@@ -167,53 +166,11 @@ func TestSchedulerRejectedReviewContinueSessionAdmitsBeforeStartingLaterScriptIn
 	fixture.rebuildStarter(t)
 	fixture.starter.storeOptions = storeOptions
 
-	const scriptPath = "watcher.sh"
-	scriptWorkflowID := createWorkflowRunnerScriptWorkflow(t, fixture.store, scriptPath)
-	if _, err := fixture.store.LinkWorkflow(ctx, fixture.projectID, scriptWorkflowID, false); err != nil {
-		t.Fatalf("link script workflow: %v", err)
-	}
-	fixture.worktrees.afterCreate = func(worktreeRoot string) error {
-		return os.WriteFile(
-			filepath.Join(worktreeRoot, scriptPath),
-			[]byte("#!/bin/sh\nprintf '%s\\n' '{\"transition\":\"done\",\"commentary\":\"watcher complete\"}'\n"),
-			0o755,
-		)
-	}
-	scriptTask, err := fixture.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  fixture.projectID,
-		WorkflowID: &scriptWorkflowID,
-		Title:      "Watch pull request",
-		Body:       "Run the watcher.",
-	})
-	if err != nil {
-		t.Fatalf("create script task: %v", err)
-	}
-	if err := fixture.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: scriptTask.ID}); err != nil {
-		t.Fatalf("materialize script task worktree: %v", err)
-	}
-	scriptExecutionTarget := fixture.worktrees.executionTargetCandidate(scriptTask)
-	scriptStart, err := fixture.store.StartTaskWithExecutionTarget(ctx, scriptTask.ID, &scriptExecutionTarget)
-	if err != nil {
-		t.Fatalf("start script task: %v", err)
-	}
-	if err := fixture.automaticIntents.RegisterAutomaticStarts([]workflow.RunID{scriptStart.RunID}); err != nil {
-		t.Fatalf("register script automatic intent: %v", err)
-	}
+	scriptTask := fixture.createStartedScriptTask(t, "watcher.sh")
 
 	planningPersisted, releasePlanningPersistence := persistenceGate.BlockNext()
 	t.Cleanup(releasePlanningPersistence)
-	scheduler, err := NewSchedulerService(
-		fixture.store,
-		fixture.starter,
-		fixture.starter.mutationPermit,
-		SchedulerConfig{Concurrency: 2},
-		WithAutomaticIntents(fixture.automaticIntents),
-	)
-	if err != nil {
-		t.Fatalf("create continuation scheduler: %v", err)
-	}
-	*fixture.schedulerTarget = scheduler
-	t.Cleanup(func() { _ = scheduler.Close() })
+	scheduler := fixture.schedulerWithConcurrency(t, 2)
 	processed := make(chan error, 1)
 	go func() {
 		processed <- scheduler.Process(ctx)

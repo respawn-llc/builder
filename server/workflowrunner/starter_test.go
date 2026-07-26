@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	stdruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1144,6 +1145,142 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
 	assertPromptContains(t, reqs[1], []string{"Use Run workflow and first summary."})
+}
+
+func TestWorkflowRuntimeContinueSessionWithActiveTranscriptSubscriberDoesNotStallLaterAutomaticIntent(t *testing.T) {
+	if stdruntime.GOOS == "windows" {
+		t.Skip("script fixture uses a POSIX shebang")
+	}
+	sourceResponseStarted := make(chan struct{})
+	sourceResponseRelease := make(chan struct{})
+	successorResponseStarted := make(chan struct{})
+	successorResponseRelease := make(chan struct{})
+	fixture := newStarterFixture(
+		t,
+		config.WorkflowCompletionModeShellCommand,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceResponseStarted)
+				select {
+				case <-sourceResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer("source completion observed").Response,
+		},
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(successorResponseStarted)
+				select {
+				case <-successorResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer("successor completion observed").Response,
+		},
+	)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("start source Process: %v", err)
+	}
+	activeCtx, cancelActive := context.WithTimeout(context.Background(), workflowRunnerTestWaitTimeout)
+	defer cancelActive()
+	select {
+	case <-sourceResponseStarted:
+	case <-activeCtx.Done():
+		t.Fatalf("wait for source runtime: %v", context.Cause(activeCtx))
+	}
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns source: %v", err)
+	}
+	if len(runs) != 1 || runs[0].StartedAt == nil || runs[0].SessionID == "" {
+		t.Fatalf("source run = %+v, want started Session-backed Agent", runs)
+	}
+	runtimes, ok := fixture.runtimes.(*registry.RuntimeRegistry)
+	if !ok {
+		t.Fatalf("runtime registry = %T, want production RuntimeRegistry", fixture.runtimes)
+	}
+	transcript, err := runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: runs[0].SessionID,
+	})
+	if err != nil {
+		t.Fatalf("subscribe source transcript: %v", err)
+	}
+	t.Cleanup(func() { _ = transcript.Close() })
+
+	controller := workflowruntime.StoreController{
+		Store:           fixture.store,
+		AutomaticStarts: fixture.automaticStarts,
+		MutationPermit:  fixture.starter.mutationPermit,
+	}
+	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
+		RunID:              runs[0].ID,
+		ExpectedGeneration: runs[0].Generation,
+		RequireGeneration:  true,
+		TransitionID:       "next",
+		OutputValues:       map[string]string{"prior_summary": "first summary"},
+		Commentary:         "first comments",
+	}); err != nil {
+		t.Fatalf("complete source through workflow controller: %v", err)
+	}
+	close(sourceResponseRelease)
+	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
+	if err := scheduler.Close(); err != nil {
+		t.Fatalf("close source scheduler: %v", err)
+	}
+
+	scriptTask := fixture.createStartedScriptTask(t, "watcher.sh")
+	scheduler = fixture.schedulerWithConcurrency(t, 2)
+
+	processCtx, cancelProcess := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelProcess()
+	if err := scheduler.Process(processCtx); err != nil {
+		t.Fatalf("process continued Session and unrelated script with active source transcript subscriber: %v", err)
+	}
+	select {
+	case <-successorResponseStarted:
+	case <-processCtx.Done():
+		t.Fatalf("wait for continued runtime: %v", context.Cause(processCtx))
+	}
+	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns continued Session: %v", err)
+	}
+	if len(runs) != 2 || runs[1].StartedAt == nil || runs[1].SessionID != runs[0].SessionID {
+		t.Fatalf("continued runs = %+v, want started successor on source Session", runs)
+	}
+	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
+		RunID:              runs[1].ID,
+		ExpectedGeneration: runs[1].Generation,
+		RequireGeneration:  true,
+		TransitionID:       "done",
+		Commentary:         "second done",
+	}); err != nil {
+		t.Fatalf("complete successor through workflow controller: %v", err)
+	}
+	close(successorResponseRelease)
+	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForCompletedRun(t, scriptTask.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
+
+	detail, err := fixture.view.GetTask(context.Background(), string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone {
+		t.Fatalf("task after continued Session replacement = %+v, want done", detail)
+	}
+	if requests := fixture.client.Requests(); len(requests) != 2 {
+		t.Fatalf("scripted model request count = %d, want exactly one request per externally completed Agent", len(requests))
+	}
 }
 
 func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *testing.T) {
@@ -2347,8 +2484,13 @@ func (f starterFixture) scheduler(t *testing.T) *SchedulerService {
 
 func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOption) *SchedulerService {
 	t.Helper()
+	return f.schedulerWithConcurrency(t, 1, opts...)
+}
+
+func (f starterFixture) schedulerWithConcurrency(t *testing.T, concurrency int, opts ...SchedulerOption) *SchedulerService {
+	t.Helper()
 	opts = append(opts, WithAutomaticIntents(f.automaticIntents))
-	scheduler, err := NewSchedulerService(f.store, f.starter, f.starter.mutationPermit, SchedulerConfig{Concurrency: 1}, opts...)
+	scheduler, err := NewSchedulerService(f.store, f.starter, f.starter.mutationPermit, SchedulerConfig{Concurrency: concurrency}, opts...)
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
 	}
@@ -2390,6 +2532,43 @@ func (f starterFixture) createStartedChainedTask(t *testing.T, contextMode workf
 	t.Helper()
 	f.linkChainedWorkflow(t, contextMode, targetRole)
 	return f.createStartedTask(t)
+}
+
+func (f starterFixture) createStartedScriptTask(t *testing.T, scriptPath string) workflowstore.TaskRecord {
+	t.Helper()
+	ctx := context.Background()
+	scriptWorkflowID := createWorkflowRunnerScriptWorkflow(t, f.store, scriptPath)
+	if _, err := f.store.LinkWorkflow(ctx, f.projectID, scriptWorkflowID, false); err != nil {
+		t.Fatalf("link script workflow: %v", err)
+	}
+	f.worktrees.afterCreate = func(worktreeRoot string) error {
+		return os.WriteFile(
+			filepath.Join(worktreeRoot, scriptPath),
+			[]byte("#!/bin/sh\nprintf '%s\\n' '{\"transition\":\"done\",\"commentary\":\"watcher complete\"}'\n"),
+			0o755,
+		)
+	}
+	task, err := f.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  f.projectID,
+		WorkflowID: &scriptWorkflowID,
+		Title:      "Watch pull request",
+		Body:       "Run the watcher.",
+	})
+	if err != nil {
+		t.Fatalf("create script task: %v", err)
+	}
+	if err := f.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("materialize script task worktree: %v", err)
+	}
+	executionTarget := f.worktrees.executionTargetCandidate(task)
+	started, err := f.store.StartTaskWithExecutionTarget(ctx, task.ID, &executionTarget)
+	if err != nil {
+		t.Fatalf("start script task: %v", err)
+	}
+	if err := f.automaticIntents.RegisterAutomaticStarts([]workflow.RunID{started.RunID}); err != nil {
+		t.Fatalf("register script automatic intent: %v", err)
+	}
+	return task
 }
 
 func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) workflowstore.TaskRecord {
