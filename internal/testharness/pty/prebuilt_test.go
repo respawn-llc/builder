@@ -90,6 +90,50 @@ func TestBuildOrUsePrebuiltKent(t *testing.T) {
 	}
 }
 
+func TestExecutablePathRejectsNonExecutableFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-executable")
+	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("write non-executable fixture: %v", err)
+	}
+	if _, err := executablePath(path); err == nil {
+		t.Fatal("validate non-executable path unexpectedly succeeded")
+	}
+}
+
+func TestExecutableModeUsesPlatformExecutableRules(t *testing.T) {
+	cases := map[string]struct {
+		mode            os.FileMode
+		operatingSystem string
+		want            bool
+	}{
+		"executable Unix file": {
+			mode:            0o755,
+			operatingSystem: "darwin",
+			want:            true,
+		},
+		"non-executable Unix file": {
+			mode:            0o644,
+			operatingSystem: "linux",
+		},
+		"Windows regular file": {
+			mode:            0o644,
+			operatingSystem: "windows",
+			want:            true,
+		},
+		"Windows directory": {
+			mode:            os.ModeDir | 0o755,
+			operatingSystem: "windows",
+		},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := executableMode(testCase.mode, testCase.operatingSystem); got != testCase.want {
+				t.Fatalf("executable mode = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
 func unsetEnvironment(t *testing.T, name string) {
 	t.Helper()
 

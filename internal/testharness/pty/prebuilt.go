@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -21,18 +20,30 @@ func PrebuiltExecutable(environmentName string) (string, bool, error) {
 	if !configured {
 		return "", false, nil
 	}
+	absolutePath, err := executablePath(path)
+	if err != nil {
+		return "", false, err
+	}
+	return absolutePath, true, nil
+}
+
+func executablePath(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", false, fmt.Errorf("inspect %q: %w", path, err)
+		return "", fmt.Errorf("inspect %q: %w", path, err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return "", false, fmt.Errorf("%q is not an executable regular file", path)
+	if !executableMode(info.Mode(), runtime.GOOS) {
+		return "", fmt.Errorf("%q is not an executable regular file", path)
 	}
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
-		return "", false, fmt.Errorf("resolve %q: %w", path, err)
+		return "", fmt.Errorf("resolve %q: %w", path, err)
 	}
-	return absolutePath, true, nil
+	return absolutePath, nil
+}
+
+func executableMode(mode os.FileMode, operatingSystem string) bool {
+	return mode.IsRegular() && (operatingSystem == "windows" || mode&0o111 != 0)
 }
 
 func BuildOrUsePrebuiltPackage(
@@ -51,40 +62,13 @@ func BuildOrUsePrebuiltPackage(
 	if err := BuildPackage(ctx, packagePath, outputPath); err != nil {
 		return "", err
 	}
-	return outputPath, nil
+	binary, err = executablePath(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("validate built package %q: %w", packagePath, err)
+	}
+	return binary, nil
 }
 
 func BuildOrUsePrebuiltKent(ctx context.Context, outputPath string) (string, error) {
-	binary, configured, err := PrebuiltExecutable(KentBinaryEnvName)
-	if err != nil {
-		return "", err
-	}
-	if configured {
-		return binary, nil
-	}
-	buildScript, err := kentBuildScriptPath()
-	if err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, buildScript, "server", "--output", outputPath)
-	if output, err := command.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build production Kent: %w output=%q", err, output)
-	}
-	return outputPath, nil
-}
-
-func kentBuildScriptPath() (string, error) {
-	_, sourcePath, _, found := runtime.Caller(0)
-	if !found {
-		return "", fmt.Errorf("resolve PTY prebuild source path")
-	}
-	buildScript := filepath.Clean(filepath.Join(filepath.Dir(sourcePath), "..", "..", "..", "scripts", "build.sh"))
-	info, err := os.Stat(buildScript)
-	if err != nil {
-		return "", fmt.Errorf("inspect Kent build script %q: %w", buildScript, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("Kent build script %q is not executable", buildScript)
-	}
-	return buildScript, nil
+	return BuildOrUsePrebuiltPackage(ctx, KentBinaryEnvName, "core/cli/kent", outputPath)
 }

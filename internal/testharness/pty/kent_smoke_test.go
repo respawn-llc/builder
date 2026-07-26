@@ -13,13 +13,14 @@ import (
 )
 
 func TestProductionKentBinaryPTYSmoke(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	bin, err := pty.BuildOrUsePrebuiltKent(ctx, filepath.Join(t.TempDir(), "kent"))
+	buildContext, cancelBuild := context.WithTimeout(context.Background(), 30*time.Second)
+	bin, err := pty.BuildOrUsePrebuiltKent(buildContext, filepath.Join(t.TempDir(), "kent"))
+	cancelBuild()
 	if err != nil {
 		t.Fatalf("build production Kent: %v", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	environment, err := blackbox.NewIsolatedEnvironment(bin, nil)
 	if err != nil {
 		t.Fatalf("start isolated configured server: %v", err)
