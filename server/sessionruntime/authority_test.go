@@ -1198,6 +1198,83 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 }
 
+func TestPreparedAgentExecutionIsHiddenUntilActivation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	workflowRef := WorkflowExecutionRef{
+		TaskID:     "task-prepared-agent",
+		RunID:      "run-prepared-agent",
+		Generation: 1,
+	}
+	runnerStarted := make(chan struct{})
+	runnerRelease := make(chan struct{})
+	var releaseRunner sync.Once
+	defer releaseRunner.Do(func() { close(runnerRelease) })
+	prepared, err := authority.PrepareAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &workflowRef,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(runnerStarted)
+			<-runnerRelease
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare agent execution: %v", err)
+	}
+	if _, ok := authority.ExecutionByWorkflow(workflowRef); ok {
+		t.Fatal("prepared agent execution was exposed as an Exact Execution Scope before activation")
+	}
+	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("current task execution snapshot before activation: %v", err)
+	}
+	if len(snapshot.Executions) != 0 {
+		t.Fatalf("prepared task executions = %+v, want none before activation", snapshot.Executions)
+	}
+	select {
+	case <-runnerStarted:
+		t.Fatal("prepared agent runner started before activation")
+	default:
+	}
+
+	prepared.Activate()
+	select {
+	case <-runnerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("activated agent runner did not start")
+	}
+	if _, ok := authority.ExecutionByWorkflow(workflowRef); !ok {
+		t.Fatal("activated agent execution was not exposed as an Exact Execution Scope")
+	}
+	snapshot, err = authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("current task execution snapshot after activation: %v", err)
+	}
+	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Ref != workflowRef {
+		t.Fatalf("activated task executions = %+v, want %v", snapshot.Executions, workflowRef)
+	}
+	releaseRunner.Do(func() { close(runnerRelease) })
+	if _, err := prepared.Handle().Wait(context.Background()); err != nil {
+		t.Fatalf("wait prepared agent execution: %v", err)
+	}
+}
+
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)

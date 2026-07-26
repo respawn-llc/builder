@@ -2047,7 +2047,7 @@ func TestWorkflowMutationPermitSerializesConcurrentTaskStarts(t *testing.T) {
 	}
 }
 
-func TestInterruptRejectsClaimedRunUntilExactExecutionScopeRegisters(t *testing.T) {
+func TestInterruptRejectsPreparingRunUntilExactExecutionScopeRegisters(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
 	runtime := newClaimScopeRaceRuntime()
@@ -2760,22 +2760,30 @@ func newClaimScopeRaceRuntime() *claimScopeRaceRuntime {
 	}
 }
 
-func (r *claimScopeRaceRuntime) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
-	r.entered <- req
+func (r *claimScopeRaceRuntime) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
+	start := workflowexecution.SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	}
+	r.entered <- start
 	select {
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	case <-r.release:
 	}
-	r.mu.Lock()
-	r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
-		ScopeID:    runtimeids.NewExecutionScopeID(),
-		TaskID:     req.TaskID,
-		RunID:      req.RunID,
-		Generation: req.Generation,
-	}}}
-	r.mu.Unlock()
-	return nil
+	return claimScopeRacePreparedRun{activate: func() {
+		r.mu.Lock()
+		r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
+			ScopeID:    runtimeids.NewExecutionScopeID(),
+			TaskID:     req.TaskID,
+			RunID:      req.RunID,
+			Generation: req.Generation,
+		}}}
+		r.mu.Unlock()
+	}}, nil
 }
 
 func (r *claimScopeRaceRuntime) PrepareWorkflowInterrupt(selector workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
@@ -2785,6 +2793,26 @@ func (r *claimScopeRaceRuntime) PrepareWorkflowInterrupt(selector workflowexecut
 		return nil, workflowexecution.ErrNoInterruptibleExecution
 	}
 	return r.prepared, nil
+}
+
+type claimScopeRacePreparedRun struct {
+	activate func()
+}
+
+func (claimScopeRacePreparedRun) Admission() workflowexecution.RunAdmission {
+	return workflowexecution.RunAdmission{}
+}
+
+func (claimScopeRacePreparedRun) Commit() error {
+	return nil
+}
+
+func (p claimScopeRacePreparedRun) Activate() {
+	p.activate()
+}
+
+func (claimScopeRacePreparedRun) Abort(context.Context) error {
+	return nil
 }
 
 func (c *recordingTaskRuntimeRunCancelRequester) RequestCancelRun(runID workflow.RunID) bool {

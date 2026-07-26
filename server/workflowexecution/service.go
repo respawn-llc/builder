@@ -229,6 +229,11 @@ func (s *SchedulerService) EnsureTaskQuiescent(ctx context.Context, taskID workf
 }
 
 func (s *SchedulerService) RuntimeFinished(runID workflow.RunID, generation int64) {
+	s.releaseActive(runID, generation)
+	s.Notify()
+}
+
+func (s *SchedulerService) releaseActive(runID workflow.RunID, generation int64) {
 	s.mu.Lock()
 	current, ok := s.active[runID]
 	if ok && current.Generation == generation {
@@ -236,7 +241,6 @@ func (s *SchedulerService) RuntimeFinished(runID workflow.RunID, generation int6
 		delete(s.active, runID)
 	}
 	s.mu.Unlock()
-	s.Notify()
 }
 
 func (s *SchedulerService) Notify() {
@@ -494,75 +498,145 @@ func (s *SchedulerService) returnExplicitRuns(runIDs []workflow.RunID) {
 }
 
 func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore.RunnableRunRecord) error {
-	var claimed workflowstore.RunnableRunRecord
-	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		var err error
-		claimed, err = s.claimRunWithPermit(ctx, candidate)
-		return err
-	}); err != nil {
-		return err
-	}
-	req := SchedulerStartRunRequest{
-		RunID:       claimed.ID,
-		TaskID:      claimed.TaskID,
-		PlacementID: claimed.PlacementID,
-		NodeID:      claimed.NodeID,
-		Generation:  claimed.Generation,
-	}
-	s.logf("workflow.scheduler.selection run_id=%s task_id=%s generation=%d action=start", req.RunID, req.TaskID, req.Generation)
-	s.mu.Lock()
-	s.active[claimed.ID] = req
-	s.mu.Unlock()
-	if err := s.starter.StartWorkflowRun(ctx, req); err != nil {
-		s.RuntimeFinished(claimed.ID, claimed.Generation)
+	req, prepared, err := s.prepareRun(ctx, candidate)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		s.logf("workflow.scheduler.runtime_start run_id=%s action=interrupt reason=%s", claimed.ID, ReasonSchedulerRuntimeStartFailed)
-		interruptErr := s.mutationPermit.Run(context.WithoutCancel(ctx), func(ctx context.Context) error {
-			return s.store.InterruptRunGeneration(ctx, claimed.ID, claimed.Generation, ReasonSchedulerRuntimeStartFailed, fmt.Sprintf(`{"error":%q}`, err.Error()))
-		})
-		if interruptErr != nil {
-			return errors.Join(fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err), interruptErr)
-		}
-		s.finalizeInterruptedRun(context.WithoutCancel(ctx), claimed.ID)
-		return fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err)
+		s.logf("workflow.scheduler.runtime_prepare run_id=%s action=interrupt reason=%s", candidate.ID, ReasonSchedulerRuntimeStartFailed)
+		return s.interruptReservedRun(ctx, candidate, req, nil, err)
 	}
+	if err := prepared.Commit(); err != nil {
+		s.logf("workflow.scheduler.runtime_commit run_id=%s action=interrupt reason=%s", candidate.ID, ReasonSchedulerRuntimeStartFailed)
+		return s.interruptReservedRun(ctx, candidate, req, prepared, err)
+	}
+	admitted, err := s.admitPreparedRun(ctx, candidate, prepared.Admission())
+	if err != nil {
+		abortErr := prepared.Abort(context.WithoutCancel(ctx))
+		s.releaseActive(req.RunID, req.Generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.Join(err, abortErr)
+		}
+		return errors.Join(fmt.Errorf("%w: %w", ErrSchedulerClaimFailed, err), abortErr)
+	}
+	if admitted.Generation != req.Generation {
+		panic(fmt.Sprintf(
+			"workflow run admission generation mismatch run_id=%s got=%d want=%d",
+			admitted.ID,
+			admitted.Generation,
+			req.Generation,
+		))
+	}
+	s.logf("workflow.scheduler.selection run_id=%s task_id=%s generation=%d action=start", req.RunID, req.TaskID, req.Generation)
+	prepared.Activate()
 	return nil
 }
 
-func (s *SchedulerService) claimRunWithPermit(ctx context.Context, candidate workflowstore.RunnableRunRecord) (workflowstore.RunnableRunRecord, error) {
+func (s *SchedulerService) prepareRun(
+	ctx context.Context,
+	candidate workflowstore.RunnableRunRecord,
+) (SchedulerStartRunRequest, PreparedWorkflowRun, error) {
+	targetGeneration := candidate.Generation + 1
+	if targetGeneration <= candidate.Generation {
+		return SchedulerStartRunRequest{}, nil, errors.New("workflow run generation overflow")
+	}
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
-		return workflowstore.RunnableRunRecord{}, ErrSchedulerStopped
+		return SchedulerStartRunRequest{}, nil, ErrSchedulerStopped
 	}
 	if _, ok := s.active[candidate.ID]; ok {
 		s.mu.Unlock()
 		s.automaticIntents.Resolve(candidate.ID)
-		return workflowstore.RunnableRunRecord{}, sql.ErrNoRows
+		return SchedulerStartRunRequest{}, nil, sql.ErrNoRows
 	}
 	reserved := SchedulerStartRunRequest{
 		RunID:       candidate.ID,
 		TaskID:      candidate.TaskID,
 		PlacementID: candidate.PlacementID,
 		NodeID:      candidate.NodeID,
-		Generation:  candidate.Generation,
+		Generation:  targetGeneration,
 	}
 	s.active[candidate.ID] = reserved
 	s.automaticIntents.SourceStarted(candidate.ID)
 	s.mu.Unlock()
 
-	claimed, err := s.claimRunWithRetry(ctx, candidate)
+	prepared, err := s.starter.PrepareWorkflowRun(ctx, SchedulerPrepareRunRequest{
+		RunID:            candidate.ID,
+		TaskID:           candidate.TaskID,
+		PlacementID:      candidate.PlacementID,
+		NodeID:           candidate.NodeID,
+		SourceGeneration: candidate.Generation,
+		Generation:       targetGeneration,
+	})
 	if err != nil {
-		s.RuntimeFinished(candidate.ID, candidate.Generation)
-		if !errors.Is(err, sql.ErrNoRows) {
-			return workflowstore.RunnableRunRecord{}, fmt.Errorf("%w: %w", ErrSchedulerClaimFailed, err)
-		}
+		s.releaseActive(candidate.ID, targetGeneration)
+		return reserved, nil, err
+	}
+	if prepared == nil {
+		s.releaseActive(candidate.ID, targetGeneration)
+		return reserved, nil, errors.New("workflow runtime preparation is required")
+	}
+	return reserved, prepared, nil
+}
+
+func (s *SchedulerService) admitPreparedRun(
+	ctx context.Context,
+	candidate workflowstore.RunnableRunRecord,
+	admission RunAdmission,
+) (workflowstore.RunnableRunRecord, error) {
+	var admitted workflowstore.RunnableRunRecord
+	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		var err error
+		admitted, err = s.admitRunWithRetry(ctx, workflowstore.RunAdmission{
+			RunID:                   candidate.ID,
+			ExpectedGeneration:      candidate.Generation,
+			SessionID:               admission.SessionID,
+			EffectiveCompletionMode: admission.EffectiveCompletionMode,
+		})
+		return err
+	})
+	if err != nil {
 		return workflowstore.RunnableRunRecord{}, err
 	}
 	s.automaticIntents.Resolve(candidate.ID)
-	return claimed, nil
+	return admitted, nil
+}
+
+func (s *SchedulerService) interruptReservedRun(
+	ctx context.Context,
+	candidate workflowstore.RunnableRunRecord,
+	req SchedulerStartRunRequest,
+	prepared PreparedWorkflowRun,
+	cause error,
+) error {
+	interruptErr := s.mutationPermit.Run(context.WithoutCancel(ctx), func(ctx context.Context) error {
+		return s.store.InterruptRunGeneration(
+			ctx,
+			candidate.ID,
+			candidate.Generation,
+			ReasonSchedulerRuntimeStartFailed,
+			fmt.Sprintf(`{"error":%q}`, cause.Error()),
+		)
+	})
+	if interruptErr == nil {
+		s.automaticIntents.Resolve(candidate.ID)
+		s.finalizeInterruptedRun(context.WithoutCancel(ctx), candidate.ID)
+	}
+	var abortErr error
+	if prepared != nil {
+		abortErr = prepared.Abort(context.WithoutCancel(ctx))
+	}
+	s.releaseActive(req.RunID, req.Generation)
+	runtimeErr := fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, cause)
+	if interruptErr != nil {
+		return errors.Join(
+			runtimeErr,
+			fmt.Errorf("%w: persist failed workflow runtime preparation: %w", ErrSchedulerClaimFailed, interruptErr),
+			abortErr,
+		)
+	}
+	return errors.Join(runtimeErr, abortErr)
 }
 
 func (s *SchedulerService) finalizeInterruptedRun(ctx context.Context, runID workflow.RunID) {
@@ -572,10 +646,10 @@ func (s *SchedulerService) finalizeInterruptedRun(ctx context.Context, runID wor
 	s.attentionFinalizer.PublishPendingInterruptedRun(ctx, runID)
 }
 
-func (s *SchedulerService) claimRunWithRetry(ctx context.Context, candidate workflowstore.RunnableRunRecord) (workflowstore.RunnableRunRecord, error) {
+func (s *SchedulerService) admitRunWithRetry(ctx context.Context, admission workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error) {
 	var lastErr error
 	for attempt := 0; attempt <= s.claimRetries; attempt++ {
-		claimed, err := s.store.ClaimRun(ctx, candidate.ID, candidate.Generation)
+		claimed, err := s.store.AdmitRun(ctx, admission)
 		if err == nil {
 			return claimed, nil
 		}
@@ -583,7 +657,7 @@ func (s *SchedulerService) claimRunWithRetry(ctx context.Context, candidate work
 			return workflowstore.RunnableRunRecord{}, err
 		}
 		lastErr = err
-		s.logf("workflow.scheduler.claim_retry run_id=%s attempt=%d error=%q", candidate.ID, attempt+1, err.Error())
+		s.logf("workflow.scheduler.claim_retry run_id=%s attempt=%d error=%q", admission.RunID, attempt+1, err.Error())
 		if s.claimBackoff > 0 && attempt < s.claimRetries {
 			timer := time.NewTimer(s.claimBackoff)
 			select {

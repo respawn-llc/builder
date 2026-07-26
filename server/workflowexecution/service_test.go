@@ -102,7 +102,7 @@ func (s lostClaimSchedulerStore) GetRun(context.Context, workflow.RunID) (workfl
 	return s.run, nil
 }
 
-func (lostClaimSchedulerStore) ClaimRun(context.Context, workflow.RunID, int64) (workflowstore.RunnableRunRecord, error) {
+func (lostClaimSchedulerStore) AdmitRun(context.Context, workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error) {
 	return workflowstore.RunnableRunRecord{}, sql.ErrNoRows
 }
 
@@ -128,8 +128,8 @@ func (lostClaimSchedulerStore) ListWaitingAskRuns(context.Context) ([]workflowst
 
 type discardingSchedulerStarter struct{}
 
-func (discardingSchedulerStarter) StartWorkflowRun(context.Context, SchedulerStartRunRequest) error {
-	return nil
+func (discardingSchedulerStarter) PrepareWorkflowRun(context.Context, SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
+	return preparedSchedulerRun{}, nil
 }
 
 type queuedExplicitSchedulerStore struct {
@@ -145,13 +145,16 @@ func (s *queuedExplicitSchedulerStore) GetRun(_ context.Context, runID workflow.
 	return run, nil
 }
 
-func (s *queuedExplicitSchedulerStore) ClaimRun(_ context.Context, runID workflow.RunID, generation int64) (workflowstore.RunnableRunRecord, error) {
+func (s *queuedExplicitSchedulerStore) AdmitRun(_ context.Context, admission workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error) {
+	runID := admission.RunID
+	generation := admission.ExpectedGeneration
 	run, ok := s.runs[runID]
 	if !ok || run.Generation != generation {
 		return workflowstore.RunnableRunRecord{}, sql.ErrNoRows
 	}
 	startedAt := int64(1)
 	run.StartedAt = &startedAt
+	run.Generation++
 	s.runs[runID] = run
 	return workflowstore.RunnableRunRecord{RunRecord: run}, nil
 }
@@ -160,7 +163,29 @@ type queuedExplicitSchedulerStarter struct {
 	requests []SchedulerStartRunRequest
 }
 
-func (s *queuedExplicitSchedulerStarter) StartWorkflowRun(_ context.Context, req SchedulerStartRunRequest) error {
-	s.requests = append(s.requests, req)
+func (s *queuedExplicitSchedulerStarter) PrepareWorkflowRun(_ context.Context, req SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
+	s.requests = append(s.requests, SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	})
+	return preparedSchedulerRun{}, nil
+}
+
+type preparedSchedulerRun struct{}
+
+func (preparedSchedulerRun) Admission() RunAdmission {
+	return RunAdmission{}
+}
+
+func (preparedSchedulerRun) Commit() error {
+	return nil
+}
+
+func (preparedSchedulerRun) Activate() {}
+
+func (preparedSchedulerRun) Abort(context.Context) error {
 	return nil
 }

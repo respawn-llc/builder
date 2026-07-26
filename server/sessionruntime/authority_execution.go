@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/runtime"
@@ -54,6 +55,8 @@ type execution struct {
 	prompts  executionPromptStore
 
 	closeResource bool
+	activated     atomic.Bool
+	finalizing    atomic.Bool
 }
 
 type executionHandle struct {
@@ -174,6 +177,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 		authority.executionFinalized.ExecutionFinalized(workflowRef)
 	}
 	close(e.done)
+}
+
+func (e *execution) beginFinalization() {
+	e.finalizing.Store(true)
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {

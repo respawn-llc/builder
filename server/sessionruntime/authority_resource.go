@@ -161,6 +161,72 @@ type AgentExecutionRequest struct {
 	Runner     AgentRunner
 }
 
+type preparedAgentExecutionState uint8
+
+const (
+	preparedAgentExecutionPrepared preparedAgentExecutionState = iota + 1
+	preparedAgentExecutionActivated
+	preparedAgentExecutionAborted
+)
+
+type PreparedAgentExecution struct {
+	execution *execution
+	decision  chan bool
+
+	mu    sync.Mutex
+	state preparedAgentExecutionState
+}
+
+func (p *PreparedAgentExecution) Handle() ExecutionHandle {
+	if p == nil || p.execution == nil {
+		panic("prepared agent execution is uninitialized")
+	}
+	return executionHandle{execution: p.execution}
+}
+
+func (p *PreparedAgentExecution) Activate() {
+	if p == nil || p.execution == nil {
+		panic("prepared agent execution is uninitialized")
+	}
+	p.mu.Lock()
+	if p.state != preparedAgentExecutionPrepared {
+		state := p.state
+		p.mu.Unlock()
+		panic(fmt.Sprintf("prepared agent execution cannot activate from state %d", state))
+	}
+	p.state = preparedAgentExecutionActivated
+	p.execution.activated.Store(true)
+	p.mu.Unlock()
+	p.decision <- true
+}
+
+func (p *PreparedAgentExecution) Abort(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if p.execution == nil {
+		return errors.New("prepared agent execution is uninitialized")
+	}
+	p.mu.Lock()
+	switch p.state {
+	case preparedAgentExecutionPrepared:
+		p.state = preparedAgentExecutionAborted
+		p.mu.Unlock()
+		p.decision <- false
+	case preparedAgentExecutionAborted:
+		p.mu.Unlock()
+	case preparedAgentExecutionActivated:
+		p.mu.Unlock()
+		return errors.New("activated agent execution preparation cannot be aborted")
+	default:
+		state := p.state
+		p.mu.Unlock()
+		return fmt.Errorf("prepared agent execution cannot abort from state %d", state)
+	}
+	_, err := p.Handle().Wait(ctx)
+	return err
+}
+
 type agentResource struct {
 	authority *Authority
 	ref       runtimeids.SessionResourceRef
@@ -211,7 +277,9 @@ func (r *agentResource) signalLocked() {
 func (r *agentResource) currentExecution() (ExecutionHandle, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.current == nil {
+	if r.current == nil ||
+		!r.current.activated.Load() ||
+		r.current.finalizing.Load() {
 		return nil, false
 	}
 	return executionHandle{execution: r.current}, true
@@ -611,7 +679,7 @@ func (a *Authority) closeAdmittedResourceLocked(ctx context.Context, resource *a
 	return closed, closeErr
 }
 
-func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (ExecutionHandle, error) {
+func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExecutionRequest) (*PreparedAgentExecution, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -715,14 +783,38 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	}
 	a.mu.Unlock()
 
+	decision := make(chan bool, 1)
 	go func() {
+		select {
+		case activate := <-decision:
+			if !activate {
+				execution.finish(ExecutionResult{}, nil, nil)
+				return
+			}
+		case <-execution.ctx.Done():
+			execution.finish(ExecutionResult{}, context.Cause(execution.ctx), nil)
+			return
+		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,
 			resource:  resource.ref,
 		})
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
-	return executionHandle{execution: execution}, nil
+	return &PreparedAgentExecution{
+		execution: execution,
+		decision:  decision,
+		state:     preparedAgentExecutionPrepared,
+	}, nil
+}
+
+func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (ExecutionHandle, error) {
+	prepared, err := a.PrepareAgentExecution(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	prepared.Activate()
+	return prepared.Handle(), nil
 }
 
 func (a *Authority) RunCurrentAgentExecution(

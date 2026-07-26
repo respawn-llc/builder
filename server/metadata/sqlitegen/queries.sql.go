@@ -238,10 +238,12 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
     started_at_unix_ms = ?2,
+    session_id = COALESCE(?3, session_id),
+    effective_completion_mode = COALESCE(?4, effective_completion_mode),
     invalid_completion_count = 0,
     run_generation = run_generation + 1
-WHERE task_runs.id = ?3
-  AND run_generation = ?4
+WHERE task_runs.id = ?5
+  AND run_generation = ?6
   AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
@@ -288,10 +290,12 @@ RETURNING
 `
 
 type ClaimWorkflowRunParams struct {
-	UpdatedAtUnixMs    int64
-	StartedAtUnixMs    sql.NullInt64
-	ID                 string
-	ExpectedGeneration int64
+	UpdatedAtUnixMs         int64
+	StartedAtUnixMs         sql.NullInt64
+	SessionID               sql.NullString
+	EffectiveCompletionMode sql.NullString
+	ID                      string
+	ExpectedGeneration      int64
 }
 
 type ClaimWorkflowRunRow struct {
@@ -321,6 +325,8 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 	row := q.db.QueryRowContext(ctx, claimWorkflowRun,
 		arg.UpdatedAtUnixMs,
 		arg.StartedAtUnixMs,
+		arg.SessionID,
+		arg.EffectiveCompletionMode,
 		arg.ID,
 		arg.ExpectedGeneration,
 	)
@@ -346,7 +352,7 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 		&i.InvalidCompletionCount,
 		&i.RunStartSnapshotJson,
 		&i.MetadataJson,
-	), claimWorkflowRun, 4)
+	), claimWorkflowRun, 6)
 
 	return i, err
 }

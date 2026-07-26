@@ -2486,6 +2486,8 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     started_at_unix_ms = sqlc.narg(started_at_unix_ms),
+    session_id = COALESCE(sqlc.narg(session_id), session_id),
+    effective_completion_mode = COALESCE(sqlc.narg(effective_completion_mode), effective_completion_mode),
     invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE task_runs.id = sqlc.arg(id)

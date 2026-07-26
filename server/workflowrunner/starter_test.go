@@ -830,9 +830,9 @@ func TestStarterAutoUsesRunStartSnapshotForContinuationDetection(t *testing.T) {
 			if input.WorkflowHasContinueSessionEdge != tt.wantFlag {
 				t.Fatalf("snapshot continuation flag = %v, want %v", input.WorkflowHasContinueSessionEdge, tt.wantFlag)
 			}
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
@@ -861,13 +861,13 @@ func TestStarterSkipsProviderCapabilityProbeWhenModeDoesNotNeedIt(t *testing.T) 
 				disableCoderShell(t, &fixture)
 				fixture.rebuildStarter(t)
 			}
-			claimed, input, plan := fixture.claimPlannedRun(t)
+			_, input, plan := fixture.claimPlannedRun(t)
 			input.WorkflowHasContinueSessionEdge = tt.hasContinueEdge
 			client := providerProbeForbiddenClient{}
 
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, client)
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, client)
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantCompletionMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantCompletionMode)
@@ -887,9 +887,9 @@ func TestStarterReusesPersistedEffectiveCompletionMode(t *testing.T) {
 		t.Fatalf("GetRunStartContext after set mode: %v", err)
 	}
 
-	mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+	mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 	if err != nil {
-		t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+		t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 	}
 	if mode != workflowruntime.CompletionModeTool {
 		t.Fatalf("mode = %q, want persisted tool", mode)
@@ -910,12 +910,12 @@ func TestStarterNodeCompletionModeOverridesGlobalConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newStarterFixture(t, tt.globalMode)
-			claimed, input, plan := fixture.claimPlannedRun(t)
+			_, input, plan := fixture.claimPlannedRun(t)
 			input.Node.CompletionMode = tt.nodeMode
 
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
@@ -937,9 +937,9 @@ func TestStarterRechecksShellAvailabilityForPersistedShellMode(t *testing.T) {
 		t.Fatalf("GetRunStartContext after set mode: %v", err)
 	}
 
-	_, _, err = fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+	_, _, err = fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 	if err == nil || !errors.Is(err, errWorkflowShellCompletionRequiresShell) {
-		t.Fatalf("resolveAndPersistWorkflowCompletionMode error = %v, want shell availability failure", err)
+		t.Fatalf("resolveWorkflowCompletionMode error = %v, want shell availability failure", err)
 	}
 }
 
@@ -1406,9 +1406,9 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 		t.Fatalf("run records by node: source=%q branches=%+v from runs %+v", sourceSessionID, branchRecords, runs)
 	}
 
-	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_a"])
+	startPreparedWorkflowRun(t, ctx, fixture, branchRecords["impl_a"])
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
-	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
+	startPreparedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
 	fixture.waitForCompletedRunCount(t, task.ID, 3)
 	if err := fixture.starter.Close(); err != nil {
 		t.Fatalf("starter.Close: %v", err)
@@ -1483,9 +1483,12 @@ func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
 	}
 
 	var scheduler *SchedulerService
+	admissionBlock := newDeterministicAdmissionBlock("implementation", 2)
+	defer admissionBlock.release()
 	executor := &deterministicCompletionStarter{
-		t:     t,
-		store: fixture.store,
+		t:              t,
+		store:          fixture.store,
+		admissionBlock: admissionBlock,
 		complete: func(ctx context.Context, req SchedulerStartRunRequest, transitionID string, outputs map[string]string) {
 			controller := workflowruntime.StoreController{
 				Store:           fixture.store,
@@ -1535,7 +1538,33 @@ func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
 	}
 	gate := executor.activeExecutions()
 	executor.retire(scheduler, gate...)
-	if err := scheduler.Process(context.Background()); err != nil {
+	processResult := make(chan error, 1)
+	go func() {
+		processResult <- scheduler.Process(context.Background())
+	}()
+	blocked := admissionBlock.waitUntilReached(t)
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns during rejected-review successor admission: %v", err)
+	}
+	var blockedRun *workflowstore.RunRecord
+	for index := range runs {
+		if runs[index].ID == blocked.RunID {
+			blockedRun = &runs[index]
+			break
+		}
+	}
+	if blockedRun == nil {
+		t.Fatalf("blocked successor run %s not found in %+v", blocked.RunID, runs)
+	}
+	if blockedRun.StartedAt != nil {
+		t.Fatalf(
+			"looped Implementation became durably started before runtime admission completed: %+v",
+			*blockedRun,
+		)
+	}
+	admissionBlock.release()
+	if err := <-processResult; err != nil {
 		t.Fatalf("Process rejected-review loop: %v", err)
 	}
 	loopedImplementation := executor.activeExecutions()
@@ -1569,58 +1598,118 @@ type deterministicExecution struct {
 }
 
 type deterministicCompletionStarter struct {
-	t        *testing.T
-	store    *workflowstore.Store
-	complete func(context.Context, SchedulerStartRunRequest, string, map[string]string)
-	mu       sync.Mutex
-	started  []workflow.ModelKey
-	active   map[workflow.RunID]deterministicExecution
-	loops    int
+	t              *testing.T
+	store          *workflowstore.Store
+	complete       func(context.Context, SchedulerStartRunRequest, string, map[string]string)
+	mu             sync.Mutex
+	started        []workflow.ModelKey
+	active         map[workflow.RunID]deterministicExecution
+	loops          int
+	admissionBlock *deterministicAdmissionBlock
 }
 
-func (s *deterministicCompletionStarter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error {
+func (s *deterministicCompletionStarter) PrepareWorkflowRun(ctx context.Context, req SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
 	input, err := s.store.GetRunStartContext(ctx, req.RunID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.mu.Lock()
-	if s.active == nil {
-		s.active = make(map[workflow.RunID]deterministicExecution)
-	}
-	s.started = append(s.started, input.Node.Key)
-	s.active[req.RunID] = deterministicExecution{SchedulerStartRunRequest: req, NodeKey: input.Node.Key}
 	if input.Node.Key == "implementation" {
 		s.loops++
 	}
 	loopCount := s.loops
-	gateLive := false
-	for _, active := range s.active {
-		if active.NodeKey == "approval_gate" {
-			gateLive = true
-			break
-		}
-	}
 	s.mu.Unlock()
-	switch input.Node.Key {
-	case "implementation":
-		if loopCount == 1 {
-			s.complete(ctx, req, "split", map[string]string{"summary": "plan"})
-		} else {
-			if gateLive {
-				return errors.New("looped Implementation started before Approval Gate Exact Execution Scope retired")
-			}
-			s.complete(ctx, req, "done", nil)
-		}
-	case "code_review":
-		s.complete(ctx, req, "join", map[string]string{"joined": "branch a"})
-	case "qa", "compliance_review":
-		s.complete(ctx, req, "join", nil)
-	case "approval_gate":
-		s.complete(ctx, req, "review_rejected", nil)
-	default:
-		s.t.Fatalf("unexpected executable Node %q", input.Node.Key)
+	if s.admissionBlock != nil && input.Node.Key == s.admissionBlock.nodeKey && loopCount == s.admissionBlock.occurrence {
+		s.admissionBlock.block(SchedulerStartRunRequest{
+			RunID:       req.RunID,
+			TaskID:      req.TaskID,
+			PlacementID: req.PlacementID,
+			NodeID:      req.NodeID,
+			Generation:  req.Generation,
+		})
 	}
-	return nil
+	startReq := SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	}
+	return schedulerPreparedRun{activate: func() {
+		s.mu.Lock()
+		if s.active == nil {
+			s.active = make(map[workflow.RunID]deterministicExecution)
+		}
+		s.started = append(s.started, input.Node.Key)
+		s.active[req.RunID] = deterministicExecution{SchedulerStartRunRequest: startReq, NodeKey: input.Node.Key}
+		gateLive := false
+		for _, active := range s.active {
+			if active.NodeKey == "approval_gate" {
+				gateLive = true
+				break
+			}
+		}
+		s.mu.Unlock()
+		switch input.Node.Key {
+		case "implementation":
+			if loopCount == 1 {
+				s.complete(ctx, startReq, "split", map[string]string{"summary": "plan"})
+			} else {
+				if gateLive {
+					s.t.Error("looped Implementation started before Approval Gate Exact Execution Scope retired")
+					return
+				}
+				s.complete(ctx, startReq, "done", nil)
+			}
+		case "code_review":
+			s.complete(ctx, startReq, "join", map[string]string{"joined": "branch a"})
+		case "qa", "compliance_review":
+			s.complete(ctx, startReq, "join", nil)
+		case "approval_gate":
+			s.complete(ctx, startReq, "review_rejected", nil)
+		default:
+			s.t.Errorf("unexpected executable Node %q", input.Node.Key)
+		}
+	}}, nil
+}
+
+type deterministicAdmissionBlock struct {
+	nodeKey    workflow.ModelKey
+	occurrence int
+	reached    chan SchedulerStartRunRequest
+	unblock    chan struct{}
+	releaseOne sync.Once
+}
+
+func newDeterministicAdmissionBlock(nodeKey workflow.ModelKey, occurrence int) *deterministicAdmissionBlock {
+	return &deterministicAdmissionBlock{
+		nodeKey:    nodeKey,
+		occurrence: occurrence,
+		reached:    make(chan SchedulerStartRunRequest, 1),
+		unblock:    make(chan struct{}),
+	}
+}
+
+func (b *deterministicAdmissionBlock) block(req SchedulerStartRunRequest) {
+	b.reached <- req
+	<-b.unblock
+}
+
+func (b *deterministicAdmissionBlock) waitUntilReached(t *testing.T) SchedulerStartRunRequest {
+	t.Helper()
+	select {
+	case req := <-b.reached:
+		return req
+	case <-time.After(workflowRunnerTestWaitTimeout):
+		t.Fatal("timed out waiting for blocked workflow runtime admission")
+		return SchedulerStartRunRequest{}
+	}
+}
+
+func (b *deterministicAdmissionBlock) release() {
+	b.releaseOne.Do(func() {
+		close(b.unblock)
+	})
 }
 
 func (s *deterministicCompletionStarter) activeExecutions() []deterministicExecution {
@@ -1989,7 +2078,13 @@ func TestStartWorkflowRunWaitsForLockedTaskWorktreeRestoreBeforeRefreshingRunCon
 	}}, worktrees: ensurer}
 	done := make(chan error, 1)
 	go func() {
-		done <- starter.StartWorkflowRun(context.Background(), SchedulerStartRunRequest{TaskID: "task-1", RunID: "run-1", Generation: 1})
+		_, err := starter.PrepareWorkflowRun(context.Background(), SchedulerPrepareRunRequest{
+			TaskID:           "task-1",
+			RunID:            "run-1",
+			SourceGeneration: 0,
+			Generation:       1,
+		})
+		done <- err
 	}()
 	var req LockedTaskWorktreeRestoreRequest
 	select {
@@ -2002,17 +2097,17 @@ func TestStartWorkflowRunWaitsForLockedTaskWorktreeRestoreBeforeRefreshingRunCon
 	}
 	select {
 	case err := <-done:
-		t.Fatalf("StartWorkflowRun returned before ensure released: %v", err)
+		t.Fatalf("PrepareWorkflowRun returned before ensure released: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(releaseEnsure)
 	select {
 	case err := <-done:
 		if !errors.Is(err, ensureErr) {
-			t.Fatalf("StartWorkflowRun error = %v, want %v", err, ensureErr)
+			t.Fatalf("PrepareWorkflowRun error = %v, want %v", err, ensureErr)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for StartWorkflowRun")
+		t.Fatal("timed out waiting for PrepareWorkflowRun")
 	}
 }
 
@@ -2941,22 +3036,32 @@ func renderedPromptForRun(t *testing.T, store *workflowstore.Store, runID workfl
 	return prompt
 }
 
-func startClaimedWorkflowRun(t *testing.T, ctx context.Context, fixture starterFixture, run workflowstore.RunRecord) {
+func startPreparedWorkflowRun(t *testing.T, ctx context.Context, fixture starterFixture, run workflowstore.RunRecord) {
 	t.Helper()
-	claimed, err := fixture.store.ClaimRun(ctx, run.ID, run.Generation)
+	prepared, err := fixture.starter.PrepareWorkflowRun(ctx, SchedulerPrepareRunRequest{
+		RunID:            run.ID,
+		TaskID:           run.TaskID,
+		PlacementID:      run.PlacementID,
+		NodeID:           run.NodeID,
+		SourceGeneration: run.Generation,
+		Generation:       run.Generation + 1,
+	})
 	if err != nil {
-		t.Fatalf("ClaimRun %s: %v", run.ID, err)
+		t.Fatalf("PrepareWorkflowRun %s: %v", run.ID, err)
 	}
-	req := SchedulerStartRunRequest{
-		RunID:       claimed.ID,
-		TaskID:      claimed.TaskID,
-		PlacementID: claimed.PlacementID,
-		NodeID:      claimed.NodeID,
-		Generation:  claimed.Generation,
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("Commit workflow run %s: %v", run.ID, err)
 	}
-	if err := fixture.starter.StartWorkflowRun(ctx, req); err != nil {
-		t.Fatalf("StartWorkflowRun %s: %v", run.ID, err)
+	admission := prepared.Admission()
+	if _, err := fixture.store.AdmitRun(ctx, workflowstore.RunAdmission{
+		RunID:                   run.ID,
+		ExpectedGeneration:      run.Generation,
+		SessionID:               admission.SessionID,
+		EffectiveCompletionMode: admission.EffectiveCompletionMode,
+	}); err != nil {
+		t.Fatalf("AdmitRun %s: %v", run.ID, err)
 	}
+	prepared.Activate()
 }
 
 func workflowRequestAskQuestionToolMessages(reqs []llm.Request) []llm.Message {
