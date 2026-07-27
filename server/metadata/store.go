@@ -69,8 +69,10 @@ type Store struct {
 }
 
 var (
-	ErrInvalidProjectKey      = errors.New("invalid project key")
-	ErrProjectKeyAlreadyInUse = errors.New("project key already in use")
+	ErrInvalidProjectKey                     = errors.New("invalid project key")
+	ErrProjectDeletePreparationInvalidated   = errors.New("project delete preparation was invalidated")
+	ErrWorkspaceUnlinkPreparationInvalidated = errors.New("workspace unlink preparation was invalidated")
+	ErrProjectKeyAlreadyInUse                = errors.New("project key already in use")
 
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
 	// is already bound to a workspace. Callers match it via errors.Is.
@@ -591,7 +593,7 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 		return blockers, nil
 	}
 	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
-		return nil, errors.New("project delete preparation was invalidated")
+		return nil, ErrProjectDeletePreparationInvalidated
 	}
 	if err := q.DeleteProjectTasks(ctx, trimmedProjectID); err != nil {
 		return nil, fmt.Errorf("delete project tasks: %w", err)
@@ -923,7 +925,7 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 		return blockers, nil
 	}
 	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
-		return nil, errors.New("workspace unlink preparation was invalidated")
+		return nil, ErrWorkspaceUnlinkPreparationInvalidated
 	}
 	rows, err := q.DeleteWorkspaceBindingByID(ctx, sqlitegen.DeleteWorkspaceBindingByIDParams{ProjectID: trimmedProjectID, WorkspaceID: trimmedWorkspaceID})
 	if err != nil {

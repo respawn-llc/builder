@@ -360,7 +360,7 @@ func TestProjectDeleteCommitInvalidatesChangedSessionSetWithoutBlocker(t *testin
 		},
 		func(ProjectSessionArtifact, bool) error { return nil },
 	)
-	if err == nil || err.Error() != "project delete preparation was invalidated" {
+	if !errors.Is(err, ErrProjectDeletePreparationInvalidated) {
 		t.Fatalf("DeleteProjectWithRuntimeBlockers error = %v, want preparation invalidated", err)
 	}
 	if _, err := store.GetProjectOverview(ctx, binding.ProjectID); err != nil {
@@ -513,7 +513,7 @@ func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *test
 			return nil, func() {}, nil
 		},
 	)
-	if err == nil || err.Error() != "workspace unlink preparation was invalidated" {
+	if !errors.Is(err, ErrWorkspaceUnlinkPreparationInvalidated) {
 		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want preparation invalidated", err)
 	}
 	workspace, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID)

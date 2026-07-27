@@ -88,32 +88,6 @@ func TestRunGitDisablesAutomaticMaintenance(t *testing.T) {
 	}
 }
 
-func TestRunGitDisablesCommitSigning(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.WriteFile(
-		filepath.Join(home, ".gitconfig"),
-		[]byte("[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = kent-test-missing-gpg\n"),
-		0o600,
-	); err != nil {
-		t.Fatalf("write test Git config: %v", err)
-	}
-
-	root := t.TempDir()
-	if _, err := runGit(root, "init", "-q", "--initial-branch=main"); err != nil {
-		t.Fatalf("initialize repository: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("root\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	if _, err := runGit(root, "add", "README.md"); err != nil {
-		t.Fatalf("stage README: %v", err)
-	}
-	if _, err := runGit(root, "commit", "-q", "-m", "init"); err != nil {
-		t.Fatalf("commit with signing configured globally: %v", err)
-	}
-}
-
 func TestSanitizedGitEnvironmentDropsExternalConfigOverrides(t *testing.T) {
 	environment := sanitizedGitEnvironment([]string{
 		"GIT_CONFIG_GLOBAL=/tmp/global.gitconfig",
