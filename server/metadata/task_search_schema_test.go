@@ -1,11 +1,20 @@
 package metadata
 
 import (
+	"context"
 	"database/sql"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"testing"
+	"testing/fstest"
+
+	"github.com/pressly/goose/v3"
 )
+
+type taskSearchCanonicalSource struct {
+	text string
+}
 
 func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 	store, err := Open(t.TempDir())
@@ -80,66 +89,7 @@ func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 }
 
 func TestTaskSearchMigrationBackfillsLegacyTaskAndCommentDocuments(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	legacy, err := openDatabaseAtVersionForTest(t, root, dbPath, 59)
-	if err != nil {
-		t.Fatalf("open version 59 metadata database: %v", err)
-	}
-	for _, object := range []struct {
-		kind string
-		name string
-	}{
-		{kind: "table", name: "task_search_documents"},
-		{kind: "view", name: "task_search_content"},
-		{kind: "table", name: "task_search_fts"},
-	} {
-		var count int
-		if err := legacy.QueryRow(
-			`SELECT COUNT(*) FROM sqlite_schema WHERE type = ? AND name = ?`,
-			object.kind,
-			object.name,
-		).Scan(&count); err != nil {
-			t.Fatalf("inspect version 59 task-search %s %s: %v", object.kind, object.name, err)
-		}
-		if count != 0 {
-			t.Fatalf("version 59 unexpectedly has task-search %s %s", object.kind, object.name)
-		}
-	}
-	now := int64(1)
-	execSeed(t, legacy, "legacy project", `INSERT INTO projects (
-    id, display_name, project_key, next_task_seq, created_at_unix_ms, updated_at_unix_ms
-) VALUES ('project-legacy-search', 'Legacy search', 'LEG', 3, ?, ?)`, now, now)
-	seedWorkflowGraph(t, legacy, "project-legacy-search", now)
-	for _, task := range []struct {
-		id      string
-		seq     int
-		shortID string
-		title   string
-		body    string
-	}{
-		{id: "task-legacy-search-one", seq: 1, shortID: "LEG-1", title: "legacy title one zebra", body: "legacy body one yak"},
-		{id: "task-legacy-search-two", seq: 2, shortID: "LEG-2", title: "legacy title two xerus", body: "legacy body two wombat"},
-	} {
-		execSeed(t, legacy, "legacy task", `INSERT INTO tasks (
-    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
-    created_at_unix_ms, updated_at_unix_ms, metadata_json
-) VALUES (?, 'link-1', 1, ?, ?, ?, ?, ?, ?, '{}')`,
-			task.id, task.seq, task.shortID, task.title, task.body, now, now,
-		)
-	}
-	for _, comment := range []struct {
-		id     string
-		taskID string
-		body   string
-	}{
-		{id: "comment-legacy-search-one", taskID: "task-legacy-search-one", body: "legacy comment one vulture"},
-		{id: "comment-legacy-search-two", taskID: "task-legacy-search-two", body: "legacy comment two urchin"},
-	} {
-		execSeed(t, legacy, "legacy task comment", `INSERT INTO task_comments (
-    id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms
-) VALUES (?, ?, ?, 'user', 'operator', ?, ?)`, comment.id, comment.taskID, comment.body, now, now)
-	}
+	legacy, root := openVersion59TaskSearchFixture(t)
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close version 59 metadata database: %v", err)
 	}
@@ -162,6 +112,36 @@ func TestTaskSearchMigrationBackfillsLegacyTaskAndCommentDocuments(t *testing.T)
 	} {
 		assertTaskSearchSourceSearchable(t, store.db, search.query, search.wantID)
 	}
+}
+
+func TestTaskSearchMigrationFailureRollsBackSchemaAndBackfill(t *testing.T) {
+	legacy, root := openVersion59TaskSearchFixture(t)
+	migrations := taskSearchMigrationsWithForcedFailure(t)
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		legacy,
+		migrations,
+		goose.WithLogger(goose.NopLogger()),
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		t.Fatalf("create failing task-search migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(context.Background(), 60); err == nil {
+		t.Fatal("task-search migration unexpectedly succeeded despite forced trailing failure")
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	assertTaskSearchLegacySourcesRemain(t, legacy)
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close failed task-search migration database: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open database after failed task-search migration: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertTaskSearchInvariants(t, store.db)
 }
 
 func TestTaskSearchDocumentTriggersCreateCanonicalSources(t *testing.T) {
@@ -256,6 +236,129 @@ VALUES ('comment', 'comment-1')`,
 		assertSQLiteConstraint(t, store.db, statement)
 	}
 	assertTaskSearchInvariants(t, store.db)
+}
+
+func openVersion59TaskSearchFixture(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	legacy, err := openDatabaseAtVersionForTest(t, root, dbPath, 59)
+	if err != nil {
+		t.Fatalf("open version 59 metadata database: %v", err)
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	now := int64(1)
+	execSeed(t, legacy, "legacy project", `INSERT INTO projects (
+    id, display_name, project_key, next_task_seq, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('project-legacy-search', 'Legacy search', 'LEG', 3, ?, ?)`, now, now)
+	seedWorkflowGraph(t, legacy, "project-legacy-search", now)
+	for _, task := range []struct {
+		id      string
+		seq     int
+		shortID string
+		title   string
+		body    string
+	}{
+		{id: "task-legacy-search-one", seq: 1, shortID: "LEG-1", title: "legacy title one zebra", body: "legacy body one yak"},
+		{id: "task-legacy-search-two", seq: 2, shortID: "LEG-2", title: "legacy title two xerus", body: "legacy body two wombat"},
+	} {
+		execSeed(t, legacy, "legacy task", `INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (?, 'link-1', 1, ?, ?, ?, ?, ?, ?, '{}')`,
+			task.id, task.seq, task.shortID, task.title, task.body, now, now,
+		)
+	}
+	for _, comment := range []struct {
+		id     string
+		taskID string
+		body   string
+	}{
+		{id: "comment-legacy-search-one", taskID: "task-legacy-search-one", body: "legacy comment one vulture"},
+		{id: "comment-legacy-search-two", taskID: "task-legacy-search-two", body: "legacy comment two urchin"},
+	} {
+		execSeed(t, legacy, "legacy task comment", `INSERT INTO task_comments (
+    id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, 'user', 'operator', ?, ?)`, comment.id, comment.taskID, comment.body, now, now)
+	}
+	return legacy, root
+}
+
+func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
+	t.Helper()
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		t.Fatalf("list metadata migrations: %v", err)
+	}
+	migrations := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := "migrations/" + entry.Name()
+		data, err := fs.ReadFile(migrationsFS, path)
+		if err != nil {
+			t.Fatalf("read metadata migration %s: %v", entry.Name(), err)
+		}
+		if entry.Name() == "00060_task_search_index.up.sql" {
+			data = append(data, []byte("\nSELECT * FROM task_search_forced_migration_failure;\n")...)
+		}
+		migrations[path] = &fstest.MapFile{Data: data}
+	}
+	sub, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		t.Fatalf("create task-search migration filesystem: %v", err)
+	}
+	return sub
+}
+
+func assertNoTaskSearchSchemaObjects(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*)
+FROM sqlite_schema
+WHERE name >= ?
+  AND name < ?`, "task_search_", "task_search`").Scan(&count); err != nil {
+		t.Fatalf("count task-search schema objects: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("task-search schema object count = %d, want 0", count)
+	}
+}
+
+func assertTaskSearchLegacySourcesRemain(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, task := range []struct {
+		id    string
+		title string
+		body  string
+	}{
+		{id: "task-legacy-search-one", title: "legacy title one zebra", body: "legacy body one yak"},
+		{id: "task-legacy-search-two", title: "legacy title two xerus", body: "legacy body two wombat"},
+	} {
+		var title, body string
+		if err := db.QueryRow(`SELECT title, body FROM tasks WHERE id = ?`, task.id).Scan(&title, &body); err != nil {
+			t.Fatalf("read %s after failed task-search migration: %v", task.id, err)
+		}
+		if title != task.title || body != task.body {
+			t.Fatalf("task %s after failed task-search migration = title:%q body:%q, want title:%q body:%q", task.id, title, body, task.title, task.body)
+		}
+	}
+	for _, comment := range []struct {
+		id   string
+		body string
+	}{
+		{id: "comment-legacy-search-one", body: "legacy comment one vulture"},
+		{id: "comment-legacy-search-two", body: "legacy comment two urchin"},
+	} {
+		var body string
+		if err := db.QueryRow(`SELECT body FROM task_comments WHERE id = ?`, comment.id).Scan(&body); err != nil {
+			t.Fatalf("read %s after failed task-search migration: %v", comment.id, err)
+		}
+		if body != comment.body {
+			t.Fatalf("comment %s after failed task-search migration = %q, want %q", comment.id, body, comment.body)
+		}
+	}
 }
 
 func assertTaskSearchIndexCatalog(t *testing.T, db *sql.DB, want []string) {
@@ -363,10 +466,7 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 	}
 }
 
-func queryTaskSearchCanonicalSources(t *testing.T, db *sql.DB) map[string]struct {
-	identity string
-	text     string
-} {
+func queryTaskSearchCanonicalSources(t *testing.T, db *sql.DB) map[string]taskSearchCanonicalSource {
 	t.Helper()
 	rows, err := db.Query(`SELECT 'title:' || id, title FROM tasks
 UNION ALL
@@ -377,10 +477,7 @@ SELECT 'comment:' || id, body FROM task_comments`)
 		t.Fatalf("list canonical task-search sources: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
-	out := make(map[string]struct {
-		identity string
-		text     string
-	})
+	out := make(map[string]taskSearchCanonicalSource)
 	for rows.Next() {
 		var identity, text string
 		if err := rows.Scan(&identity, &text); err != nil {
@@ -389,10 +486,7 @@ SELECT 'comment:' || id, body FROM task_comments`)
 		if _, exists := out[identity]; exists {
 			t.Fatalf("duplicate canonical task-search source identity %s", identity)
 		}
-		out[identity] = struct {
-			identity string
-			text     string
-		}{identity: identity, text: text}
+		out[identity] = taskSearchCanonicalSource{text: text}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate canonical task-search sources: %v", err)
