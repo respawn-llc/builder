@@ -19,6 +19,7 @@ import (
 )
 
 func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
@@ -87,6 +88,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 }
 
 func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:               "gpt-5.6-sol",
 		ThinkingLevel:       "medium",
@@ -138,6 +140,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 }
 
 func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
@@ -180,6 +183,7 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 }
 
 func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
+	t.Parallel()
 	baseSettings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
 			Model:         "gpt-5.5",
@@ -239,6 +243,7 @@ func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 }
 
 func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T) {
+	t.Parallel()
 	settings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
 			Model:         "gpt-5.5",
@@ -348,6 +353,7 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 }
 
 func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	current := "current"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &current}); err != nil {
@@ -593,6 +599,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 }
 
 func TestSplitMetaContextMessagesTreatsSubagentsAsMeta(t *testing.T) {
+	t.Parallel()
 	subagents := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:")}
 	messages := []llm.Message{
 		subagents,
@@ -608,6 +615,7 @@ func TestSplitMetaContextMessagesTreatsSubagentsAsMeta(t *testing.T) {
 }
 
 func TestSubagentsMetaContextVisibilityIsDetailOnly(t *testing.T) {
+	t.Parallel()
 	entry, ok := visibleDeveloperChatEntry(llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeSubagents),
@@ -650,6 +658,7 @@ func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) b
 }
 
 func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:\n- worker: specialist")},
 		{Role: llm.RoleUser, Content: textutil.Value("request")},

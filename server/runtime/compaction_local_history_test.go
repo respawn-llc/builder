@@ -14,6 +14,7 @@ import (
 )
 
 func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testing.T) {
+	t.Parallel()
 	const (
 		preBoundaryID  = "reasoning-before-boundary"
 		checkpointID   = "reasoning-at-boundary"
@@ -94,6 +95,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 }
 
 func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
+	t.Parallel()
 	probe := &toolExecutionProbe{}
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
@@ -147,6 +149,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 }
 
 func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
+	t.Parallel()
 	client := &fakeCompactionClient{}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",

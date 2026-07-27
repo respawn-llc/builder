@@ -710,6 +710,10 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		done:          make(chan struct{}),
 		prompts:       newExecutionPromptStore(scope, a.promptFeed),
 		closeResource: closeResource,
+		phase:         executionPhaseRunning,
+	}
+	if workflowRef != nil {
+		execution.phase = executionPhaseQueued
 	}
 	if resource.askBroker != nil {
 		scopeID := scope.ID()
@@ -739,6 +743,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 				execution.finish(ExecutionResult{}, waitErr, nil)
 				return
 			}
+			a.beginWorkflowExecution(execution)
 		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,

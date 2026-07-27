@@ -28,6 +28,14 @@ type ExecutionResult struct {
 	DroppedRuntimeEvents uint64
 }
 
+type executionPhase uint8
+
+const (
+	executionPhaseQueued executionPhase = iota + 1
+	executionPhaseRunning
+	executionPhaseFinalizing
+)
+
 type ExecutionPromptSnapshot struct {
 	Scope     ExecutionScope
 	Request   tools.AskQuestionRequest
@@ -66,6 +74,8 @@ type execution struct {
 	runErr   error
 	stopErr  error
 	prompts  executionPromptStore
+
+	phase executionPhase
 
 	closeResource bool
 }
@@ -212,12 +222,26 @@ func (e *execution) retire() {
 	authority.mu.Unlock()
 }
 
-// retireWorkflow keeps an exact scope addressable for an in-flight finalizer
-// while removing it from every workflow liveness index. Completion finalizers
-// need the exact scope to prove ownership, but a finished process is neither
-// interruptible nor an active workflow execution.
-func (e *execution) retireWorkflow() {
+// beginWorkflowFinalization removes a terminal Script from workflow liveness
+// indexes while retaining its Exact Execution Scope for its completion
+// finalizer. A Script becomes terminal when its process exits or Start fails.
+// Its finalizer can still prove Current Node ownership, but no longer
+// authorizes Interrupt or appears in queued/running read models.
+func (e *execution) beginWorkflowFinalization() {
 	e.authority.mu.Lock()
+	if e.authority.byScope[e.scope.ID()] != e {
+		e.authority.mu.Unlock()
+		return
+	}
+	if e.phase != executionPhaseQueued && e.phase != executionPhaseRunning {
+		e.authority.mu.Unlock()
+		panic(fmt.Sprintf(
+			"workflow execution scope %s began finalization from phase %d",
+			e.scope.ID(),
+			e.phase,
+		))
+	}
+	e.phase = executionPhaseFinalizing
 	e.retireWorkflowLocked()
 	e.authority.mu.Unlock()
 }

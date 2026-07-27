@@ -11,13 +11,17 @@ import type {
 const id = z.string().min(1);
 const ids = z.array(id);
 const nonEmptyIDs = ids.min(1);
-const notificationKind = z.enum(["question", "approval", "interrupted_current_node"]);
+const notificationKind = z.enum(["question", "approval", "workflow_approval", "interrupted_current_node"]);
 
 const identifierSchema = z.object({ kind: notificationKind, uuid: id }).strict();
 const questionFocusSchema = z.object({ kind: z.literal("question"), ask_ids: nonEmptyIDs }).strict();
 const approvalFocusSchema = z.object({ kind: z.literal("approval"), approval_id: id }).strict();
 const interruptedFocusSchema = z.object({ kind: z.literal("interrupted_current_node") }).strict();
-const focusSchema = z.discriminatedUnion("kind", [questionFocusSchema, approvalFocusSchema, interruptedFocusSchema]);
+const focusSchema = z.discriminatedUnion("kind", [
+  questionFocusSchema,
+  approvalFocusSchema,
+  interruptedFocusSchema,
+]);
 
 function focus(value: z.infer<typeof focusSchema>): AttentionNotificationTaskDetailFocus {
   switch (value.kind) {
@@ -45,20 +49,18 @@ const targetSchema = z.discriminatedUnion("kind", [
       focus: focusSchema,
     })
     .strict()
-    .transform(
-      (value): AttentionNotificationTarget => ({
-        kind: value.kind,
-        projectID: value.project_id,
-        workflowID: value.workflow_id,
-        taskID: value.task_id,
-        taskShortID: value.task_short_id,
-        taskTitle: value.task_title,
-        sessionID: value.session_id,
-        currentNodeID: value.current_node_id,
-        currentNodeBranchKey: value.current_node_branch_key,
-        focus: focus(value.focus),
-      }),
-    ),
+    .transform((value): AttentionNotificationTarget => ({
+      kind: value.kind,
+      projectID: value.project_id,
+      workflowID: value.workflow_id,
+      taskID: value.task_id,
+      taskShortID: value.task_short_id,
+      taskTitle: value.task_title,
+      sessionID: value.session_id,
+      currentNodeID: value.current_node_id,
+      currentNodeBranchKey: value.current_node_branch_key,
+      focus: focus(value.focus),
+    })),
   z
     .object({ kind: z.literal("session_prompt"), session_id: id })
     .strict()
@@ -93,9 +95,14 @@ const notificationPayloadSchema = z
     occurred_at: id,
     revision: z.number().int().positive(),
     question: questionStateSchema.nullish(),
-    approval: z.object({ approval_id: id, message: z.string().optional() }).strict().nullish(),
+    approval: z.object({ message: id }).strict().nullish(),
+    workflow_approval: z.object({ approval_id: id, message: z.string().optional() }).strict().nullish(),
     interrupted_current_node: z
-      .object({ message: z.string().optional(), reason: z.string().optional(), detail_json: z.string().optional() })
+      .object({
+        message: z.string().optional(),
+        reason: z.string().optional(),
+        detail_json: z.string().optional(),
+      })
       .strict()
       .nullish(),
     target: targetSchema,
@@ -112,7 +119,11 @@ const notificationSchema: z.ZodType<AttentionNotification> = notificationPayload
     occurredAt: value.occurred_at,
     revision: value.revision,
     question: value.question ?? null,
-    approval: value.approval == null ? null : { approvalID: value.approval.approval_id, message: value.approval.message },
+    approval: value.approval ?? null,
+    workflowApproval:
+      value.workflow_approval == null
+        ? null
+        : { approvalID: value.workflow_approval.approval_id, message: value.workflow_approval.message },
     interruptedCurrentNode:
       value.interrupted_current_node == null
         ? null
@@ -124,26 +135,47 @@ const notificationSchema: z.ZodType<AttentionNotification> = notificationPayload
     target: value.target,
   }));
 
-export const attentionNotificationEventSchema: z.ZodType<AttentionNotificationEvent> = z.discriminatedUnion("type", [
-  z
-    .object({ type: z.literal("pending"), sequence: z.number().int().positive(), source: z.enum(["live", "snapshot"]), pending: notificationSchema })
-    .strict(),
-  z
-    .object({ type: z.literal("resolved"), sequence: z.number().int().positive(), source: z.enum(["live", "snapshot"]), id: identifierSchema, kind: notificationKind, occurred_at: id })
-    .strict()
-    .transform((value) => ({ ...value, occurredAt: value.occurred_at })),
-  z
-    .object({ type: z.literal("snapshot_complete"), sequence: z.number().int().positive(), source: z.literal("snapshot"), session_id: id })
-    .strict()
-    .transform((value) => ({ ...value, sessionID: value.session_id })),
-]);
+export const attentionNotificationEventSchema: z.ZodType<AttentionNotificationEvent> = z.discriminatedUnion(
+  "type",
+  [
+    z
+      .object({
+        type: z.literal("pending"),
+        sequence: z.number().int().positive(),
+        source: z.enum(["live", "snapshot"]),
+        pending: notificationSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("resolved"),
+        sequence: z.number().int().positive(),
+        source: z.enum(["live", "snapshot"]),
+        id: identifierSchema,
+        kind: notificationKind,
+        occurred_at: id,
+      })
+      .strict()
+      .transform((value) => ({ ...value, occurredAt: value.occurred_at })),
+    z
+      .object({
+        type: z.literal("snapshot_complete"),
+        sequence: z.number().int().positive(),
+        source: z.literal("snapshot"),
+        session_id: id,
+      })
+      .strict()
+      .transform((value) => ({ ...value, sessionID: value.session_id })),
+  ],
+);
 
 export const attentionNotificationEventParamsSchema: z.ZodType<AttentionNotificationEventParams> = z
   .object({ event: attentionNotificationEventSchema })
   .strict();
 
-function sameIDs(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+function sameIDSet(left: readonly string[], right: readonly string[]): boolean {
+  const rightIDs = new Set(right);
+  return new Set(left).size === rightIDs.size && left.every((value) => rightIDs.has(value));
 }
 
 function validateNotificationCoherence(value: NotificationPayload, context: z.RefinementCtx): void {
@@ -158,6 +190,9 @@ function validateNotificationCoherence(value: NotificationPayload, context: z.Re
     case "approval":
       validateApprovalNotification(value, context);
       return;
+    case "workflow_approval":
+      validateWorkflowApprovalNotification(value, context);
+      return;
     case "interrupted_current_node":
       validateInterruptedCurrentNodeNotification(value, context);
   }
@@ -167,14 +202,14 @@ function validateQuestionNotification(value: NotificationPayload, context: z.Ref
   if (value.question == null) {
     context.addIssue({ code: "custom", message: "question state required" });
   }
-  if (value.approval != null || value.interrupted_current_node != null) {
+  if (value.approval != null || value.workflow_approval != null || value.interrupted_current_node != null) {
     context.addIssue({ code: "custom", message: "question notification has unrelated payload" });
   }
   if (value.target.kind !== "workflow_task" || value.target.focus.kind !== "question") {
     context.addIssue({ code: "custom", message: "question notification target mismatch" });
     return;
   }
-  if (value.question != null && !sameIDs(value.question.currentUnresolvedAskIDs, value.target.focus.askIDs)) {
+  if (value.question != null && !sameIDSet(value.question.preparedAskIDs, value.target.focus.askIDs)) {
     context.addIssue({ code: "custom", message: "question notification IDs do not match target focus" });
   }
 }
@@ -183,15 +218,33 @@ function validateApprovalNotification(value: NotificationPayload, context: z.Ref
   if (value.approval == null) {
     context.addIssue({ code: "custom", message: "approval state required" });
   }
-  if (value.question != null || value.interrupted_current_node != null) {
+  if (value.question != null || value.workflow_approval != null || value.interrupted_current_node != null) {
     context.addIssue({ code: "custom", message: "approval notification has unrelated payload" });
   }
-  if (value.target.kind !== "workflow_task" || value.target.focus.kind !== "approval") {
+  if (value.target.kind !== "session_prompt") {
     context.addIssue({ code: "custom", message: "approval notification target mismatch" });
+  }
+}
+
+function validateWorkflowApprovalNotification(value: NotificationPayload, context: z.RefinementCtx): void {
+  if (value.workflow_approval == null) {
+    context.addIssue({ code: "custom", message: "workflow approval state required" });
+  }
+  if (value.question != null || value.approval != null || value.interrupted_current_node != null) {
+    context.addIssue({ code: "custom", message: "workflow approval notification has unrelated payload" });
+  }
+  if (value.target.kind !== "workflow_task" || value.target.focus.kind !== "approval") {
+    context.addIssue({ code: "custom", message: "workflow approval notification target mismatch" });
     return;
   }
-  if (value.approval != null && value.approval.approval_id !== value.target.focus.approvalID) {
-    context.addIssue({ code: "custom", message: "approval notification ID does not match target focus" });
+  if (
+    value.workflow_approval != null &&
+    value.workflow_approval.approval_id !== value.target.focus.approvalID
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "workflow approval notification ID does not match target focus",
+    });
   }
 }
 
@@ -202,8 +255,11 @@ function validateInterruptedCurrentNodeNotification(
   if (value.interrupted_current_node == null) {
     context.addIssue({ code: "custom", message: "interrupted-current-node state required" });
   }
-  if (value.question != null || value.approval != null) {
-    context.addIssue({ code: "custom", message: "interrupted-current-node notification has unrelated payload" });
+  if (value.question != null || value.approval != null || value.workflow_approval != null) {
+    context.addIssue({
+      code: "custom",
+      message: "interrupted-current-node notification has unrelated payload",
+    });
   }
   if (
     value.target.kind !== "workflow_task" ||

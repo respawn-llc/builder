@@ -11,6 +11,7 @@ import (
 )
 
 func TestHistoryReplacementLiveProjectionMatchesPersistedActiveSegment(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(
 		t,

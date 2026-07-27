@@ -111,6 +111,7 @@ type ManualMoveResult struct {
 	workflow.CurrentNodeMutationResult
 	Retained        []workflow.CurrentNode
 	PendingApproval *workflow.PendingApproval
+	TaskAttentionResolution
 }
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {

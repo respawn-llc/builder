@@ -1839,31 +1839,6 @@ func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPe
 	return i, err
 }
 
-const getTaskPendingApprovalIDForCurrentNode = `-- name: GetTaskPendingApprovalIDForCurrentNode :one
-SELECT id
-FROM task_pending_approvals
-WHERE source_task_id = ?1
-  AND source_node_id = ?2
-  AND (
-      (source_transition_branch_key IS NULL AND ?3 IS NULL)
-      OR source_transition_branch_key = ?3
-  )
-`
-
-type GetTaskPendingApprovalIDForCurrentNodeParams struct {
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey interface{}
-}
-
-func (q *Queries) GetTaskPendingApprovalIDForCurrentNode(ctx context.Context, arg GetTaskPendingApprovalIDForCurrentNodeParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getTaskPendingApprovalIDForCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getTaskPendingApprovalIDForCurrentNode, 3)
-
-	return id, err
-}
-
 const getTaskProjectWorkflowIDs = `-- name: GetTaskProjectWorkflowIDs :one
 SELECT project_id, workflow_id
 FROM task_records
@@ -2457,6 +2432,33 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 	), getWorktreeByID, 1)
 
 	return i, err
+}
+
+const hasTaskPendingApprovalForCurrentNode = `-- name: HasTaskPendingApprovalForCurrentNode :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_pending_approvals
+    WHERE source_task_id = ?1
+      AND source_node_id = ?2
+      AND (
+          (source_transition_branch_key IS NULL AND ?3 IS NULL)
+          OR source_transition_branch_key = ?3
+      )
+)
+`
+
+type HasTaskPendingApprovalForCurrentNodeParams struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey interface{}
+}
+
+func (q *Queries) HasTaskPendingApprovalForCurrentNode(ctx context.Context, arg HasTaskPendingApprovalForCurrentNodeParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasTaskPendingApprovalForCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	var exists bool
+	err := recordQueryError(ctx, row.Scan(&exists), hasTaskPendingApprovalForCurrentNode, 3)
+
+	return exists, err
 }
 
 const incrementWorkflowVersion = `-- name: IncrementWorkflowVersion :one
@@ -6282,7 +6284,8 @@ column_facts AS (
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-        CAST(json_extract(value, '$.has_execution') AS INTEGER) AS has_execution,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
     FROM args, json_each(args.live_task_states_json)
 ),
@@ -6291,20 +6294,26 @@ effective_status AS (
         durable.task_id,
         durable.is_done,
         CASE
+            WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN COALESCE(live.has_execution, 0) != 0 THEN 'running'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
             ELSE durable.kind
         END AS kind,
         CASE
+            WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN COALESCE(live.has_execution, 0) != 0 THEN 5
+            WHEN durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
             ELSE durable.primary_status_rank
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
             ELSE COALESCE((
                 SELECT json_group_array(attention_type)
                 FROM (
@@ -7182,28 +7191,60 @@ func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSes
 	return result.RowsAffected()
 }
 
-const recoverAdmittedCurrentNodes = `-- name: RecoverAdmittedCurrentNodes :execrows
+const recoverExecutableCurrentNodes = `-- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
     interruption_reason = ?1,
     interruption_detail_json = ?2,
     interrupted_at_unix_ms = ?3
-WHERE scheduling_state = 'admitted'
+WHERE scheduling_state IN ('ready', 'admitted')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND (
+            (approval.source_transition_branch_key IS NULL AND task_current_nodes.transition_branch_key IS NULL)
+            OR approval.source_transition_branch_key = task_current_nodes.transition_branch_key
+        )
+  )
+RETURNING task_id, node_id, transition_branch_key
 `
 
-type RecoverAdmittedCurrentNodesParams struct {
+type RecoverExecutableCurrentNodesParams struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
 }
 
-func (q *Queries) RecoverAdmittedCurrentNodes(ctx context.Context, arg RecoverAdmittedCurrentNodesParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recoverAdmittedCurrentNodes, arg.InterruptionReason, arg.InterruptionDetailJson, arg.InterruptedAtUnixMs)
-	err = recordQueryError(ctx, err, recoverAdmittedCurrentNodes, 3)
+type RecoverExecutableCurrentNodesRow struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+}
+
+func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg RecoverExecutableCurrentNodesParams) ([]RecoverExecutableCurrentNodesRow, error) {
+	rows, err := q.db.QueryContext(ctx, recoverExecutableCurrentNodes, arg.InterruptionReason, arg.InterruptionDetailJson, arg.InterruptedAtUnixMs)
+	err = recordQueryError(ctx, err, recoverExecutableCurrentNodes, 3)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []RecoverExecutableCurrentNodesRow
+	for rows.Next() {
+		var i RecoverExecutableCurrentNodesRow
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.NodeID, &i.TransitionBranchKey), recoverExecutableCurrentNodes, 3); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), recoverExecutableCurrentNodes, 3); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), recoverExecutableCurrentNodes, 3); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const renameProjectLabel = `-- name: RenameProjectLabel :one

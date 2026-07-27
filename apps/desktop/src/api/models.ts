@@ -502,6 +502,7 @@ export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;
   canResume: boolean;
+  canDelete: boolean;
   manualMoveTargetNodeIDs: readonly string[];
 }>;
 

@@ -16,6 +16,7 @@ import (
 )
 
 func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -87,6 +88,7 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 }
 
 func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverAtomically(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
@@ -283,6 +285,7 @@ func workflowModeMessagesFromItems(items []llm.ResponseItem) []llm.Message {
 }
 
 func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{

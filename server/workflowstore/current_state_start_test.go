@@ -130,6 +130,79 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	}
 }
 
+func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesApprovalSources(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	readyTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	ready := startTask(t, ctx, store, readyTask.ID).Mutation.Created[0]
+	admittedTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	admitted := startTask(t, ctx, store, admittedTask.ID).Mutation.Created[0]
+	if err := store.AdmitCurrentNode(ctx, admitted.Reference); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+
+	approvalWorkflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, approvalWorkflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, approvalWorkflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID).RequiresApproval = true
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, approvalWorkflowID, false)
+	approvalTask := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &approvalWorkflowID,
+		Title:      "Approval task",
+		Body:       "Preserve pending Approval",
+	})
+	approvalSource := startTask(t, ctx, store, approvalTask.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       approvalSource.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "preserve approval"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create pending Approval")
+	}
+
+	reason := workflow.CurrentNodeInterruptionReason("workflow_startup_recovery")
+	recovered, err := store.RecoverExecutableCurrentNodes(ctx, reason, workflow.CurrentNodeInterruptionDetail{Code: string(reason)})
+	if err != nil {
+		t.Fatalf("RecoverExecutableCurrentNodes: %v", err)
+	}
+	if len(recovered) != 2 {
+		t.Fatalf("recovered current nodes = %d, want ready and admitted nodes only", len(recovered))
+	}
+	for _, expected := range []workflow.CurrentNodeReference{ready.Reference, admitted.Reference} {
+		nodes, err := store.ListCurrentNodes(ctx, expected.TaskID)
+		if err != nil {
+			t.Fatalf("ListCurrentNodes(%q): %v", expected.TaskID, err)
+		}
+		if len(nodes) != 1 ||
+			nodes[0].Scheduling == nil ||
+			nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted ||
+			nodes[0].Scheduling.Interruption == nil ||
+			nodes[0].Scheduling.Interruption.Reason != reason {
+			t.Fatalf("recovered current nodes for %q = %+v, want startup interruption", expected.TaskID, nodes)
+		}
+	}
+	approvalNodes, err := store.ListCurrentNodes(ctx, approvalTask.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes approval task: %v", err)
+	}
+	if len(approvalNodes) != 1 ||
+		!approvalNodes[0].Reference.Equal(approvalSource.Reference) ||
+		approvalNodes[0].Scheduling == nil ||
+		approvalNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		t.Fatalf("approval source after recovery = %+v, want frozen ready source", approvalNodes)
+	}
+}
+
 func TestCurrentNodeStartContextDerivesContinuationFromOutgoingEdges(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

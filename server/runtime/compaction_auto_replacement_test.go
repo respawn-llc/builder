@@ -11,6 +11,7 @@ import (
 )
 
 func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
+	t.Parallel()
 	const autoCompactLimit = 190_000
 
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{

@@ -21,6 +21,7 @@ import (
 )
 
 func TestSteerWorktreeTransitionFailureRejectsInvalidOutcomeBeforeRuntimeMutation(t *testing.T) {
+	t.Parallel()
 	engine := &Engine{}
 	err := engine.SteerWorktreeTransitionFailure(clientui.WorktreeTransitionOutcome{
 		Transition: clientui.WorktreeTransitionEnter,
@@ -33,6 +34,7 @@ func TestSteerWorktreeTransitionFailureRejectsInvalidOutcomeBeforeRuntimeMutatio
 }
 
 func TestPersistedWorktreeContextRejectsDuplicateSourcePath(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	target := mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
 		session.WorktreeReminderModeEnter,
@@ -514,6 +516,7 @@ func TestConfirmedSameCWDTargetChangeBypassesLegacyFallback(t *testing.T) {
 }
 
 func TestLegacyWorktreeFallbackOnlyMatchesUnversionedTarget(t *testing.T) {
+	t.Parallel()
 	const sharedCWD = "/tmp/legacy-fallback-cwd"
 	legacyItems := []llm.ResponseItem{{
 		Type:        llm.ResponseItemTypeMessage,

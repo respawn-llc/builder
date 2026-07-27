@@ -9,6 +9,7 @@ import (
 )
 
 func TestNormalizeToolCallForTranscriptUsesCustomPatchInput(t *testing.T) {
+	t.Parallel()
 	patchText := "*** Begin Patch\n*** Update File: cli/app/ui_status.go\n@@\n type uiStatusAuthInfo struct {\n-\tSummary string\n+\tSummary string\n+\tReady bool\n }\n*** End Patch\n"
 	call := llm.ToolCall{
 		ID:          "call_patch",

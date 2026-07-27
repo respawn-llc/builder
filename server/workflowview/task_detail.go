@@ -23,9 +23,10 @@ type TaskDetail struct {
 	definitions *DefinitionProjection
 	projector   *TaskProjector
 	authority   *sessionruntime.Authority
+	quiescence  TaskQuiescenceSource
 }
 
-func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskDetail, error) {
+func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource) (*TaskDetail, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -38,11 +39,15 @@ func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProject
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
+	if quiescence == nil {
+		return nil, errors.New("task quiescence source is required")
+	}
 	return &TaskDetail{
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
 		projector:   projector,
 		authority:   authority,
+		quiescence:  quiescence,
 	}, nil
 }
 
@@ -153,12 +158,22 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	attentionCount := taskAttentionCount(taskCurrentNodes, currentExecutions, len(pendingApprovals))
+	taskID := workflow.TaskID(task.ID)
+	quiescence, err := d.quiescence.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	canDelete, exists := quiescence[taskID]
+	if !exists {
+		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", task.ID)
+	}
 	facts := d.projector.ProjectTaskFacts(TaskFactsInput{
 		Task:           task,
 		Status:         statusFact,
 		CurrentNodes:   taskCurrentNodes,
 		LiveExecutions: currentExecutions,
 		Definition:     definition,
+		CanDelete:      canDelete,
 	})
 
 	detail := serverapi.WorkflowTaskDetail{
@@ -226,8 +241,12 @@ func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionrunti
 		return durable
 	}
 	hasWaitingQuestion := false
+	hasRunning := false
+	hasQueued := false
 	for _, execution := range current {
 		hasWaitingQuestion = hasWaitingQuestion || execution.WaitingQuestion
+		hasRunning = hasRunning || !execution.Queued
+		hasQueued = hasQueued || execution.Queued
 	}
 	switch {
 	case hasWaitingQuestion:
@@ -236,9 +255,13 @@ func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionrunti
 		}
 	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingApproval:
 		return durable
-	case len(current) != 0:
+	case hasRunning:
 		return workflowTaskStatusFact{
 			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindRunning, false),
+		}
+	case hasQueued:
+		return workflowTaskStatusFact{
+			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindQueued, false),
 		}
 	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindRunning ||
 		durable.Status.Kind == serverapi.WorkflowTaskStatusKindQueued ||

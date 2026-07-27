@@ -46,3 +46,10 @@ func InterruptedCurrentNodeProjections(projections []workflowstore.InterruptedCu
 	}
 	return out
 }
+
+func (f *Finalizer) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
+	f.FinalizeResolution(Resolution{
+		Approvals:               ApprovalProjections(resolution.Approvals),
+		InterruptedCurrentNodes: InterruptedCurrentNodeProjections(resolution.InterruptedCurrentNodes),
+	})
+}

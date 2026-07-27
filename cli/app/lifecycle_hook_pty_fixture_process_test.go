@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -297,13 +296,10 @@ func runLifecycleHookServerFixtureProcess(
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, server.Close()) }()
-	ready, err := json.Marshal(struct {
-		PID int `json:"pid"`
-	}{PID: os.Getpid()})
-	if err != nil {
-		return fmt.Errorf("marshal lifecycle server fixture readiness: %w", err)
-	}
-	if err := os.WriteFile(processConfig.ReadyPath, ready, 0o600); err != nil {
+	if err := appfixture.WriteLifecycleServerProcessReady(
+		processConfig.ReadyPath,
+		appfixture.LifecycleServerProcessReady{PID: os.Getpid()},
+	); err != nil {
 		return fmt.Errorf("publish lifecycle server fixture readiness: %w", err)
 	}
 	select {}

@@ -25,6 +25,13 @@ export type SurfaceRecord = Readonly<{
   state: "activating" | "activation_failed" | "dismissed" | "native" | "surfacing" | "toast";
 }>;
 
+export function advancesAttentionNotificationRevision(
+  currentRevision: number | undefined,
+  incomingRevision: number,
+): boolean {
+  return currentRevision === undefined || incomingRevision > currentRevision;
+}
+
 const attentionToastIDPrefix = "attention-";
 
 type NativeNotifications = AppServices["nativeBridge"]["notifications"];
@@ -179,9 +186,9 @@ export function notificationTitle(notification: AttentionNotification, t: Transl
       ? questionCount > 1
         ? `${String(questionCount)} questions`
         : t("app.attention.questionTitle")
-      : notification.kind === "approval"
+      : notification.kind === "approval" || notification.kind === "workflow_approval"
         ? t("app.attention.approvalTitle")
-        : t("app.attention.interruptedRunTitle");
+        : t("app.attention.interruptedCurrentNodeTitle");
   return shortID.length > 0 ? `${shortID}: ${suffix}` : suffix;
 }
 
@@ -192,7 +199,12 @@ export function notificationBody(notification: AttentionNotification, t: Transla
   if (notification.kind === "approval") {
     return nonEmpty(notification.approval?.message) ?? t("app.attention.approvalFallback");
   }
-  return nonEmpty(notification.interruptedCurrentNode?.message) ?? interruptedCurrentNodeFallback(notification, t);
+  if (notification.kind === "workflow_approval") {
+    return nonEmpty(notification.workflowApproval?.message) ?? t("app.attention.approvalFallback");
+  }
+  return (
+    nonEmpty(notification.interruptedCurrentNode?.message) ?? interruptedCurrentNodeFallback(notification, t)
+  );
 }
 
 export function attentionToastID(id: string): string {
@@ -312,9 +324,7 @@ function attentionTargetIsActive(
     );
   }
   if (focus.kind === "approval") {
-    return attention.some(
-      (item) => item.kind === "approval" && item.approvalID === focus.approvalID,
-    );
+    return attention.some((item) => item.kind === "approval" && item.approvalID === focus.approvalID);
   }
   return attention.some(
     (item) =>
@@ -362,7 +372,7 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 function interruptedCurrentNodeFallback(notification: AttentionNotification, t: Translate): string {
-  const fallback = t("app.attention.interruptedRunFallback");
+  const fallback = t("app.attention.interruptedCurrentNodeFallback");
   const reason = nonEmpty(notification.interruptedCurrentNode?.reason);
   return reason === undefined ? fallback : `${fallback}: ${reason}`;
 }

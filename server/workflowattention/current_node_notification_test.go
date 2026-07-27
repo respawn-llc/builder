@@ -20,27 +20,36 @@ func TestFinalizerPublishesCurrentNodeApprovalNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	publisher := &notificationPublisher{}
-	finalizer := NewFinalizer(notificationProjectionProvider{
-		approval: ApprovalProjection{
-			ApprovalID:       approvalID,
-			Source:           source,
-			ProjectID:        "project-1",
-			WorkflowID:       "workflow-1",
-			OccurredAtUnixMs: 1,
-		},
-	}, publisher)
+	projection := ApprovalProjection{
+		ApprovalID:       approvalID,
+		Source:           source,
+		ProjectID:        "project-1",
+		WorkflowID:       "workflow-1",
+		OccurredAtUnixMs: 1,
+	}
+	broker := attentionnotify.NewBroker()
+	subscription, err := broker.SubscribeDesktop()
+	if err != nil {
+		t.Fatalf("SubscribeDesktop: %v", err)
+	}
+	finalizer := NewFinalizer(notificationProjectionProvider{approval: projection}, broker)
 
 	finalizer.PublishPendingApproval(context.Background(), approvalID)
 
-	if len(publisher.pending) != 1 {
-		t.Fatalf("pending notification count = %d, want 1", len(publisher.pending))
+	nextContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	pendingEvent, err := subscription.Next(nextContext)
+	if err != nil {
+		t.Fatalf("Next pending approval: %v", err)
 	}
-	got := publisher.pending[0]
-	if got.Kind != clientui.AttentionNotificationKindApproval || got.Approval == nil {
-		t.Fatalf("pending notification = %+v, want approval", got)
+	if pendingEvent.Type != clientui.AttentionNotificationEventPending || pendingEvent.Pending == nil {
+		t.Fatalf("pending event = %+v, want pending workflow approval", pendingEvent)
 	}
-	if got.Approval.ApprovalID != approvalID.String() || got.Target.TaskID != string(source.TaskID) {
+	got := *pendingEvent.Pending
+	if got.Kind != clientui.AttentionNotificationKindWorkflowApproval || got.WorkflowApproval == nil {
+		t.Fatalf("pending notification = %+v, want workflow approval", got)
+	}
+	if got.WorkflowApproval.ApprovalID != approvalID.String() || got.Target.TaskID != string(source.TaskID) {
 		t.Fatalf("approval notification = %+v, want current-node task and approval identity", got)
 	}
 	if got.Target.CurrentNodeID == nil ||
@@ -58,9 +67,71 @@ func TestFinalizerPublishesCurrentNodeApprovalNotification(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ValidateAttentionNotificationEvent approval: %v", err)
 	}
+
+	finalizer.FinalizeResolution(Resolution{Approvals: []ApprovalProjection{projection}})
+
+	resolvedEvent, err := subscription.Next(nextContext)
+	if err != nil {
+		t.Fatalf("Next resolved approval: %v", err)
+	}
+	if resolvedEvent.Type != clientui.AttentionNotificationEventResolved ||
+		resolvedEvent.ID == nil ||
+		*resolvedEvent.ID != got.ID ||
+		resolvedEvent.Kind != clientui.AttentionNotificationKindWorkflowApproval {
+		t.Fatalf("resolved event = %+v, want resolved workflow approval", resolvedEvent)
+	}
 }
 
-func TestFinalizerPublishesAndResolvesInterruptedCurrentNodeExactlyOnce(t *testing.T) {
+func TestFinalizerOrdersPendingBeforeConcurrentResolution(t *testing.T) {
+	approvalID, err := workflow.ParseApprovalID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseApprovalID: %v", err)
+	}
+	source, err := workflow.NewCurrentNodeReference("task-1", "node-1", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	projection := ApprovalProjection{
+		ApprovalID:       approvalID,
+		Source:           source,
+		ProjectID:        "project-1",
+		WorkflowID:       "workflow-1",
+		OccurredAtUnixMs: 1,
+	}
+	publisher := &blockingPendingPublisher{
+		pendingEntered:  make(chan struct{}),
+		releasePending:  make(chan struct{}),
+		resolvedEntered: make(chan struct{}),
+		events:          make(chan clientui.AttentionNotificationEventType, 2),
+	}
+	finalizer := NewFinalizer(notificationProjectionProvider{approval: projection}, publisher)
+	pendingDone := make(chan struct{})
+	go func() {
+		finalizer.PublishPendingApproval(context.Background(), approvalID)
+		close(pendingDone)
+	}()
+	<-publisher.pendingEntered
+
+	resolvedDone := make(chan struct{})
+	go func() {
+		finalizer.FinalizeResolution(Resolution{Approvals: []ApprovalProjection{projection}})
+		close(resolvedDone)
+	}()
+	select {
+	case <-publisher.resolvedEntered:
+		t.Fatal("resolved notification overtook an in-flight pending notification")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(publisher.releasePending)
+	<-pendingDone
+	<-resolvedDone
+
+	if first, second := <-publisher.events, <-publisher.events; first != clientui.AttentionNotificationEventPending || second != clientui.AttentionNotificationEventResolved {
+		t.Fatalf("notification order = %q, %q; want pending then resolved", first, second)
+	}
+}
+
+func TestFinalizerPublishesAndResolvesInterruptedCurrentNode(t *testing.T) {
 	branch := workflow.TransitionBranchKey("branch-a")
 	currentNode, err := workflow.NewCurrentNodeReference("task-1", "node-1", &branch)
 	if err != nil {
@@ -114,14 +185,12 @@ func TestFinalizerPublishesAndResolvesInterruptedCurrentNodeExactlyOnce(t *testi
 	}
 
 	finalizer.FinalizeResolution(Resolution{InterruptedCurrentNodes: []InterruptedCurrentNodeProjection{projection}})
-	finalizer.FinalizeResolution(Resolution{InterruptedCurrentNodes: []InterruptedCurrentNodeProjection{projection}})
-	finalizer.PublishPendingInterruptedCurrentNode(context.Background(), currentNode)
 
 	if len(publisher.pending) != 1 {
-		t.Fatalf("pending notifications after resolution = %d, want original pending only", len(publisher.pending))
+		t.Fatalf("pending notifications = %d, want one", len(publisher.pending))
 	}
 	if len(publisher.resolved) != 1 {
-		t.Fatalf("resolved notifications = %+v, want one idempotent resolution", publisher.resolved)
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
 	}
 	resolved := publisher.resolved[0]
 	if resolved.id != pending.ID || resolved.kind != clientui.AttentionNotificationKindInterruptedCurrentNode || resolved.occurredAt.IsZero() {
@@ -170,5 +239,25 @@ func (p *notificationPublisher) PublishPending(_ attentionnotify.RoutingScope, n
 
 func (p *notificationPublisher) PublishResolved(_ attentionnotify.RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, occurredAt time.Time) error {
 	p.resolved = append(p.resolved, resolvedNotification{id: id, kind: kind, occurredAt: occurredAt})
+	return nil
+}
+
+type blockingPendingPublisher struct {
+	pendingEntered  chan struct{}
+	releasePending  chan struct{}
+	resolvedEntered chan struct{}
+	events          chan clientui.AttentionNotificationEventType
+}
+
+func (p *blockingPendingPublisher) PublishPending(attentionnotify.RoutingScope, clientui.AttentionNotification) error {
+	close(p.pendingEntered)
+	<-p.releasePending
+	p.events <- clientui.AttentionNotificationEventPending
+	return nil
+}
+
+func (p *blockingPendingPublisher) PublishResolved(attentionnotify.RoutingScope, clientui.AttentionNotificationID, clientui.AttentionNotificationKind, time.Time) error {
+	close(p.resolvedEntered)
+	p.events <- clientui.AttentionNotificationEventResolved
 	return nil
 }

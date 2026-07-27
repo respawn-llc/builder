@@ -334,6 +334,7 @@ func TestEnvironmentContextMessageFallsBackToProcessCWDWhenWorkspaceRootMissing(
 }
 
 func TestEnvironmentContextMessageRejectsEmptyModel(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	if _, err := environmentContextMessage(workspace, "", time.Unix(0, 0).UTC()); !errors.Is(err, errEnvironmentContextModelRequired) {
 		t.Fatalf("expected errEnvironmentContextModelRequired, got %v", err)
@@ -341,6 +342,7 @@ func TestEnvironmentContextMessageRejectsEmptyModel(t *testing.T) {
 }
 
 func TestNewRejectsEmptyModel(t *testing.T) {
+	t.Parallel()
 	storeRoot := t.TempDir()
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
@@ -390,6 +392,7 @@ func TestSubmitInjectsEnvironmentLineWithLabeledModelIdentifier(t *testing.T) {
 }
 
 func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name              string
 		active            bool

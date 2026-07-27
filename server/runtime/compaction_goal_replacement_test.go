@@ -13,6 +13,7 @@ import (
 )
 
 func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) {
+	t.Parallel()
 	paused := session.GoalStatusPaused
 	complete := session.GoalStatusComplete
 	tests := []struct {

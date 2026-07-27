@@ -13,6 +13,7 @@ import (
 )
 
 func TestForkedSessionRecoversCompletedTriggerHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -50,6 +51,7 @@ func TestForkedSessionRecoversCompletedTriggerHandoff(t *testing.T) {
 }
 
 func TestTriggerHandoffRejectsUnavailableAdmissionWithoutQueueing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		setup func(*Engine)

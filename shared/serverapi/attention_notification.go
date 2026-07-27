@@ -59,6 +59,7 @@ var attentionFocusValidators = map[clientui.AttentionNotificationFocusKind]atten
 var attentionPayloadValidators = map[clientui.AttentionNotificationKind]attentionPayloadValidator{
 	clientui.AttentionNotificationKindQuestion:               validateQuestionAttentionPayload,
 	clientui.AttentionNotificationKindApproval:               validateApprovalAttentionPayload,
+	clientui.AttentionNotificationKindWorkflowApproval:       validateWorkflowApprovalAttentionPayload,
 	clientui.AttentionNotificationKindInterruptedCurrentNode: validateInterruptedCurrentNodeAttentionPayload,
 }
 
@@ -248,8 +249,8 @@ func validateQuestionAttentionPayload(notification clientui.AttentionNotificatio
 	if notification.Question == nil {
 		return errors.New("question attention notification payload is required")
 	}
-	if notification.Approval != nil || notification.InterruptedCurrentNode != nil {
-		return errors.New("question attention notification must not carry approval or interrupted-current-node payloads")
+	if notification.Approval != nil || notification.WorkflowApproval != nil || notification.InterruptedCurrentNode != nil {
+		return errors.New("question attention notification must not carry approval, workflow-approval, or interrupted-current-node payloads")
 	}
 	if err := validateQuestionAttentionState(*notification.Question); err != nil {
 		return err
@@ -269,22 +270,35 @@ func validateApprovalAttentionPayload(notification clientui.AttentionNotificatio
 	if notification.Approval == nil {
 		return errors.New("approval attention notification payload is required")
 	}
-	if notification.Question != nil || notification.InterruptedCurrentNode != nil {
-		return errors.New("approval attention notification must not carry question or interrupted-current-node payloads")
+	if notification.Question != nil || notification.WorkflowApproval != nil || notification.InterruptedCurrentNode != nil {
+		return errors.New("approval attention notification must not carry question, workflow-approval, or interrupted-current-node payloads")
 	}
-	if strings.TrimSpace(notification.Approval.ApprovalID) == "" {
-		return errors.New("approval attention notification payload approval_id is required")
+	if strings.TrimSpace(notification.Approval.Message) == "" {
+		return errors.New("approval attention notification payload message is required")
 	}
-	if notification.Target.Kind == clientui.AttentionNotificationTargetWorkflowTask &&
-		(notification.Target.Focus == nil || notification.Target.Focus.Kind != clientui.AttentionNotificationFocusApproval) {
-		return errors.New("approval attention notification workflow-task target focus kind must be approval")
+	if notification.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
+		return errors.New("approval attention notification target must be session prompt")
 	}
-	if notification.Target.Kind == clientui.AttentionNotificationTargetWorkflowTask &&
-		strings.TrimSpace(notification.Approval.ApprovalID) == "" {
-		return errors.New("approval attention notification workflow-task payload approval_id is required")
+	return nil
+}
+
+func validateWorkflowApprovalAttentionPayload(notification clientui.AttentionNotification) error {
+	if notification.WorkflowApproval == nil {
+		return errors.New("workflow-approval attention notification payload is required")
 	}
-	if notification.Target.Focus != nil && notification.Target.Focus.ApprovalID != notification.Approval.ApprovalID {
-		return errors.New("approval attention notification focus approval_id must match approval payload")
+	if notification.Question != nil || notification.Approval != nil || notification.InterruptedCurrentNode != nil {
+		return errors.New("workflow-approval attention notification must not carry question, approval, or interrupted-current-node payloads")
+	}
+	if strings.TrimSpace(notification.WorkflowApproval.ApprovalID) == "" {
+		return errors.New("workflow-approval attention notification payload approval_id is required")
+	}
+	if notification.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask ||
+		notification.Target.Focus == nil ||
+		notification.Target.Focus.Kind != clientui.AttentionNotificationFocusApproval {
+		return errors.New("workflow-approval attention notification target must be a workflow task with approval focus")
+	}
+	if notification.Target.Focus.ApprovalID != notification.WorkflowApproval.ApprovalID {
+		return errors.New("workflow-approval attention notification focus approval_id must match workflow-approval payload")
 	}
 	return nil
 }
@@ -293,8 +307,8 @@ func validateInterruptedCurrentNodeAttentionPayload(notification clientui.Attent
 	if notification.InterruptedCurrentNode == nil {
 		return errors.New("interrupted-current-node attention notification payload is required")
 	}
-	if notification.Question != nil || notification.Approval != nil {
-		return errors.New("interrupted-current-node attention notification must not carry question or approval payloads")
+	if notification.Question != nil || notification.Approval != nil || notification.WorkflowApproval != nil {
+		return errors.New("interrupted-current-node attention notification must not carry question, approval, or workflow-approval payloads")
 	}
 	if notification.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
 		return errors.New("interrupted-current-node attention notification target must be workflow task")

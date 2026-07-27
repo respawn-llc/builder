@@ -1,4 +1,5 @@
-export type AttentionNotificationKind = "question" | "approval" | "interrupted_current_node";
+export type AttentionNotificationKind =
+  "question" | "approval" | "workflow_approval" | "interrupted_current_node";
 
 export type AttentionNotificationSource = "live" | "snapshot";
 
@@ -26,8 +27,7 @@ export type AttentionNotificationWorkflowTaskTarget = Readonly<{
 }>;
 
 export type AttentionNotificationTarget =
-  | AttentionNotificationWorkflowTaskTarget
-  | Readonly<{ kind: "session_prompt"; sessionID: string }>;
+  AttentionNotificationWorkflowTaskTarget | Readonly<{ kind: "session_prompt"; sessionID: string }>;
 
 export type AttentionNotificationQuestionState = Readonly<{
   preparedAskIDs: readonly string[];
@@ -40,6 +40,10 @@ export type AttentionNotificationQuestionState = Readonly<{
 }>;
 
 export type AttentionNotificationApprovalState = Readonly<{
+  message: string;
+}>;
+
+export type AttentionNotificationWorkflowApprovalState = Readonly<{
   approvalID: string;
   message?: string | undefined;
 }>;
@@ -57,12 +61,18 @@ export type AttentionNotification = Readonly<{
   revision: number;
   question: AttentionNotificationQuestionState | null;
   approval: AttentionNotificationApprovalState | null;
+  workflowApproval: AttentionNotificationWorkflowApprovalState | null;
   interruptedCurrentNode: AttentionNotificationInterruptedCurrentNodeState | null;
   target: AttentionNotificationTarget;
 }>;
 
 export type AttentionNotificationEvent =
-  | Readonly<{ type: "pending"; sequence: number; source: AttentionNotificationSource; pending: AttentionNotification }>
+  | Readonly<{
+      type: "pending";
+      sequence: number;
+      source: AttentionNotificationSource;
+      pending: AttentionNotification;
+    }>
   | Readonly<{
       type: "resolved";
       sequence: number;

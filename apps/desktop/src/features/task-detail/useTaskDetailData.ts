@@ -10,7 +10,7 @@ import { workflowProjectEventAffectsTask } from "@/app-facade";
 
 // useTaskDetailLiveRefresh keeps an open task detail in sync with the server by
 // subscribing to its project's workflow events. Any event that mutates this
-// task (status, runs, transitions/approvals, comments, questions, title/body)
+// task (status, Current Nodes/Approvals, comments, questions, title/body)
 // invalidates the detail's queries so the surface refreshes on its own,
 // regardless of which route hosts it (board sidebar, attention inbox, or the
 // standalone task window). Invalidations target active observers only and reuse

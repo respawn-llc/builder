@@ -6,12 +6,7 @@ import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail 
 import { ApiClient } from "@/api/composition";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
-import {
-  createTestServices,
-  startupRoutes,
-  TestAppProviders,
-  type TestAppServices,
-} from "../app-services";
+import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -42,6 +37,7 @@ const taskActions = {
   can_start: false,
   can_interrupt: true,
   can_resume: false,
+  can_delete: false,
 };
 
 const attentionBase = {

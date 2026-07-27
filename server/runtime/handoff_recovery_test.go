@@ -14,6 +14,7 @@ import (
 )
 
 func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -59,6 +60,7 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 }
 
 func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlreadyHappened(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -100,6 +102,7 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 }
 
 func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -157,6 +160,7 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 }
 
 func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
@@ -228,6 +232,7 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 }
 
 func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWithoutRecompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		blockFutureAppend bool
@@ -313,6 +318,7 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 }
 
 func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("handoff future-message observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -338,6 +344,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 }
 
 func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLingeringCallOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sessionID := store.Meta().SessionID
 	client := &fakeClient{responses: []llm.Response{{

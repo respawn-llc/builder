@@ -51,7 +51,7 @@ const interruptedCurrentNodeAttentionItem = {
   task_title: "Task",
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_id: null,
-  message: "Run interrupted",
+  message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
 

@@ -10,6 +10,7 @@ import (
 )
 
 func TestRemoteCompactionMissingCheckpointFallsBackToLocal(t *testing.T) {
+	t.Parallel()
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},

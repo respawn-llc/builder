@@ -806,7 +806,9 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 
 	select {
 	case <-blockingClient.started:
-	case <-time.After(time.Second):
+	case err := <-submitDone:
+		t.Fatalf("runtime stopped before the interruptible model request: %v", err)
+	case <-time.After(5 * time.Second):
 		t.Fatal("runtime did not reach the interruptible model request")
 	}
 	if err := firstEngine.Interrupt(); err != nil {
@@ -817,7 +819,7 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("interrupted submit error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("interrupted runtime did not become idle")
 	}
 	if err := firstEngine.Close(); err != nil {

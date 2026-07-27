@@ -13,6 +13,7 @@ import (
 )
 
 func TestCurrentEventLogRejectsUnsupportedCacheDigestVersion(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	_, _, err := appendTestEvent(t, store, "legacy-request", persistedCacheRequestObserved{
 		DigestVersion: 999,
@@ -27,6 +28,7 @@ func TestCurrentEventLogRejectsUnsupportedCacheDigestVersion(t *testing.T) {
 }
 
 func TestGenerateWithRetryClient_DoesNotInventCompactionCauseWithoutPriorLineageOnReopen(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine: "local",

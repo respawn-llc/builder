@@ -70,6 +70,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"AttentionNotificationTarget":                      {},
 		"AttentionNotificationTargetKind":                  {},
 		"AttentionNotificationTaskDetailFocus":             {},
+		"AttentionNotificationWorkflowApprovalState":       {},
 		"BackgroundLifecycle":                              {},
 		"BackgroundProcess":                                {},
 		"CompactionLifecycle":                              {},

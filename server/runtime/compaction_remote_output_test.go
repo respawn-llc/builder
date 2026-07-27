@@ -8,6 +8,7 @@ import (
 )
 
 func TestSanitizeRemoteCompactionOutputAcceptsEncryptedReasoningCheckpoint(t *testing.T) {
+	t.Parallel()
 	const reasoningID = "reasoning-checkpoint"
 
 	replacement, err := sanitizeRemoteCompactionOutput([]llm.ResponseItem{

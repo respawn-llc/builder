@@ -9,6 +9,7 @@ import (
 )
 
 func TestCurrentNodeExecutionConfigurationCarriesOnlyLiveScopeAndNaturalNodeIdentity(t *testing.T) {
+	t.Parallel()
 	branch := workflow.TransitionBranchKey("implementation")
 	reference, err := workflow.NewCurrentNodeReference("task-1", "node-1", &branch)
 	if err != nil {

@@ -18,6 +18,7 @@ type PendingApprovalApplyResult struct {
 	ResolvedApproval workflow.PendingApproval
 	Handoff          CompletionHandoff
 	AutomaticIntents []workflow.CurrentNodeReference
+	TaskAttentionResolution
 }
 
 type pendingApprovalTransitionSnapshot struct {
@@ -79,6 +80,14 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 	return approvals, nil
 }
 
+func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflow.PendingApproval, error) {
+	normalizedID, err := normalizeApprovalID(approvalID)
+	if err != nil {
+		return workflow.PendingApproval{}, err
+	}
+	return pendingApprovalByID(ctx, s.queries, normalizedID)
+}
+
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {
 	if _, err := currentNodeForReference(ctx, s.queries, reference); err != nil {
 		return false, err
@@ -107,13 +116,16 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	row, err := q.GetTaskPendingApproval(ctx, normalizedID.String())
+	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
-	approval, err := pendingApprovalFromRow(ctx, q, row)
+	approvalAttention, found, err := pendingApprovalAttentionProjection(ctx, q, normalizedID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
+	}
+	if !found {
+		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 	}
 	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
 		return PendingApprovalApplyResult{}, err
@@ -170,6 +182,9 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		},
 		ResolvedApproval: approval,
 		Handoff:          pendingApprovalHandoff(approval),
+		TaskAttentionResolution: TaskAttentionResolution{
+			Approvals: []ApprovalAttentionProjection{approvalAttention},
+		},
 	}
 	for _, target := range targets {
 		if target.Scheduling != nil {
@@ -177,6 +192,18 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		}
 	}
 	return result, nil
+}
+
+func pendingApprovalByID(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	approvalID workflow.ApprovalID,
+) (workflow.PendingApproval, error) {
+	row, err := q.GetTaskPendingApproval(ctx, approvalID.String())
+	if err != nil {
+		return workflow.PendingApproval{}, err
+	}
+	return pendingApprovalFromRow(ctx, q, row)
 }
 
 func pendingApprovalHandoff(approval workflow.PendingApproval) CompletionHandoff {
@@ -639,22 +666,15 @@ func currentNodePendingApprovalID(ctx context.Context, q *sqlitegen.Queries, ref
 	if value, present := reference.TransitionBranchKey(); present {
 		branchKey = sql.NullString{String: string(value), Valid: true}
 	}
-	raw, err := q.GetTaskPendingApprovalIDForCurrentNode(ctx, sqlitegen.GetTaskPendingApprovalIDForCurrentNodeParams{
+	pending, err := q.HasTaskPendingApprovalForCurrentNode(ctx, sqlitegen.HasTaskPendingApprovalForCurrentNodeParams{
 		TaskID:              string(reference.TaskID),
 		NodeID:              string(reference.NodeID),
 		TransitionBranchKey: branchKey,
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
 	if err != nil {
 		return "", false, err
 	}
-	id, err := workflow.ParseApprovalID(raw)
-	if err != nil {
-		return "", false, fmt.Errorf("decode pending approval id: %w", err)
-	}
-	return id, true, nil
+	return "", pending, nil
 }
 
 func sameOptionalSessionID(left, right *runtimeids.SessionID) bool {

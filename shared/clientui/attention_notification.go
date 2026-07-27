@@ -22,6 +22,7 @@ type AttentionNotificationKind string
 const (
 	AttentionNotificationKindQuestion               AttentionNotificationKind = "question"
 	AttentionNotificationKindApproval               AttentionNotificationKind = "approval"
+	AttentionNotificationKindWorkflowApproval       AttentionNotificationKind = "workflow_approval"
 	AttentionNotificationKindInterruptedCurrentNode AttentionNotificationKind = "interrupted_current_node"
 )
 
@@ -63,6 +64,7 @@ type AttentionNotification struct {
 	Revision               uint64                                            `json:"revision"`
 	Question               *AttentionNotificationQuestionState               `json:"question,omitempty"`
 	Approval               *AttentionNotificationApprovalState               `json:"approval,omitempty"`
+	WorkflowApproval       *AttentionNotificationWorkflowApprovalState       `json:"workflow_approval,omitempty"`
 	InterruptedCurrentNode *AttentionNotificationInterruptedCurrentNodeState `json:"interrupted_current_node,omitempty"`
 	Target                 AttentionNotificationTarget                       `json:"target"`
 }
@@ -78,6 +80,10 @@ type AttentionNotificationQuestionState struct {
 }
 
 type AttentionNotificationApprovalState struct {
+	Message string `json:"message"`
+}
+
+type AttentionNotificationWorkflowApprovalState struct {
 	ApprovalID string `json:"approval_id"`
 	Message    string `json:"message,omitempty"`
 }

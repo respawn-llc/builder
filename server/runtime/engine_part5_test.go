@@ -17,6 +17,7 @@ import (
 )
 
 func TestReviewerRunsOnAllFrequencyWithoutToolCalls(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -83,6 +84,7 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 }
 
 func TestReviewerSystemPromptFileIsLazyLockedAndReused(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	reviewerPromptPath := filepath.Join(dir, "reviewer-prompt.md")
 	writeTestFile(t, reviewerPromptPath, "custom reviewer prompt")
@@ -108,6 +110,7 @@ func TestReviewerSystemPromptFileIsLazyLockedAndReused(t *testing.T) {
 }
 
 func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	reviewerPromptPath := filepath.Join(workspace, "reviewer.md")
 	writeTestFile(t, reviewerPromptPath, "reviewer A")
@@ -169,6 +172,7 @@ func TestReviewerSystemPromptFileResolvesTilde(t *testing.T) {
 }
 
 func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	missingPromptPath := filepath.Join(dir, "missing-reviewer-prompt.md")
 	store := mustCreateTestSessionAt(t, dir)
@@ -186,6 +190,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 }
 
 func TestReviewerFrequencyOffDoesNotReadSystemPromptFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	missingPromptPath := filepath.Join(dir, "missing-reviewer-prompt.md")
 	store := mustCreateTestSessionAt(t, dir)
@@ -204,6 +209,7 @@ func TestReviewerFrequencyOffDoesNotReadSystemPromptFile(t *testing.T) {
 }
 
 func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -238,6 +244,7 @@ func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
 }
 
 func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -327,6 +334,7 @@ func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 }
 
 func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -368,6 +376,7 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 }
 
 func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -433,6 +442,7 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 }
 
 func TestReviewerUsesStreamingClientWhenAvailable(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -481,6 +491,7 @@ func TestReviewerUsesStreamingClientWhenAvailable(t *testing.T) {
 }
 
 func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 	if err := engine.Close(); err != nil {

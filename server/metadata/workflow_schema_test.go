@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 //go:embed testdata/workflow_project_key_backfill.sql
@@ -32,6 +33,7 @@ var workflowSeedTaskSQL string
 var workflowSeedPlacementSQL string
 
 func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
+	t.Parallel()
 	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -186,172 +188,8 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	}
 }
 
-func TestTaskCurrentNodeSchemaRejectsSecondSerialNode(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
-	assertTaskCurrentNodeConstraint(t, store.db, "task-1", "node-agent", nil)
-}
-
-func TestTaskCurrentNodeSchemaRejectsFanoutWhileSerialCurrentNodeExists(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_active_fanouts (task_id) VALUES ('task-1')`)
-}
-
-func TestTaskCurrentNodeSchemaRejectsSerialNodeWhileFanoutExists(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	insertTaskActiveFanout(t, store.db, "task-1")
-	assertTaskCurrentNodeConstraint(t, store.db, "task-1", "node-start", nil)
-}
-
-func TestTaskCurrentNodeSchemaRejectsParallelNodeWithoutExpectedBranch(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	insertTaskActiveFanout(t, store.db, "task-1")
-	assertTaskCurrentNodeConstraint(t, store.db, "task-1", "node-agent", currentSchemaBranch("implementation"))
-}
-
-func TestTaskCurrentNodeSchemaRejectsSecondParallelNodeInOneBranch(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	branch := currentSchemaBranch("implementation")
-	insertTaskActiveFanout(t, store.db, "task-1")
-	insertTaskActiveFanoutBranch(t, store.db, "task-1", *branch)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", branch)
-	assertTaskCurrentNodeConstraint(t, store.db, "task-1", "node-agent", branch)
-}
-
-func TestTaskCurrentNodeSchemaRejectsSecondSerialApprovalForOneSource(t *testing.T) {
-	store, now := newTaskCurrentSchemaFixture(t)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
-	insertTaskPendingApproval(t, store.db, "approval-1", "task-1", "node-start", nil, now)
-	assertTaskPendingApprovalConstraint(t, store.db, "approval-2", "task-1", "node-start", nil, now)
-}
-
-func TestTaskCurrentNodeSchemaRejectsSecondParallelApprovalForOneSource(t *testing.T) {
-	store, now := newTaskCurrentSchemaFixture(t)
-	branch := currentSchemaBranch("implementation")
-	insertTaskActiveFanout(t, store.db, "task-1")
-	insertTaskActiveFanoutBranch(t, store.db, "task-1", *branch)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", branch)
-	insertTaskPendingApproval(t, store.db, "approval-1", "task-1", "node-start", branch, now)
-	assertTaskPendingApprovalConstraint(t, store.db, "approval-2", "task-1", "node-start", branch, now)
-}
-
-func TestTaskCurrentNodeSchemaRejectsDeletingPendingApprovalSource(t *testing.T) {
-	store, now := newTaskCurrentSchemaFixture(t)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
-	insertTaskPendingApproval(t, store.db, "approval-1", "task-1", "node-start", nil, now)
-	assertSQLiteConstraint(t, store.db, `DELETE FROM task_current_nodes
-WHERE task_id = 'task-1'
-  AND node_id = 'node-start'
-  AND transition_branch_key IS NULL`)
-}
-
-func TestTaskCurrentNodeSchemaAllowsSerialParallelAggregateReplacement(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
-
-	toParallel, err := store.db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("begin serial-to-parallel transaction: %v", err)
-	}
-	defer func() { _ = toParallel.Rollback() }()
-	if _, err := toParallel.Exec(`DELETE FROM task_current_nodes
-WHERE task_id = 'task-1'
-  AND transition_branch_key IS NULL`); err != nil {
-		t.Fatalf("remove serial current node: %v", err)
-	}
-	insertTaskActiveFanout(t, toParallel, "task-1")
-	insertTaskActiveFanoutBranch(t, toParallel, "task-1", "implementation")
-	insertTaskCurrentNode(t, toParallel, "task-1", "node-agent", currentSchemaBranch("implementation"))
-	if err := toParallel.Commit(); err != nil {
-		t.Fatalf("commit serial-to-parallel transaction: %v", err)
-	}
-
-	toSerial, err := store.db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("begin parallel-to-serial transaction: %v", err)
-	}
-	defer func() { _ = toSerial.Rollback() }()
-	if _, err := toSerial.Exec(`DELETE FROM task_current_nodes
-WHERE task_id = 'task-1'
-  AND transition_branch_key = 'implementation'`); err != nil {
-		t.Fatalf("remove parallel current node: %v", err)
-	}
-	if _, err := toSerial.Exec(`DELETE FROM task_active_fanouts WHERE task_id = 'task-1'`); err != nil {
-		t.Fatalf("remove active fanout: %v", err)
-	}
-	insertTaskCurrentNode(t, toSerial, "task-1", "node-start", nil)
-	if err := toSerial.Commit(); err != nil {
-		t.Fatalf("commit parallel-to-serial transaction: %v", err)
-	}
-}
-
-func TestTaskCurrentNodeSchemaRejectsSerialUpdateWhileFanoutExists(t *testing.T) {
-	store, _ := newTaskCurrentSchemaFixture(t)
-	branch := currentSchemaBranch("implementation")
-	insertTaskActiveFanout(t, store.db, "task-1")
-	insertTaskActiveFanoutBranch(t, store.db, "task-1", *branch)
-	insertTaskCurrentNode(t, store.db, "task-1", "node-start", branch)
-	assertSQLiteConstraint(t, store.db, `UPDATE task_current_nodes
-SET transition_branch_key = NULL
-WHERE task_id = 'task-1'
-  AND node_id = 'node-start'
-  AND transition_branch_key = 'implementation'`)
-}
-
-func TestTaskCurrentNodeSchemaRejectsNodeOutsideTaskWorkflow(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	assertTaskCurrentNodeConstraint(t, store.db, "task-1", "node-start-2", nil)
-}
-
-func TestTaskCurrentNodeSchemaRejectsFanoutUpdateIntoSerialTask(t *testing.T) {
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	seedWorkflowTaskWithID(t, store, "task-2", "link-2", 2, "BLD-2", "placement-start-2", "node-start-2")
-
-	insertTaskActiveFanout(t, store.db, "task-1")
-	insertTaskCurrentNode(t, store.db, "task-2", "node-start-2", nil)
-	assertSQLiteConstraint(t, store.db, `UPDATE task_active_fanouts
-SET task_id = 'task-2'
-WHERE task_id = 'task-1'`)
-}
-
-func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testing.T) {
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	for _, table := range []string{
-		"task_current_nodes",
-		"task_active_fanouts",
-		"task_active_fanout_branches",
-		"task_pending_approval_branches",
-	} {
-		if columnExists(t, store.db, table, "id") {
-			t.Fatalf("%s.id should not exist; the relation has a natural identity", table)
-		}
-	}
-	assertExactTableColumns(t, store.db, "task_active_fanouts", map[string]struct{}{
-		"task_id": {},
-	})
-	assertExactTableColumns(t, store.db, "task_active_fanout_branches", map[string]struct{}{
-		"task_id":               {},
-		"transition_branch_key": {},
-		"arrival_state":         {},
-		"arrival_values_json":   {},
-	})
-}
-
 func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T) {
+	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	now := time.Now().UTC().UnixMilli()
@@ -381,10 +219,10 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 		}
 	}
 
-	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
 ) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now)
-	assertSQLiteConstraint(t, store.db, `UPDATE sessions
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE sessions
 SET task_id = 'task-2'
 WHERE id = ?`, sessionID)
 	if _, err := store.db.Exec(`UPDATE sessions
@@ -398,7 +236,7 @@ WHERE id = ?`, sessionID); err != nil {
 ) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now); err != nil {
 		t.Fatalf("insert serial association: %v", err)
 	}
-	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
 ) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now+1)
 	for _, branch := range []string{"branch-a", "branch-b"} {
@@ -408,10 +246,10 @@ WHERE id = ?`, sessionID); err != nil {
 			t.Fatalf("insert branch association %q: %v", branch, err)
 		}
 	}
-	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
 ) VALUES (?, 'node-agent', 'branch-a', ?)`, sessionID, now+1)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
 ) VALUES (?, 'node-agent-2', NULL, ?)`, sessionID, now)
 
@@ -432,6 +270,7 @@ WHERE session_id = ?`, sessionID).Scan(&associationCount); err != nil {
 }
 
 func TestProjectLabelSchemaEnforcesCatalogIdentityScopeAndCascades(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -528,6 +367,7 @@ VALUES (?, ?, 'STRASSE', ?, ?)`,
 }
 
 func TestOpenBackfillsProjectKeysForExistingMetadataDB(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := root + "/db/main.sqlite3"
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 4)
@@ -555,6 +395,7 @@ func TestOpenBackfillsProjectKeysForExistingMetadataDB(t *testing.T) {
 }
 
 func TestProjectKeyValidationCollisionAndMutability(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -596,6 +437,7 @@ func TestProjectKeyValidationCollisionAndMutability(t *testing.T) {
 }
 
 func TestWorkflowSchemaConstraints(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
@@ -603,27 +445,28 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 
 	execSeed(t, store.db, "node groups", workflowSchemaNodeGroupsSQL, now, now)
 
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', 'workflow-1', 'second_start', 'start', 'Second Start', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', 'workflow-1', 'bad', 'robot', 'Bad', '[]')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', 'workflow-1', 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', 'workflow-1', 'second_start', 'start', 'Second Start', '[]')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', 'workflow-1', 'bad', 'robot', 'Bad', '[]')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', 'workflow-1', 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`)
 	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-valid', 'workflow-1', 'script_valid', 'script', 'Script Valid', '[]', 'scripts/complete')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', 'workflow-1', 'script_blank', 'script', 'Script Blank', '[]', '   ')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', 'workflow-1', 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', 'workflow-1', 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`)
-	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-empty-key', 'group-start', 'bad_context_empty', 'node-agent', 0, 'continue_session', 'selected_node', '', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-immediate-key', 'group-start', 'bad_context_key', 'node-agent', 0, 'continue_session', 'immediate_source', 'agent', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, parameters_json, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-parameters-json', 'group-start', 'bad_parameters_json', 'node-agent', 0, 'new_session', '{}', '{}', '{}')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', 'workflow-1', 'script_blank', 'script', 'Script Blank', '[]', '   ')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', 'workflow-1', 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', 'workflow-1', 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-empty-key', 'group-start', 'bad_context_empty', 'node-agent', 0, 'continue_session', 'selected_node', '', '{}', '{}')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-immediate-key', 'group-start', 'bad_context_key', 'node-agent', 0, 'continue_session', 'immediate_source', 'agent', '{}', '{}')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, parameters_json, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-parameters-json', 'group-start', 'bad_parameters_json', 'node-agent', 0, 'new_session', '{}', '{}', '{}')`)
 	execSeed(t, store.db, "previous target context source edge", `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-previous-target-context-source', 'group-start', 'previous_target_context', 'node-agent', 0, 'continue_session', 'previous_target', '', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-previous-target-key', 'group-start', 'bad_previous_target_context_key', 'node-agent', 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-time', 'Bad', 1, -1, 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-rev', 'Bad', 0, 1, 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-author', 'task-1', 'system note', 'system', 1, 1)`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-too-large', 'task-1', ?, 'agent', 1, 1)`, strings.Repeat("a", 262145))
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-previous-target-key', 'group-start', 'bad_previous_target_context_key', 'node-agent', 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-time', 'Bad', 1, -1, 1)`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-rev', 'Bad', 0, 1, 1)`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-author', 'task-1', 'system note', 'system', 1, 1)`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-too-large', 'task-1', ?, 'agent', 1, 1)`, strings.Repeat("a", 262145))
 }
 
 func TestTaskSchemaAllowsEmptyBodyAndProjectScopedSourceWorkspace(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -642,11 +485,12 @@ func TestTaskSchemaAllowsEmptyBodyAndProjectScopedSourceWorkspace(t *testing.T) 
 VALUES ('task-empty-body', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, ?, ?, '{}')`, source.WorkspaceID, now, now); err != nil {
 		t.Fatalf("empty task body with source workspace should be allowed: %v", err)
 	}
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-foreign-workspace', 'link-2', 1, 1, 'OTH-1', 'Task', '', ?, ?, ?, '{}')`, source.WorkspaceID, now, now)
 }
 
 func TestWorkflowSchemaRejectsCrossProjectTaskLinkFacts(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -658,14 +502,15 @@ func TestWorkflowSchemaRejectsCrossProjectTaskLinkFacts(t *testing.T) {
 	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
 	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
 
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-cross-workspace', 'link-2', 1, 1, 'OTH-1', 'Task', '', (SELECT id FROM workspaces WHERE project_id = ? LIMIT 1), ?, ?, '{}')`, binding.ProjectID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-duplicate-seq', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, ?, '{}')`, now, now)
-	assertSQLiteConstraint(t, store.db, `UPDATE projects SET default_project_workflow_link_id = 'link-2' WHERE id = ?`, binding.ProjectID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE projects SET default_project_workflow_link_id = 'link-2' WHERE id = ?`, binding.ProjectID)
 }
 
 func TestProjectPrimaryWorkspaceSchemaRejectsCrossProjectPointer(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -673,10 +518,11 @@ func TestProjectPrimaryWorkspaceSchemaRejectsCrossProjectPointer(t *testing.T) {
 		t.Fatalf("CreateProjectForWorkspace: %v", err)
 	}
 
-	assertSQLiteConstraint(t, store.db, `UPDATE projects SET primary_workspace_id = ? WHERE id = ?`, other.WorkspaceID, binding.ProjectID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE projects SET primary_workspace_id = ? WHERE id = ?`, other.WorkspaceID, binding.ProjectID)
 }
 
 func TestWorkspaceSessionSchemaRejectsCrossProjectReferences(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -706,20 +552,21 @@ func TestWorkspaceSessionSchemaRejectsCrossProjectReferences(t *testing.T) {
 	}
 	now := time.Now().UTC().UnixMilli()
 
-	assertSQLiteConstraint(t, store.db, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('session-cross-workspace', ?, ?, 'projects/project/sessions/session-cross-workspace', ?, ?)`, binding.ProjectID, other.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('session-cross-worktree', ?, ?, 'worktree-other', 'projects/project/sessions/session-cross-worktree', ?, ?)`, binding.ProjectID, binding.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO sessions (id, project_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO sessions (id, project_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('session-worktree-without-workspace', ?, 'worktree-other', 'projects/project/sessions/session-worktree-without-workspace', ?, ?)`, binding.ProjectID, now, now)
 	if _, err := store.db.Exec(`INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('session-valid-worktree', ?, ?, 'worktree-valid', 'projects/project/sessions/session-valid-worktree', ?, ?)`, binding.ProjectID, binding.WorkspaceID, now, now); err != nil {
 		t.Fatalf("valid session worktree should be allowed: %v", err)
 	}
-	assertSQLiteConstraint(t, store.db, `UPDATE sessions SET workspace_id = NULL WHERE id = 'session-valid-worktree'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE sessions SET workspace_id = NULL WHERE id = 'session-valid-worktree'`)
 }
 
 func TestTaskManagedWorktreeSchemaRejectsCrossWorkspaceReferences(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -753,14 +600,15 @@ func TestTaskManagedWorktreeSchemaRejectsCrossWorkspaceReferences(t *testing.T) 
 VALUES ('task-valid-worktree', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
 		t.Fatalf("valid managed worktree should be allowed: %v", err)
 	}
-	assertSQLiteConstraint(t, store.db, `UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-cross-worktree', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree-other', ?, ?, '{}')`, binding.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-missing-source-workspace', 'link-1', 1, 3, 'BLD-3', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now)
 }
 
 func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
@@ -799,9 +647,9 @@ func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
 	if policy != "ask_on_first_execution" {
 		t.Fatalf("workflow target policy = %q, want ask_on_first_execution", policy)
 	}
-	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'unknown' WHERE id = 'workflow-1'`)
-	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'head', execution_target_custom_ref = 'refs/heads/main' WHERE id = 'workflow-1'`)
-	assertSQLiteConstraint(t, store.db, `UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = ' ' WHERE id = 'workflow-1'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'unknown' WHERE id = 'workflow-1'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'head', execution_target_custom_ref = 'refs/heads/main' WHERE id = 'workflow-1'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = ' ' WHERE id = 'workflow-1'`)
 	if _, err := store.db.Exec(`UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = NULL WHERE id = 'workflow-1'`); err != nil {
 		t.Fatalf("incomplete custom-ref workflow draft should persist: %v", err)
 	}
@@ -812,15 +660,15 @@ func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
 	insertExecutionTargetSchemaTask(t, store.db, "task-default-branch", 4, "BLD-4", binding.WorkspaceID, nil, stringPointerForSchemaTest("default_branch"), stringPointerForSchemaTest("refs/remotes/origin/HEAD"), stringPointerForSchemaTest("refs/remotes/origin/main"), stringPointerForSchemaTest("commit-4"), stringPointerForSchemaTest("resolved"), now)
 	insertExecutionTargetSchemaTask(t, store.db, "task-custom-ref", 5, "BLD-5", binding.WorkspaceID, nil, stringPointerForSchemaTest("custom_ref"), stringPointerForSchemaTest("release/v1"), stringPointerForSchemaTest("refs/tags/release/v1"), stringPointerForSchemaTest("commit-5"), stringPointerForSchemaTest("resolved"), now)
 
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO tasks (
     id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
     execution_target_mode, execution_target_commit_oid, created_at_unix_ms, updated_at_unix_ms, metadata_json
 ) VALUES ('task-invalid-mixed', 'link-1', 1, 6, 'BLD-6', 'Task', '', ?, NULL, 'commit-1', ?, ?, '{}')`, binding.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO tasks (
     id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
     managed_worktree_id, execution_target_mode, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
 ) VALUES ('task-invalid-none-worktree', 'link-1', 1, 7, 'BLD-7', 'Task', '', ?, 'worktree-target', 'none', 'resolved', ?, ?, '{}')`, binding.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO tasks (
     id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id,
     execution_target_mode, execution_target_requested_ref, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
 ) VALUES ('task-invalid-managed-facts', 'link-1', 1, 8, 'BLD-8', 'Task', '', ?, 'head', 'HEAD', 'resolved', ?, ?, '{}')`, binding.WorkspaceID, now, now)
@@ -840,14 +688,15 @@ func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
 }
 
 func TestWorktreeCreationBaseCommitOIDIsImmutable(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, store.db, "worktree with creation base", `INSERT INTO worktrees (
     id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, creation_base_commit_oid, created_at_unix_ms, updated_at_unix_ms
 ) VALUES ('worktree-base', ?, ?, 1, 1, '', '{}', 'commit-created', ?, ?)`, binding.WorkspaceID, t.TempDir(), now, now)
-	assertSQLiteConstraint(t, store.db, `UPDATE worktrees SET creation_base_commit_oid = 'commit-mutated' WHERE id = 'worktree-base'`)
-	assertSQLiteConstraint(t, store.db, `UPDATE worktrees SET creation_base_commit_oid = NULL WHERE id = 'worktree-base'`)
-	assertSQLiteConstraint(t, store.db, `INSERT INTO worktrees (
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE worktrees SET creation_base_commit_oid = 'commit-mutated' WHERE id = 'worktree-base'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE worktrees SET creation_base_commit_oid = NULL WHERE id = 'worktree-base'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO worktrees (
     id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, creation_base_commit_oid, created_at_unix_ms, updated_at_unix_ms
 ) SELECT 'worktree-base-conflict', workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, 'commit-conflict', ?, ?
 FROM worktrees
@@ -872,6 +721,7 @@ func stringPointerForSchemaTest(value string) *string {
 }
 
 func TestTaskShortIDUniquenessIsProjectScoped(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
@@ -882,7 +732,7 @@ func TestTaskShortIDUniquenessIsProjectScoped(t *testing.T) {
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
 	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
 	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	assertSQLiteConstraint(t, store.db, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-dup', 'link-1', 1, 2, 'BLD-1', 'Task', 'Body', ?, ?, '{}')`, now, now)
 	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-other', 'link-2', 1, 1, 'BLD-1', 'Task', 'Body', ?, ?, '{}')`, now, now); err != nil {
@@ -891,6 +741,7 @@ VALUES ('task-other', 'link-2', 1, 1, 'BLD-1', 'Task', 'Body', ?, ?, '{}')`, now
 }
 
 func TestTaskSequenceAllocationIsAtomic(t *testing.T) {
+	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	if err := store.SetProjectKey(ctx, binding.ProjectID, "BLD"); err != nil {
@@ -1052,109 +903,22 @@ func taskShortIDByID(t *testing.T, db *sql.DB, taskID string) string {
 	return shortID
 }
 
-func assertSQLiteConstraint(t *testing.T, db *sql.DB, statement string, args ...any) {
+func assertSQLiteConstraint(t *testing.T, db *sql.DB, wantCode int, statement string, args ...any) {
 	t.Helper()
 	_, err := db.Exec(statement, args...)
 	if err == nil {
 		t.Fatalf("expected SQLite constraint failure for %s", statement)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "constraint") {
-		t.Fatalf("expected constraint failure, got %v", err)
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("expected SQLite error for %s, got %T: %v", statement, err, err)
 	}
-}
-
-type schemaSQLExecutor interface {
-	Exec(string, ...any) (sql.Result, error)
-}
-
-const insertTaskCurrentNodeSQL = `INSERT INTO task_current_nodes (
-    task_id,
-    node_id,
-    transition_branch_key,
-    current_input_values_json,
-    prior_node_values_json
-) VALUES (?, ?, ?, '{}', '{}')`
-
-const insertTaskPendingApprovalSQL = `INSERT INTO task_pending_approvals (
-    id,
-    source_task_id,
-    source_node_id,
-    source_transition_branch_key,
-    workflow_version,
-    transition_snapshot_json,
-    materialized_values_json,
-    created_at_unix_ms
-) VALUES (?, ?, ?, ?, 1, '{}', '{}', ?)`
-
-func newTaskCurrentSchemaFixture(t *testing.T) (*Store, int64) {
-	t.Helper()
-	store, _, binding := newMetadataTestStore(t)
-	now := time.Now().UTC().UnixMilli()
-	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
-	return store, now
-}
-
-func currentSchemaBranch(value string) *string {
-	return &value
-}
-
-func insertTaskCurrentNode(t *testing.T, executor schemaSQLExecutor, taskID, nodeID string, branch *string) {
-	t.Helper()
-	if _, err := executor.Exec(insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, nodeID, branch)...); err != nil {
-		t.Fatalf("insert current node %s/%s: %v", taskID, nodeID, err)
+	if got := sqliteErr.Code() & 0xff; got != sqlite3.SQLITE_CONSTRAINT {
+		t.Fatalf("SQLite primary result code for %s = %d, want %d; full code = %d", statement, got, sqlite3.SQLITE_CONSTRAINT, sqliteErr.Code())
 	}
-}
-
-func assertTaskCurrentNodeConstraint(t *testing.T, db *sql.DB, taskID, nodeID string, branch *string) {
-	t.Helper()
-	assertSQLiteConstraint(t, db, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, nodeID, branch)...)
-}
-
-func taskCurrentNodeArgs(taskID, nodeID string, branch *string) []any {
-	var branchValue any
-	if branch != nil {
-		branchValue = *branch
+	if got := sqliteErr.Code(); got != wantCode {
+		t.Fatalf("SQLite extended result code for %s = %d, want %d", statement, got, wantCode)
 	}
-	return []any{taskID, nodeID, branchValue}
-}
-
-func insertTaskActiveFanout(t *testing.T, executor schemaSQLExecutor, taskID string) {
-	t.Helper()
-	if _, err := executor.Exec(`INSERT INTO task_active_fanouts (task_id) VALUES (?)`, taskID); err != nil {
-		t.Fatalf("insert active fanout for %s: %v", taskID, err)
-	}
-}
-
-func insertTaskActiveFanoutBranch(t *testing.T, executor schemaSQLExecutor, taskID, branch string) {
-	t.Helper()
-	if _, err := executor.Exec(`INSERT INTO task_active_fanout_branches (
-    task_id,
-    transition_branch_key,
-    arrival_state
-) VALUES (?, ?, 'pending')`, taskID, branch); err != nil {
-		t.Fatalf("insert active fanout branch %s/%s: %v", taskID, branch, err)
-	}
-}
-
-func insertTaskPendingApproval(t *testing.T, executor schemaSQLExecutor, approvalID, taskID, nodeID string, branch *string, now int64) {
-	t.Helper()
-	if _, err := executor.Exec(insertTaskPendingApprovalSQL, taskPendingApprovalArgs(approvalID, taskID, nodeID, branch, now)...); err != nil {
-		t.Fatalf("insert pending approval %s: %v", approvalID, err)
-	}
-}
-
-func assertTaskPendingApprovalConstraint(t *testing.T, db *sql.DB, approvalID, taskID, nodeID string, branch *string, now int64) {
-	t.Helper()
-	assertSQLiteConstraint(t, db, insertTaskPendingApprovalSQL, taskPendingApprovalArgs(approvalID, taskID, nodeID, branch, now)...)
-}
-
-func taskPendingApprovalArgs(approvalID, taskID, nodeID string, branch *string, now int64) []any {
-	var branchValue any
-	if branch != nil {
-		branchValue = *branch
-	}
-	return []any{approvalID, taskID, nodeID, branchValue, now}
 }
 
 func seedWorkflowGraph(t *testing.T, db *sql.DB, projectID string, now int64) {

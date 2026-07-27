@@ -14,6 +14,7 @@ import (
 )
 
 func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
+	t.Parallel()
 	pipeline := defaultReviewerPipeline{}
 	if pipeline.ShouldRunTurn("edits", &fakeClient{}, false) {
 		t.Fatal("reviewer ran for edits frequency without a patch edit")
@@ -21,6 +22,7 @@ func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
 }
 
 func TestReviewerCompletionPersistsStatusWithoutCommittedCoordinates(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	main := &fakeClient{responses: []llm.Response{
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("initial")}},
@@ -78,6 +80,7 @@ func TestReviewerCompletionPersistsStatusWithoutCommittedCoordinates(t *testing.
 }
 
 func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"},
@@ -104,6 +107,7 @@ func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T
 }
 
 func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	main, reviewer := reviewerAppliedClients()
 	finals := 0
@@ -147,6 +151,7 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 }
 
 func TestCommittedReviewerStatusObserverFailureDoesNotPublishCompletion(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("reviewer status observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -190,6 +195,7 @@ func TestCommittedReviewerStatusObserverFailureDoesNotPublishCompletion(t *testi
 }
 
 func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -217,6 +223,7 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 }
 
 func TestBuildReviewerTranscriptMessagesKeepsOrphanToolOutputEntry(t *testing.T) {
+	t.Parallel()
 	items := buildReviewerTranscriptItems([]llm.ResponseItem{{
 		Type:   llm.ResponseItemTypeFunctionCallOutput,
 		CallID: textutil.Value("orphan-call"),

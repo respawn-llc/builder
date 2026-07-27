@@ -97,6 +97,9 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			}
 		}
 		if startErr := process.cmd.Start(); startErr != nil {
+			// A failed start never becomes running. Its completion finalizer
+			// retains exact ownership without publishing queued/running state.
+			execution.beginWorkflowFinalization()
 			var finalizeErr error
 			if req.Finalize != nil {
 				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
@@ -104,12 +107,11 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
 			return
 		}
+		if req.Workflow != nil {
+			a.beginWorkflowExecution(execution)
+		}
 		result, runErr, stopErr := process.wait(execution.ctx)
-		// The process is no longer live, so remove its workflow liveness
-		// index. Keep its exact scope addressable until the finalizer commits
-		// workflow completion; that finalizer proves Current Node ownership by
-		// exact scope rather than a durable execution record.
-		execution.retireWorkflow()
+		execution.beginWorkflowFinalization()
 		var finalizeErr error
 		if req.Finalize != nil {
 			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)

@@ -13,6 +13,7 @@ import (
 )
 
 func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	completionTool := &externalCompletionTool{controller: controller}
@@ -76,6 +77,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 }
 
 func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	completionTool := &externalCompletionTool{controller: controller}

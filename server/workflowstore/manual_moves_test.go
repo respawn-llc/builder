@@ -121,6 +121,10 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if moved.PendingApproval == nil || moved.PendingApproval.ID == supersededApprovalID {
 		t.Fatalf("manual move pending Approval = %+v, want replacement", moved.PendingApproval)
 	}
+	if len(moved.TaskAttentionResolution.Approvals) != 1 ||
+		moved.TaskAttentionResolution.Approvals[0].ApprovalID != supersededApprovalID {
+		t.Fatalf("manual move attention resolution = %+v, want superseded Approval", moved.TaskAttentionResolution)
+	}
 	if len(moved.Retained) != 1 || !moved.Retained[0].Reference.Equal(source.Reference) {
 		t.Fatalf("manual move retained = %+v, want source Current Node", moved.Retained)
 	}
@@ -162,6 +166,10 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 		len(approved.Mutation.Created) != 1 ||
 		approved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) {
 		t.Fatalf("Approval mutation = %+v, want source replaced with target", approved.Mutation)
+	}
+	if len(approved.TaskAttentionResolution.Approvals) != 1 ||
+		approved.TaskAttentionResolution.Approvals[0].ApprovalID != moved.PendingApproval.ID {
+		t.Fatalf("Approval attention resolution = %+v, want applied Approval", approved.TaskAttentionResolution)
 	}
 }
 

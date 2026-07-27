@@ -11,6 +11,7 @@ import (
 )
 
 func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		messageType llm.MessageType
@@ -36,6 +37,7 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 }
 
 func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		phase llm.MessagePhase
@@ -78,6 +80,7 @@ func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testin
 }
 
 func TestUnknownDeveloperMessageVisibilityDependsOnRecoverableContent(t *testing.T) {
+	t.Parallel()
 	unknownType := llm.MessageType("unknown_future_context")
 
 	withText := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(unknownType), Content: textutil.Value("recoverable text")})
@@ -97,6 +100,7 @@ func TestUnknownDeveloperMessageVisibilityDependsOnRecoverableContent(t *testing
 }
 
 func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) {
+	t.Parallel()
 	unknownType := llm.MessageType("unknown_future_context")
 	facts := transcriptCommittedRowFactsFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(unknownType), Content: textutil.Value(" ")}, nil, nil, nil)
 
@@ -110,6 +114,7 @@ func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) 
 }
 
 func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T) {
+	t.Parallel()
 	exitCode := 9
 	msg := llm.Message{
 		Role:               llm.RoleDeveloper,
@@ -132,6 +137,7 @@ func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T
 }
 
 func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
+	t.Parallel()
 	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{{
 		Visibility: transcript.EntryVisibilityDetail,
 		Role:       cacheWarningTranscriptRole,
@@ -146,6 +152,7 @@ func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
 }
 
 func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
+	t.Parallel()
 	msg := llm.Message{
 		Role:        llm.RoleTool,
 		MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput),

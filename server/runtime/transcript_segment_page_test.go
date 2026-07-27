@@ -86,6 +86,7 @@ func containsText(texts []string, want string) bool {
 }
 
 func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -126,6 +127,7 @@ func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 }
 
 func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -166,6 +168,7 @@ func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T)
 }
 
 func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -183,6 +186,7 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 }
 
 func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -215,6 +219,7 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 }
 
 func TestEngineTranscriptNewestSegmentPageProjectsHistoryReplacementRows(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 

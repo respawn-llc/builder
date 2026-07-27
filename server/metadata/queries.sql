@@ -1502,7 +1502,8 @@ column_facts AS (
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-        CAST(json_extract(value, '$.has_execution') AS INTEGER) AS has_execution,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
     FROM args, json_each(args.live_task_states_json)
 ),
@@ -1511,20 +1512,26 @@ effective_status AS (
         durable.task_id,
         durable.is_done,
         CASE
+            WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN COALESCE(live.has_execution, 0) != 0 THEN 'running'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
             ELSE durable.kind
         END AS kind,
         CASE
+            WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN COALESCE(live.has_execution, 0) != 0 THEN 5
+            WHEN durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
             ELSE durable.primary_status_rank
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
             ELSE COALESCE((
                 SELECT json_group_array(attention_type)
                 FROM (
@@ -3205,13 +3212,24 @@ WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state IN ('ready', 'admitted');
 
--- name: RecoverAdmittedCurrentNodes :execrows
+-- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
     interruption_reason = sqlc.arg(interruption_reason),
     interruption_detail_json = sqlc.arg(interruption_detail_json),
     interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
-WHERE scheduling_state = 'admitted';
+WHERE scheduling_state IN ('ready', 'admitted')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      WHERE approval.source_task_id = task_current_nodes.task_id
+        AND approval.source_node_id = task_current_nodes.node_id
+        AND (
+            (approval.source_transition_branch_key IS NULL AND task_current_nodes.transition_branch_key IS NULL)
+            OR approval.source_transition_branch_key = task_current_nodes.transition_branch_key
+        )
+  )
+RETURNING task_id, node_id, transition_branch_key;
 
 -- name: InsertTaskCurrentNode :exec
 INSERT INTO task_current_nodes (
@@ -3335,15 +3353,17 @@ WHERE id = sqlc.arg(id);
 DELETE FROM task_pending_approvals
 WHERE source_task_id = sqlc.arg(task_id);
 
--- name: GetTaskPendingApprovalIDForCurrentNode :one
-SELECT id
-FROM task_pending_approvals
-WHERE source_task_id = sqlc.arg(task_id)
-  AND source_node_id = sqlc.arg(node_id)
-  AND (
-      (source_transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
-      OR source_transition_branch_key = sqlc.narg(transition_branch_key)
-  );
+-- name: HasTaskPendingApprovalForCurrentNode :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_pending_approvals
+    WHERE source_task_id = sqlc.arg(task_id)
+      AND source_node_id = sqlc.arg(node_id)
+      AND (
+          (source_transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+          OR source_transition_branch_key = sqlc.narg(transition_branch_key)
+      )
+);
 
 -- name: GetTaskActiveFanout :one
 SELECT task_id

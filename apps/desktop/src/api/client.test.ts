@@ -903,6 +903,7 @@ const emptyTaskDetailResponse = {
       can_start: true,
       can_interrupt: false,
       can_resume: false,
+      can_delete: true,
       manual_move_target_node_ids: [],
     },
     label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],

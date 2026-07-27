@@ -9,6 +9,7 @@ import (
 )
 
 func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Unix(123, 456).UTC()
 	document := sessionMetadataDocument{
 		WorkspaceRoot:                   "/workspace",

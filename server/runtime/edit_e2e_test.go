@@ -15,6 +15,7 @@ import (
 )
 
 func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, "a.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {

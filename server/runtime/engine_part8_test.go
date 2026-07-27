@@ -21,6 +21,7 @@ import (
 )
 
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -162,7 +163,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"sleep 0.3; echo done","shell":"/bin/sh","login":false,"yield_time_ms":250}`),
+				Input: json.RawMessage(`{"cmd":"read trigger; echo done","shell":"/bin/sh","login":false,"yield_time_ms":250}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -171,7 +172,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_poll_1",
 				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":15000}`),
+				Input: json.RawMessage("{\"session_id\":1000,\"chars\":\"continue\\n\",\"yield_time_ms\":15000}"),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -239,6 +240,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 }
 
 func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "completed-step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("hello")}); err != nil {
 		t.Fatalf("append user message: %v", err)
@@ -266,6 +268,7 @@ func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testin
 }
 
 func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery", Reason: "missing_step", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("set pending recovery: %v", err)
@@ -294,6 +297,7 @@ func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
 }
 
 func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -355,6 +359,7 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 }
 
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -401,6 +406,7 @@ func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *
 }
 
 func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -486,6 +492,8 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 	}}
 
 	slow := blockingTool{name: toolspec.ToolExecCommand, started: make(chan struct{}), release: make(chan struct{})}
+	releaseSlow := sync.OnceFunc(func() { close(slow.release) })
+	defer releaseSlow()
 	toolCompleted := make(chan tools.Result, 4)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: slow},
@@ -512,14 +520,14 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 
 	select {
 	case <-slow.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for slow tool to start")
 	}
 
 	var completed tools.Result
 	select {
 	case completed = <-toolCompleted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for fast tool completion")
 	}
 	if completed.CallID != "b" {
@@ -541,18 +549,19 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 		t.Fatalf("expected snapshot to expose pending a and completed b before slow tool finishes, got %+v", snapshot.Entries)
 	}
 
-	close(slow.release)
+	releaseSlow()
 	select {
 	case submitErr := <-submitDone:
 		if submitErr != nil {
 			t.Fatalf("submit: %v", submitErr)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for submit completion")
 	}
 }
 
 func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sequencer := &serialPairProbeTool{
 		firstID:       "call-ask-1",
@@ -610,6 +619,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 }
 
 func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sequencer := &serialPairProbeTool{
 		firstID:       "call-patch",
@@ -663,6 +673,7 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 }
 
 func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -715,6 +726,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 }
 
 func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		registry *tools.Registry

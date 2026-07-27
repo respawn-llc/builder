@@ -242,7 +242,7 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 		t.Fatalf("GetWorkflow: %v", err)
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
-	execution := &manualMoveExecutionStub{}
+	execution := newManualMoveExecutionStub(service)
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
@@ -294,8 +294,10 @@ func TestServiceManualMoveRequiredApprovalRetainsSourceUntilApprovalStartsTarget
 	}
 	sourceNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "implement")
-	execution := &manualMoveExecutionStub{}
+	execution := newManualMoveExecutionStub(service)
 	service.currentNodeExecution = execution
+	attention := &workflowAttentionRecorder{}
+	service.attentionFinalizer = attention
 	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
 	execution.started = nil
 
@@ -326,6 +328,26 @@ func TestServiceManualMoveRequiredApprovalRetainsSourceUntilApprovalStartsTarget
 	if len(approvals) != 1 {
 		t.Fatalf("pending Approvals = %+v, want one", approvals)
 	}
+	supersededApprovalID := approvals[0].ID
+
+	if _, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           task.Task.ID,
+		TargetNodeID:     targetNodeID,
+		OutputValues:     map[string]string{"prior_summary": "revised manual plan"},
+	}); err != nil {
+		t.Fatalf("MoveWorkflowTask supersede: %v", err)
+	}
+	approvals, err = service.store.ListPendingApprovals(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after supersede: %v", err)
+	}
+	if len(approvals) != 1 || approvals[0].ID == supersededApprovalID {
+		t.Fatalf("pending Approvals after supersede = %+v, want one replacement", approvals)
+	}
+	if resolved := attention.resolvedApprovalIDs(); len(resolved) != 1 || resolved[0] != supersededApprovalID {
+		t.Fatalf("resolved Approvals after supersede = %+v, want %q", resolved, supersededApprovalID)
+	}
 
 	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
 		ApprovalID: approvals[0].ID.String(),
@@ -344,6 +366,9 @@ func TestServiceManualMoveRequiredApprovalRetainsSourceUntilApprovalStartsTarget
 	if len(execution.started) != 1 || execution.started[0].NodeID != workflow.NodeID(targetNodeID) {
 		t.Fatalf("execution starts after Approval = %+v, want target Current Node", execution.started)
 	}
+	if resolved := attention.resolvedApprovalIDs(); len(resolved) != 2 || resolved[1] != approvals[0].ID {
+		t.Fatalf("resolved Approvals after application = %+v, want replacement Approval resolved", resolved)
+	}
 }
 
 func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing.T) {
@@ -356,7 +381,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 		t.Fatalf("GetWorkflow: %v", err)
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
-	execution := &manualMoveExecutionStub{quiescentErrors: []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}}
+	execution := newManualMoveExecutionStub(service)
+	execution.quiescentErrors = []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}
 	service.currentNodeExecution = execution
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
@@ -433,7 +459,8 @@ func TestServiceFineGrainedGraphMutationsRevalidateWorkflowTasksAtCommit(t *test
 		t.Fatalf("AddWorkflowNodeGroup setup: %v", err)
 	}
 
-	execution := &manualMoveExecutionStub{quiescentErr: workflowexecution.ErrTaskExecutionNotQuiescent}
+	execution := newManualMoveExecutionStub(service)
+	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
 	service.currentNodeExecution = execution
 	tests := []struct {
 		name string
@@ -547,7 +574,8 @@ func TestServiceGraphSaveAndWorkflowDeleteRevalidateWorkflowTasksAtCommit(t *tes
 	if err != nil {
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
 	}
-	execution := &manualMoveExecutionStub{quiescentErr: workflowexecution.ErrTaskExecutionNotQuiescent}
+	execution := newManualMoveExecutionStub(service)
+	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
 	service.currentNodeExecution = execution
 
 	_, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
@@ -1248,9 +1276,76 @@ type manualMoveExecutionStub struct {
 	quiescentTaskIDs []workflow.TaskID
 }
 
-func (s *manualMoveExecutionStub) Start(_ context.Context, reference workflow.CurrentNodeReference) error {
-	s.started = append(s.started, reference)
-	return nil
+type workflowAttentionRecorder struct {
+	resolutions []workflowstore.TaskAttentionResolution
+	pending     []workflow.ApprovalID
+}
+
+func (r *workflowAttentionRecorder) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
+	r.resolutions = append(r.resolutions, resolution)
+}
+
+func (r *workflowAttentionRecorder) PublishPendingApproval(_ context.Context, approvalID workflow.ApprovalID) {
+	r.pending = append(r.pending, approvalID)
+}
+
+func (r *workflowAttentionRecorder) resolvedApprovalIDs() []workflow.ApprovalID {
+	var approvalIDs []workflow.ApprovalID
+	for _, resolution := range r.resolutions {
+		for _, approval := range resolution.Approvals {
+			approvalIDs = append(approvalIDs, approval.ApprovalID)
+		}
+	}
+	return approvalIDs
+}
+
+func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
+	return &manualMoveExecutionStub{
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+	}
+}
+
+func (s *manualMoveExecutionStub) StartTaskWithExecutionTarget(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	candidate *workflowstore.ExecutionTargetCandidate,
+) (workflowstore.StartTaskResult, error) {
+	started, err := s.currentNodeCompletionExecutionStub.StartTaskWithExecutionTarget(ctx, taskID, candidate)
+	if err == nil {
+		s.recordStarted(started.Mutation.Created)
+	}
+	return started, err
+}
+
+func (s *manualMoveExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
+	applied, err := s.currentNodeCompletionExecutionStub.ApplyPendingApproval(ctx, approvalID)
+	if err == nil {
+		s.recordStarted(applied.Mutation.Created)
+	}
+	return applied, err
+}
+
+func (s *manualMoveExecutionStub) ApplyManualMove(
+	ctx context.Context,
+	prepared workflowstore.ManualMovePreparation,
+	candidate *workflowstore.ExecutionTargetCandidate,
+) (workflowstore.ManualMoveResult, error) {
+	if err := s.EnsureTaskQuiescent(prepared.TaskID()); err != nil {
+		return workflowstore.ManualMoveResult{}, err
+	}
+	moved, err := s.currentNodeCompletionExecutionStub.ApplyManualMove(ctx, prepared, candidate)
+	if err == nil && moved.PendingApproval == nil {
+		s.recordStarted(moved.Created)
+	}
+	return moved, err
+}
+
+func (s *manualMoveExecutionStub) recordStarted(nodes []workflow.CurrentNode) {
+	for _, currentNode := range nodes {
+		if currentNode.Scheduling != nil {
+			s.started = append(s.started, currentNode.Reference)
+		}
+	}
 }
 
 func (s *manualMoveExecutionStub) EnsureTaskQuiescent(taskID workflow.TaskID) error {
@@ -1730,7 +1825,7 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{}))
+	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
@@ -1755,12 +1850,13 @@ func newWorkflowServiceReadModels(
 	}
 	projector := workflowview.NewTaskProjector()
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	quiescence := workflowViewQuiescenceSource{}
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close workflow read-model authority: %v", err)
 		}
 	})
-	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority)
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority, quiescence)
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
@@ -1768,7 +1864,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority)
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -1788,6 +1884,16 @@ func newWorkflowServiceReadModels(
 		Activity:    activity,
 		Attention:   attention,
 	}
+}
+
+type workflowViewQuiescenceSource struct{}
+
+func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
+	result := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		result[taskID] = true
+	}
+	return result, nil
 }
 
 type emptyWorkflowPendingPromptSource struct{}

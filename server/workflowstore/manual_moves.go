@@ -21,6 +21,10 @@ func (p ManualMovePreparation) RequiresExecutionTarget() bool {
 	return p.requiresExecutionTarget
 }
 
+func (p ManualMovePreparation) TaskID() workflow.TaskID {
+	return p.request.TaskID
+}
+
 func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (ManualMoveResult, error) {
 	prepared, err := s.PrepareManualMove(ctx, req)
 	if err != nil {
@@ -72,6 +76,10 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	task, err := q.GetTask(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
@@ -164,8 +172,9 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 				return ManualMoveResult{}, err
 			}
 			return ManualMoveResult{
-				Retained:        currentNodes,
-				PendingApproval: &approval,
+				Retained:                currentNodes,
+				PendingApproval:         &approval,
+				TaskAttentionResolution: attentionResolution,
 			}, nil
 		}
 	} else {
@@ -210,10 +219,13 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	for _, currentNode := range currentNodes {
 		removedReferences = append(removedReferences, currentNode.Reference)
 	}
-	return ManualMoveResult{CurrentNodeMutationResult: workflow.CurrentNodeMutationResult{
-		Removed: removedReferences,
-		Created: []workflow.CurrentNode{target},
-	}}, nil
+	return ManualMoveResult{
+		CurrentNodeMutationResult: workflow.CurrentNodeMutationResult{
+			Removed: removedReferences,
+			Created: []workflow.CurrentNode{target},
+		},
+		TaskAttentionResolution: attentionResolution,
+	}, nil
 }
 
 func manualMoveTransitionGroup(definition workflow.Definition, edge workflow.Edge) (workflow.TransitionGroup, error) {

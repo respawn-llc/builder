@@ -132,9 +132,7 @@ export function cardBelongsToColumn(column: BoardColumn, card: KanbanCardVM): bo
     return card.statusKind === "backlog";
   }
   if (column.isDone) {
-    return (
-      card.statusKind === "done" || card.activeNodeIDs.includes(column.id)
-    );
+    return card.statusKind === "done" || card.activeNodeIDs.includes(column.id);
   }
   return card.activeNodeIDs.includes(column.id);
 }
@@ -180,6 +178,7 @@ function cardActionsEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.actions.canInterrupt === right.actions.canInterrupt &&
     left.actions.canResume === right.actions.canResume &&
     left.actions.canStart === right.actions.canStart &&
+    left.actions.canDelete === right.actions.canDelete &&
     arrayEqual(left.actions.manualMoveTargetNodeIDs, right.actions.manualMoveTargetNodeIDs)
   );
 }

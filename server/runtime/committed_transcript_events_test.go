@@ -18,6 +18,7 @@ import (
 )
 
 func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing.T) {
+	t.Parallel()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
@@ -80,6 +81,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 }
 
 func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) {
+	t.Parallel()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
@@ -164,6 +166,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 }
 
 func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -240,6 +243,7 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 }
 
 func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	replacementEventEntered := make(chan struct{})
 	releaseReplacementEvent := make(chan struct{})
@@ -293,6 +297,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 }
 
 func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -319,6 +324,7 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 }
 
 func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -361,6 +367,7 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 }
 
 func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 8)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -398,6 +405,7 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 }
 
 func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndToolResults(t *testing.T) {
+	t.Parallel()
 	toolCalls := []llm.ToolCall{
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
@@ -459,6 +467,7 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 }
 
 func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
@@ -516,6 +525,7 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 }
 
 func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *testing.T) {
+	t.Parallel()
 	const (
 		beforeStepID = "11111111-1111-4111-8111-111111111111"
 		emptyStepID  = "22222222-2222-4222-8222-222222222222"
@@ -565,6 +575,7 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 }
 
 func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{

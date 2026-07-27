@@ -381,6 +381,7 @@ func (f *fakeStreamClient) GenerateStream(_ context.Context, req llm.Request, on
 }
 
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -397,6 +398,7 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 }
 
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -413,6 +415,7 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 }
 
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -429,6 +432,7 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 }
 
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -445,6 +449,7 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 }
 
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -461,6 +466,7 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 }
 
 func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMessage(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -613,6 +619,7 @@ func (c *providerContractFailClient) Calls() int {
 }
 
 func TestLocksAtFirstDispatch(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -659,6 +666,7 @@ func TestLocksAtFirstDispatch(t *testing.T) {
 }
 
 func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -688,6 +696,7 @@ func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
 }
 
 func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	firstClient := &fakeClient{responses: []llm.Response{{
@@ -724,6 +733,7 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 }
 
 func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	firstClient := &fakeClient{responses: []llm.Response{{
@@ -919,6 +929,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 }
 
 func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	systemPath := filepath.Join(workspace, "system.md")
 	writeTestFile(t, systemPath, "prompt A")
@@ -1015,6 +1026,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 }
 
 func TestLegacyNonBooleanSystemPromptSnapshotIsNotRefreshed(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model:           "gpt-5",
@@ -1034,6 +1046,7 @@ func TestLegacyNonBooleanSystemPromptSnapshotIsNotRefreshed(t *testing.T) {
 }
 
 func TestLockedRequestShapeSurvivesRuntimeConfigToolAndWebSearchToggles(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(

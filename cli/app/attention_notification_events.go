@@ -14,7 +14,9 @@ func tuiAcceptsAttentionNotification(event clientui.AttentionNotificationEvent) 
 
 func tuiSupportsAttentionNotification(notification clientui.AttentionNotification) bool {
 	switch notification.Kind {
-	case clientui.AttentionNotificationKindQuestion, clientui.AttentionNotificationKindApproval:
+	case clientui.AttentionNotificationKindQuestion,
+		clientui.AttentionNotificationKindApproval,
+		clientui.AttentionNotificationKindWorkflowApproval:
 		return true
 	default:
 		return false

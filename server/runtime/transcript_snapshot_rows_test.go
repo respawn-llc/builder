@@ -8,6 +8,7 @@ import (
 )
 
 func TestTranscriptCommittedRowFactsFromSnapshotOwnsKindsVisibilityAndIntegrity(t *testing.T) {
+	t.Parallel()
 	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{
 		{Visibility: transcript.EntryVisibilityHidden, Role: "assistant", Text: "hidden"},
 		{Role: "user", Text: "valid user"},
@@ -86,6 +87,7 @@ func TestTranscriptCommittedRowFactsFromSnapshotOwnsKindsVisibilityAndIntegrity(
 }
 
 func TestTranscriptDetailSnapshotOmitsRawToolCallEntries(t *testing.T) {
+	t.Parallel()
 	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{
 		{
 			Role:       "tool_call",

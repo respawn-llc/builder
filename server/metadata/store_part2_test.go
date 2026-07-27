@@ -18,6 +18,7 @@ import (
 )
 
 func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
@@ -52,6 +53,7 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 }
 
 func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -98,6 +100,7 @@ func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
 }
 
 func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -121,6 +124,7 @@ func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
 }
 
 func TestImportSessionSnapshotRejectsInvalidSessionCategory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := "session-invalid-category"
@@ -142,6 +146,7 @@ func TestImportSessionSnapshotRejectsInvalidSessionCategory(t *testing.T) {
 }
 
 func TestSessionCategoryResolverRejectsInvalidStoredCategory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -157,6 +162,7 @@ func TestSessionCategoryResolverRejectsInvalidStoredCategory(t *testing.T) {
 }
 
 func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
+	t.Parallel()
 	target := sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
 		WorkspaceID:   "workspace-1",
 		WorkspaceRoot: "/tmp/workspace",
@@ -185,6 +191,7 @@ func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
 }
 
 func TestResolveSessionExecutionTargetUsesMetadataAuthority(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -219,6 +226,7 @@ func TestResolveSessionExecutionTargetUsesMetadataAuthority(t *testing.T) {
 }
 
 func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	worktreeRoot := filepath.Join(cfg.WorkspaceRoot, "wt-a")
@@ -269,13 +277,11 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 }
 
 func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfgA, bindingA := newMetadataTestStore(t)
 	workspaceB := t.TempDir()
-	cfgB, err := config.Load(workspaceB, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load workspaceB: %v", err)
-	}
+	cfgB := loadMetadataTestConfig(t, workspaceB, cfgA.PersistenceRoot)
 	bindingB, err := store.RegisterWorkspaceBinding(ctx, cfgB.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding workspaceB: %v", err)
@@ -296,6 +302,7 @@ func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T)
 }
 
 func TestUpdateSessionExecutionTargetAllowsNullableWorkspaceTargetFromReadModel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -323,6 +330,7 @@ func TestUpdateSessionExecutionTargetAllowsNullableWorkspaceTargetFromReadModel(
 }
 
 func TestUpsertWorktreeRecordRejectsMissingRequiredFields(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	baseRecord := WorktreeRecord{
@@ -355,6 +363,7 @@ func TestUpsertWorktreeRecordRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestSessionLaunchVisibilityTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		mutate      func(*testing.T, *Store, config.App, Binding, *session.Store)
@@ -483,9 +492,6 @@ func createMetadataTestSession(t *testing.T, store *Store, cfg config.App, bindi
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := sess.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
 	return sess
 }
 
@@ -518,17 +524,20 @@ func newMetadataTestStoreWithoutBinding(t *testing.T) (*Store, config.App) {
 
 func newMetadataTestStoreForWorkspace(t *testing.T, workspace string) (*Store, config.App) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
-	cfg, err := config.Load(workspace, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
+	cfg := loadMetadataTestConfig(t, workspace, filepath.Join(t.TempDir(), "persistence"))
 	store, err := Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store, cfg
+}
+
+func loadMetadataTestConfig(t *testing.T, workspace string, persistenceRoot string) config.App {
+	t.Helper()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: persistenceRoot})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg
 }

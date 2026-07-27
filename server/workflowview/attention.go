@@ -124,17 +124,7 @@ type attentionCandidate struct {
 }
 
 func (a *Attention) durableCandidates(ctx context.Context, cursor attentionPageCursor, taskID *string, limit int) ([]attentionCandidate, error) {
-	task := sql.NullString{}
-	if taskID != nil {
-		task = sql.NullString{String: *taskID, Valid: true}
-	}
-	rows, err := a.queries.ListWorkflowDurableAttentionCandidates(ctx, sqlitegen.ListWorkflowDurableAttentionCandidatesParams{
-		SelectedTaskID:         task,
-		PageLimit:              int64(limit),
-		CursorActive:           boolInt64(cursor.hasValue),
-		CursorOccurredAtUnixMs: cursor.occurredAtUnixMs,
-		CursorItemID:           cursor.itemID,
-	})
+	rows, err := a.durableCandidateRows(ctx, cursor, taskID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -149,13 +139,28 @@ func (a *Attention) durableCandidates(ctx context.Context, cursor attentionPageC
 	return out, nil
 }
 
+func (a *Attention) durableCandidateRows(ctx context.Context, cursor attentionPageCursor, taskID *string, limit int) ([]sqlitegen.ListWorkflowDurableAttentionCandidatesRow, error) {
+	task := sql.NullString{}
+	if taskID != nil {
+		task = sql.NullString{String: *taskID, Valid: true}
+	}
+	return a.queries.ListWorkflowDurableAttentionCandidates(ctx, sqlitegen.ListWorkflowDurableAttentionCandidatesParams{
+		SelectedTaskID:         task,
+		PageLimit:              int64(limit),
+		CursorActive:           boolInt64(cursor.hasValue),
+		CursorOccurredAtUnixMs: cursor.occurredAtUnixMs,
+		CursorItemID:           cursor.itemID,
+	})
+}
+
 func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (serverapi.WorkflowAttentionItem, error) {
-	switch row.Kind {
-	case "approval":
-		approvalID := strings.TrimSpace(row.ApprovalID.String)
-		if !row.ApprovalID.Valid || approvalID == "" {
-			return serverapi.WorkflowAttentionItem{}, fmt.Errorf("approval attention candidate %q has no approval id", row.ID)
-		}
+	reference, err := durableAttentionNotificationReference(row)
+	if err != nil {
+		return serverapi.WorkflowAttentionItem{}, err
+	}
+	switch typed := reference.(type) {
+	case DurableApprovalAttentionReference:
+		approvalID := typed.ApprovalID.String()
 		approval, err := a.pendingApproval(ctx, workflow.TaskID(row.TaskID), approvalID)
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, err
@@ -173,8 +178,8 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			ApprovalSnapshot: &snapshot,
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
 		}, nil
-	case "interrupted":
-		currentNode, err := currentNodeFromAttentionCandidate(row)
+	case DurableInterruptedCurrentNodeAttentionReference:
+		currentNode, err := currentNodeFromAttentionCandidate(row, typed.CurrentNode)
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, err
 		}
@@ -190,7 +195,7 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
 		}, nil
 	default:
-		return serverapi.WorkflowAttentionItem{}, fmt.Errorf("workflow durable attention candidate %q has invalid kind %q", row.ID, row.Kind)
+		return serverapi.WorkflowAttentionItem{}, fmt.Errorf("unsupported durable workflow attention notification reference %T", reference)
 	}
 }
 
@@ -229,18 +234,8 @@ func cloneOutputValues(values map[string]string) map[string]string {
 	return out
 }
 
-func currentNodeFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (serverapi.WorkflowTaskCurrentNode, error) {
-	if !row.NodeID.Valid || strings.TrimSpace(row.NodeID.String) == "" {
-		return serverapi.WorkflowTaskCurrentNode{}, fmt.Errorf("interrupted attention candidate %q has no current node", row.ID)
-	}
-	currentNode := serverapi.WorkflowTaskCurrentNode{NodeID: row.NodeID.String}
-	if row.TransitionBranchKey.Valid {
-		value := row.TransitionBranchKey.String
-		if strings.TrimSpace(value) == "" {
-			return serverapi.WorkflowTaskCurrentNode{}, fmt.Errorf("interrupted attention candidate %q has invalid branch key", row.ID)
-		}
-		currentNode.TransitionBranchKey = &value
-	}
+func currentNodeFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentionCandidatesRow, reference workflow.CurrentNodeReference) (serverapi.WorkflowTaskCurrentNode, error) {
+	currentNode := workflowCurrentNodeReference(reference)
 	if row.SessionID.Valid {
 		value := strings.TrimSpace(row.SessionID.String)
 		if value == "" {
@@ -249,6 +244,25 @@ func currentNodeFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentio
 		currentNode.SessionID = &value
 	}
 	return currentNode, nil
+}
+
+func currentNodeReferenceFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (workflow.CurrentNodeReference, error) {
+	if !row.NodeID.Valid || strings.TrimSpace(row.NodeID.String) == "" {
+		return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has no current node", row.ID)
+	}
+	var branchKey *workflow.TransitionBranchKey
+	if row.TransitionBranchKey.Valid {
+		value := workflow.TransitionBranchKey(strings.TrimSpace(row.TransitionBranchKey.String))
+		if value == "" {
+			return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has invalid branch key", row.ID)
+		}
+		branchKey = &value
+	}
+	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID.String), branchKey)
+	if err != nil {
+		return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has invalid current node: %w", row.ID, err)
+	}
+	return reference, nil
 }
 
 func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *string, selectedTask *sqlitegen.TaskRecord) ([]attentionCandidate, error) {

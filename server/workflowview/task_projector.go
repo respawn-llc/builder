@@ -14,6 +14,10 @@ import (
 
 type TaskProjector struct{}
 
+type TaskQuiescenceSource interface {
+	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+}
+
 type TaskStatusInput struct {
 	TaskID             string
 	Kind               string
@@ -28,6 +32,7 @@ type TaskFactsInput struct {
 	CurrentNodes   []workflow.CurrentNode
 	LiveExecutions []sessionruntime.TaskExecution
 	Definition     definitionSnapshot
+	CanDelete      bool
 }
 
 type TaskFacts struct {
@@ -71,7 +76,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary: taskSummary(input.Task, input.Status.Status, done),
 		Status:  input.Status.Status,
-		Actions: taskActions(done, input.Status.Status, input.CurrentNodes, input.LiveExecutions, input.Definition.api, input.Definition.nodeKinds),
+		Actions: taskActions(done, input.Status.Status, input.CurrentNodes, input.LiveExecutions, input.Definition.api, input.Definition.nodeKinds, input.CanDelete),
 		Done:    done,
 	}
 }
@@ -183,16 +188,18 @@ func taskActions(
 	live []sessionruntime.TaskExecution,
 	def serverapi.WorkflowDefinition,
 	nodeKinds map[string]workflow.NodeKind,
+	canDelete bool,
 ) serverapi.WorkflowTaskActions {
 	hasLiveExecution := len(live) != 0
 	hasInterruptibleExecution := false
 	for _, execution := range live {
-		hasInterruptibleExecution = hasInterruptibleExecution || !execution.WaitingQuestion
+		hasInterruptibleExecution = hasInterruptibleExecution || (!execution.Queued && !execution.WaitingQuestion)
 	}
 	actions := serverapi.WorkflowTaskActions{
 		CanStart:     !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
 		CanInterrupt: !done && hasInterruptibleExecution,
 		CanResume:    !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindInterrupted,
+		CanDelete:    canDelete,
 	}
 	if !done && !hasLiveExecution {
 		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, currentNodes, nodeKinds)

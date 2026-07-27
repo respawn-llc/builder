@@ -13,6 +13,7 @@ import (
 )
 
 func TestEngineStateAccessorsAreNotCalledWhileEngineMutexHeld(t *testing.T) {
+	t.Parallel()
 	forbidden := map[string]struct{}{
 		"compactionPlanningSnapshot": {},
 		"lockedContractState":        {},

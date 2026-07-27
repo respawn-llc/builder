@@ -13,6 +13,7 @@ import (
 )
 
 func TestSelectWorkflowTaskPromptForFirstNodeAssignmentInSession(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		nil,
 		"run-current",
@@ -24,6 +25,7 @@ func TestSelectWorkflowTaskPromptForFirstNodeAssignmentInSession(t *testing.T) {
 }
 
 func TestSelectWorkflowTaskPromptForAnotherNodeAssignmentInSameSession(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-previous"),
 		"run-current",
@@ -35,6 +37,7 @@ func TestSelectWorkflowTaskPromptForAnotherNodeAssignmentInSameSession(t *testin
 }
 
 func TestSelectWorkflowTaskPromptOmitsDuplicateForCurrentTaskRequest(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-current"),
 		"run-current",
@@ -46,6 +49,7 @@ func TestSelectWorkflowTaskPromptOmitsDuplicateForCurrentTaskRequest(t *testing.
 }
 
 func TestSelectWorkflowTaskPromptAfterSameNodeAssignmentCompaction(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-current"),
 		"run-current",
@@ -57,6 +61,7 @@ func TestSelectWorkflowTaskPromptAfterSameNodeAssignmentCompaction(t *testing.T)
 }
 
 func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-previous"),
 		"run-current",
@@ -68,6 +73,7 @@ func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *test
 }
 
 func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testing.T) {
+	t.Parallel()
 	source := mustCreateTestSession(t)
 	mustAppendTestEvent(t, source, "previous-assignment", llm.Message{
 		Role:        llm.RoleDeveloper,

@@ -11,6 +11,7 @@ import (
 )
 
 func TestSubmitUserShellCommandPersistsErrorWithoutRegisteredHandler(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})

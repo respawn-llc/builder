@@ -38,6 +38,7 @@ func (t *webSearchProbeTool) Calls() int {
 }
 
 func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		mu     sync.Mutex
@@ -78,6 +79,7 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 }
 
 func TestExecuteToolCallsRejectsWhitespaceWebSearchQuery(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -111,6 +113,7 @@ func TestExecuteToolCallsRejectsWhitespaceWebSearchQuery(t *testing.T) {
 }
 
 func TestExecuteToolCallsRejectsHallucinatedWebSearchQueryBeforeHandler(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	probe := &webSearchProbeTool{name: toolspec.ToolWebSearch}
@@ -151,6 +154,7 @@ func TestExecuteToolCallsRejectsHallucinatedWebSearchQueryBeforeHandler(t *testi
 }
 
 func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{inputTokenCountFn: func(req llm.Request) int {
@@ -202,6 +206,7 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 }
 
 func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	patchInput := "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"
@@ -254,6 +259,7 @@ func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 }
 
 func TestRequestToolsExposePatchAsCustomToolOnlyForFirstPartyResponsesProvider(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		caps       llm.ProviderCapabilities
@@ -298,6 +304,7 @@ func TestRequestToolsExposePatchAsCustomToolOnlyForFirstPartyResponsesProvider(t
 }
 
 func TestRequestToolsUseActiveProviderCapsForCustomPatchTool(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model:        "gpt-5",
@@ -334,6 +341,7 @@ func TestRequestToolsUseActiveProviderCapsForCustomPatchTool(t *testing.T) {
 }
 
 func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -378,6 +386,7 @@ func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 }
 
 func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
@@ -410,6 +419,7 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 }
 
 func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	liveStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "live"), "ws", dir)
 	restoredStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "restored"), "ws", dir)
@@ -557,6 +567,7 @@ func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Requ
 }
 
 func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -606,6 +617,7 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 }
 
 func TestStreamingEmitsReasoningSummaryDeltaEvents(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -648,6 +660,7 @@ func TestStreamingEmitsReasoningSummaryDeltaEvents(t *testing.T) {
 }
 
 func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -685,6 +698,7 @@ func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
 }
 
 func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -746,6 +760,7 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 }
 
 func TestAuthErrorsAreNotRetried(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &authFailClient{}
@@ -763,6 +778,7 @@ func TestAuthErrorsAreNotRetried(t *testing.T) {
 }
 
 func TestNonRetriableStatusCodesAreNotRetried(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{400, 401, 403, 404} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			store := mustCreateTestSession(t)
@@ -784,6 +800,7 @@ func TestNonRetriableStatusCodesAreNotRetried(t *testing.T) {
 }
 
 func TestProviderContractErrorsAreNotRetried(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &providerContractFailClient{}

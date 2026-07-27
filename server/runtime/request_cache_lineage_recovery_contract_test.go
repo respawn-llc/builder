@@ -15,6 +15,7 @@ import (
 )
 
 func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("cache response observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -57,6 +58,7 @@ func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
 }
 
 func TestVerboseCacheReuseDropPersistsTypedWarning(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(4)}},
@@ -94,6 +96,7 @@ func TestVerboseCacheReuseDropPersistsTypedWarning(t *testing.T) {
 }
 
 func TestReviewerCacheLineagePersistsScopedWarning(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(8)}},

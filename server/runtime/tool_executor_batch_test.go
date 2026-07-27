@@ -19,6 +19,7 @@ import (
 )
 
 func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *testing.T) {
+	t.Parallel()
 	probe := &toolExecutionProbe{}
 	engine := mustNewTestEngine(
 		t,
@@ -43,6 +44,7 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 }
 
 func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
@@ -110,6 +112,7 @@ func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *
 }
 
 func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input json.RawMessage
@@ -187,6 +190,7 @@ func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
 }
 
 func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
+	t.Parallel()
 	t.Run("uncommitted append", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		probe := &toolExecutionProbe{}

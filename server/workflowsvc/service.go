@@ -14,7 +14,6 @@ import (
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/server/workflowexecution"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
@@ -37,8 +36,10 @@ type Service struct {
 	questionMemo         *requestmemo.Memo[taskQuestionAnswerMemoRequest, struct{}]
 	mutationPermit       *workflowexecution.MutationPermit
 	currentNodeExecution interface {
-		Start(context.Context, workflow.CurrentNodeReference) error
-		Resume(context.Context, workflow.CurrentNodeReference) error
+		StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
+		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
+		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -93,9 +94,8 @@ type taskWorktreeDeleter interface {
 }
 
 type workflowAttentionFinalizer interface {
-	FinalizeResolution(workflowattention.Resolution)
+	FinalizeTaskResolution(workflowstore.TaskAttentionResolution)
 	PublishPendingApproval(context.Context, workflow.ApprovalID)
-	PublishPendingInterruptedCurrentNode(context.Context, workflow.CurrentNodeReference)
 }
 
 const (
@@ -116,8 +116,10 @@ type taskQuestionAnswerMemoRequest struct {
 type Option func(*Service)
 
 func WithCurrentNodeExecution(execution interface {
-	Start(context.Context, workflow.CurrentNodeReference) error
-	Resume(context.Context, workflow.CurrentNodeReference) error
+	StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
+	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
+	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -773,9 +775,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: true,
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
-		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
-			return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
-		})
+		return s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
@@ -792,12 +792,6 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	started := *coordinated.applied
 	if len(started.Mutation.Created) != 1 {
 		return serverapi.WorkflowTaskStartResponse{}, errors.New("task start did not create exactly one current node")
-	}
-	if s.currentNodeExecution == nil {
-		return serverapi.WorkflowTaskStartResponse{}, errors.New("current node workflow execution is required")
-	}
-	if err := s.currentNodeExecution.Start(ctx, started.Mutation.Created[0].Reference); err != nil {
-		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID)
@@ -1027,18 +1021,6 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := s.currentNodeExecution.Interrupt(ctx, selector); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	if s.attentionFinalizer != nil {
-		currentNodes, err := s.store.ListCurrentNodes(ctx, workflow.TaskID(req.TaskID))
-		if err != nil {
-			return serverapi.WorkflowTaskInterruptResponse{}, err
-		}
-		for _, currentNode := range currentNodes {
-			if currentNode.Scheduling == nil || currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
-				continue
-			}
-			s.attentionFinalizer.PublishPendingInterruptedCurrentNode(ctx, currentNode.Reference)
-		}
-	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionInterrupted, req.TaskID)
 	}
@@ -1073,14 +1055,9 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
-	resumed, err := s.store.InterruptedExecutableCurrentNodes(ctx, workflow.TaskID(req.TaskID))
+	resumed, err := s.currentNodeExecution.ResumeTask(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
-	}
-	for _, currentNode := range resumed {
-		if err := s.currentNodeExecution.Resume(ctx, currentNode.Reference); err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
@@ -1103,20 +1080,11 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	approved, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
-		return s.store.ApplyPendingApproval(ctx, approvalID)
-	})
+	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	for _, currentNode := range approved.Mutation.Created {
-		if currentNode.Scheduling == nil {
-			continue
-		}
-		if err := s.currentNodeExecution.Start(ctx, currentNode.Reference); err != nil {
-			return serverapi.WorkflowTaskApproveResponse{}, err
-		}
-	}
+	s.finalizeTaskAttentionResolution(approved.TaskAttentionResolution)
 	taskID := string(approved.ResolvedApproval.Source.TaskID)
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, taskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionApproved, taskID, req.ApprovalID)
@@ -1167,12 +1135,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
-		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
-			if err := s.currentNodeExecution.EnsureTaskQuiescent(moveRequest.TaskID); err != nil {
-				return workflowstore.ManualMoveResult{}, err
-			}
-			return s.store.ApplyManualMove(ctx, prepared, candidate)
-		})
+		return s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
@@ -1187,6 +1150,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
 	}
 	moved := *coordinated.applied
+	s.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
 	currentNodes := moved.Created
 	if moved.PendingApproval != nil {
 		if len(moved.Created) != 0 || len(moved.Retained) == 0 {
@@ -1200,14 +1164,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		}
 	} else if len(moved.Retained) != 0 {
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("applied task move unexpectedly retained current nodes")
-	}
-	if prepared.RequiresExecutionTarget() && moved.PendingApproval == nil {
-		if len(moved.Created) != 1 {
-			return serverapi.WorkflowTaskMoveResponse{}, errors.New("executable task move did not create exactly one current node")
-		}
-		if err := s.currentNodeExecution.Start(ctx, moved.Created[0].Reference); err != nil {
-			return serverapi.WorkflowTaskMoveResponse{}, err
-		}
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID)
@@ -1321,24 +1277,21 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 		if err != nil {
 			return err
 		}
-		s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
+		s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
 		s.publishProjectWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
 		return nil
 	})
 }
 
 func (s *Service) finalizeWorkflowAttentionResolution(ctx context.Context, result workflowstore.WorkflowDeleteResult) {
-	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
+	s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
 }
 
-func (s *Service) finalizeTaskAttentionResolution(ctx context.Context, resolution workflowstore.TaskAttentionResolution) {
+func (s *Service) finalizeTaskAttentionResolution(resolution workflowstore.TaskAttentionResolution) {
 	if s == nil || s.attentionFinalizer == nil {
 		return
 	}
-	s.attentionFinalizer.FinalizeResolution(workflowattention.Resolution{
-		Approvals:               workflowattention.ApprovalProjections(resolution.Approvals),
-		InterruptedCurrentNodes: workflowattention.InterruptedCurrentNodeProjections(resolution.InterruptedCurrentNodes),
-	})
+	s.attentionFinalizer.FinalizeTaskResolution(resolution)
 }
 
 func workflowAttentionContext(ctx context.Context) (context.Context, context.CancelFunc) {

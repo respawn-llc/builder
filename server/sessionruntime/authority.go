@@ -179,6 +179,18 @@ func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key wor
 	byTask[key] = item
 }
 
+func (a *Authority) beginWorkflowExecution(item *execution) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.byScope[item.scope.ID()] != item {
+		return
+	}
+	if item.phase != executionPhaseQueued {
+		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
+	}
+	item.phase = executionPhaseRunning
+}
+
 func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
 	byProject := a.workflowExecutions[ref.ProjectID]
 	if byProject == nil {
@@ -382,9 +394,11 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		prompts:   newExecutionPromptStore(scope, a.promptFeed),
+		phase:     executionPhaseRunning,
 	}
 	if workflowRef != nil {
 		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}
+		reserved.phase = executionPhaseQueued
 	}
 	return reserved, nil
 }

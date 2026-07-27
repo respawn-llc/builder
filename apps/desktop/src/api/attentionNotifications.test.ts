@@ -54,7 +54,7 @@ describe("attention notification API", () => {
             task_title: "Needs answer",
             session_id: "session-1",
             current_node_id: "node-1",
-            focus: { kind: "question", ask_ids: ["ask-1"] },
+            focus: { kind: "question", ask_ids: ["ask-2", "ask-1"] },
           },
         },
       },
@@ -70,7 +70,7 @@ describe("attention notification API", () => {
     if (event.pending.target.kind !== "workflow_task") {
       throw new Error("Expected workflow-task attention target.");
     }
-    expect(event.pending.target.focus).toEqual({ kind: "question", askIDs: ["ask-1"] });
+    expect(event.pending.target.focus).toEqual({ kind: "question", askIDs: ["ask-2", "ask-1"] });
 
     transport.emit("attention.notification", {
       event: {
@@ -109,7 +109,7 @@ describe("attention notification API", () => {
     expect(errors[1]).toBeInstanceOf(ContractError);
   });
 
-  it("parses matching approval notification IDs", () => {
+  it("parses generic and Workflow Approvals as distinct payloads", () => {
     const transport = new FakeRpcTransport([]);
     const client = new ApiClient(transport);
     const events: AttentionNotificationEvent[] = [];
@@ -132,11 +132,29 @@ describe("attention notification API", () => {
         sequence: 1,
         source: "live",
         pending: {
-          id: { kind: "approval", uuid: "approval-notification-1" },
+          id: { kind: "approval", uuid: "model-approval-1" },
           kind: "approval",
           occurred_at: "2026-06-29T12:00:00Z",
           revision: 1,
-          approval: { approval_id: "approval-1" },
+          approval: { message: "Approve protected path?" },
+          target: {
+            kind: "session_prompt",
+            session_id: "session-1",
+          },
+        },
+      },
+    });
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 2,
+        source: "live",
+        pending: {
+          id: { kind: "workflow_approval", uuid: "approval-notification-1" },
+          kind: "workflow_approval",
+          occurred_at: "2026-06-29T12:00:00Z",
+          revision: 1,
+          workflow_approval: { approval_id: "approval-1" },
           target: {
             kind: "workflow_task",
             task_id: "task-1",
@@ -146,12 +164,20 @@ describe("attention notification API", () => {
       },
     });
 
-    const event = events[0];
-    if (event?.type !== "pending" || event.pending.target.kind !== "workflow_task") {
-      throw new Error("Expected parsed approval attention pending event.");
+    const genericApproval = events[0];
+    if (genericApproval?.type !== "pending" || genericApproval.pending.target.kind !== "session_prompt") {
+      throw new Error("Expected parsed generic approval attention pending event.");
     }
-    expect(event.pending.approval?.approvalID).toBe("approval-1");
-    expect(event.pending.target.focus).toEqual({ kind: "approval", approvalID: "approval-1" });
+    expect(genericApproval.pending.approval?.message).toBe("Approve protected path?");
+    expect(genericApproval.pending.workflowApproval).toBeNull();
+
+    const workflowApproval = events[1];
+    if (workflowApproval?.type !== "pending" || workflowApproval.pending.target.kind !== "workflow_task") {
+      throw new Error("Expected parsed Workflow Approval attention pending event.");
+    }
+    expect(workflowApproval.pending.approval).toBeNull();
+    expect(workflowApproval.pending.workflowApproval?.approvalID).toBe("approval-1");
+    expect(workflowApproval.pending.target.focus).toEqual({ kind: "approval", approvalID: "approval-1" });
   });
 
   it("parses interrupted-current-node attention notifications", () => {
@@ -182,7 +208,7 @@ describe("attention notification API", () => {
           occurred_at: "2026-06-29T12:00:00Z",
           revision: 1,
           interrupted_current_node: {
-            message: "Run interrupted",
+            message: "Current Node interrupted",
             reason: "workflow_runtime_failed",
           },
           target: {
@@ -251,14 +277,14 @@ describe("attention notification API", () => {
       },
       {
         ...question,
-        approval: { approval_id: "approval-1" },
+        approval: { message: "Approve?" },
       },
       {
-        id: { kind: "approval", uuid: "approval-notification-1" },
-        kind: "approval",
+        id: { kind: "workflow_approval", uuid: "approval-notification-1" },
+        kind: "workflow_approval",
         occurred_at: "2026-06-29T12:00:00Z",
         revision: 1,
-        approval: { approval_id: "approval-1" },
+        workflow_approval: { approval_id: "approval-1" },
         target: {
           kind: "workflow_task",
           task_id: "task-1",

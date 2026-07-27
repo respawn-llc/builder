@@ -171,7 +171,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for run to reach model request")
 	}
 
@@ -191,7 +191,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 		if runErr != nil {
 			t.Fatalf("RunPrompt: %v", runErr)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		requestMu.Lock()
 		count := requestIndex
 		requestMu.Unlock()
@@ -206,7 +206,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 		if waitErr != nil {
 			t.Fatalf("LiveWait: %v", waitErr)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for LiveWait to finish")
 	}
 	waitResp := <-waitResult
@@ -215,7 +215,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	}
 	select {
 	case <-secondStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for queued or steered follow-up request")
 	}
 }

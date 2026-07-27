@@ -1107,10 +1107,155 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	if len(targets.Executions) != 0 {
 		t.Fatalf("finalizing script remains interruptible: %+v", targets)
 	}
+	selectionCalled := false
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+		selectionCalled = true
+		return nil
+	})
+	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
+		t.Fatalf("finalizing script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+	}
+	if selectionCalled {
+		t.Fatal("finalizing script alone authorized task interrupt")
+	}
 
 	close(releaseFinalize)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-finalizing-selection")
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	finalizing, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-finalizing", nil)),
+		Command:  ScriptCommand{Path: truePath},
+		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start finalizing script: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = finalizing.Close(context.Background())
+	})
+	<-finalizeStarted
+
+	grace := 50 * time.Millisecond
+	running, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-running", nil)),
+		Command: ScriptCommand{
+			Path:              sleepPath,
+			Args:              []string{"30"},
+			CancellationGrace: &grace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start running script: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = running.Stop(context.Background())
+	})
+
+	deadline := time.After(3 * time.Second)
+	for {
+		var selection WorkflowInterruptSelection
+		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
+			selection = got
+			return nil
+		})
+		if selectionErr == nil &&
+			len(selection.Interruptible) == 1 &&
+			selection.Interruptible[0].Scope().ID() == running.Scope().ID() &&
+			len(selection.Queued) == 0 &&
+			len(selection.Finalizing) == 1 &&
+			selection.Finalizing[0].Scope().ID() == finalizing.Scope().ID() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("task interrupt selection = %+v, error = %v", selection, selectionErr)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-script-startup-failure")
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-startup-failure", nil)),
+		Command:  ScriptCommand{Path: filepath.Join(t.TempDir(), "missing-script")},
+		Finalize: func(_ context.Context, _ ExecutionScope, _ ScriptResult, startErr error) error {
+			if startErr == nil {
+				t.Error("startup finalizer error = nil, want command start error")
+			}
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = handle.Close(context.Background())
+	})
+	<-finalizeStarted
+
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(targets.Executions) != 0 {
+		t.Fatalf("startup failure published workflow execution: %+v", targets)
+	}
+	selectionCalled := false
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+		selectionCalled = true
+		return nil
+	})
+	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
+		t.Fatalf("startup failure selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+	}
+	if selectionCalled {
+		t.Fatal("startup failure authorized task interrupt")
 	}
 }
 

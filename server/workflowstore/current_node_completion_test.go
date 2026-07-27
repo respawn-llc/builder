@@ -1,9 +1,11 @@
 package workflowstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -12,6 +14,30 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 )
+
+func TestCompleteCurrentNodeWithoutApprovalDoesNotEmitQueryFailureDiagnostics(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	var diagnostics bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	if _, err := store.CompleteCurrentNode(metadata.WithQueryFailureDiagnostics(ctx), CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "completed"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("ordinary completion diagnostics = %q, want none", diagnostics.String())
+	}
+}
 
 func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -345,15 +371,13 @@ func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing
 	}
 	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
-		DeleteArtifact: func(ProjectSessionArtifact, bool) error {
-			return nil
-		},
+		Artifacts: projectDeleteArtifactsNoop{},
 	})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	if len(blockers) == 0 {
-		t.Fatalf("project deletion blockers = %+v, want quiescence blockers", blockers)
+		t.Fatalf("project deletion blockers = %+v, want pending Approval blocker", blockers)
 	}
 }
 

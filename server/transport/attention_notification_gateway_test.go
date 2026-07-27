@@ -22,7 +22,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndLiveOnly(t *testing.T) {
+func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndKeepsQuestionsLiveOnly(t *testing.T) {
 	appCore, prompts, server := newGatewayAttentionTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()

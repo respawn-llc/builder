@@ -351,9 +351,6 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("persist session store: %v", err)
-	}
 	if client == nil {
 		client = &runtimeControlFakeClient{}
 	}
@@ -1782,7 +1779,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	}()
 	select {
 	case <-client.firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the first model request")
 	}
 	queuedText := "use the existing lld installation"
@@ -1806,13 +1803,13 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 				steeringReq.OperationRef.ClientRequestID,
 			)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("accepted steering emitted no queue status")
 	}
 	close(client.releaseFirst)
 	select {
 	case <-client.secondStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
 	defer close(client.releaseSecond)

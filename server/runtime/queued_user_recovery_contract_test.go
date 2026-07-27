@@ -7,6 +7,7 @@ import (
 )
 
 func TestDiscardQueuedUserMessagePreservesOtherQueuedIdentities(t *testing.T) {
+	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 	})

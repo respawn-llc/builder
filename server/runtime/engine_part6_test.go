@@ -19,6 +19,7 @@ import (
 )
 
 func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTranscriptAdvance(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -139,6 +140,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 }
 
 func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -169,6 +171,7 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 }
 
 func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:    "gpt-5",
@@ -215,6 +218,7 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 }
 
 func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstructionAppendFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
@@ -298,6 +302,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 }
 
 func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantEvent(t *testing.T) {
+	t.Parallel()
 	localEntryErr := errors.New("injected reviewer status persistence failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -372,6 +377,7 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 }
 
 func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role:          "reviewer_suggestions",
@@ -401,6 +407,7 @@ func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
 }
 
 func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role:     "system",
@@ -421,6 +428,7 @@ func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 }
 
 func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
+	t.Parallel()
 	blankCallID := " "
 	tests := []struct {
 		name  string
@@ -466,6 +474,7 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 }
 
 func TestAppendCommittedEntryWithCondensedTextSkipsBlankEntries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -483,6 +492,7 @@ func TestAppendCommittedEntryWithCondensedTextSkipsBlankEntries(t *testing.T) {
 }
 
 func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	presentation := transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
 		ToolName:       string(toolspec.ToolExecCommand),
@@ -526,6 +536,7 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 }
 
 func TestReviewerSuggestionPresentation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		verbose         bool
@@ -599,6 +610,7 @@ func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggest
 }
 
 func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
+	t.Parallel()
 	suggestions := parseReviewerSuggestionsObject(`{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
 	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != "two" || suggestions[2] != "one" {
 		t.Fatalf("unexpected suggestions from object payload: %+v", suggestions)
@@ -621,6 +633,7 @@ func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 }
 
 func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I’ll inspect quickly.")},
 		{Role: llm.RoleUser, Content: textutil.Value("user request")},
@@ -658,6 +671,7 @@ func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *test
 }
 
 func TestReviewerStatusTextIncludesReviewerCacheHitMetadata(t *testing.T) {
+	t.Parallel()
 	text := reviewerStatusText(ReviewerStatus{
 		Outcome:               "applied",
 		SuggestionsCount:      2,
@@ -692,6 +706,7 @@ func TestReviewerStatusTextIncludesReviewerCacheHitMetadata(t *testing.T) {
 }
 
 func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		outcome string
 		want    string
@@ -712,6 +727,7 @@ func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
 }
 
 func TestBuildReviewerTranscriptMessagesIncludesSupervisorControlDeveloperMessage(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, Content: textutil.Value("Supervisor agent gave you suggestions:\n1. run tests")},
 	}

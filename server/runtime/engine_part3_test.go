@@ -28,6 +28,7 @@ func openAIFirstPartyNativeWebSearchCaps() llm.ProviderCapabilities {
 }
 
 func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -81,6 +82,7 @@ func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
 }
 
 func TestSetReviewerDisabledConcurrentWithBusyStepSkipsReviewerForCurrentRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -132,6 +134,7 @@ func TestSetReviewerDisabledConcurrentWithBusyStepSkipsReviewerForCurrentRun(t *
 }
 
 func TestHostedWebSearchExecutionFromOutputItem(t *testing.T) {
+	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -169,6 +172,7 @@ func TestHostedWebSearchExecutionFromOutputItem(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionUsesURLAsQueryFallback(t *testing.T) {
+	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -194,6 +198,7 @@ func TestHostedWebSearchExecutionUsesURLAsQueryFallback(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionRejectsWhitespaceSearchQuery(t *testing.T) {
+	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -232,6 +237,7 @@ func TestHostedWebSearchExecutionRejectsWhitespaceSearchQuery(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
+	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -267,6 +273,7 @@ func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -343,6 +350,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var hostedStart *llm.ToolCall
 
@@ -448,6 +456,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 }
 
 func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFinal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -524,6 +533,7 @@ func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFin
 }
 
 func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -600,6 +610,7 @@ func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T)
 }
 
 func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		model            string
@@ -662,6 +673,7 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 }
 
 func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -708,6 +720,7 @@ func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t
 }
 
 func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -765,6 +778,7 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 }
 
 func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -849,6 +863,7 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 }
 
 func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -891,6 +906,7 @@ func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) 
 }
 
 func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: llm.ProviderCapabilities{

@@ -48,6 +48,42 @@ func TestRuntimeRegistryKeepsGenericPromptAttentionOffDesktopRootStream(t *testi
 	}
 }
 
+func TestRuntimeRegistryPublishesGenericApprovalToSessionAttention(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+	sessionSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	}
+
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		StepID:   registryTestStepID,
+		Question: "Approve protected path?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	})
+
+	pending, err := sessionSub.Next(shortRegistryContext(t))
+	if err != nil {
+		t.Fatalf("generic approval attention: %v", err)
+	}
+	if pending.Type != clientui.AttentionNotificationEventPending ||
+		pending.Pending == nil ||
+		pending.Pending.Kind != clientui.AttentionNotificationKindApproval ||
+		pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt ||
+		pending.Pending.Approval == nil ||
+		pending.Pending.Approval.Message != "Approve protected path?" {
+		t.Fatalf("generic approval attention = %+v", pending)
+	}
+}
+
 func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testing.T) {
 	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)

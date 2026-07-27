@@ -142,6 +142,7 @@ func streamScanRepresentativeEvents(t *testing.T) []session.EventRecord {
 }
 
 func TestStreamingTranscriptScanSeedsLastFinalAnswerFromCompactionBoundary(t *testing.T) {
+	t.Parallel()
 	events := []session.EventRecord{
 		streamScanTestEvent(t, "history_replaced", historyReplacementPayload{
 			Engine:                            "compaction",
@@ -159,6 +160,7 @@ func TestStreamingTranscriptScanSeedsLastFinalAnswerFromCompactionBoundary(t *te
 }
 
 func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *testing.T) {
+	t.Parallel()
 	events := []session.EventRecord{
 		streamScanTestEvent(t, "history_replaced", historyReplacementPayload{
 			Engine:                            "compaction",
@@ -177,6 +179,7 @@ func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *test
 }
 
 func TestStreamingTranscriptScanKeepsToolAttachedLocalEntryAfterMaterializedOutput(t *testing.T) {
+	t.Parallel()
 	fallbackCallID := "call-fallback"
 	ordinaryCallID := "call-ordinary"
 	fallbackPresentation := transcript.ToolCallMeta{
@@ -278,6 +281,7 @@ func fullStreamingProjection(t *testing.T, events []session.EventRecord) ChatSna
 }
 
 func TestStreamingTranscriptScanPagesAreWindowsOfFullProjection(t *testing.T) {
+	t.Parallel()
 	events := streamScanRepresentativeEvents(t)
 	full := fullStreamingProjection(t, events).Entries
 	total := len(full)
@@ -317,6 +321,7 @@ func TestStreamingTranscriptScanPagesAreWindowsOfFullProjection(t *testing.T) {
 }
 
 func TestStreamingTranscriptScanRecentTailIsSuffixOfFullProjection(t *testing.T) {
+	t.Parallel()
 	events := streamScanRepresentativeEvents(t)
 	full := fullStreamingProjection(t, events).Entries
 	total := len(full)
@@ -341,6 +346,7 @@ func TestStreamingTranscriptScanRecentTailIsSuffixOfFullProjection(t *testing.T)
 }
 
 func TestStreamingTranscriptScanMetadata(t *testing.T) {
+	t.Parallel()
 	events := streamScanRepresentativeEvents(t)
 	full := fullStreamingProjection(t, events).Entries
 
@@ -356,6 +362,7 @@ func TestStreamingTranscriptScanMetadata(t *testing.T) {
 }
 
 func TestStreamingTranscriptScanRetainsOnlyWindow(t *testing.T) {
+	t.Parallel()
 	const (
 		messages  = 5000
 		tailLimit = 12

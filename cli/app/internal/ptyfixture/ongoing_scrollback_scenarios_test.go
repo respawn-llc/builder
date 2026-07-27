@@ -19,6 +19,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
+	scenarioSlots := make(chan struct{}, 4)
 
 	for _, tc := range []struct {
 		name                      string
@@ -334,6 +335,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			scenarioSlots <- struct{}{}
+			defer func() { <-scenarioSlots }()
+
 			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			capture, observationsPath := runPTYFixtureScenario(

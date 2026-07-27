@@ -18,6 +18,7 @@ import (
 )
 
 func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
@@ -62,6 +63,7 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 }
 
 func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []workflowruntime.CompletionMode{
 		workflowruntime.CompletionModeTool,
 		workflowruntime.CompletionModeShellCommand,
@@ -109,6 +111,7 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 }
 
 func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
+	t.Parallel()
 	engine := mustNewExecTestEngine(
 		t,
 		mustCreateTestSession(t),
@@ -132,6 +135,7 @@ func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
 }
 
 func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
@@ -162,6 +166,7 @@ func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
 }
 
 func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{}
 	engine := mustNewTestEngine(
@@ -189,6 +194,7 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 }
 
 func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{caps: llm.ProviderCapabilities{
 		ProviderID:           "provider-without-required-choice",
@@ -219,6 +225,7 @@ func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
 }
 
 func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{}
 	engine := mustNewWorkflowTestEngine(
@@ -246,6 +253,7 @@ func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t 
 }
 
 func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	sideEffect := &workflowSideEffectTool{}
 	controller := &workflowCompletionAccountingController{}
@@ -338,6 +346,7 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 }
 
 func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowCompletionAccountingController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -381,6 +390,7 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 }
 
 func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowCompletionAccountingController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -427,6 +437,7 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 }
 
 func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		model        string
@@ -491,6 +502,7 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 }
 
 func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model:        "gpt-5",

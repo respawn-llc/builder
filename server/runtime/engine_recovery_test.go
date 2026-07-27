@@ -17,6 +17,7 @@ import (
 )
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
+	t.Parallel()
 	clearErr := errors.New("pending model recovery observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -74,6 +75,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 }
 
 func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
+	t.Parallel()
 	const stepID = "interrupted-step"
 
 	store := mustCreateTestSession(t)
@@ -114,6 +116,7 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 }
 
 func TestNewTerminalRecoveredStepDoesNotPublishInterruption(t *testing.T) {
+	t.Parallel()
 	const stepID = "terminal-step"
 	store := mustCreateTestSession(t)
 	mustAppendTestEvent(t, store, stepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("input")})
@@ -134,6 +137,7 @@ func TestNewTerminalRecoveredStepDoesNotPublishInterruption(t *testing.T) {
 }
 
 func TestNewRecoveryWithoutStepIDDiscardsCandidateWithoutInterruption(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
 		RecoveryID: "missing-step-recovery", Reason: "provider_visible_output_persisted", CreatedAt: time.Unix(2, 0).UTC(),
@@ -163,6 +167,7 @@ func assertNoBoundedInterruptionRecord(t *testing.T, store *session.Store) {
 }
 
 func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
+	t.Parallel()
 	const (
 		stepID = "interrupted-tool-step"
 		callID = "interrupted-tool-call"
@@ -209,6 +214,7 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 }
 
 func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:               "gpt-5",
@@ -259,6 +265,7 @@ func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 }
 
 func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if err := engine.steer("initial", steerMessagesWithPersistenceIntent(
@@ -328,6 +335,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 }
 
 func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	scheduled := false
@@ -371,6 +379,7 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 }
 
 func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
+	t.Parallel()
 	const (
 		successorRecoveryID = "00000000-0000-4000-8000-000000000051"
 		successorStepID     = "00000000-0000-4000-8000-000000000052"
@@ -406,6 +415,7 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 }
 
 func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
+	t.Parallel()
 	finishErr := errors.New("finish persistence failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(
@@ -481,6 +491,7 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 }
 
 func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
+	t.Parallel()
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-question-call",
 		Name:  string(toolspec.ToolAskQuestion),
@@ -524,6 +535,7 @@ func (s *finishFailureLifecycleSink) StepEnded(
 }
 
 func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing.T) {
+	t.Parallel()
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-shell-call",
 		Name:  string(toolspec.ToolExecCommand),
@@ -532,6 +544,7 @@ func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing
 }
 
 func TestReopenCarriesInterruptedApprovalBackedPatchToolAttemptIntoNextModelRequest(t *testing.T) {
+	t.Parallel()
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:          "interrupted-patch-call",
 		Name:        string(toolspec.ToolPatch),

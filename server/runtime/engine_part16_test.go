@@ -12,6 +12,7 @@ import (
 )
 
 func TestAutoCompactionDoesNotRetryNonOverflow400(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -50,6 +51,7 @@ func TestAutoCompactionDoesNotRetryNonOverflow400(t *testing.T) {
 }
 
 func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -109,6 +111,7 @@ func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
 }
 
 func TestOpenAIModelCompact404DoesNotFallbackToLocalCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{

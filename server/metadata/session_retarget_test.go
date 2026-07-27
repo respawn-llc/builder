@@ -24,12 +24,8 @@ type sessionRetargetFixture struct {
 
 func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
 	sourceRoot := t.TempDir()
-	cfg, err := config.Load(sourceRoot, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
+	cfg := loadMetadataTestConfig(t, sourceRoot, filepath.Join(t.TempDir(), "persistence"))
 	store, err := Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -53,9 +49,6 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := sessionStore.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
 	return sessionRetargetFixture{
 		store:         store,
 		config:        cfg,
@@ -66,6 +59,7 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 }
 
 func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	if _, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, targetRoot); err != nil {
@@ -90,6 +84,7 @@ func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t 
 }
 
 func TestCommitSessionWorkspaceRetargetUsesSourceBindingWhenPathIsShared(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	sourceBinding, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.source.ProjectID, targetRoot)
@@ -117,6 +112,7 @@ func TestCommitSessionWorkspaceRetargetUsesSourceBindingWhenPathIsShared(t *test
 }
 
 func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	targetProjectID := fixture.targetProject.ProjectID
@@ -149,6 +145,7 @@ func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *t
 }
 
 func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	if _, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, targetRoot); err != nil {
@@ -190,6 +187,7 @@ func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutatio
 }
 
 func TestSessionSnapshotImportAndRetargetRemoveLegacyWorkflowMetadata(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	ctx := context.Background()
 	sessionID := fixture.session.Meta().SessionID

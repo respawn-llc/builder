@@ -252,12 +252,14 @@ export const taskActionsSchema: z.ZodType<TaskActions> = z
     can_start: z.boolean(),
     can_interrupt: z.boolean(),
     can_resume: z.boolean(),
+    can_delete: z.boolean(),
     manual_move_target_node_ids: stringList,
   })
   .transform((value) => ({
     canStart: value.can_start,
     canInterrupt: value.can_interrupt,
     canResume: value.can_resume,
+    canDelete: value.can_delete,
     manualMoveTargetNodeIDs: value.manual_move_target_node_ids,
   }));
 

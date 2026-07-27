@@ -126,6 +126,27 @@ func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sq
 }
 
 func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskAttentionResolution, error) {
+	resolution, err := taskApprovalAttentionResolution(ctx, q, taskID)
+	if err != nil {
+		return TaskAttentionResolution{}, err
+	}
+	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
+	if err != nil {
+		return TaskAttentionResolution{}, err
+	}
+	for _, currentNode := range currentNodes {
+		projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
+		if err != nil {
+			return TaskAttentionResolution{}, err
+		}
+		if found {
+			resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
+		}
+	}
+	return resolution, nil
+}
+
+func taskApprovalAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskAttentionResolution, error) {
 	approvals, err := q.ListTaskPendingApprovals(ctx, string(taskID))
 	if err != nil {
 		return TaskAttentionResolution{}, err
@@ -144,19 +165,6 @@ func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID w
 			return TaskAttentionResolution{}, fmt.Errorf("pending approval %q disappeared during attention resolution", row.ID)
 		}
 		resolution.Approvals = append(resolution.Approvals, projection)
-	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
-	if err != nil {
-		return TaskAttentionResolution{}, err
-	}
-	for _, currentNode := range currentNodes {
-		projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
-		if err != nil {
-			return TaskAttentionResolution{}, err
-		}
-		if found {
-			resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
-		}
 	}
 	return resolution, nil
 }

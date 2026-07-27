@@ -21,6 +21,7 @@ type TaskExecution struct {
 	Ref             WorkflowExecutionRef
 	Agent           *TaskAgentExecutionTarget
 	Script          *TaskScriptExecutionTarget
+	Queued          bool
 	WaitingQuestion bool
 }
 
@@ -153,7 +154,14 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	if !ok {
 		return errors.New("workflow execution index contains a non-workflow scope")
 	}
-	target := TaskExecution{Ref: ref, WaitingQuestion: execution.prompts.hasPending()}
+	if execution.phase != executionPhaseQueued && execution.phase != executionPhaseRunning {
+		return errors.New("live workflow execution has an invalid phase")
+	}
+	target := TaskExecution{
+		Ref:             ref,
+		Queued:          execution.phase == executionPhaseQueued,
+		WaitingQuestion: execution.prompts.hasPending(),
+	}
 	if resource, ok := execution.scope.Resource(); ok {
 		target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
 	} else {
@@ -211,6 +219,9 @@ func (e TaskExecution) validate() error {
 		if e.WaitingQuestion {
 			return errors.New("live workflow script execution cannot wait for a question")
 		}
+	}
+	if e.Queued && e.WaitingQuestion {
+		return errors.New("queued workflow execution cannot wait for a question")
 	}
 	return nil
 }

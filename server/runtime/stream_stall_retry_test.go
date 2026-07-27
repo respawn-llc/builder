@@ -95,6 +95,7 @@ func TestGenerateWithRetryRequiredChoiceSurfacesProviderAndTransportFailures(t *
 }
 
 func TestStatusFromRunErrorClassifiesStallAsFailed(t *testing.T) {
+	t.Parallel()
 	stall := fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled)
 	if status := statusFromRunError(stall); status != RunStatusFailed {
 		t.Fatalf("statusFromRunError(stall) = %v, want RunStatusFailed", status)

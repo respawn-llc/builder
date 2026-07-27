@@ -149,7 +149,7 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID workflow.
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
-	started, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
+	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
@@ -165,11 +165,7 @@ func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.Ta
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("start mutation = %+v, want one Current Node", started.Mutation)
 	}
-	reference := started.Mutation.Created[0].Reference
-	if err := f.controller.Start(context.Background(), reference); err != nil {
-		t.Fatalf("start Current Node: %v", err)
-	}
-	return reference
+	return started.Mutation.Created[0].Reference
 }
 
 func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workflow.TaskID, predicate func([]workflow.CurrentNode) bool) []workflow.CurrentNode {
@@ -252,7 +248,7 @@ func TestCurrentNodePreparationFailureCleansOnlyFreshDisposableSession(t *testin
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
-	started, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
+	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
@@ -265,8 +261,8 @@ func TestCurrentNodePreparationFailureCleansOnlyFreshDisposableSession(t *testin
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
-	if err := f.controller.Start(context.Background(), started.Mutation.Created[0].Reference); err == nil {
-		t.Fatal("start Current Node succeeded, want provider preparation failure")
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("start mutation = %+v, want one Current Node", started.Mutation)
 	}
 	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling != nil &&

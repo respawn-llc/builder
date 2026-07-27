@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	workflowTaskListPageTokenVersion = 5
-	workflowTaskStatusModelVersion   = 2
+	workflowTaskListPageTokenVersion = 6
+	workflowTaskStatusModelVersion   = 3
 )
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
@@ -451,7 +451,8 @@ func workflowTaskListCursorFromRow(row workflowTaskListRow) workflowTaskListCurs
 
 type workflowTaskListLiveState struct {
 	TaskID          string `json:"task_id"`
-	HasExecution    bool   `json:"has_execution"`
+	HasRunning      bool   `json:"has_running"`
+	HasQueued       bool   `json:"has_queued"`
 	WaitingQuestion bool   `json:"waiting_question"`
 }
 
@@ -461,8 +462,10 @@ func workflowTaskListLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime
 		if len(snapshot.Executions) == 0 {
 			continue
 		}
-		state := workflowTaskListLiveState{TaskID: string(taskID), HasExecution: true}
+		state := workflowTaskListLiveState{TaskID: string(taskID)}
 		for _, execution := range snapshot.Executions {
+			state.HasRunning = state.HasRunning || !execution.Queued
+			state.HasQueued = state.HasQueued || execution.Queued
 			state.WaitingQuestion = state.WaitingQuestion || execution.WaitingQuestion
 		}
 		states = append(states, state)

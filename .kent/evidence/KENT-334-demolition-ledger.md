@@ -8,19 +8,22 @@ The final handwritten non-test production diff must be net-negative. Tests,
 generated SQL, migrations, documentation, and `.kent` working evidence are
 excluded from this calculation.
 
-## Final inventory — 2026-07-26
+## Final inventory — 2026-07-27
 
 - Recompute the ledger after every coherent commit from `3c7d45a62` with the
   command below. It includes untracked handwritten production files and
   excludes tests, generated SQL, migrations, documentation, `.kent`, and the
   frozen `tui-rs/` tree.
-- Final dirty-worktree snapshot at `2026-07-26T18:05:02+0200`,
-  `HEAD=62a6e55775deee1b5e214a563ae420ffe0774ca0`, production-patch SHA-256
-  `ef10dd89a4d1d9f99a5495068f105f72397124236bdc324879ec7a4f800743f2`:
-  206 included files, `+10908 / -13520`, net `-2612`.
+- Final dirty-worktree snapshot at `2026-07-27T21:52:05+0200`,
+  `HEAD=d7875e6321b20afcab6a0b4998200006cff0cd02`, production-patch SHA-256
+  `457f7bdaf247f0f94ff93d5ac0c6126de111c9d12f7fc17bb4c3f03948ac185c`:
+  221 included files, `+13107 / -13630`, net `-523`.
 - The net-negative gate passes. Manual QA and deployment are excluded from the
-  takeover goal; all scoped non-Rust tests, CI checks, docs verification, and
-  builds are recorded in `KENT-334-cutover-checklist.md`.
+  takeover goal. The clean full server/desktop invocation was assertion-clean
+  through the fixed cap but cap-incomplete; the User explicitly deferred that
+  cap on 2026-07-27, and the packages unfinished at cutoff passed together in
+  focused verification. The remaining non-Rust tests, CI checks, docs
+  verification, and builds are recorded in `KENT-334-cutover-checklist.md`.
 
 ```sh
 set -eu -o pipefail

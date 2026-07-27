@@ -14,6 +14,7 @@ import (
 )
 
 func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
+	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	branchKey := workflow.TransitionBranchKey("implementation")
 	counter := &workflowTaskCommentCounterProbe{count: 3}
@@ -80,6 +81,7 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 }
 
 func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                string
 		existingCurrentNode bool
@@ -204,6 +206,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 }
 
 func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
+	t.Parallel()
 	controller := &workflowProtocolBudgetController{}
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),

@@ -108,15 +108,25 @@ Final reproduced commands:
 ```text
 KENT_TEST_GO_PACKAGE_PARALLELISM=8 ./scripts/test.sh server
 ./scripts/test.sh server
-./scripts/test.sh server desktop
+go clean -testcache && ./scripts/test.sh server desktop
+./scripts/test.sh server ./server/transport ./server/workflowstore ./server/worktree -count=1
+./scripts/test.sh server ./server/runtime ./server/runtimecontrol -count=1
+./scripts/test.sh desktop
 ./scripts/build.sh server desktop --output ./bin/kent
 ./scripts/ci-check.sh deps
 ./scripts/ci-check.sh frontend-lint
 ./scripts/ci-check.sh vet
-gofmt -l .
+find . -path './tui-rs' -prune -o -name '*.go' -type f -print0 | xargs -0 gofmt -l
 pnpm --dir docs test
 pnpm --dir docs build
 pnpm --dir docs smoke:built
 ```
+
+The clean full server/desktop command produced no assertion failure but reached
+the unchanged 180-second cap after Runtime passed, with only Transport,
+Workflow Store, and Worktree unfinished. Those packages passed together in
+the focused command above. On 2026-07-27 the User explicitly deferred the
+single-invocation cap (“ignore the cap for now”); it is not recorded as a pass,
+and `--no-wall-clock-cap` was not used.
 
 Manual QA and deployment are excluded by the takeover goal.

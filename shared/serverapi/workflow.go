@@ -1389,6 +1389,7 @@ type WorkflowTaskActions struct {
 	CanStart                bool     `json:"can_start"`
 	CanInterrupt            bool     `json:"can_interrupt"`
 	CanResume               bool     `json:"can_resume"`
+	CanDelete               bool     `json:"can_delete"`
 	ManualMoveTargetNodeIDs []string `json:"manual_move_target_node_ids,omitempty"`
 }
 

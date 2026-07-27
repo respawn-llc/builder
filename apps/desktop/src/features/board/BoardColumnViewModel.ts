@@ -28,6 +28,7 @@ export type KanbanCardVM = Readonly<{
     canInterrupt: boolean;
     canResume: boolean;
     canStart: boolean;
+    canDelete: boolean;
     manualMoveTargetNodeIDs: readonly string[];
   }>;
 }>;
@@ -81,6 +82,7 @@ export function toKanbanCardVM(
       canInterrupt: card.actions.canInterrupt,
       canResume: card.actions.canResume,
       canStart: card.actions.canStart,
+      canDelete: card.actions.canDelete,
       manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
     },
   };

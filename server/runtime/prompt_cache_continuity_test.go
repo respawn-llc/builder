@@ -220,6 +220,7 @@ func TestSkillsPolicyChangesOnlyAtMainContextReconstruction(t *testing.T) {
 }
 
 func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	persistence := filepath.Join(root, "sessions")
@@ -298,6 +299,7 @@ func TestLiveReloadedSkillsPolicyAppliesOnlyAtCompaction(t *testing.T) {
 }
 
 func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{

@@ -253,33 +253,46 @@ func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.Current
 // ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
 // immediately follows it with AdmitCurrentNode under the same mutation permit;
 // it is deliberately not an automatic recovery path.
-func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) error {
+func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
 	if err := reference.Validate(); err != nil {
-		return err
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
 	var (
-		resumed int64
-		err     error
+		resumed   int64
+		resumeErr error
 	)
 	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		resumed, err = s.queries.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
+		resumed, resumeErr = q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
 			TaskID:              string(reference.TaskID),
 			NodeID:              string(reference.NodeID),
 			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
 		})
 	} else {
-		resumed, err = s.queries.ResumeSerialCurrentNode(ctx, sqlitegen.ResumeSerialCurrentNodeParams{
+		resumed, resumeErr = q.ResumeSerialCurrentNode(ctx, sqlitegen.ResumeSerialCurrentNodeParams{
 			TaskID: string(reference.TaskID),
 			NodeID: string(reference.NodeID),
 		})
 	}
-	if err != nil {
-		return err
+	if resumeErr != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, resumeErr
 	}
 	if resumed != 1 {
-		return sql.ErrNoRows
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
 	}
-	return nil
+	if err := tx.Commit(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	return projection, found, nil
 }
 
 // InterruptedExecutableCurrentNodes returns the exact interrupted nodes a
@@ -422,26 +435,43 @@ func (s *Store) InterruptCurrentNode(
 	return nil
 }
 
-// RecoverAdmittedCurrentNodes turns restart markers left by a previous process
-// into resumable interruption state. Ready and already-interrupted work is
-// intentionally untouched and no Automatic Intent is reconstructed.
-func (s *Store) RecoverAdmittedCurrentNodes(
+// RecoverExecutableCurrentNodes turns ready or admitted executable work left
+// by a previous process into resumable interruption state. Pending Approval
+// sources remain frozen and no Automatic Intent is reconstructed.
+func (s *Store) RecoverExecutableCurrentNodes(
 	ctx context.Context,
 	reason workflow.CurrentNodeInterruptionReason,
 	detail workflow.CurrentNodeInterruptionDetail,
-) (int64, error) {
+) ([]workflow.CurrentNodeReference, error) {
 	if strings.TrimSpace(string(reason)) == "" {
-		return 0, errors.New("current node interruption reason is required")
+		return nil, errors.New("current node interruption reason is required")
 	}
 	detailJSON, err := json.Marshal(detail)
 	if err != nil {
-		return 0, fmt.Errorf("encode current node interruption detail: %w", err)
+		return nil, fmt.Errorf("encode current node interruption detail: %w", err)
 	}
-	return s.queries.RecoverAdmittedCurrentNodes(ctx, sqlitegen.RecoverAdmittedCurrentNodesParams{
+	rows, err := s.queries.RecoverExecutableCurrentNodes(ctx, sqlitegen.RecoverExecutableCurrentNodesParams{
 		InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
 		InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
 		InterruptedAtUnixMs:    sql.NullInt64{Int64: s.now().UTC().UnixMilli(), Valid: true},
 	})
+	if err != nil {
+		return nil, err
+	}
+	references := make([]workflow.CurrentNodeReference, 0, len(rows))
+	for _, row := range rows {
+		var branchKey *workflow.TransitionBranchKey
+		if row.TransitionBranchKey.Valid {
+			value := workflow.TransitionBranchKey(row.TransitionBranchKey.String)
+			branchKey = &value
+		}
+		reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID), branchKey)
+		if err != nil {
+			return nil, err
+		}
+		references = append(references, reference)
+	}
+	return references, nil
 }
 
 func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.InsertTaskCurrentNodeParams, error) {

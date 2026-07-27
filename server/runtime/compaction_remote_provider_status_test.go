@@ -15,6 +15,7 @@ import (
 )
 
 func TestRemoteCompactionFailsNonOverflowProvider400WithoutReplacementOrFallback(t *testing.T) {
+	t.Parallel()
 	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
 		ProviderID: "openai",
 		StatusCode: 400,
@@ -30,6 +31,7 @@ func TestRemoteCompactionFailsNonOverflowProvider400WithoutReplacementOrFallback
 }
 
 func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
@@ -105,6 +107,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 }
 
 func TestRemoteCompactionFails404WithoutReplacementOrFallback(t *testing.T) {
+	t.Parallel()
 	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
 		ProviderID: "openai",
 		StatusCode: 404,
