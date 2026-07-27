@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 
 	"core/shared/config"
 )
@@ -66,6 +66,11 @@ func validateProcessEnvironmentProbe(rootTestName string, environmentName string
 	if rootTestName == "" {
 		return fmt.Errorf("test process root test name is required")
 	}
+	for _, character := range rootTestName {
+		if !unicode.IsLetter(character) && !unicode.IsDigit(character) && character != '_' {
+			return fmt.Errorf("test process root test name %q contains unsupported character %q", rootTestName, character)
+		}
+	}
 	if environmentName == "" {
 		return fmt.Errorf("test process environment name is required")
 	}
@@ -73,7 +78,7 @@ func validateProcessEnvironmentProbe(rootTestName string, environmentName string
 }
 
 func testRunArgument(rootTestName string) string {
-	return "-test.run=^" + regexp.QuoteMeta(rootTestName) + "$"
+	return "-test.run=^" + rootTestName + "$"
 }
 
 func replaceEnvironment(environment []string, replacements ...string) []string {

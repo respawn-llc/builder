@@ -25,6 +25,10 @@ func TestProcessEnvironmentProbeRejectsMissingRequiredInputs(t *testing.T) {
 		"missing environment name": {
 			rootTestName: "TestProbe",
 		},
+		"unsupported root test name character": {
+			rootTestName:    "TestProbe[run]+",
+			environmentName: "KENT_PERSISTENCE_ROOT",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateProcessEnvironmentProbe(testCase.rootTestName, testCase.environmentName); err == nil {
@@ -34,9 +38,9 @@ func TestProcessEnvironmentProbeRejectsMissingRequiredInputs(t *testing.T) {
 	}
 }
 
-func TestTestRunArgumentEscapesLiteralRootName(t *testing.T) {
-	rootTestName := "TestProbe[run]+"
-	if got, want := testRunArgument(rootTestName), "-test.run=^TestProbe\\[run\\]\\+$"; got != want {
+func TestTestRunArgumentSelectsExactRootName(t *testing.T) {
+	rootTestName := "TestProbe"
+	if got, want := testRunArgument(rootTestName), "-test.run=^TestProbe$"; got != want {
 		t.Fatalf("test run argument = %q, want %q", got, want)
 	}
 }
