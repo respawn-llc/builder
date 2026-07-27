@@ -38,6 +38,31 @@ func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 			t.Fatalf("task-search uniqueness index %s is missing", index)
 		}
 	}
+	rows, err := store.db.Query(`PRAGMA foreign_key_list('task_search_documents')`)
+	if err != nil {
+		t.Fatalf("list task-search mapping foreign keys: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	foreignKeys := map[string]string{}
+	for rows.Next() {
+		var id, sequence int
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &sequence, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scan task-search mapping foreign key: %v", err)
+		}
+		foreignKeys[from] = table + ":" + onDelete
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate task-search mapping foreign keys: %v", err)
+	}
+	for column, want := range map[string]string{
+		"task_id":    "tasks:CASCADE",
+		"comment_id": "task_comments:CASCADE",
+	} {
+		if got := foreignKeys[column]; got != want {
+			t.Fatalf("task-search mapping foreign key %s = %q, want %q", column, got, want)
+		}
+	}
 	if _, err := store.db.Exec(`INSERT INTO task_search_fts(task_search_fts) VALUES ('integrity-check')`); err != nil {
 		t.Fatalf("run task-search FTS integrity check: %v", err)
 	}
