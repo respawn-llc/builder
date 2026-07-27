@@ -1,14 +1,21 @@
-import type { BoardNodeCardsPage, TaskLabelFilter, WorkflowBoard } from "@/api";
+import {
+  canonicalTaskLabelFilter,
+  taskLabelFiltersEqual,
+  type BoardNodeCardsPage,
+  type CanonicalTaskLabelFilter,
+  type TaskLabelFilter,
+  type WorkflowBoard,
+} from "@/api";
 
 export type BoardFilterGeneration = Readonly<{
   generation: number;
-  filter: TaskLabelFilter;
+  filter: CanonicalTaskLabelFilter;
   retiring: boolean;
 }>;
 
 export type BoardFilterGenerationSnapshot = Readonly<{
   active: BoardFilterGeneration;
-  desiredFilter: TaskLabelFilter | null;
+  desiredFilter: CanonicalTaskLabelFilter | null;
 }>;
 
 export type BoardFilterGenerationController = Readonly<{
@@ -68,7 +75,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     this.#snapshot = {
       active: {
         generation: 1,
-        filter: canonicalFilter(initialFilter),
+        filter: canonicalTaskLabelFilter(initialFilter),
         retiring: false,
       },
       desiredFilter: null,
@@ -122,9 +129,9 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
   }
 
   setDesiredFilter(filter: TaskLabelFilter): void {
-    const desiredFilter = canonicalFilter(filter);
+    const desiredFilter = canonicalTaskLabelFilter(filter);
     const { active } = this.#snapshot;
-    if (!active.retiring && filtersEqual(active.filter, desiredFilter)) {
+    if (!active.retiring && taskLabelFiltersEqual(active.filter, desiredFilter)) {
       return;
     }
     if (!this.#hasUnsettledWork() && !active.retiring) {
@@ -234,7 +241,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     this.#promote(desiredFilter);
   }
 
-  #promote(filter: TaskLabelFilter): void {
+  #promote(filter: CanonicalTaskLabelFilter): void {
     const active: BoardFilterGeneration = {
       generation: this.#snapshot.active.generation + 1,
       filter,
@@ -277,29 +284,4 @@ class OperationLeaseRegistry<T> {
 
 function scopedIdentity(generation: number, identity: string): string {
   return `${generation.toString()}:${identity}`;
-}
-
-function canonicalFilter(filter: TaskLabelFilter): TaskLabelFilter {
-  if (filter.kind !== "named") {
-    return filter;
-  }
-  return {
-    kind: "named",
-    mode: filter.mode,
-    labelIDs: [...filter.labelIDs].sort(),
-  };
-}
-
-function filtersEqual(left: TaskLabelFilter, right: TaskLabelFilter): boolean {
-  if (left.kind !== right.kind) {
-    return false;
-  }
-  if (left.kind !== "named" || right.kind !== "named") {
-    return true;
-  }
-  return (
-    left.mode === right.mode &&
-    left.labelIDs.length === right.labelIDs.length &&
-    left.labelIDs.every((labelID, index) => labelID === right.labelIDs[index])
-  );
 }

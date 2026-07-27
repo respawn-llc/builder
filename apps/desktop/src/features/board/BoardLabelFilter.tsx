@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from
 import { useTranslation } from "react-i18next";
 import { FilterIcon, XIcon } from "lucide-react";
 
+import { taskLabelFilterConditionCount } from "@/api";
 import {
   LabelChooser,
   type LabelMembershipRefreshEffect,
@@ -48,7 +49,7 @@ export function BoardLabelFilterChrome() {
   const active = filter.state.filter.kind !== "none";
   const summary =
     filter.state.filter.kind === "named"
-      ? t("labels.filterCount", { count: filter.state.filter.labelIDs.length })
+      ? t("labels.filterCount", { count: taskLabelFilterConditionCount(filter.state.filter) })
       : filter.state.filter.kind === "unlabeled"
         ? t("labels.unlabeled")
         : t("labels.filter");

@@ -160,6 +160,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		LabelFilterKind:        labelFilterArgs.kind,
 		LabelFilterMode:        labelFilterArgs.mode,
 		LabelIdsJson:           labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson:   labelFilterArgs.excludedLabelIDsJSON,
 		LimitRows:              int64(pageSize + 1),
 	})
 	if err != nil {
@@ -572,6 +573,7 @@ func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.W
 		LabelFilterKind:        labelFilterArgs.kind,
 		LabelFilterMode:        labelFilterArgs.mode,
 		LabelIdsJson:           labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson:   labelFilterArgs.excludedLabelIDsJSON,
 	})
 	if err != nil {
 		return err

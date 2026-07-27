@@ -123,6 +123,21 @@ func namedTaskLabelFilter(mode serverapi.WorkflowTaskNamedLabelFilterMode, label
 	}
 }
 
+func namedTaskLabelFilterWithExclusions(
+	mode serverapi.WorkflowTaskNamedLabelFilterMode,
+	labelIDs []string,
+	excludedLabelIDs []string,
+) serverapi.WorkflowTaskLabelFilter {
+	return serverapi.WorkflowTaskLabelFilter{
+		Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+		Named: &serverapi.WorkflowTaskNamedLabelFilter{
+			Mode:             mode,
+			LabelIDs:         append([]string(nil), labelIDs...),
+			ExcludedLabelIDs: append([]string(nil), excludedLabelIDs...),
+		},
+	}
+}
+
 func TestTaskListNamedAnyLabelFilterMatchesAnySelectedAssignment(t *testing.T) {
 	fixture := newTaskListLabelFilterFixture(t)
 	response := fixture.list(t, namedTaskLabelFilter(
@@ -147,6 +162,95 @@ func TestTaskListNamedAllLabelFilterMatchesEverySelectedAssignment(t *testing.T)
 		fixture.alpha.String(),
 	))
 	requireTaskListIDs(t, response, fixture.taskIDs["both"])
+}
+
+func TestTaskListNamedFilterCombinesIncludedAndExcludedConditions(t *testing.T) {
+	fixture := newTaskListLabelFilterFixture(t)
+	delta, err := fixture.store.CreateProjectLabel(fixture.ctx, fixture.projectID, "delta")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel delta: %v", err)
+	}
+	createTask := func(title string, labelIDs ...string) string {
+		t.Helper()
+		task, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+			ProjectID: fixture.projectID,
+			Title:     title,
+			LabelIDs:  labelIDs,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask %s: %v", title, err)
+		}
+		return string(task.ID)
+	}
+	featureWithUnrelatedLabel := createTask("feature with unrelated label", fixture.gamma.String(), delta.ID.String())
+	allConditions := createTask("all conditions", fixture.alpha.String(), fixture.beta.String(), fixture.gamma.String())
+
+	for _, tt := range []struct {
+		name   string
+		filter serverapi.WorkflowTaskLabelFilter
+		want   []string
+	}{
+		{
+			name: "mixed OR",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAny,
+				[]string{fixture.gamma.String()},
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["alpha"],
+				fixture.taskIDs["beta"],
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+				featureWithUnrelatedLabel,
+				allConditions,
+			},
+		},
+		{
+			name: "mixed AND",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAll,
+				[]string{fixture.gamma.String()},
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["gamma"],
+				featureWithUnrelatedLabel,
+			},
+		},
+		{
+			name: "excluded-only OR",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAny,
+				nil,
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["alpha"],
+				fixture.taskIDs["beta"],
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+				featureWithUnrelatedLabel,
+			},
+		},
+		{
+			name: "excluded-only AND",
+			filter: namedTaskLabelFilterWithExclusions(
+				serverapi.WorkflowTaskNamedLabelFilterModeAll,
+				nil,
+				[]string{fixture.alpha.String(), fixture.beta.String()},
+			),
+			want: []string{
+				fixture.taskIDs["gamma"],
+				fixture.taskIDs["unlabeled"],
+				featureWithUnrelatedLabel,
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requireTaskListIDs(t, fixture.list(t, tt.filter), tt.want...)
+		})
+	}
 }
 
 func TestTaskListOneNamedLabelMatchesIdenticallyInAnyAndAllModes(t *testing.T) {
@@ -272,6 +376,38 @@ func TestTaskListPageTokenRejectsAnotherNamedLabelMode(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("changed named label mode error = %v, want ErrInvalidPageToken", err)
+	}
+}
+
+func TestTaskListPageTokenRejectsChangedExcludedConditions(t *testing.T) {
+	fixture := newTaskListLabelFilterFixture(t)
+	firstPage, err := fixture.view.tasks(t).List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID: &fixture.projectID,
+		PageSize:  1,
+		LabelFilter: namedTaskLabelFilterWithExclusions(
+			serverapi.WorkflowTaskNamedLabelFilterModeAny,
+			nil,
+			[]string{fixture.alpha.String()},
+		),
+	})
+	if err != nil {
+		t.Fatalf("List first page: %v", err)
+	}
+	if firstPage.NextPageToken == nil {
+		t.Fatal("first page did not produce a continuation token")
+	}
+
+	_, err = fixture.view.tasks(t).List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		PageToken: *firstPage.NextPageToken,
+		PageSize:  1,
+		LabelFilter: namedTaskLabelFilterWithExclusions(
+			serverapi.WorkflowTaskNamedLabelFilterModeAny,
+			nil,
+			[]string{fixture.beta.String()},
+		),
+	})
+	if !errors.Is(err, ErrInvalidPageToken) {
+		t.Fatalf("changed excluded conditions error = %v, want ErrInvalidPageToken", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 import { Check, Pencil, Trash2, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import type { ProjectLabel } from "@/api";
 import {
@@ -26,6 +27,24 @@ export type DeleteState = Readonly<{
   error: string | null;
   pending: boolean;
 }>;
+
+export type LabelFilterCondition = "neutral" | "included" | "excluded";
+
+export type LabelResultRowSelection =
+  | Readonly<{
+      kind: "binary";
+      selected: boolean;
+    }>
+  | Readonly<{
+      kind: "condition";
+      state: LabelFilterCondition;
+    }>;
+
+const conditionIndicatorVisibility = {
+  neutral: "scale-75 opacity-0",
+  included: "scale-100 opacity-100",
+  excluded: "scale-100 opacity-100",
+} as const;
 
 export function LabelRenameEditor({
   onCancel,
@@ -94,7 +113,7 @@ export function LabelResultRow({
   onDeleteOpenChange,
   onRename,
   onSelect,
-  selected,
+  selection,
 }: Readonly<{
   deletion: DeleteState | null;
   highlighted: boolean;
@@ -103,19 +122,14 @@ export function LabelResultRow({
   onDeleteOpenChange(open: boolean): void;
   onRename(): void;
   onSelect(): void;
-  selected: boolean;
+  selection: LabelResultRowSelection;
 }>) {
   const { t } = useTranslation();
   const deleteAction = (
     <Popover onOpenChange={onDeleteOpenChange} open={deletion !== null}>
       <PopoverTrigger asChild>
         <Button aria-label={t("labels.delete", { name: label.name })} size="icon-sm" variant="ghost">
-          <Trash2
-            aria-hidden="true"
-            className="text-[var(--color-error)]"
-            size={14}
-            strokeWidth={1.8}
-          />
+          <Trash2 aria-hidden="true" className="text-[var(--color-error)]" size={14} strokeWidth={1.8} />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56" level={4} side="top">
@@ -136,7 +150,11 @@ export function LabelResultRow({
       contextualActions={
         <>
           {deleteAction}
-          <IconTooltipButton label={t("labels.rename", { name: label.name })} onClick={onRename} size="icon-sm">
+          <IconTooltipButton
+            label={t("labels.rename", { name: label.name })}
+            onClick={onRename}
+            size="icon-sm"
+          >
             <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
           </IconTooltipButton>
         </>
@@ -144,7 +162,7 @@ export function LabelResultRow({
       highlighted={highlighted}
       name={label.name}
       onSelect={onSelect}
-      selected={selected}
+      selection={selection}
     />
   );
 }
@@ -165,7 +183,7 @@ export function UnlabeledResultRow({
       highlighted={highlighted}
       name={name}
       onSelect={onSelect}
-      selected={selected}
+      selection={{ kind: "binary", selected }}
     />
   );
 }
@@ -175,33 +193,91 @@ function LabelSelectionRow({
   highlighted,
   name,
   onSelect,
-  selected,
+  selection,
 }: Readonly<{
   contextualActions?: ReactNode;
   highlighted: boolean;
   name: string;
   onSelect(): void;
-  selected: boolean;
+  selection: LabelResultRowSelection;
 }>) {
+  const { t } = useTranslation();
+  const conditionDescriptionID = useId();
+  const presentation =
+    selection.kind === "binary"
+      ? {
+          conditionDescription: null,
+          conditionState: null,
+          selectButtonProps: { onClick: onSelect },
+          selected: selection.selected,
+        }
+      : {
+          conditionDescription: labelConditionDescription(t, selection.state),
+          conditionState: selection.state,
+          selectButtonProps: {
+            "aria-describedby": conditionDescriptionID,
+            "aria-pressed": undefined,
+            onClick: onSelect,
+          },
+          selected: selection.state !== "neutral",
+        };
   return (
     <ActionableListRow
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
       contextualActions={contextualActions}
       role="listitem"
-      selectButtonProps={{ onClick: onSelect }}
-      selected={selected}
+      selectButtonProps={presentation.selectButtonProps}
+      selected={presentation.selected}
     >
-      <Chip className="min-w-[calc(3ch+var(--space-4))] justify-center" selected={selected}>
+      <Chip className="min-w-[calc(3ch+var(--space-4))] justify-center" selected={presentation.selected}>
         <span className="min-w-0 truncate text-center">{name}</span>
       </Chip>
-      {selected ? (
-        <Check
+      {presentation.conditionDescription === null ? null : (
+        <span className="sr-only" id={conditionDescriptionID}>
+          {presentation.conditionDescription}
+        </span>
+      )}
+      {presentation.conditionState === null ? (
+        presentation.selected ? (
+          <Check
+            aria-hidden="true"
+            className="pointer-events-none absolute top-1/2 right-[var(--space-2)] -translate-y-1/2 text-[var(--color-success)]"
+            size={16}
+            strokeWidth={1.8}
+          />
+        ) : null
+      ) : (
+        <span
           aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 right-[var(--space-2)] -translate-y-1/2 text-[var(--color-success)]"
-          size={16}
-          strokeWidth={1.8}
-        />
-      ) : null}
+          className={`label-filter-condition-indicator pointer-events-none absolute top-1/2 right-[var(--space-2)] grid size-4 -translate-y-1/2 place-items-center ${
+            conditionIndicatorVisibility[presentation.conditionState]
+          }`}
+        >
+          {labelConditionIndicatorIcon(presentation.conditionState)}
+        </span>
+      )}
     </ActionableListRow>
   );
+}
+
+function labelConditionDescription(t: TFunction, state: LabelFilterCondition): string {
+  switch (state) {
+    case "neutral":
+      return t("labels.filterConditionNeutral");
+    case "included":
+      return t("labels.filterConditionIncluded");
+    case "excluded":
+      return t("labels.filterConditionExcluded");
+  }
+}
+
+function labelConditionIndicatorIcon(state: LabelFilterCondition): ReactNode {
+  switch (state) {
+    case "neutral":
+      return null;
+    case "included":
+      return <Check className="text-[var(--color-success)]" size={16} strokeWidth={1.8} />;
+    case "excluded":
+      return <X className="text-[var(--color-error)]" size={16} strokeWidth={1.8} />;
+  }
 }

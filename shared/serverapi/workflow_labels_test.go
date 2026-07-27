@@ -75,8 +75,15 @@ func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 			LabelIDs: []string{workflowLabelIDAlpha},
 		},
 	}
+	namedExcluded := WorkflowTaskLabelFilter{
+		Kind: WorkflowTaskLabelFilterKindNamed,
+		Named: &WorkflowTaskNamedLabelFilter{
+			Mode:             WorkflowTaskNamedLabelFilterModeAny,
+			ExcludedLabelIDs: []string{workflowLabelIDAlpha},
+		},
+	}
 	unlabeled := WorkflowTaskLabelFilter{Kind: WorkflowTaskLabelFilterKindUnlabeled}
-	for _, filter := range []WorkflowTaskLabelFilter{none, namedAny, namedAll, unlabeled} {
+	for _, filter := range []WorkflowTaskLabelFilter{none, namedAny, namedAll, namedExcluded, unlabeled} {
 		if err := filter.Validate(); err != nil {
 			t.Fatalf("valid filter %+v rejected: %v", filter, err)
 		}
@@ -142,6 +149,54 @@ func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	}
 	if err := cards.Validate(); err != nil {
 		t.Fatalf("board cards all filter rejected: %v", err)
+	}
+}
+
+func TestWorkflowTaskNamedLabelFilterExclusionsValidateAndMarshalAdditively(t *testing.T) {
+	mixed := WorkflowTaskLabelFilter{
+		Kind: WorkflowTaskLabelFilterKindNamed,
+		Named: &WorkflowTaskNamedLabelFilter{
+			Mode:             WorkflowTaskNamedLabelFilterModeAny,
+			LabelIDs:         []string{workflowLabelIDAlpha},
+			ExcludedLabelIDs: []string{workflowLabelIDBeta},
+		},
+	}
+	if err := mixed.Validate(); err != nil {
+		t.Fatalf("mixed named filter rejected: %v", err)
+	}
+	data, err := json.Marshal(mixed)
+	if err != nil {
+		t.Fatalf("marshal mixed named filter: %v", err)
+	}
+	var shape struct {
+		Named map[string]any `json:"named"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		t.Fatalf("decode mixed named filter: %v", err)
+	}
+	if !slices.Equal(shape.Named["excluded_label_ids"].([]any), []any{workflowLabelIDBeta}) {
+		t.Fatalf("mixed named filter exclusions = %#v, want [%q]", shape.Named["excluded_label_ids"], workflowLabelIDBeta)
+	}
+
+	includeOnly := WorkflowTaskLabelFilter{
+		Kind: WorkflowTaskLabelFilterKindNamed,
+		Named: &WorkflowTaskNamedLabelFilter{
+			Mode:     WorkflowTaskNamedLabelFilterModeAll,
+			LabelIDs: []string{workflowLabelIDAlpha},
+		},
+	}
+	includeOnlyData, err := json.Marshal(includeOnly)
+	if err != nil {
+		t.Fatalf("marshal include-only named filter: %v", err)
+	}
+	shape = struct {
+		Named map[string]any `json:"named"`
+	}{}
+	if err := json.Unmarshal(includeOnlyData, &shape); err != nil {
+		t.Fatalf("decode include-only named filter: %v", err)
+	}
+	if _, exists := shape.Named["excluded_label_ids"]; exists {
+		t.Fatalf("include-only named filter unexpectedly carries exclusions: %s", includeOnlyData)
 	}
 }
 
@@ -224,6 +279,19 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 			code:  WorkflowRequestErrorTooLong,
 		},
 		{
+			name: "named filter combined 101 IDs wins over malformed IDs",
+			request: WorkflowTaskLabelFilter{
+				Kind: WorkflowTaskLabelFilterKindNamed,
+				Named: &WorkflowTaskNamedLabelFilter{
+					Mode:             WorkflowTaskNamedLabelFilterModeAny,
+					LabelIDs:         raw101[:WorkflowLabelMaxIDs],
+					ExcludedLabelIDs: raw101[WorkflowLabelMaxIDs:],
+				},
+			},
+			field: "label_filter.excluded_label_ids",
+			code:  WorkflowRequestErrorTooLong,
+		},
+		{
 			name:    "task create rejects non-canonical label ID",
 			request: WorkflowTaskCreateRequest{ProjectID: projectID, Title: "Task", LabelIDs: []string{"11111111-1111-4111-8111-111111111111 "}},
 			field:   "label_ids[0]",
@@ -276,6 +344,43 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 			},
 			field: "label_filter.label_ids",
 			code:  WorkflowRequestErrorRequired,
+		},
+		{
+			name: "named filter rejects malformed excluded ID",
+			request: WorkflowTaskLabelFilter{
+				Kind: WorkflowTaskLabelFilterKindNamed,
+				Named: &WorkflowTaskNamedLabelFilter{
+					Mode:             WorkflowTaskNamedLabelFilterModeAny,
+					ExcludedLabelIDs: []string{"not-a-uuid"},
+				},
+			},
+			field: "label_filter.excluded_label_ids[0]",
+			code:  WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name: "named filter rejects duplicate excluded ID",
+			request: WorkflowTaskLabelFilter{
+				Kind: WorkflowTaskLabelFilterKindNamed,
+				Named: &WorkflowTaskNamedLabelFilter{
+					Mode:             WorkflowTaskNamedLabelFilterModeAny,
+					ExcludedLabelIDs: []string{workflowLabelIDAlpha, workflowLabelIDAlpha},
+				},
+			},
+			field: "label_filter.excluded_label_ids[1]",
+			code:  WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name: "named filter rejects included and excluded overlap",
+			request: WorkflowTaskLabelFilter{
+				Kind: WorkflowTaskLabelFilterKindNamed,
+				Named: &WorkflowTaskNamedLabelFilter{
+					Mode:             WorkflowTaskNamedLabelFilterModeAny,
+					LabelIDs:         []string{workflowLabelIDAlpha},
+					ExcludedLabelIDs: []string{workflowLabelIDAlpha},
+				},
+			},
+			field: "label_filter.excluded_label_ids[0]",
+			code:  WorkflowRequestErrorInvalidValue,
 		},
 		{
 			name: "none filter rejects named sentinel",

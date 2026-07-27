@@ -10,19 +10,20 @@ import (
 )
 
 type taskListCommandContext struct {
-	ProjectRef         string
-	ResolvedProjectID  string
-	SelectedWorkflowID *string
-	ColumnKeys         []string
-	StatusKinds        []serverapi.WorkflowTaskStatusKind
-	AttentionKinds     []serverapi.WorkflowTaskAttentionKind
-	Sort               []serverapi.WorkflowTaskListSort
-	LabelSelectors     []string
-	LabelMatch         *serverapi.WorkflowTaskNamedLabelFilterMode
-	Unlabeled          bool
-	PageSize           int
-	PageToken          string
-	JSON               bool
+	ProjectRef             string
+	ResolvedProjectID      string
+	SelectedWorkflowID     *string
+	ColumnKeys             []string
+	StatusKinds            []serverapi.WorkflowTaskStatusKind
+	AttentionKinds         []serverapi.WorkflowTaskAttentionKind
+	Sort                   []serverapi.WorkflowTaskListSort
+	LabelSelectors         []string
+	ExcludedLabelSelectors []string
+	LabelMatch             *serverapi.WorkflowTaskNamedLabelFilterMode
+	Unlabeled              bool
+	PageSize               int
+	PageToken              string
+	JSON                   bool
 }
 
 type taskCreateCommandContext struct {
@@ -301,6 +302,9 @@ func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID 
 	}
 	for _, selector := range commandContext.LabelSelectors {
 		args = append(args, "--label", selector)
+	}
+	for _, selector := range commandContext.ExcludedLabelSelectors {
+		args = append(args, "--not-label", selector)
 	}
 	if commandContext.LabelMatch != nil {
 		args = append(args, "--label-match", string(*commandContext.LabelMatch))

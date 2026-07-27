@@ -139,6 +139,7 @@ export type {
   WorkspaceUnlinkResponse,
 } from "./models";
 export type {
+  CanonicalTaskLabelFilter,
   ProjectLabel,
   ProjectLabelCatalog,
   TaskLabelAssignment,
@@ -146,4 +147,10 @@ export type {
   TaskListItem,
   TaskListPage,
 } from "./workflowLabels";
-export { noTaskLabelFilter } from "./workflowLabels";
+export {
+  canonicalTaskLabelFilter,
+  labelIDListsEqual,
+  noTaskLabelFilter,
+  taskLabelFilterConditionCount,
+  taskLabelFiltersEqual,
+} from "./workflowLabels";

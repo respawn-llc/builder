@@ -1566,7 +1566,8 @@ label_filter_args AS (
     SELECT
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
-        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.arg(excluded_label_ids_json) AS TEXT) AS excluded_label_ids_json
 ),
 effective_board_placements AS (
     SELECT
@@ -1623,7 +1624,7 @@ SELECT
 FROM effective_board_placements
 JOIN label_filter_args
 WHERE (
-{{taskLabelFilter "    " "effective_board_placements.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json"}}
+{{taskLabelFilter "    " "effective_board_placements.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json" "label_filter_args.excluded_label_ids_json"}}
 )
 GROUP BY node_id
 ORDER BY node_id ASC;
@@ -1645,6 +1646,7 @@ args AS (
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.arg(excluded_label_ids_json) AS TEXT) AS excluded_label_ids_json,
         CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
         CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
         CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
@@ -1864,7 +1866,7 @@ selected_rows AS (
           )
       )
       AND (
-{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json"}}
+{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json" "args.excluded_label_ids_json"}}
       )
 ),
 matching_workflows AS (
@@ -1997,7 +1999,7 @@ WITH board_node_tasks AS (
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
-{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)"}}
+{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
       )
       AND (
           EXISTS (

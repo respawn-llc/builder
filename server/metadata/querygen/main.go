@@ -13,11 +13,12 @@ import (
 )
 
 type taskLabelFilterTemplateData struct {
-	FilterKind string
-	FilterMode string
-	Indent     string
-	LabelIDs   string
-	TaskID     string
+	FilterKind       string
+	FilterMode       string
+	Indent           string
+	LabelIDs         string
+	ExcludedLabelIDs string
+	TaskID           string
 }
 
 func main() {
@@ -114,13 +115,15 @@ func generateQueries(source []byte, filterSource []byte) ([]byte, error) {
 		filterKind string,
 		filterMode string,
 		labelIDs string,
+		excludedLabelIDs string,
 	) (string, error) {
 		data := taskLabelFilterTemplateData{
-			FilterKind: filterKind,
-			FilterMode: filterMode,
-			Indent:     indent,
-			LabelIDs:   labelIDs,
-			TaskID:     taskID,
+			FilterKind:       filterKind,
+			FilterMode:       filterMode,
+			Indent:           indent,
+			LabelIDs:         labelIDs,
+			ExcludedLabelIDs: excludedLabelIDs,
+			TaskID:           taskID,
 		}
 		if err := data.validate(); err != nil {
 			return "", err
@@ -155,6 +158,8 @@ func (d taskLabelFilterTemplateData) validate() error {
 		return errors.New("filter mode template expression is empty")
 	case strings.TrimSpace(d.LabelIDs) == "":
 		return errors.New("label IDs template expression is empty")
+	case strings.TrimSpace(d.ExcludedLabelIDs) == "":
+		return errors.New("excluded label IDs template expression is empty")
 	default:
 		return nil
 	}

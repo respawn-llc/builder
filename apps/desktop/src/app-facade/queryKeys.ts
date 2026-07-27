@@ -1,14 +1,22 @@
-import type { TaskLabelFilter } from "@/api";
+import { canonicalTaskLabelFilter, type TaskLabelFilter } from "@/api";
 
 const attentionKey = ["attention"] as const;
 
 function labelFilterKey(filter: TaskLabelFilter): readonly string[] {
-  switch (filter.kind) {
+  const canonical = canonicalTaskLabelFilter(filter);
+  switch (canonical.kind) {
     case "none":
     case "unlabeled":
-      return [filter.kind];
+      return [canonical.kind];
     case "named":
-      return [filter.kind, filter.mode, ...[...filter.labelIDs].sort()];
+      return [
+        canonical.kind,
+        canonical.mode,
+        "included",
+        ...canonical.labelIDs,
+        "excluded",
+        ...canonical.excludedLabelIDs,
+      ];
   }
 }
 
@@ -36,11 +44,7 @@ export const queryKeys = {
   allActivity: ["activity"],
   allComments: ["comments"],
   allPendingAsks: ["pending-asks"],
-  boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => [
-    "board",
-    projectID,
-    workflowID,
-  ],
+  boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
   projectBoardsRoot: (projectID: string) => ["board", projectID],
   board: (projectID: string, workflowID: string | undefined, labelFilter: TaskLabelFilter) => [
     "board",

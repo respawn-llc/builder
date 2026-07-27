@@ -62,17 +62,19 @@
 ## Labels
 
 - Boards have one transparent label-filter row. It provides no status, attention, column, or sort filter.
-- The trigger says `Labels` with no filter, `Labels · N` with selected Labels, and `No labels` for the unlabeled filter. A clear action appears only for an active filter.
+- The trigger says `Labels` with no filter, `Labels · N` with named Label conditions, and `No labels` for the unlabeled filter. N counts included and excluded Label conditions. A clear action appears only for an active filter.
 - One Label filter and its OR/AND mode apply to every board in a Project and persist for that Project in the desktop installation. They are not shared with other clients. OR is the default.
-- `No labels` clears named selections and disables OR/AND. Selecting it again removes that filter without losing the remembered named mode. Selecting a Label clears `No labels` and restores the remembered mode. Clear removes the filter and restores OR.
+- Board Label filtering uses the shared Label-expression semantics in the Workflow orchestration specification.
+- `No labels` clears all named Label conditions and disables OR/AND. Selecting it again removes that filter without losing the remembered named mode. Selecting a Label clears `No labels` and restores the remembered mode. Clear removes the filter and restores OR.
 - Filter changes apply immediately through server filtering while the chooser remains open. There is no Apply step. Existing cards remain visible without a replacement loading state until new content arrives. Active filters change each column count to the matching Task count.
-- Deleting a selected Label removes it from the saved filter. Removing the last selected Label clears the named restriction; deleting another Label does not change an active `No labels` filter.
+- Deleting a participating Label removes its included or excluded condition from the saved filter. Removing the last named Label condition clears the named restriction; deleting another Label does not change an active `No labels` filter.
 - One chooser manages filtering, Task Label assignment, and Label creation, renaming, and deletion. There is no separate Project Label page.
 - Search is case-insensitive substring matching with case-insensitive alphabetical results. When no exact case-insensitive name exists, offer `Create “…”`; creation immediately selects the Label for the invoking use.
 - A Project permits at most 100 Labels. At the limit, search and selection remain available and creation explains its unavailability; deletion restores creation.
 - The chooser shows at most 10 scrolling result rows, keeps search and context controls visible, remains open through selection and management actions, and discards an uncommitted rename on close.
-- Rows toggle selection. Rename edits in place and can be committed or cancelled; validation failures remain inline. Deleting a Label requires confirmation and removes it from all Tasks.
-- Assignment omits OR/AND and `No labels` but otherwise has the same chooser behavior. Labels are neutral chips, ordered case-insensitively in the chooser, Task Detail, and board cards. Renaming can reposition them.
+- In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser enters the included state.
+- Rename edits in place and can be committed or cancelled; validation failures remain inline. Deleting a Label requires confirmation and removes it from all Tasks.
+- Assignment omits OR/AND and `No labels` and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. Labels are neutral chips, ordered case-insensitively in the chooser, Task Detail, and board cards. Renaming can reposition them.
 - Board cards show fitting complete Labels in their footer and replace the last fitting position with `+N` when needed. Task Detail places Labels directly after Task ID; the entire Label value opens the chooser.
 - Labels can change in every Task state. The interface updates immediately, then adopts the server result; failures restore the prior state and show a persistent Retry error.
 

@@ -77,6 +77,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 				"none",
 				"",
 				"[]",
+				"[]",
 				"node-1",
 				"node-done",
 				direction,
@@ -94,7 +95,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 		{
 			name: "column counts",
 			sql:  listBoardColumnTaskCounts,
-			args: []any{"none", "", "[]", "project-1", "workflow-1", "node-done"},
+			args: []any{"none", "", "[]", "[]", "project-1", "workflow-1", "node-done"},
 		},
 		{
 			name: "node cards",
@@ -104,6 +105,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 				"workflow-1",
 				"none",
 				"",
+				"[]",
 				"[]",
 				"node-1",
 				"node-done",

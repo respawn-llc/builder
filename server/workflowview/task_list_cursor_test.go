@@ -186,6 +186,63 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 	}
 }
 
+func TestWorkflowTaskListRequestFingerprintIncludesExcludedConditions(t *testing.T) {
+	const (
+		alphaID = "00000000-0000-4000-8000-000000000001"
+		betaID  = "00000000-0000-4000-8000-000000000002"
+	)
+	mode := serverapi.WorkflowTaskNamedLabelFilterModeAny
+	scope := workflowTaskListFingerprintScope{
+		ProjectWide: &workflowTaskListProjectWideFingerprintInvariants{},
+	}
+	sortSelectors := normalizeWorkflowTaskListSort(nil)
+	includedAlphaExcludedBeta, err := workflowTaskListRequestFingerprint(
+		serverapi.WorkflowTaskListRequest{LabelFilter: serverapi.WorkflowTaskLabelFilter{
+			Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+			Named: &serverapi.WorkflowTaskNamedLabelFilter{
+				Mode:             mode,
+				LabelIDs:         []string{alphaID},
+				ExcludedLabelIDs: []string{betaID},
+			},
+		}},
+		workflowTaskLabelFilterFacts{
+			Kind:             serverapi.WorkflowTaskLabelFilterKindNamed,
+			Mode:             &mode,
+			LabelIDs:         []string{alphaID},
+			ExcludedLabelIDs: []string{betaID},
+		},
+		sortSelectors,
+		scope,
+	)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	includedBetaExcludedAlpha, err := workflowTaskListRequestFingerprint(
+		serverapi.WorkflowTaskListRequest{LabelFilter: serverapi.WorkflowTaskLabelFilter{
+			Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+			Named: &serverapi.WorkflowTaskNamedLabelFilter{
+				Mode:             mode,
+				LabelIDs:         []string{betaID},
+				ExcludedLabelIDs: []string{alphaID},
+			},
+		}},
+		workflowTaskLabelFilterFacts{
+			Kind:             serverapi.WorkflowTaskLabelFilterKindNamed,
+			Mode:             &mode,
+			LabelIDs:         []string{betaID},
+			ExcludedLabelIDs: []string{alphaID},
+		},
+		sortSelectors,
+		scope,
+	)
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
+	if includedAlphaExcludedBeta == includedBetaExcludedAlpha {
+		t.Fatalf("fingerprints collide across label-condition polarity: %q", includedAlphaExcludedBeta)
+	}
+}
+
 func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
 	request := serverapi.WorkflowTaskListRequest{
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}}

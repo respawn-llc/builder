@@ -6,7 +6,7 @@ Usage of kent task:
   kent task approve <transition-id> [--execution-target none|head|default-branch|ref:<revision>]
   kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
   kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
   kent task delete <short-id-or-task-id> [--project <project>]
@@ -37,7 +37,7 @@ Workflow selection:
   default, or the lone linked workflow when the project has no default.
 
 Labels:
-  Label selectors are literal repeatable `--label` values. A canonical UUIDv4
+  Label selectors are literal repeatable `--label` and `--not-label` values. A canonical UUIDv4
   selects a label ID; every other value is trimmed and matched as a complete
   case-insensitive Unicode label name. Values are never comma-split.
   Catalog deletion is immediate and removes the label from every Project task.
@@ -66,6 +66,7 @@ Listing tasks:
   positions belong to one workflow.
   `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
   followed by `:asc` or `:desc`.
-  `--label-match` defaults to `any`; `all` requires every selected label.
-  `--unlabeled` cannot be combined with `--label` or an explicit `--label-match`.
+  `--label-match` defaults to `any`; `all` requires every included and excluded
+  label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`,
+  or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.
