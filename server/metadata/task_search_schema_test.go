@@ -9,6 +9,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"core/server/tasksearchtext"
+
 	"github.com/pressly/goose/v3"
 )
 
@@ -51,11 +53,13 @@ func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 	assertTaskSearchTriggerCatalog(t, store.db, []string{
 		"task_search_comment_body_after_update",
 		"task_search_comment_body_before_update",
+		"task_search_comment_delete",
 		"task_search_comment_insert",
 		"task_search_document_delete",
 		"task_search_document_insert",
 		"task_search_task_body_after_update",
 		"task_search_task_body_before_update",
+		"task_search_task_delete",
 		"task_search_task_insert",
 		"task_search_task_title_after_update",
 		"task_search_task_title_before_update",
@@ -102,15 +106,16 @@ func TestTaskSearchMigrationBackfillsLegacyTaskAndCommentDocuments(t *testing.T)
 
 	assertTaskSearchInvariants(t, store.db)
 	for _, search := range []struct {
-		query  string
-		wantID string
+		query      string
+		sourceKind string
+		wantID     string
 	}{
-		{query: "title one zebra", wantID: "task-legacy-search-one"},
-		{query: "body two wombat", wantID: "task-legacy-search-two"},
-		{query: "comment one vulture", wantID: "comment-legacy-search-one"},
-		{query: "comment two urchin", wantID: "comment-legacy-search-two"},
+		{query: "title one zebra", sourceKind: "title", wantID: "task-legacy-search-one"},
+		{query: "body two wombat", sourceKind: "body", wantID: "task-legacy-search-two"},
+		{query: "comment one vulture", sourceKind: "comment", wantID: "comment-legacy-search-one"},
+		{query: "comment two urchin", sourceKind: "comment", wantID: "comment-legacy-search-two"},
 	} {
-		assertTaskSearchSourceSearchable(t, store.db, search.query, search.wantID)
+		assertTaskSearchSourceSearchable(t, store.db, search.query, search.sourceKind, search.wantID)
 	}
 }
 
@@ -175,35 +180,14 @@ ORDER BY document_id ASC`)
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate task-search documents: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("task-search documents = %v, want title/body/comment mappings", got)
+	slices.Sort(got)
+	want := []string{
+		"body:task-1:",
+		"comment::comment-1",
+		"title:task-1:",
 	}
-
-	if _, err := store.db.Exec(`UPDATE tasks SET title = 'changed task title' WHERE id = 'task-1'`); err != nil {
-		t.Fatalf("update task title: %v", err)
-	}
-	var matched int
-	if err := store.db.QueryRow(`
-SELECT COUNT(*)
-FROM task_search_fts
-WHERE title MATCH '"changed task title"'`).Scan(&matched); err != nil {
-		t.Fatalf("query updated task title in FTS: %v", err)
-	}
-	if matched != 1 {
-		t.Fatalf("updated task title FTS match count = %d, want 1", matched)
-	}
-
-	if _, err := store.db.Exec(`DELETE FROM task_comments WHERE id = 'comment-1'`); err != nil {
-		t.Fatalf("delete task comment: %v", err)
-	}
-	if err := store.db.QueryRow(`
-SELECT COUNT(*)
-FROM task_search_documents
-WHERE comment_id = 'comment-1'`).Scan(&matched); err != nil {
-		t.Fatalf("count deleted comment mapping: %v", err)
-	}
-	if matched != 0 {
-		t.Fatalf("deleted comment mapping count = %d, want 0", matched)
+	if !slices.Equal(got, want) {
+		t.Fatalf("task-search documents = %v, want %v", got, want)
 	}
 	assertTaskSearchInvariants(t, store.db)
 }
@@ -236,6 +220,172 @@ VALUES ('comment', 'comment-1')`,
 		assertSQLiteConstraint(t, store.db, statement)
 	}
 	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchSourceMutationsSynchronizeFTS(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-mutation", 1, "KNT-1", "task create title koala", "task create body llama", now)
+	assertTaskSearchSourceSearchable(t, store.db, "create title koala", "title", "task-mutation")
+	assertTaskSearchSourceSearchable(t, store.db, "create body llama", "body", "task-mutation")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`UPDATE tasks SET title = 'task update title mongoose' WHERE id = 'task-mutation'`); err != nil {
+		t.Fatalf("update task title: %v", err)
+	}
+	assertTaskSearchSourceNotSearchable(t, store.db, "create title koala")
+	assertTaskSearchSourceSearchable(t, store.db, "update title mongoose", "title", "task-mutation")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`UPDATE tasks SET body = 'task update body narwhal' WHERE id = 'task-mutation'`); err != nil {
+		t.Fatalf("update task body: %v", err)
+	}
+	assertTaskSearchSourceNotSearchable(t, store.db, "create body llama")
+	assertTaskSearchSourceSearchable(t, store.db, "update body narwhal", "body", "task-mutation")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-mutation', 'task-mutation', 'comment create otter', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("create task comment: %v", err)
+	}
+	assertTaskSearchSourceSearchable(t, store.db, "create otter", "comment", "comment-mutation")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`UPDATE task_comments SET body = 'comment update puffin' WHERE id = 'comment-mutation'`); err != nil {
+		t.Fatalf("update task comment: %v", err)
+	}
+	assertTaskSearchSourceNotSearchable(t, store.db, "create otter")
+	assertTaskSearchSourceSearchable(t, store.db, "update puffin", "comment", "comment-mutation")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`DELETE FROM task_comments WHERE id = 'comment-mutation'`); err != nil {
+		t.Fatalf("delete task comment: %v", err)
+	}
+	assertTaskSearchSourceNotSearchable(t, store.db, "update puffin")
+	assertTaskSearchInvariants(t, store.db)
+
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-task-delete', 'task-mutation', 'comment task delete quokka', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("create task-delete comment: %v", err)
+	}
+	assertTaskSearchSourceSearchable(t, store.db, "task delete quokka", "comment", "comment-task-delete")
+	if _, err := store.db.Exec(`DELETE FROM tasks WHERE id = 'task-mutation'`); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	for _, query := range []string{
+		"update title mongoose",
+		"update body narwhal",
+		"task delete quokka",
+	} {
+		assertTaskSearchSourceNotSearchable(t, store.db, query)
+	}
+	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchMappingFailureRollsBackCanonicalCreates(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-stable", 1, "KNT-1", "stable task title", "stable task body", now)
+	if _, err := store.db.Exec(`CREATE TRIGGER test_task_search_mapping_failure
+BEFORE INSERT ON task_search_documents
+BEGIN
+    SELECT RAISE(ABORT, 'forced task-search mapping failure');
+END`); err != nil {
+		t.Fatalf("create mapping failure trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.db.Exec(`DROP TRIGGER IF EXISTS test_task_search_mapping_failure`)
+	})
+
+	if _, err := store.db.Exec(`INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES ('task-mapping-failure', 'link-1', 1, 2, 'KNT-2', 'mapping failure title', 'mapping failure body', ?, ?, '{}')`, now, now); err == nil {
+		t.Fatal("task creation succeeded despite injected mapping failure")
+	}
+	assertTaskSearchTaskAbsent(t, store.db, "task-mapping-failure")
+
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-mapping-failure', 'task-stable', 'mapping failure comment', 'user', 'operator', ?, ?)`, now, now); err == nil {
+		t.Fatal("comment creation succeeded despite injected mapping failure")
+	}
+	assertTaskSearchCommentAbsent(t, store.db, "comment-mapping-failure")
+	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchFTSFailureRollsBackCanonicalMutations(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-fts-failure", 1, "KNT-1", "fts original title", "fts original body", now)
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-fts-failure', 'task-fts-failure', 'fts original comment', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("create FTS failure task comment: %v", err)
+	}
+	for _, mutation := range []struct {
+		name          string
+		statement     string
+		verifySources []string
+		absentSources []string
+	}{
+		{
+			name:          "task title update",
+			statement:     `UPDATE tasks SET title = 'fts changed title' WHERE id = 'task-fts-failure'`,
+			verifySources: []string{"original title"},
+			absentSources: []string{"changed title"},
+		},
+		{
+			name:          "task body update",
+			statement:     `UPDATE tasks SET body = 'fts changed body' WHERE id = 'task-fts-failure'`,
+			verifySources: []string{"original body"},
+			absentSources: []string{"changed body"},
+		},
+		{
+			name:          "comment body update",
+			statement:     `UPDATE task_comments SET body = 'fts changed comment' WHERE id = 'comment-fts-failure'`,
+			verifySources: []string{"original comment"},
+			absentSources: []string{"changed comment"},
+		},
+		{
+			name:          "comment delete",
+			statement:     `DELETE FROM task_comments WHERE id = 'comment-fts-failure'`,
+			verifySources: []string{"original comment"},
+		},
+		{
+			name:          "task delete",
+			statement:     `DELETE FROM tasks WHERE id = 'task-fts-failure'`,
+			verifySources: []string{"original title", "original body", "original comment"},
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			tx, err := store.db.BeginTx(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("begin transaction: %v", err)
+			}
+			if _, err := tx.Exec(`DROP TABLE task_search_fts`); err != nil {
+				t.Fatalf("drop FTS table: %v", err)
+			}
+			if _, err := tx.Exec(mutation.statement); err == nil {
+				t.Fatalf("%s succeeded despite injected FTS failure", mutation.name)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatalf("roll back injected FTS failure: %v", err)
+			}
+			for _, query := range mutation.verifySources {
+				assertTaskSearchSourceSearchable(t, store.db, query, "", "")
+			}
+			for _, query := range mutation.absentSources {
+				assertTaskSearchSourceNotSearchable(t, store.db, query)
+			}
+			assertTaskSearchInvariants(t, store.db)
+		})
+	}
 }
 
 func openVersion59TaskSearchFixture(t *testing.T) (*sql.DB, string) {
@@ -358,6 +508,38 @@ func assertTaskSearchLegacySourcesRemain(t *testing.T, db *sql.DB) {
 		if body != comment.body {
 			t.Fatalf("comment %s after failed task-search migration = %q, want %q", comment.id, body, comment.body)
 		}
+	}
+}
+
+func insertTaskSearchTestTask(t *testing.T, db *sql.DB, id string, sequence int, shortID string, title string, body string, now int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (?, 'link-1', 1, ?, ?, ?, ?, ?, ?, '{}')`, id, sequence, shortID, title, body, now, now); err != nil {
+		t.Fatalf("insert task-search task %s: %v", id, err)
+	}
+}
+
+func assertTaskSearchTaskAbsent(t *testing.T, db *sql.DB, taskID string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE id = ?`, taskID).Scan(&count); err != nil {
+		t.Fatalf("count task %s: %v", taskID, err)
+	}
+	if count != 0 {
+		t.Fatalf("task %s count = %d, want 0", taskID, count)
+	}
+}
+
+func assertTaskSearchCommentAbsent(t *testing.T, db *sql.DB, commentID string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_comments WHERE id = ?`, commentID).Scan(&count); err != nil {
+		t.Fatalf("count task comment %s: %v", commentID, err)
+	}
+	if count != 0 {
+		t.Fatalf("task comment %s count = %d, want 0", commentID, count)
 	}
 }
 
@@ -608,40 +790,69 @@ func taskSearchSparseText(t *testing.T, documentID int64, title sql.NullString, 
 	return text
 }
 
-func assertTaskSearchSourceSearchable(t *testing.T, db *sql.DB, query string, wantSourceID string) {
+func assertTaskSearchSourceSearchable(t *testing.T, db *sql.DB, query string, wantSourceKind string, wantSourceID string) {
 	t.Helper()
-	rows, err := db.Query(`SELECT document_id
-FROM task_search_documents
-WHERE document_id IN (
-    SELECT rowid
-    FROM task_search_fts
-    WHERE task_search_fts MATCH ?
-)`, `"`+query+`"`)
+	rows, err := db.Query(`SELECT document.source_kind, document.task_id, document.comment_id
+FROM task_search_documents document
+JOIN task_search_fts ON task_search_fts.rowid = document.document_id
+WHERE task_search_fts MATCH ?`, taskSearchCandidateExpression(t, query))
 	if err != nil {
 		t.Fatalf("search task-search FTS for %q: %v", query, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var documentIDs []int64
+	var sources []struct {
+		kind      string
+		taskID    sql.NullString
+		commentID sql.NullString
+	}
 	for rows.Next() {
-		var documentID int64
-		if err := rows.Scan(&documentID); err != nil {
+		var source struct {
+			kind      string
+			taskID    sql.NullString
+			commentID sql.NullString
+		}
+		if err := rows.Scan(&source.kind, &source.taskID, &source.commentID); err != nil {
 			t.Fatalf("scan task-search FTS result for %q: %v", query, err)
 		}
-		documentIDs = append(documentIDs, documentID)
+		sources = append(sources, source)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate task-search FTS result for %q: %v", query, err)
 	}
-	if len(documentIDs) != 1 {
-		t.Fatalf("task-search FTS result count for %q = %d, want 1", query, len(documentIDs))
+	if len(sources) != 1 {
+		t.Fatalf("task-search FTS result count for %q = %d, want 1", query, len(sources))
 	}
-	var taskID, commentID sql.NullString
-	if err := db.QueryRow(`SELECT task_id, comment_id
-FROM task_search_documents
-WHERE document_id = ?`, documentIDs[0]).Scan(&taskID, &commentID); err != nil {
-		t.Fatalf("read task-search FTS source for %q: %v", query, err)
+	if wantSourceKind == "" {
+		return
 	}
-	if (!taskID.Valid || taskID.String != wantSourceID) && (!commentID.Valid || commentID.String != wantSourceID) {
-		t.Fatalf("task-search FTS source for %q = task:%+v comment:%+v, want %q", query, taskID, commentID, wantSourceID)
+	source := sources[0]
+	if source.kind != wantSourceKind {
+		t.Fatalf("task-search FTS source kind for %q = %q, want %q", query, source.kind, wantSourceKind)
 	}
+	if (source.kind == "comment" && (!source.commentID.Valid || source.commentID.String != wantSourceID)) ||
+		(source.kind != "comment" && (!source.taskID.Valid || source.taskID.String != wantSourceID)) {
+		t.Fatalf("task-search FTS source for %q = task:%+v comment:%+v, want %s:%s", query, source.taskID, source.commentID, wantSourceKind, wantSourceID)
+	}
+}
+
+func assertTaskSearchSourceNotSearchable(t *testing.T, db *sql.DB, query string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*)
+FROM task_search_fts
+WHERE task_search_fts MATCH ?`, taskSearchCandidateExpression(t, query)).Scan(&count); err != nil {
+		t.Fatalf("search task-search FTS for absent source %q: %v", query, err)
+	}
+	if count != 0 {
+		t.Fatalf("task-search FTS result count for absent source %q = %d, want 0", query, count)
+	}
+}
+
+func taskSearchCandidateExpression(t *testing.T, query string) string {
+	t.Helper()
+	matcher, err := tasksearchtext.NewLiteralMatcher(query, tasksearchtext.LiteralCaseInsensitive)
+	if err != nil {
+		t.Fatalf("create literal matcher for task-search FTS query %q: %v", query, err)
+	}
+	return matcher.CandidateExpression()
 }
