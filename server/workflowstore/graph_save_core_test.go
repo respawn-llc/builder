@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 	"core/shared/toolspec"
 )
@@ -123,6 +124,62 @@ func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
 	close(resolver.release)
 	if err := <-saveDone; err != nil {
 		t.Fatalf("SaveWorkflowGraph after validation release: %v", err)
+	}
+}
+
+func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
+	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	spareDoneID := workflow.NodeID("node-spare-done-" + string(workflowID))
+	spareGroupID := workflow.TransitionGroupID("group-spare-done-" + string(workflowID))
+	spareEdgeID := workflow.EdgeID("edge-spare-done-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.Nodes = append(req.Nodes, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"})
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: spareEdgeID, WorkflowID: workflowID, TransitionGroupID: spareGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession})
+	})
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, spareDoneID)
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, spareGroupID)
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, spareEdgeID)
+	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+		t.Fatalf("preview before active work = %+v, want no dynamic policy blocker", preview)
+	}
+
+	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	store.roleResolver = resolver
+	type saveResult struct {
+		result WorkflowGraphSaveResult
+		err    error
+	}
+	saved := make(chan saveResult, 1)
+	go func() {
+		result, err := store.SaveWorkflowGraph(ctx, confirmWorkflowGraphSaveRequest(req, preview.Impact))
+		saved <- saveResult{result: result, err: err}
+	}()
+	<-resolver.started
+
+	task := createDefaultTask(t, ctx, activeStore, binding.ProjectID)
+	startTask(t, ctx, activeStore, task.ID)
+	close(resolver.release)
+
+	outcome := <-saved
+	if outcome.err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
+	}
+	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("save after dynamic policy race = %+v, want active_transition_contract_changed blocker", outcome.result)
 	}
 }
 
