@@ -21,8 +21,62 @@ import (
 type Service struct {
 	metadata         *metadata.Store
 	projectID        string
-	runtimeAuthority *sessionruntime.Authority
+	runtimeGuard     runtimeSessionGuard
 	projectMutations *requestmemo.MutationLaneRegistry[string]
+}
+
+// runtimeSessionGuard is an internal composition collaborator. Production
+// composition always installs the authority adapter via WithRuntimeAuthority.
+type runtimeSessionGuard interface {
+	CountBlockingRuntimeActivity(context.Context, []string) (int, error)
+	BlockSessionStarts(context.Context, []string) (func(), error)
+}
+
+type authorityRuntimeSessionGuard struct {
+	authority *sessionruntime.Authority
+}
+
+func (g authorityRuntimeSessionGuard) CountBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
+	if g.authority == nil {
+		return 0, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		active, err := g.authority.HasBlockingRuntimeActivity(ctx, id.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
+	if g.authority == nil {
+		return func() {}, nil
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := g.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -52,7 +106,11 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	if s == nil {
 		return nil
 	}
-	s.runtimeAuthority = authority
+	if authority == nil {
+		s.runtimeGuard = nil
+	} else {
+		s.runtimeGuard = authorityRuntimeSessionGuard{authority: authority}
+	}
 	return s
 }
 
@@ -410,22 +468,10 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if s == nil || s.runtimeAuthority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return func() {}, nil
 	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil || len(ids) == 0 {
-		return func() {}, err
-	}
-	release, err := s.runtimeAuthority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
-		}
-	}, nil
+	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -453,27 +499,10 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.runtimeAuthority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return 0, nil
 	}
-	if err := context.Cause(ctx); err != nil {
-		return 0, err
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, sessionID := range ids {
-		active, err := s.runtimeAuthority.HasBlockingRuntimeActivity(ctx, sessionID.String())
-		if err != nil {
-			return 0, err
-		}
-		if active {
-			count++
-		}
-	}
-	return count, nil
+	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
 }
 
 func deleteSessionArtifact(persistenceRoot string, projectID string, relpath string, remove bool) error {
