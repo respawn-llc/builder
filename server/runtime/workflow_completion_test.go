@@ -1160,38 +1160,47 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 }
 
 func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{
-		caps: compatibleResponsesCapabilities(),
-		responses: []llm.Response{
-			compatiblePhaseAbsentResponse(""),
-			compatiblePhaseAbsentResponse(" \n\t "),
-			compatibleFinalResponse(""),
-			compatibleFinalResponse(" \n\t "),
-			compatibleCommentaryResponse("complete",
-				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
-			),
-		},
+	tests := []struct {
+		name     string
+		response func(string) llm.Response
+		content  string
+	}{
+		{name: "absent empty", response: compatiblePhaseAbsentResponse, content: ""},
+		{name: "absent whitespace", response: compatiblePhaseAbsentResponse, content: " \n\t "},
+		{name: "final empty", response: compatibleFinalResponse, content: ""},
+		{name: "final whitespace", response: compatibleFinalResponse, content: " \n\t "},
 	}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					tt.response(tt.content),
+					compatibleCommentaryResponse("complete",
+						completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+					),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
 
-	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
 
-	assertModelCallCount(t, client, 5)
-	if got := controller.violations.Load(); got != 0 {
-		t.Fatalf("violations = %d, want 0", got)
-	}
-	for requestIndex := 1; requestIndex < len(client.calls); requestIndex++ {
-		if !requestHasDeveloperErrorFeedback(client.calls[requestIndex]) {
-			t.Fatalf("request %d after an empty response did not append generic developer feedback", requestIndex)
-		}
-	}
-	terminal := eng.WorkflowTerminalState()
-	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
-		t.Fatalf("terminal state = %+v, want later tool completion", terminal)
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("violations = %d, want 0", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("empty response did not append generic developer feedback")
+			}
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
+				t.Fatalf("terminal state = %+v, want later tool completion", terminal)
+			}
+		})
 	}
 }
 
