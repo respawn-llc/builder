@@ -96,6 +96,16 @@ if [ "${#go_test_args[@]}" -gt 0 ]; then
     server_test_args=("${go_test_args[@]}")
 fi
 
+server_test_requires_runtime_admission=0
+for server_test_arg in "${server_test_args[@]}"; do
+    case "$server_test_arg" in
+    ./... | ./server/... | ./server/runtime | ./server/runtime/... | core/server/... | core/server/runtime | core/server/runtime/...)
+        server_test_requires_runtime_admission=1
+        break
+        ;;
+    esac
+done
+
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
@@ -241,7 +251,7 @@ require_command() {
 check_dependencies() {
     if target_selected server; then
         require_command go "run server tests"
-        if [ "$disable_wall_clock_cap" != "1" ]; then
+        if [ "$disable_wall_clock_cap" != "1" ] || [ "$server_test_requires_runtime_admission" = "1" ]; then
             require_command python3 "enforce the server test-runtime timeout"
         fi
     fi
@@ -352,6 +362,10 @@ run_server_tests() {
         export KENT_PTY_ANSI_WRITER_BINARY="$pty_fixture_build_dir/ansi-writer"
         export KENT_PTY_PHASE_INPUT_WRITER_BINARY="$pty_fixture_build_dir/phase-input-writer"
         export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_build_dir/phase-writer"
+    fi
+
+    if [ "$server_test_requires_runtime_admission" = "1" ]; then
+        server_test_command=(python3 "$repo_root/scripts/runtime-test-lock.py" "${server_test_command[@]}")
     fi
 
     if [ "$disable_wall_clock_cap" = "1" ]; then
