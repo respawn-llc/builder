@@ -9,6 +9,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"core/server/metadata/sqlitegen"
 	"core/server/tasksearchtext"
 
 	"github.com/pressly/goose/v3"
@@ -16,6 +17,21 @@ import (
 
 type taskSearchCanonicalSource struct {
 	text string
+}
+
+var taskSearchTriggerNames = []string{
+	"task_search_comment_body_after_update",
+	"task_search_comment_body_before_update",
+	"task_search_comment_delete",
+	"task_search_comment_insert",
+	"task_search_document_delete",
+	"task_search_document_insert",
+	"task_search_task_body_after_update",
+	"task_search_task_body_before_update",
+	"task_search_task_delete",
+	"task_search_task_insert",
+	"task_search_task_title_after_update",
+	"task_search_task_title_before_update",
 }
 
 func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
@@ -50,20 +66,7 @@ func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 		"task_search_documents_task_body_unique",
 		"task_search_documents_task_title_unique",
 	})
-	assertTaskSearchTriggerCatalog(t, store.db, []string{
-		"task_search_comment_body_after_update",
-		"task_search_comment_body_before_update",
-		"task_search_comment_delete",
-		"task_search_comment_insert",
-		"task_search_document_delete",
-		"task_search_document_insert",
-		"task_search_task_body_after_update",
-		"task_search_task_body_before_update",
-		"task_search_task_delete",
-		"task_search_task_insert",
-		"task_search_task_title_after_update",
-		"task_search_task_title_before_update",
-	})
+	assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
 	rows, err := store.db.Query(`PRAGMA foreign_key_list('task_search_documents')`)
 	if err != nil {
 		t.Fatalf("list task-search mapping foreign keys: %v", err)
@@ -388,6 +391,203 @@ VALUES ('comment-fts-failure', 'task-fts-failure', 'fts original comment', 'user
 	}
 }
 
+func TestTaskSearchWorkflowDeletionRemovesOnlyDeletedSources(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
+	insertTaskSearchTestTask(t, store.db, "task-workflow-deleted", 1, "KNT-1", "workflow delete title raven", "workflow delete body salmon", now)
+	insertTaskSearchTestTaskForLink(t, store.db, "task-workflow-survives", "link-2", 2, "KNT-2", "workflow survive title tiger", "workflow survive body urchin", now)
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-workflow-deleted', 'task-workflow-deleted', 'workflow delete comment viper', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("create workflow-delete comment: %v", err)
+	}
+	assertTaskSearchInvariants(t, store.db)
+
+	tx, err := store.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("begin workflow deletion transaction: %v", err)
+	}
+	q := store.Queries().WithTx(tx)
+	for _, operation := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "task transitions", run: func() error {
+			_, err := q.DeleteWorkflowTaskTransitionsByWorkflowID(t.Context(), "workflow-1")
+			return err
+		}},
+		{name: "task placements", run: func() error {
+			_, err := q.DeleteWorkflowTaskNodePlacementsByWorkflowID(t.Context(), "workflow-1")
+			return err
+		}},
+		{name: "task comments", run: func() error {
+			_, err := q.DeleteWorkflowTaskCommentsByWorkflowID(t.Context(), "workflow-1")
+			return err
+		}},
+		{name: "tasks", run: func() error {
+			_, err := q.DeleteWorkflowTasksByWorkflowID(t.Context(), "workflow-1")
+			return err
+		}},
+		{name: "default links", run: func() error {
+			_, err := q.ClearDeletedWorkflowDefaultProjectLinks(t.Context(), sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{
+				UpdatedAtUnixMs: now,
+				WorkflowID:      "workflow-1",
+			})
+			return err
+		}},
+		{name: "project links", run: func() error {
+			_, err := q.DeleteProjectWorkflowLinksByWorkflowID(t.Context(), "workflow-1")
+			return err
+		}},
+	} {
+		if err := operation.run(); err != nil {
+			t.Fatalf("delete workflow %s: %v", operation.name, err)
+		}
+	}
+	if deleted, err := q.DeleteWorkflowByID(t.Context(), "workflow-1"); err != nil {
+		t.Fatalf("delete workflow: %v", err)
+	} else if deleted != 1 {
+		t.Fatalf("deleted workflow rows = %d, want 1", deleted)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit workflow deletion: %v", err)
+	}
+
+	for _, query := range []string{
+		"delete title raven",
+		"delete body salmon",
+		"delete comment viper",
+	} {
+		assertTaskSearchSourceNotSearchable(t, store.db, query)
+	}
+	assertTaskSearchSourceSearchable(t, store.db, "survive title tiger", "title", "task-workflow-survives")
+	assertTaskSearchSourceSearchable(t, store.db, "survive body urchin", "body", "task-workflow-survives")
+	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchProjectDeletionRemovesOnlyDeletedSources(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-project-deleted", 1, "KNT-1", "project delete title walrus", "project delete body xerus", now)
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-project-deleted', 'task-project-deleted', 'project delete comment yak', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("create project-delete comment: %v", err)
+	}
+	other, err := store.CreateProjectForWorkspace(t.Context(), t.TempDir(), "Task search survivor")
+	if err != nil {
+		t.Fatalf("create survivor project: %v", err)
+	}
+	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
+	insertTaskSearchTestTaskForLink(t, store.db, "task-project-survives", "link-2", 1, "SUR-1", "project survive title zebra", "project survive body antelope", now)
+	assertTaskSearchInvariants(t, store.db)
+
+	blockers, err := store.DeleteProject(t.Context(), binding.ProjectID, func(ProjectSessionArtifact, bool) error { return nil })
+	if err != nil {
+		t.Fatalf("delete project: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Fatalf("project delete blockers = %+v, want none", blockers)
+	}
+	for _, query := range []string{
+		"delete title walrus",
+		"delete body xerus",
+		"delete comment yak",
+	} {
+		assertTaskSearchSourceNotSearchable(t, store.db, query)
+	}
+	assertTaskSearchSourceSearchable(t, store.db, "survive title zebra", "title", "task-project-survives")
+	assertTaskSearchSourceSearchable(t, store.db, "survive body antelope", "body", "task-project-survives")
+	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchSourceTableRebuildOmitsRequiredTriggersUntilRestored(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		missingTrigger string
+		rebuild        func(*sql.Tx) error
+	}{
+		{
+			name:           "tasks",
+			missingTrigger: "task_search_task_insert",
+			rebuild: func(tx *sql.Tx) error {
+				if _, err := tx.Exec(`CREATE TABLE tasks_rebuilt AS SELECT * FROM tasks`); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`DROP TABLE tasks`); err != nil {
+					return err
+				}
+				_, err := tx.Exec(`ALTER TABLE tasks_rebuilt RENAME TO tasks`)
+				return err
+			},
+		},
+		{
+			name:           "task comments",
+			missingTrigger: "task_search_comment_insert",
+			rebuild: func(tx *sql.Tx) error {
+				if _, err := tx.Exec(`CREATE TABLE task_comments_rebuilt AS SELECT * FROM task_comments`); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`DROP TABLE task_comments`); err != nil {
+					return err
+				}
+				_, err := tx.Exec(`ALTER TABLE task_comments_rebuilt RENAME TO task_comments`)
+				return err
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			conn, err := store.db.Conn(t.Context())
+			if err != nil {
+				t.Fatalf("acquire SQLite connection: %v", err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			if _, err := conn.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+				t.Fatalf("disable foreign keys for %s rebuild: %v", testCase.name, err)
+			}
+			if _, err := conn.ExecContext(t.Context(), `PRAGMA legacy_alter_table = ON`); err != nil {
+				t.Fatalf("enable legacy table rebuild mode for %s: %v", testCase.name, err)
+			}
+			tx, err := conn.BeginTx(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("begin %s rebuild: %v", testCase.name, err)
+			}
+			if err := testCase.rebuild(tx); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("rebuild %s: %v", testCase.name, err)
+			}
+			var count int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = ?`, testCase.missingTrigger).Scan(&count); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("inspect rebuilt %s trigger: %v", testCase.name, err)
+			}
+			if count != 0 {
+				_ = tx.Rollback()
+				t.Fatalf("rebuild %s retained %s, want schema-contract omission", testCase.name, testCase.missingTrigger)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatalf("roll back %s rebuild: %v", testCase.name, err)
+			}
+			if _, err := conn.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+				t.Fatalf("restore foreign keys after %s rebuild: %v", testCase.name, err)
+			}
+			if _, err := conn.ExecContext(t.Context(), `PRAGMA legacy_alter_table = OFF`); err != nil {
+				t.Fatalf("restore table rebuild mode after %s: %v", testCase.name, err)
+			}
+			assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
+			assertTaskSearchInvariants(t, store.db)
+		})
+	}
+}
+
 func openVersion59TaskSearchFixture(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -513,10 +713,15 @@ func assertTaskSearchLegacySourcesRemain(t *testing.T, db *sql.DB) {
 
 func insertTaskSearchTestTask(t *testing.T, db *sql.DB, id string, sequence int, shortID string, title string, body string, now int64) {
 	t.Helper()
+	insertTaskSearchTestTaskForLink(t, db, id, "link-1", sequence, shortID, title, body, now)
+}
+
+func insertTaskSearchTestTaskForLink(t *testing.T, db *sql.DB, id string, linkID string, sequence int, shortID string, title string, body string, now int64) {
+	t.Helper()
 	if _, err := db.Exec(`INSERT INTO tasks (
     id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
     created_at_unix_ms, updated_at_unix_ms, metadata_json
-) VALUES (?, 'link-1', 1, ?, ?, ?, ?, ?, ?, '{}')`, id, sequence, shortID, title, body, now, now); err != nil {
+) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, '{}')`, id, linkID, sequence, shortID, title, body, now, now); err != nil {
 		t.Fatalf("insert task-search task %s: %v", id, err)
 	}
 }
