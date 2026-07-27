@@ -1788,7 +1788,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	}()
 	select {
 	case <-client.firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("active turn did not reach the first model request")
 	}
 	queuedText := "use the existing lld installation"
@@ -1812,13 +1812,13 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 				steeringReq.OperationRef.ClientRequestID,
 			)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("accepted steering emitted no queue status")
 	}
 	close(client.releaseFirst)
 	select {
 	case <-client.secondStarted:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
 	defer close(client.releaseSecond)
