@@ -13,10 +13,6 @@ const (
 	sqliteOpcodeSorterOpen    sqliteOpcode = "SorterOpen"
 	sqliteOpcodeSort          sqliteOpcode = "Sort"
 	sqliteOpcodeSorterSort    sqliteOpcode = "SorterSort"
-	sqliteOpcodeVFilter       sqliteOpcode = "VFilter"
-	sqliteOpcodeRewind        sqliteOpcode = "Rewind"
-	sqliteOpcodeNext          sqliteOpcode = "Next"
-	sqliteOpcodePrev          sqliteOpcode = "Prev"
 )
 
 type sqliteInstruction struct {

@@ -213,18 +213,6 @@ type TaskRunRecord struct {
 	MetadataJson                string
 }
 
-type TaskSearchDocument struct {
-	DocumentID int64
-	TaskID     string
-	SourceKind string
-	SourceText string
-}
-
-type TaskSearchFt struct {
-	SourceText string
-	Rank       float64
-}
-
 type TaskTransition struct {
 	ID                    string
 	TaskID                string
