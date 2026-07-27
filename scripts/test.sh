@@ -104,6 +104,13 @@ for server_test_arg in "${server_test_args[@]}"; do
         break
         ;;
     esac
+    if [ -d "$server_test_arg" ] && command -v go >/dev/null 2>&1; then
+        resolved_import_path="$(go list -f '{{.ImportPath}}' "$server_test_arg" 2>/dev/null || true)"
+        if [ "$resolved_import_path" = "core/server/runtime" ]; then
+            server_test_requires_runtime_admission=1
+            break
+        fi
+    fi
 done
 
 if [ "$inherit_env" != "1" ]; then
