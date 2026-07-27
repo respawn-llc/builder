@@ -3,6 +3,8 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -55,22 +57,105 @@ func TestTaskSearchRequestValidation(t *testing.T) {
 	}
 }
 
+func TestTaskSearchRequestRequiresCanonicalContinuationAndStatusFilters(t *testing.T) {
+	for _, token := range []string{"", " token"} {
+		request := validTaskSearchRequest()
+		request.PageToken = &token
+		if err := request.Validate(); err == nil {
+			t.Fatalf("request with invalid page token %q validated", token)
+		}
+	}
+	for _, statuses := range [][]WorkflowTaskStatusKind{
+		{WorkflowTaskStatusKindDone, WorkflowTaskStatusKindBacklog},
+		{WorkflowTaskStatusKindBacklog, WorkflowTaskStatusKindBacklog},
+		{"other"},
+	} {
+		request := validTaskSearchRequest()
+		request.StatusKinds = statuses
+		if err := request.Validate(); err == nil {
+			t.Fatalf("request with invalid status filters %v validated", statuses)
+		}
+	}
+}
+
+func TestTaskSearchRequestPinsDefaultsAndBounds(t *testing.T) {
+	if TaskSearchDefaultContext != 20 || TaskSearchMinContext != 1 || TaskSearchMaxContext != 64 {
+		t.Fatalf(
+			"task search context contract = default %d, range %d..%d",
+			TaskSearchDefaultContext,
+			TaskSearchMinContext,
+			TaskSearchMaxContext,
+		)
+	}
+	if TaskSearchDefaultPageSize != 100 || TaskSearchMaxPageSize != 100 {
+		t.Fatalf("task search page-size contract = default %d, max %d", TaskSearchDefaultPageSize, TaskSearchMaxPageSize)
+	}
+	if err := validTaskSearchRequest().Validate(); err != nil {
+		t.Fatalf("explicit default request: %v", err)
+	}
+	for _, request := range []TaskSearchRequest{
+		{Mode: TaskSearchModeLiteral, Query: "needle", Context: TaskSearchMaxContext + 1, PageSize: TaskSearchDefaultPageSize},
+		{Mode: TaskSearchModeLiteral, Query: "needle", Context: TaskSearchDefaultContext, PageSize: TaskSearchMaxPageSize + 1},
+		{Mode: TaskSearchModeLiteral, Query: strings.Repeat("a", TaskSearchMaxQueryRunes+1), Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize},
+	} {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("out-of-contract request validated: %+v", request)
+		}
+	}
+}
+
+func TestTaskSearchCursorContractVersionsArePinned(t *testing.T) {
+	if TaskSearchSparseDocumentContractVersion != "kent-task-search-sparse-document-v1" {
+		t.Fatalf("sparse document contract version = %q", TaskSearchSparseDocumentContractVersion)
+	}
+	if TaskSearchRankingContractVersion != "kent-task-search-ranking-v1" {
+		t.Fatalf("ranking contract version = %q", TaskSearchRankingContractVersion)
+	}
+}
+
+func TestTaskSearchRequestRejectsNonCanonicalQueryAndProjectFilters(t *testing.T) {
+	for _, request := range []TaskSearchRequest{
+		{Mode: TaskSearchModeLiteral, Query: "", Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize},
+		{Mode: TaskSearchModeLiteral, Query: "\u00a0", Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize},
+		{Mode: TaskSearchModeLiteral, Query: "needle ", Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize},
+		{Mode: TaskSearchModeLiteral, Query: "needle", Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize, ProjectIDs: []string{"project-a", "project-a"}},
+		{Mode: TaskSearchModeLiteral, Query: "needle", Context: TaskSearchDefaultContext, PageSize: TaskSearchDefaultPageSize, ProjectIDs: []string{" project-a"}},
+	} {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("noncanonical request validated: %+v", request)
+		}
+	}
+	request := validTaskSearchRequest()
+	request.Query = "needle\twith\ninterior whitespace"
+	if err := request.Validate(); err != nil {
+		t.Fatalf("request with preserved interior whitespace: %v", err)
+	}
+}
+
 func TestTaskSearchResponseJSONAndTaggedHits(t *testing.T) {
 	response := TaskSearchResponse{
 		Mode: TaskSearchModeLiteral,
 		Groups: []TaskSearchGroup{{
-			ProjectID:     "project-1",
-			ProjectKey:    "KNT",
-			TaskID:        "task-1",
-			ShortID:       "KNT-1",
-			WorkflowID:    "workflow-1",
-			Title:         "Task",
-			Status:        WorkflowTaskStatus{Kind: WorkflowTaskStatusKindBacklog},
+			ProjectID:  "project-1",
+			ProjectKey: "KNT",
+			TaskID:     "task-1",
+			ShortID:    "KNT-1",
+			WorkflowID: "workflow-1",
+			Title:      "Task",
+			Status: WorkflowTaskStatus{
+				Kind:        WorkflowTaskStatusKindBacklog,
+				NativeState: WorkflowTaskNativeStateActive,
+			},
 			TotalHitCount: 1,
 			Hits: []TaskSearchHit{{
 				Ordinal: 1,
 				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
-				Literal: &TaskSearchLiteralHit{Match: "needle"},
+				Literal: &TaskSearchLiteralHit{
+					Before:        "before ",
+					Match:         "needle",
+					After:         " after",
+					LeftTruncated: true,
+				},
 			}},
 		}},
 	}
@@ -93,6 +178,34 @@ func TestTaskSearchResponseJSONAndTaggedHits(t *testing.T) {
 	}
 	if _, exists := shape["score"]; exists {
 		t.Fatalf("response unexpectedly has score: %s", encoded)
+	}
+	groups := shape["groups"].([]any)
+	group := groups[0].(map[string]any)
+	if _, exists := group["score"]; exists {
+		t.Fatalf("task group unexpectedly has score: %s", encoded)
+	}
+	hit := group["hits"].([]any)[0].(map[string]any)
+	if _, exists := hit["score"]; exists {
+		t.Fatalf("task hit unexpectedly has score: %s", encoded)
+	}
+	if _, exists := hit["fts5"]; exists {
+		t.Fatalf("literal task hit unexpectedly has fts5 payload: %s", encoded)
+	}
+	literal := hit["literal"].(map[string]any)
+	for _, field := range []string{"before", "match", "after", "left_truncated", "right_truncated"} {
+		if _, exists := literal[field]; !exists {
+			t.Fatalf("literal task hit omitted %q: %s", field, encoded)
+		}
+	}
+	var decoded TaskSearchResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal literal task search response: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded literal task search response: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, response) {
+		t.Fatalf("literal response round-trip = %+v, want %+v", decoded, response)
 	}
 
 	empty := TaskSearchResponse{Mode: TaskSearchModeFTS5, Groups: []TaskSearchGroup{}}
@@ -121,5 +234,308 @@ func TestTaskSearchResponseJSONAndTaggedHits(t *testing.T) {
 		FTS5:    &TaskSearchFTS5Hit{},
 	}).Validate(TaskSearchModeFTS5); err == nil {
 		t.Fatal("comment hit without comment_id validated")
+	}
+}
+
+func TestTaskSearchResponseRoundTripsRawGroupedJSON(t *testing.T) {
+	commentID := "comment-1"
+	nextPageToken := "opaque-token"
+	response := validTaskSearchResponse()
+	response.Mode = TaskSearchModeFTS5
+	response.NextPageToken = &nextPageToken
+	response.Groups[0].Hits[0] = TaskSearchHit{
+		Ordinal: 1,
+		Source:  TaskSearchSource{Kind: TaskSearchSourceKindComment, CommentID: &commentID},
+		FTS5:    &TaskSearchFTS5Hit{Snippet: "selected raw FTS5 snippet"},
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal raw task search response: %v", err)
+	}
+	var decoded TaskSearchResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal raw task search response: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded raw task search response: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, response) {
+		t.Fatalf("raw response round-trip = %+v, want %+v", decoded, response)
+	}
+}
+
+func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
+	for _, reason := range []TaskSearchErrorReason{
+		TaskSearchErrorReasonNormalizedTooShort,
+		TaskSearchErrorReasonMalformedFTS5,
+		TaskSearchErrorReasonInvalidCursor,
+	} {
+		source := TaskSearchError{Reason: reason}
+		if err := source.Validate(); err != nil {
+			t.Fatalf("source error %q: %v", reason, err)
+		}
+		encoded, err := json.Marshal(source)
+		if err != nil {
+			t.Fatalf("marshal task search error %q: %v", reason, err)
+		}
+		var decoded TaskSearchError
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("unmarshal task search error %q: %v", reason, err)
+		}
+		if err := decoded.Validate(); err != nil || decoded.Reason != reason {
+			t.Fatalf("decoded task search error = %+v / %v, want reason %q", decoded, err, reason)
+		}
+	}
+	if err := (TaskSearchError{Reason: "other"}).Validate(); err == nil {
+		t.Fatal("unknown task search error reason validated")
+	}
+}
+
+func TestTaskSearchResponseRejectsGroupWithoutRequiredIdentity(t *testing.T) {
+	response := TaskSearchResponse{
+		Mode: TaskSearchModeLiteral,
+		Groups: []TaskSearchGroup{{
+			ProjectKey:    "KNT",
+			TaskID:        "task-1",
+			ShortID:       "KNT-1",
+			WorkflowID:    "workflow-1",
+			Title:         "Task",
+			Status:        WorkflowTaskStatus{Kind: WorkflowTaskStatusKindBacklog, NativeState: WorkflowTaskNativeStateActive},
+			TotalHitCount: 1,
+			Hits: []TaskSearchHit{{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				Literal: &TaskSearchLiteralHit{Match: "needle"},
+			}},
+		}},
+	}
+	if err := response.Validate(); err == nil {
+		t.Fatal("response without project id validated")
+	}
+}
+
+func TestTaskSearchResponseRequiresEveryGroupIdentityField(t *testing.T) {
+	for _, mutate := range []func(*TaskSearchGroup){
+		func(group *TaskSearchGroup) { group.ProjectKey = "" },
+		func(group *TaskSearchGroup) { group.TaskID = "" },
+		func(group *TaskSearchGroup) { group.ShortID = "" },
+		func(group *TaskSearchGroup) { group.WorkflowID = "" },
+		func(group *TaskSearchGroup) { group.Title = "" },
+	} {
+		response := validTaskSearchResponse()
+		mutate(&response.Groups[0])
+		if err := response.Validate(); err == nil {
+			t.Fatalf("response with missing group field validated: %+v", response.Groups[0])
+		}
+	}
+}
+
+func TestTaskSearchResponseRequiresCanonicalTaskStatus(t *testing.T) {
+	for _, status := range []WorkflowTaskStatus{
+		{},
+		{Kind: WorkflowTaskStatusKindBacklog},
+		{Kind: WorkflowTaskStatusKindBacklog, NativeState: WorkflowTaskNativeStateRunning},
+		{Kind: "other", NativeState: WorkflowTaskNativeStateActive},
+	} {
+		response := validTaskSearchResponse()
+		response.Groups[0].Status = status
+		if err := response.Validate(); err == nil {
+			t.Fatalf("response with invalid status validated: %+v", status)
+		}
+	}
+}
+
+func TestTaskSearchResponseRequiresOrderedInRangeGroupHitOrdinals(t *testing.T) {
+	for _, mutate := range []func(*TaskSearchGroup){
+		func(group *TaskSearchGroup) { group.Hits = nil },
+		func(group *TaskSearchGroup) { group.Hits = []TaskSearchHit{} },
+		func(group *TaskSearchGroup) { group.Hits[0].Ordinal = 2 },
+		func(group *TaskSearchGroup) {
+			group.TotalHitCount = 2
+			group.Hits = append(group.Hits, TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindBody},
+				Literal: &TaskSearchLiteralHit{Match: "needle"},
+			})
+			group.Hits[0].Ordinal = 2
+		},
+		func(group *TaskSearchGroup) {
+			group.TotalHitCount = 2
+			group.Hits = append(group.Hits, TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindBody},
+				Literal: &TaskSearchLiteralHit{Match: "needle"},
+			})
+		},
+	} {
+		response := validTaskSearchResponse()
+		mutate(&response.Groups[0])
+		if err := response.Validate(); err == nil {
+			t.Fatalf("response with invalid group hit ordinals validated: %+v", response.Groups[0])
+		}
+	}
+}
+
+func TestTaskSearchResponseRequiresUniqueTaskGroups(t *testing.T) {
+	response := validTaskSearchResponse()
+	response.Groups = append(response.Groups, response.Groups[0])
+	if err := response.Validate(); err == nil {
+		t.Fatal("response with duplicate task group validated")
+	}
+}
+
+func TestTaskSearchResponseRejectsBlankContinuationToken(t *testing.T) {
+	for _, token := range []string{"", " token"} {
+		response := validTaskSearchResponse()
+		response.NextPageToken = &token
+		if err := response.Validate(); err == nil {
+			t.Fatalf("response with invalid next page token %q validated", token)
+		}
+	}
+}
+
+func TestTaskSearchHitRequiresModePayloadContentsAndExactCommentID(t *testing.T) {
+	commentID := " comment-1"
+	for _, test := range []struct {
+		hit  TaskSearchHit
+		mode TaskSearchMode
+	}{
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				Literal: &TaskSearchLiteralHit{},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				FTS5:    &TaskSearchFTS5Hit{},
+			},
+			mode: TaskSearchModeFTS5,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindComment, CommentID: &commentID},
+				Literal: &TaskSearchLiteralHit{Match: "needle"},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+	} {
+		if err := test.hit.Validate(test.mode); err == nil {
+			t.Fatalf("invalid hit validated: %+v", test.hit)
+		}
+	}
+}
+
+func TestTaskSearchHitAcceptsAllSourceVariantsAndRejectsWrongModePayload(t *testing.T) {
+	commentID := "comment-1"
+	for _, test := range []struct {
+		hit  TaskSearchHit
+		mode TaskSearchMode
+	}{
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				Literal: &TaskSearchLiteralHit{Match: "title"},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindBody},
+				Literal: &TaskSearchLiteralHit{Match: "body"},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindComment, CommentID: &commentID},
+				FTS5:    &TaskSearchFTS5Hit{Snippet: "comment"},
+			},
+			mode: TaskSearchModeFTS5,
+		},
+	} {
+		if err := test.hit.Validate(test.mode); err != nil {
+			t.Fatalf("valid source variant rejected: %+v / %v", test.hit, err)
+		}
+	}
+	for _, test := range []struct {
+		hit  TaskSearchHit
+		mode TaskSearchMode
+	}{
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				FTS5:    &TaskSearchFTS5Hit{Snippet: "raw"},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindBody},
+				Literal: &TaskSearchLiteralHit{Match: "literal"},
+			},
+			mode: TaskSearchModeFTS5,
+		},
+		{
+			hit: TaskSearchHit{
+				Ordinal: 0,
+				Source:  TaskSearchSource{Kind: "other"},
+				Literal: &TaskSearchLiteralHit{Match: "literal"},
+			},
+			mode: TaskSearchModeLiteral,
+		},
+	} {
+		if err := test.hit.Validate(test.mode); err == nil {
+			t.Fatalf("invalid source/mode variant validated: %+v", test.hit)
+		}
+	}
+}
+
+func validTaskSearchResponse() TaskSearchResponse {
+	return TaskSearchResponse{
+		Mode: TaskSearchModeLiteral,
+		Groups: []TaskSearchGroup{{
+			ProjectID:  "project-1",
+			ProjectKey: "KNT",
+			TaskID:     "task-1",
+			ShortID:    "KNT-1",
+			WorkflowID: "workflow-1",
+			Title:      "Task",
+			Status: WorkflowTaskStatus{
+				Kind:        WorkflowTaskStatusKindBacklog,
+				NativeState: WorkflowTaskNativeStateActive,
+			},
+			TotalHitCount: 1,
+			Hits: []TaskSearchHit{{
+				Ordinal: 1,
+				Source:  TaskSearchSource{Kind: TaskSearchSourceKindTitle},
+				Literal: &TaskSearchLiteralHit{Match: "needle"},
+			}},
+		}},
+	}
+}
+
+func validTaskSearchRequest() TaskSearchRequest {
+	return TaskSearchRequest{
+		Mode:       TaskSearchModeLiteral,
+		Query:      "needle",
+		Context:    TaskSearchDefaultContext,
+		PageSize:   TaskSearchDefaultPageSize,
+		ProjectIDs: []string{"project-a", "project-b"},
+		StatusKinds: []WorkflowTaskStatusKind{
+			WorkflowTaskStatusKindBacklog,
+			WorkflowTaskStatusKindDone,
+		},
 	}
 }

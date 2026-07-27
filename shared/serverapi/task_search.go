@@ -16,6 +16,9 @@ const (
 	TaskSearchMaxContext      = 64
 	TaskSearchDefaultPageSize = 100
 	TaskSearchMaxPageSize     = 100
+
+	TaskSearchSparseDocumentContractVersion = "kent-task-search-sparse-document-v1"
+	TaskSearchRankingContractVersion        = "kent-task-search-ranking-v1"
 )
 
 type TaskSearchMode string
@@ -70,8 +73,8 @@ func (r TaskSearchRequest) Validate() error {
 	if r.PageSize < 1 || r.PageSize > TaskSearchMaxPageSize {
 		return taskSearchFieldError("page_size", "page_size is out of range")
 	}
-	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
-		return taskSearchFieldError("page_token", "page_token must be trimmed")
+	if r.PageToken != nil && (strings.TrimSpace(*r.PageToken) == "" || strings.TrimSpace(*r.PageToken) != *r.PageToken) {
+		return taskSearchFieldError("page_token", "page_token is invalid")
 	}
 	for index, projectID := range r.ProjectIDs {
 		if strings.TrimSpace(projectID) == "" || strings.TrimSpace(projectID) != projectID {
@@ -84,6 +87,9 @@ func (r TaskSearchRequest) Validate() error {
 	for index, status := range r.StatusKinds {
 		if _, valid := status.NativeState(); !valid {
 			return taskSearchFieldError(fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
+		}
+		if index > 0 && r.StatusKinds[index-1] >= status {
+			return taskSearchFieldError("status_kinds", "status kinds must be sorted and unique")
 		}
 	}
 	return nil
@@ -138,13 +144,47 @@ func (r TaskSearchResponse) Validate() error {
 	if r.Groups == nil {
 		return errors.New("task search response groups are required")
 	}
+	if r.NextPageToken != nil {
+		if err := validateTaskSearchResponseString("next page token", *r.NextPageToken); err != nil {
+			return err
+		}
+	}
+	groupTaskIDs := make(map[string]struct{}, len(r.Groups))
 	for groupIndex, group := range r.Groups {
-		if group.TotalHitCount < len(group.Hits) || group.TotalHitCount < 1 {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "project id", value: group.ProjectID},
+			{name: "project key", value: group.ProjectKey},
+			{name: "task id", value: group.TaskID},
+			{name: "short id", value: group.ShortID},
+			{name: "workflow id", value: group.WorkflowID},
+			{name: "title", value: group.Title},
+		} {
+			if err := validateTaskSearchResponseString(field.name, field.value); err != nil {
+				return fmt.Errorf("task search group %d: %w", groupIndex, err)
+			}
+		}
+		if _, exists := groupTaskIDs[group.TaskID]; exists {
+			return fmt.Errorf("task search response duplicates task group %q", group.TaskID)
+		}
+		groupTaskIDs[group.TaskID] = struct{}{}
+		if len(group.Hits) == 0 || group.TotalHitCount < len(group.Hits) || group.TotalHitCount < 1 {
 			return fmt.Errorf("task search group %d total hit count is invalid", groupIndex)
 		}
-		for _, hit := range group.Hits {
+		if err := validateTaskSearchStatus(group.Status); err != nil {
+			return fmt.Errorf("task search group %d: %w", groupIndex, err)
+		}
+		for hitIndex, hit := range group.Hits {
 			if err := hit.Validate(r.Mode); err != nil {
 				return err
+			}
+			if hit.Ordinal > group.TotalHitCount {
+				return fmt.Errorf("task search group %d hit %d ordinal exceeds total hit count", groupIndex, hitIndex)
+			}
+			if hitIndex > 0 && group.Hits[hitIndex-1].Ordinal >= hit.Ordinal {
+				return fmt.Errorf("task search group %d hit ordinals are not strictly ascending", groupIndex)
 			}
 		}
 	}
@@ -161,16 +201,25 @@ func (h TaskSearchHit) Validate(mode TaskSearchMode) error {
 			return errors.New("task search title/body source forbids comment id")
 		}
 	case TaskSearchSourceKindComment:
-		if h.Source.CommentID == nil || strings.TrimSpace(*h.Source.CommentID) == "" {
+		if h.Source.CommentID == nil {
 			return errors.New("task search comment source requires comment id")
+		}
+		if err := validateTaskSearchResponseString("comment id", *h.Source.CommentID); err != nil {
+			return err
 		}
 	default:
 		return errors.New("task search source kind is invalid")
 	}
 	if mode == TaskSearchModeLiteral && h.Literal != nil && h.FTS5 == nil {
+		if h.Literal.Match == "" {
+			return errors.New("task search literal hit match is required")
+		}
 		return nil
 	}
 	if mode == TaskSearchModeFTS5 && h.FTS5 != nil && h.Literal == nil {
+		if h.FTS5.Snippet == "" {
+			return errors.New("task search FTS5 hit snippet is required")
+		}
 		return nil
 	}
 	return errors.New("task search hit mode payload is invalid")
@@ -185,7 +234,7 @@ const (
 )
 
 type TaskSearchError struct {
-	Reason TaskSearchErrorReason
+	Reason TaskSearchErrorReason `json:"reason"`
 }
 
 func (e *TaskSearchError) Error() string {
@@ -195,6 +244,32 @@ func (e *TaskSearchError) Error() string {
 	return "task search error: " + string(e.Reason)
 }
 
+func (e TaskSearchError) Validate() error {
+	switch e.Reason {
+	case TaskSearchErrorReasonNormalizedTooShort,
+		TaskSearchErrorReasonMalformedFTS5,
+		TaskSearchErrorReasonInvalidCursor:
+		return nil
+	default:
+		return errors.New("task search error reason is invalid")
+	}
+}
+
 func taskSearchFieldError(field string, message string) error {
 	return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidValue, Field: field, Message: message}
+}
+
+func validateTaskSearchResponseString(field string, value string) error {
+	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+		return fmt.Errorf("task search response %s is invalid", field)
+	}
+	return nil
+}
+
+func validateTaskSearchStatus(status WorkflowTaskStatus) error {
+	nativeState, valid := status.Kind.NativeState()
+	if !valid || status.NativeState != nativeState {
+		return errors.New("task search response status is invalid")
+	}
+	return nil
 }
