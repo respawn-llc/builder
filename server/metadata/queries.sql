@@ -1418,6 +1418,32 @@ WHERE r.task_id IN (sqlc.slice('task_ids'))
   AND p.state = 'active'
 ORDER BY r.task_id ASC, r.id ASC;
 
+-- name: AnchorWorkflowTaskStatusSnapshot :many
+WITH
+snapshot_anchor AS (
+    SELECT EXISTS(SELECT 1 FROM task_run_records) AS has_task_runs
+),
+observed_run_ids AS (
+    SELECT CAST(value AS TEXT) AS run_id
+    FROM json_each(sqlc.arg(observed_run_ids_json))
+)
+SELECT
+    snapshot_anchor.has_task_runs AS snapshot_has_task_runs,
+    observed_run_ids.run_id AS observed_run_id,
+    r.id AS durable_run_id,
+    r.task_id,
+    r.run_generation,
+    r.waiting_ask_id,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    p.state AS placement_state
+FROM snapshot_anchor
+LEFT JOIN observed_run_ids ON TRUE
+LEFT JOIN task_run_records r ON r.id = observed_run_ids.run_id
+LEFT JOIN task_node_placements p ON p.id = r.placement_id
+ORDER BY observed_run_ids.run_id ASC;
+
 -- name: ListWorkflowTaskRunActionFactsByTasks :many
 SELECT
     p.task_id,

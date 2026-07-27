@@ -1,7 +1,9 @@
 package workflowexecution
 
 import (
+	"errors"
 	"sort"
+	"strings"
 
 	"core/server/workflow"
 )
@@ -27,6 +29,25 @@ type SchedulerActiveRunObservation struct {
 type SchedulerActiveRunSnapshot struct {
 	Revision   SchedulerActiveRunRevision
 	ActiveRuns []SchedulerActiveRunObservation
+}
+
+func (o SchedulerActiveRunObservation) Validate() error {
+	switch {
+	case strings.TrimSpace(string(o.RunID)) == "":
+		return errors.New("scheduler active run id is required")
+	case strings.TrimSpace(string(o.TaskID)) == "":
+		return errors.New("scheduler active task id is required")
+	case strings.TrimSpace(string(o.PlacementID)) == "":
+		return errors.New("scheduler active placement id is required")
+	case strings.TrimSpace(string(o.NodeID)) == "":
+		return errors.New("scheduler active node id is required")
+	case o.Generation <= 0:
+		return errors.New("scheduler active run generation must be positive")
+	case o.Phase != SchedulerActiveRunPhaseStarting && o.Phase != SchedulerActiveRunPhaseRunning:
+		return errors.New("scheduler active run phase is invalid")
+	default:
+		return nil
+	}
 }
 
 type schedulerActiveRun struct {

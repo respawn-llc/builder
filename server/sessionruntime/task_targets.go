@@ -42,6 +42,10 @@ type WorkflowExecutionObservation struct {
 	PromptRevision WorkflowExecutionPromptRevision
 }
 
+func (o WorkflowExecutionObservation) Validate() error {
+	return o.Execution.validate()
+}
+
 func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentTaskExecutionSnapshots([]workflow.TaskID{taskID})
 	if err != nil {

@@ -108,6 +108,81 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	return i, err
 }
 
+const anchorWorkflowTaskStatusSnapshot = `-- name: AnchorWorkflowTaskStatusSnapshot :many
+WITH
+snapshot_anchor AS (
+    SELECT EXISTS(SELECT 1 FROM task_run_records) AS has_task_runs
+),
+observed_run_ids AS (
+    SELECT CAST(value AS TEXT) AS run_id
+    FROM json_each(?1)
+)
+SELECT
+    snapshot_anchor.has_task_runs AS snapshot_has_task_runs,
+    observed_run_ids.run_id AS observed_run_id,
+    r.id AS durable_run_id,
+    r.task_id,
+    r.run_generation,
+    r.waiting_ask_id,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    p.state AS placement_state
+FROM snapshot_anchor
+LEFT JOIN observed_run_ids ON TRUE
+LEFT JOIN task_run_records r ON r.id = observed_run_ids.run_id
+LEFT JOIN task_node_placements p ON p.id = r.placement_id
+ORDER BY observed_run_ids.run_id ASC
+`
+
+type AnchorWorkflowTaskStatusSnapshotRow struct {
+	SnapshotHasTaskRuns bool
+	ObservedRunID       sql.NullString
+	DurableRunID        sql.NullString
+	TaskID              sql.NullString
+	RunGeneration       sql.NullInt64
+	WaitingAskID        sql.NullString
+	StartedAtUnixMs     sql.NullInt64
+	CompletedAtUnixMs   sql.NullInt64
+	InterruptedAtUnixMs sql.NullInt64
+	PlacementState      sql.NullString
+}
+
+func (q *Queries) AnchorWorkflowTaskStatusSnapshot(ctx context.Context, observedRunIdsJson interface{}) ([]AnchorWorkflowTaskStatusSnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, anchorWorkflowTaskStatusSnapshot, observedRunIdsJson)
+	err = recordQueryError(ctx, err, anchorWorkflowTaskStatusSnapshot, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AnchorWorkflowTaskStatusSnapshotRow
+	for rows.Next() {
+		var i AnchorWorkflowTaskStatusSnapshotRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SnapshotHasTaskRuns,
+			&i.ObservedRunID,
+			&i.DurableRunID,
+			&i.TaskID,
+			&i.RunGeneration,
+			&i.WaitingAskID,
+			&i.StartedAtUnixMs,
+			&i.CompletedAtUnixMs,
+			&i.InterruptedAtUnixMs,
+			&i.PlacementState,
+		), anchorWorkflowTaskStatusSnapshot, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), anchorWorkflowTaskStatusSnapshot, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), anchorWorkflowTaskStatusSnapshot, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const applyPendingTransitionEdgeToJoin = `-- name: ApplyPendingTransitionEdgeToJoin :execrows
 UPDATE task_transition_edges
 SET state = 'applied'
