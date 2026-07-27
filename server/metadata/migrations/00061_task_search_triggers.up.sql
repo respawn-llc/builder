@@ -39,3 +39,27 @@ BEGIN
     VALUES ('comment', NEW.id);
 END;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER task_search_task_title_before_update
+BEFORE UPDATE OF title ON tasks
+BEGIN
+    INSERT INTO task_search_fts(task_search_fts, rowid, title, body, comment)
+    SELECT 'delete', document_id, OLD.title, NULL, NULL
+    FROM task_search_documents
+    WHERE task_id = OLD.id
+      AND source_kind = 'title';
+END;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER task_search_task_title_after_update
+AFTER UPDATE OF title ON tasks
+BEGIN
+    INSERT INTO task_search_fts(rowid, title, body, comment)
+    SELECT document_id, NEW.title, NULL, NULL
+    FROM task_search_documents
+    WHERE task_id = NEW.id
+      AND source_kind = 'title';
+END;
+-- +goose StatementEnd

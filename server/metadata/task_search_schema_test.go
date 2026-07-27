@@ -122,4 +122,18 @@ ORDER BY document_id ASC`)
 	if len(got) != 3 {
 		t.Fatalf("task-search documents = %v, want title/body/comment mappings", got)
 	}
+
+	if _, err := store.db.Exec(`UPDATE tasks SET title = 'changed task title' WHERE id = 'task-1'`); err != nil {
+		t.Fatalf("update task title: %v", err)
+	}
+	var matched int
+	if err := store.db.QueryRow(`
+SELECT COUNT(*)
+FROM task_search_fts
+WHERE title MATCH '"changed task title"'`).Scan(&matched); err != nil {
+		t.Fatalf("query updated task title in FTS: %v", err)
+	}
+	if matched != 1 {
+		t.Fatalf("updated task title FTS match count = %d, want 1", matched)
+	}
 }
