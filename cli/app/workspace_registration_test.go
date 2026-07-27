@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -23,11 +22,6 @@ import (
 	"core/shared/config"
 	"core/shared/sessioncontract"
 )
-
-var appTestServerPortReservations struct {
-	sync.Mutex
-	releases map[string]func()
-}
 
 func registerAppWorkspace(t *testing.T, workspace string) {
 	t.Helper()
@@ -172,32 +166,10 @@ func configureAppTestServerPort(t *testing.T) {
 func reserveAppTestServerPort(t *testing.T) func() {
 	t.Helper()
 	releaseConfiguredAppTestServerPort()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve server port: %v", err)
-	}
-	address := listener.Addr().String()
+	reservation := testsetup.ReserveLoopbackPort(t)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
-	var once sync.Once
-	release := func() {
-		once.Do(func() {
-			_ = listener.Close()
-			appTestServerPortReservations.Lock()
-			if appTestServerPortReservations.releases[address] != nil {
-				delete(appTestServerPortReservations.releases, address)
-			}
-			appTestServerPortReservations.Unlock()
-		})
-	}
-	appTestServerPortReservations.Lock()
-	if appTestServerPortReservations.releases == nil {
-		appTestServerPortReservations.releases = make(map[string]func())
-	}
-	appTestServerPortReservations.releases[address] = release
-	appTestServerPortReservations.Unlock()
-	t.Cleanup(release)
-	return release
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
+	return reservation.Release
 }
 
 func releaseConfiguredAppTestServerPort() {
@@ -206,13 +178,7 @@ func releaseConfiguredAppTestServerPort() {
 	if !hostFound || !portFound {
 		return
 	}
-	address := net.JoinHostPort(host, port)
-	appTestServerPortReservations.Lock()
-	release := appTestServerPortReservations.releases[address]
-	appTestServerPortReservations.Unlock()
-	if release != nil {
-		release()
-	}
+	testsetup.ReleaseLoopbackAddress(net.JoinHostPort(host, port))
 }
 
 func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
