@@ -8,6 +8,7 @@ import (
 	"core/shared/sessioncontract"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,6 +310,41 @@ func TestDeleteProjectAllowsBacklogTasks(t *testing.T) {
 	}
 }
 
+func TestProjectDeleteCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+
+	blockers, err := store.DeleteProjectWithRuntimeBlockers(ctx, binding.ProjectID, nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+			if len(preparedSessionIDs) != 0 {
+				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+			}
+			mutated := make(chan error, 1)
+			go func() {
+				mutated <- addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "delete-race", cfg.WorkspaceRoot, "")
+			}()
+			if err := <-mutated; err != nil {
+				return nil, nil, err
+			}
+			return nil, func() {}, nil
+		},
+		func(ProjectSessionArtifact, bool) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("DeleteProjectWithRuntimeBlockers: %v", err)
+	}
+	assertProjectDeleteBlocker(t, blockers, "non_terminal_tasks")
+	if _, err := store.GetProjectOverview(ctx, binding.ProjectID); err != nil {
+		t.Fatalf("project should remain after authoritative blocker: %v", err)
+	}
+}
+
 func TestProjectDeleteRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
@@ -381,6 +417,44 @@ func TestProjectDeleteCleanupDoesNotBlockUnrelatedMetadata(t *testing.T) {
 	close(release)
 	if err := <-deleteDone; err != nil {
 		t.Fatalf("DeleteProject during cleanup: %v", err)
+	}
+}
+
+func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			if len(preparedSessionIDs) != 0 {
+				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+			}
+			mutated := make(chan error, 1)
+			go func() {
+				mutated <- addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "unlink-race", attached.CanonicalRoot, attached.WorkspaceID)
+			}()
+			if err := <-mutated; err != nil {
+				return nil, nil, err
+			}
+			return nil, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
+	if _, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID); err != nil {
+		t.Fatalf("workspace should remain after authoritative blocker: %v", err)
 	}
 }
 
@@ -517,6 +591,64 @@ func assertWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWork
 		}
 	}
 	t.Fatalf("blockers = %+v, want code %q", blockers, code)
+}
+
+func assertProjectDeleteBlocker(t *testing.T, blockers []serverapi.ProjectDeleteBlocker, code string) {
+	t.Helper()
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return
+		}
+	}
+	t.Fatalf("blockers = %+v, want code %q", blockers, code)
+}
+
+func addMetadataRaceSessionAndActiveTask(
+	ctx context.Context,
+	store *Store,
+	cfg config.App,
+	binding Binding,
+	suffix string,
+	workspaceRoot string,
+	sourceWorkspaceID string,
+) error {
+	projectSessionsDir := filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID, "sessions")
+	if _, err := session.Create(
+		projectSessionsDir,
+		filepath.Base(projectSessionsDir),
+		workspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		store.AuthoritativeSessionStoreOptions()...,
+	); err != nil {
+		return fmt.Errorf("create concurrent session: %w", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	taskID := "task-" + suffix
+	if _, err := store.db.ExecContext(ctx, workflowSeedTaskSQL, taskID, "link-1", 1, "BLD-1", now, now); err != nil {
+		return fmt.Errorf("create concurrent task: %w", err)
+	}
+	if _, err := store.db.ExecContext(ctx, workflowSeedPlacementSQL, "placement-"+suffix, taskID, "node-agent", now, now); err != nil {
+		return fmt.Errorf("create concurrent task placement: %w", err)
+	}
+	if strings.TrimSpace(sourceWorkspaceID) == "" {
+		return nil
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE tasks
+SET source_workspace_id = ?,
+    metadata_json = json_object(
+        'source_workspace_snapshot',
+        json_object('root_path', ?, 'display_name', 'Concurrent workspace')
+    )
+WHERE id = ?`,
+		sourceWorkspaceID,
+		workspaceRoot,
+		taskID,
+	); err != nil {
+		return fmt.Errorf("set concurrent task source workspace: %w", err)
+	}
+	return nil
 }
 
 func TestRebindWorkspacePreservesWorkspaceIdentity(t *testing.T) {

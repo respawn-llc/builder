@@ -20,8 +20,62 @@ import (
 type Service struct {
 	metadata         *metadata.Store
 	projectID        string
-	authority        *sessionruntime.Authority
+	runtimeGuard     RuntimeSessionGuard
 	projectMutations *metadata.MutationLaneRegistry[string]
+}
+
+// RuntimeSessionGuard coordinates Project lifecycle mutations with live Session
+// execution without exposing runtime ownership to Project-view callers.
+type RuntimeSessionGuard interface {
+	CountBlockingRuntimeActivity(context.Context, []string) (int, error)
+	BlockSessionStarts(context.Context, []string) (func(), error)
+}
+
+type authorityRuntimeSessionGuard struct {
+	authority *sessionruntime.Authority
+}
+
+func (g authorityRuntimeSessionGuard) CountBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
+	if g.authority == nil {
+		return 0, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, sessionID := range ids {
+		active, err := g.authority.HasBlockingRuntimeActivity(ctx, sessionID.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
+	if g.authority == nil {
+		return func() {}, nil
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := g.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -48,10 +102,19 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 }
 
 func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
+	if authority == nil {
+		return s.WithRuntimeSessionGuard(nil)
+	}
+	return s.WithRuntimeSessionGuard(authorityRuntimeSessionGuard{authority: authority})
+}
+
+// WithRuntimeSessionGuard installs the server-owned live-runtime coordination
+// boundary used by destructive Project lifecycle operations.
+func (s *Service) WithRuntimeSessionGuard(guard RuntimeSessionGuard) *Service {
 	if s == nil {
 		return nil
 	}
-	s.authority = authority
+	s.runtimeGuard = guard
 	return s
 }
 
@@ -409,22 +472,10 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return func() {}, nil
 	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil || len(ids) == 0 {
-		return func() {}, err
-	}
-	release, err := s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
-		}
-	}, nil
+	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -452,27 +503,10 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return 0, nil
 	}
-	if err := context.Cause(ctx); err != nil {
-		return 0, err
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, sessionID := range ids {
-		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID.String())
-		if err != nil {
-			return 0, err
-		}
-		if active {
-			count++
-		}
-	}
-	return count, nil
+	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
 }
 
 func deleteSessionArtifact(persistenceRoot string, projectID string, relpath string, remove bool) error {
