@@ -53,6 +53,21 @@ func TestInitializeRepositoryPinsInitialBranch(t *testing.T) {
 	}
 }
 
+func TestInitializeRepositoryDisablesConfiguredCommitSigning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(
+		filepath.Join(home, ".gitconfig"),
+		[]byte("[commit]\n\tgpgsign = true\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write test Git config: %v", err)
+	}
+	if err := initializeRepository(t.TempDir()); err != nil {
+		t.Fatalf("initializeRepository with configured commit signing: %v", err)
+	}
+}
+
 func TestRunGitDisablesAutomaticMaintenance(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

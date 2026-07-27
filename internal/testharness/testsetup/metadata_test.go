@@ -3,6 +3,8 @@ package testsetup
 import (
 	"context"
 	"testing"
+
+	"core/server/metadata"
 )
 
 func TestOpenStoreMaterializesIsolatedCurrentStores(t *testing.T) {
@@ -19,5 +21,19 @@ func TestOpenStoreMaterializesIsolatedCurrentStores(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("second store projects = %+v, want isolated empty store", projects)
+	}
+}
+
+func TestPrepareMetadataPersistenceRootIsIdempotent(t *testing.T) {
+	persistenceRoot := t.TempDir()
+	PrepareMetadataPersistenceRoot(t, persistenceRoot)
+	PrepareMetadataPersistenceRoot(t, persistenceRoot)
+
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("open prepared metadata store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close prepared metadata store: %v", err)
 	}
 }

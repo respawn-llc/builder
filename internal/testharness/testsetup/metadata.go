@@ -1,7 +1,10 @@
 package testsetup
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -21,13 +24,7 @@ var currentDatabaseSeed struct {
 
 func OpenStore(t testing.TB, persistenceRoot string) *metadata.Store {
 	t.Helper()
-	seed, err := migratedDatabaseSeed()
-	if err != nil {
-		t.Fatalf("prepare migrated metadata database seed: %v", err)
-	}
-	if err := materializeDatabaseSeed(seed, persistenceRoot); err != nil {
-		t.Fatalf("materialize migrated metadata database seed: %v", err)
-	}
+	materializeCurrentDatabaseSeed(t, persistenceRoot)
 	store, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -38,6 +35,28 @@ func OpenStore(t testing.TB, persistenceRoot string) *metadata.Store {
 		}
 	})
 	return store
+}
+
+func PrepareMetadataPersistenceRoot(t testing.TB, persistenceRoot string) {
+	t.Helper()
+	databasePath := filepath.Join(persistenceRoot, metadataDatabaseRelativePath)
+	if _, err := os.Stat(databasePath); err == nil {
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat metadata database %q: %v", databasePath, err)
+	}
+	materializeCurrentDatabaseSeed(t, persistenceRoot)
+}
+
+func materializeCurrentDatabaseSeed(t testing.TB, persistenceRoot string) {
+	t.Helper()
+	seed, err := migratedDatabaseSeed()
+	if err != nil {
+		t.Fatalf("prepare migrated metadata database seed: %v", err)
+	}
+	if err := materializeDatabaseSeed(seed, persistenceRoot); err != nil {
+		t.Fatalf("materialize migrated metadata database seed: %v", err)
+	}
 }
 
 func migratedDatabaseSeed() (databaseSeed, error) {

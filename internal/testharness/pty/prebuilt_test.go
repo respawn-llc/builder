@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -92,7 +93,10 @@ func TestBuildOrUsePrebuiltKent(t *testing.T) {
 	}
 }
 
-func TestExecutablePathRejectsNonExecutableFiles(t *testing.T) {
+func TestExecutablePathRejectsNonExecutableUnixFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows treats regular generated files as executable")
+	}
 	path := filepath.Join(t.TempDir(), "not-executable")
 	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
 		t.Fatalf("write non-executable fixture: %v", err)
