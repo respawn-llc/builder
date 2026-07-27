@@ -6,22 +6,38 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 
 
-def open_shared_lock():
-    lock_path = "/tmp/kent-runtime-test.lock"
-    if os.name == "nt":
-        lock_path = os.path.join(tempfile.gettempdir(), "kent-runtime-test.lock")
+def repository_lock_path() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "resolve shared runtime test lock directory: "
+            + result.stderr.strip()
+        )
+    common_dir = result.stdout.strip()
+    if not common_dir:
+        raise RuntimeError("resolve shared runtime test lock directory: empty git common directory")
+    if not os.path.isabs(common_dir):
+        common_dir = os.path.abspath(common_dir)
+    if not os.path.isdir(common_dir):
+        raise RuntimeError(
+            f"resolve shared runtime test lock directory: not a directory: {common_dir}"
+        )
+    return os.path.join(common_dir, "kent-runtime-test.lock")
 
+
+def open_shared_lock():
+    lock_path = repository_lock_path()
     flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        previous_umask = os.umask(0)
-        try:
-            descriptor = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o666)
-        finally:
-            os.umask(previous_umask)
+        descriptor = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         descriptor = os.open(lock_path, flags)
 

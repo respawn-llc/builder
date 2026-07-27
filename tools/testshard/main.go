@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -45,7 +46,11 @@ func main() {
 		fatalf("plan Go test shards: %v", err)
 	}
 	if requiresRuntimeAdmission(jobs) {
-		if err := runWithRuntimeAdmission(); err != nil {
+		repositoryRoot, err := moduleRoot()
+		if err != nil {
+			fatalf("resolve runtime test repository root: %v", err)
+		}
+		if err := runWithRuntimeAdmission(repositoryRoot); err != nil {
 			fatalf("admit runtime test shards: %v", err)
 		}
 		return
@@ -67,12 +72,33 @@ func requiresRuntimeAdmission(jobs []testJob) bool {
 	return false
 }
 
-func runWithRuntimeAdmission() error {
+func moduleRoot() (string, error) {
+	command := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(string(output))
+	if root == "" {
+		return "", errors.New("module root is empty")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("module root is not a directory: %s", root)
+	}
+	return root, nil
+}
+
+func runWithRuntimeAdmission(repositoryRoot string) error {
 	arguments := append(
-		[]string{runtimeAdmissionLockScriptRelative, os.Args[0]},
+		[]string{filepath.Join(repositoryRoot, runtimeAdmissionLockScriptRelative), os.Args[0]},
 		os.Args[1:]...,
 	)
 	command := exec.Command("python3", arguments...)
+	command.Dir = repositoryRoot
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
