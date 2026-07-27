@@ -612,70 +612,64 @@ func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 		t.Fatalf("goal condensed text = %q, want compact", entry.CondensedText)
 	}
 }
-func TestSurfaceRunErrorPersistsOperatorFeedback(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-
-	runErr := errors.New("provider down")
-	engine.surfaceRunError(runErr)
-
-	snapshot := engine.ChatSnapshot()
-	found := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == runErr.Error() {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected surfaced run error entry, got %+v", snapshot.Entries)
-	}
-	if snapshot.StreamingError == "" {
-		t.Fatal("expected streaming error banner to be set")
-	}
-}
-
-func TestSurfaceRunErrorIgnoresBenignTerminations(t *testing.T) {
+func TestSurfaceRunError(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
-	for _, benign := range []error{nil, context.Canceled, ErrAgentBusy, errGoalLoopInactive, ErrEngineClosed} {
-		engine.surfaceRunError(benign)
-	}
-
-	snapshot := engine.ChatSnapshot()
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
-			t.Fatalf("benign termination surfaced an error entry: %+v", entry)
+	t.Run("ignores benign terminations", func(t *testing.T) {
+		for _, benign := range []error{nil, context.Canceled, ErrAgentBusy, errGoalLoopInactive, ErrEngineClosed} {
+			engine.surfaceRunError(benign)
 		}
-	}
-	if snapshot.StreamingError != "" {
-		t.Fatalf("benign termination set a streaming error banner: %q", snapshot.StreamingError)
-	}
-}
 
-func TestSurfaceRunErrorPrefersUserFacingMessageForStall(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-
-	engine.surfaceRunError(fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled))
-
-	snapshot := engine.ChatSnapshot()
-	want := llm.UserFacingError(llm.ErrModelStreamStalled)
-	if want == "" {
-		t.Fatal("expected stall sentinel to have a user-facing message")
-	}
-	found := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == want {
-			found = true
+		snapshot := engine.ChatSnapshot()
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				t.Fatalf("benign termination surfaced an error entry: %+v", entry)
+			}
 		}
-	}
-	if !found {
+		if snapshot.StreamingError != "" {
+			t.Fatalf("benign termination set a streaming error banner: %q", snapshot.StreamingError)
+		}
+	})
+
+	t.Run("persists operator feedback", func(t *testing.T) {
+		if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+
+		runErr := errors.New("provider down")
+		engine.surfaceRunError(runErr)
+
+		snapshot := engine.ChatSnapshot()
+		found := false
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == runErr.Error() {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected surfaced run error entry, got %+v", snapshot.Entries)
+		}
+		if snapshot.StreamingError == "" {
+			t.Fatal("expected streaming error banner to be set")
+		}
+	})
+
+	t.Run("prefers user-facing message for stall", func(t *testing.T) {
+		engine.surfaceRunError(fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled))
+
+		snapshot := engine.ChatSnapshot()
+		want := llm.UserFacingError(llm.ErrModelStreamStalled)
+		if want == "" {
+			t.Fatal("expected stall sentinel to have a user-facing message")
+		}
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == want {
+				return
+			}
+		}
 		t.Fatalf("expected user-facing stall message entry, got %+v", snapshot.Entries)
-	}
+	})
 }
 
 func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {

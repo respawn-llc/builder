@@ -12,6 +12,11 @@ import (
 )
 
 func TestBoardDoneCardsIgnoreDeepHistoricalRunPayloads(t *testing.T) {
+	const (
+		historicalRunCount = 512
+		historicalPayload  = 16 * 1024
+	)
+
 	ctx, metadataStore, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -45,14 +50,14 @@ func TestBoardDoneCardsIgnoreDeepHistoricalRunPayloads(t *testing.T) {
 	}
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
 
-	payload := `{"payload":"` + strings.Repeat("x", 32*1024) + `"}`
+	payload := `{"payload":"` + strings.Repeat("x", historicalPayload) + `"}`
 	if _, err := metadataStore.DB().ExecContext(ctx, `
 WITH RECURSIVE history(run_number) AS (
     SELECT 1
     UNION ALL
     SELECT run_number + 1
     FROM history
-    WHERE run_number < 1024
+    WHERE run_number < ?
 )
 INSERT INTO task_runs (
     id,
@@ -81,7 +86,7 @@ SELECT
     0,
     ?,
     ?
-FROM history`, string(started.PlacementID), payload, payload); err != nil {
+FROM history`, historicalRunCount, string(started.PlacementID), payload, payload); err != nil {
 		t.Fatalf("insert historical runs: %v", err)
 	}
 

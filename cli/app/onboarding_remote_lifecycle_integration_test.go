@@ -234,7 +234,7 @@ func (s *gatedOnboardingServer) endpoint() string {
 }
 
 func TestOnboardingRemoteLifecycleKeepsSubmittedRPCAliveAfterParentCancellation(t *testing.T) {
-	binary := buildOnboardingRemoteLifecycleTestBinary(t)
+	binary := onboardingRemoteLifecycleTestExecutable(t)
 	server := newGatedOnboardingServer(t)
 	root := t.TempDir()
 	cancelPath := filepath.Join(root, "cancel")
@@ -267,6 +267,7 @@ func TestOnboardingRemoteLifecycleKeepsSubmittedRPCAliveAfterParentCancellation(
 
 	capture, err := pty.RunCommand(context.Background(), pty.CommandSpec{
 		Path:       binary,
+		Args:       []string{onboardingRemoteLifecycleTestRunArgument},
 		Env:        []string{onboardingRemoteLifecycleConfigEnv + "=" + processConfigPath},
 		Dimensions: pty.MustDimensions(24, 80),
 		ParseableInputs: []pty.ParseableInputEvent{
@@ -288,7 +289,7 @@ func TestOnboardingRemoteLifecycleKeepsSubmittedRPCAliveAfterParentCancellation(
 }
 
 func TestOnboardingRemoteLifecycleEscapeCancelsBeforeFinalization(t *testing.T) {
-	binary := buildOnboardingRemoteLifecycleTestBinary(t)
+	binary := onboardingRemoteLifecycleTestExecutable(t)
 	server := newGatedOnboardingServer(t)
 	root := t.TempDir()
 	resultPath := filepath.Join(root, "result.json")
@@ -298,6 +299,7 @@ func TestOnboardingRemoteLifecycleEscapeCancelsBeforeFinalization(t *testing.T) 
 	})
 	capture, err := pty.RunCommand(context.Background(), pty.CommandSpec{
 		Path:       binary,
+		Args:       []string{onboardingRemoteLifecycleTestRunArgument},
 		Env:        []string{onboardingRemoteLifecycleConfigEnv + "=" + processConfigPath},
 		Dimensions: pty.MustDimensions(24, 80),
 		ParseableInputs: []pty.ParseableInputEvent{
@@ -405,40 +407,11 @@ func waitForOnboardingGateClose(t *testing.T, closed <-chan struct{}) {
 	}
 }
 
-var onboardingRemoteLifecycleTestBinary struct {
-	once sync.Once
-	root *string
-	path *string
-	err  error
-}
-
-func buildOnboardingRemoteLifecycleTestBinary(t *testing.T) string {
+func onboardingRemoteLifecycleTestExecutable(t *testing.T) string {
 	t.Helper()
-	onboardingRemoteLifecycleTestBinary.once.Do(func() {
-		root, err := os.MkdirTemp("", "kent-onboarding-lifecycle-")
-		if err != nil {
-			onboardingRemoteLifecycleTestBinary.err = err
-			return
-		}
-		binary := filepath.Join(root, "app.test")
-		onboardingRemoteLifecycleTestBinary.root = &root
-		onboardingRemoteLifecycleTestBinary.path = &binary
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		onboardingRemoteLifecycleTestBinary.err = pty.BuildTestBinary(ctx, "core/cli/app", binary)
-	})
-	if onboardingRemoteLifecycleTestBinary.err != nil {
-		t.Fatalf("build onboarding lifecycle test binary: %v", onboardingRemoteLifecycleTestBinary.err)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve onboarding lifecycle test executable: %v", err)
 	}
-	if onboardingRemoteLifecycleTestBinary.path == nil {
-		t.Fatal("onboarding lifecycle test binary path is required")
-	}
-	return *onboardingRemoteLifecycleTestBinary.path
-}
-
-func cleanupOnboardingRemoteLifecycleTestBinary() error {
-	if onboardingRemoteLifecycleTestBinary.root == nil {
-		return nil
-	}
-	return os.RemoveAll(*onboardingRemoteLifecycleTestBinary.root)
+	return executable
 }

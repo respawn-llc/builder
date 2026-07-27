@@ -148,7 +148,7 @@ func RunGit(t *testing.T, dir string, args ...string) string {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	commandArgs := append([]string{"-c", "maintenance.auto=false"}, args...)
+	commandArgs := append([]string{"-c", "maintenance.auto=false", "-c", "commit.gpgsign=false"}, args...)
 	command := exec.Command("git", commandArgs...)
 	command.Dir = dir
 	command.Env = append(sanitizedGitEnvironment(os.Environ()),

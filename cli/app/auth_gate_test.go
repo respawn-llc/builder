@@ -57,7 +57,7 @@ func TestBootstrapAppHeadlessUsesEnvAPIKeyWithoutPersistingAuthState(t *testing.
 	home, workspace := newRegisteredAppWorkspace(t)
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, newHeadlessAuthInteractor(), false)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace}, newHeadlessAuthInteractor(), false)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestBootstrapAppReadyEnvAuthDoesNotOpenAuthPicker(t *testing.T) {
 			return authMethodPickerResult{}, nil
 		},
 	}
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, interactor, true)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace}, interactor, true)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestBootstrapAppNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T) {
 		}
 		return false
 	}
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, OpenAIBaseURL: "http://127.0.0.1:8080/v1", OpenAIBaseURLExplicit: true}, interactor, true)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, OpenAIBaseURL: "http://127.0.0.1:8080/v1", OpenAIBaseURLExplicit: true}, interactor, true)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestBootstrapAppRequiredNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T)
 		},
 	}
 
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestBootstrapAppSkipAuthDoesNotPersistAuthState(t *testing.T) {
 			return authservice.FlowInteractionOutcome{ProceedWithoutAuth: true}, nil
 		},
 	}
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, Model: "gpt-5"}, interactor, false)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, Model: "gpt-5"}, interactor, false)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}

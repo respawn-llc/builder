@@ -316,52 +316,47 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		}
 	}()
 
-	for _, resize := range spec.Resizes {
-		resize := resize
-		if resize.After == 0 {
-			continue
-		}
+	events := timedEvents(spec)
+	if len(events) > 0 {
 		eventWG.Add(1)
 		go func() {
 			defer eventWG.Done()
-			timer := time.NewTimer(resize.After)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
+			for _, event := range events {
+				delay := time.Until(started.Add(event.After))
+				if delay > 0 {
+					timer := time.NewTimer(delay)
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					}
+				}
 				if processExited.Load() || ctx.Err() != nil {
 					return
 				}
-				if _, err := applyResize(resize); err != nil {
-					if processExited.Load() {
+				switch event.Kind {
+				case timedEventResize:
+					if _, err := applyResize(event.Resize); err != nil {
+						if processExited.Load() {
+							return
+						}
+						eventErrors.Add(err)
+						cancel()
 						return
 					}
-					eventErrors.Add(err)
-					cancel()
-				}
-			case <-ctx.Done():
-			}
-		}()
-	}
-	for _, input := range spec.Inputs {
-		input := input
-		eventWG.Add(1)
-		go func() {
-			defer eventWG.Done()
-			timer := time.NewTimer(input.After)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				if processExited.Load() || ctx.Err() != nil {
-					return
-				}
-				if err := writeFull(ptmx, input.Bytes); err != nil {
-					if processExited.Load() {
+				case timedEventInput:
+					if err := writeFull(ptmx, event.Input.Bytes); err != nil {
+						if processExited.Load() {
+							return
+						}
+						eventErrors.Add(fmt.Errorf("write scheduled PTY input: %w", err))
+						cancel()
 						return
 					}
-					eventErrors.Add(fmt.Errorf("write scheduled PTY input: %w", err))
-					cancel()
+				default:
+					panic(fmt.Sprintf("unknown timed PTY event kind %d", event.Kind))
 				}
-			case <-ctx.Done():
 			}
 		}()
 	}
@@ -424,6 +419,54 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		return capture, fmt.Errorf("pty command exited with error path=%s args=%v: %w", spec.Path, spec.Args, waitErr)
 	}
 	return capture, nil
+}
+
+type timedEventKind uint8
+
+const (
+	timedEventResize timedEventKind = iota
+	timedEventInput
+)
+
+type timedEvent struct {
+	After  time.Duration
+	Kind   timedEventKind
+	Index  int
+	Resize ResizeEvent
+	Input  InputEvent
+}
+
+func timedEvents(spec CommandSpec) []timedEvent {
+	events := make([]timedEvent, 0, len(spec.Resizes)+len(spec.Inputs))
+	for index, resize := range spec.Resizes {
+		if resize.After == 0 {
+			continue
+		}
+		events = append(events, timedEvent{
+			After:  resize.After,
+			Kind:   timedEventResize,
+			Index:  index,
+			Resize: resize,
+		})
+	}
+	for index, input := range spec.Inputs {
+		events = append(events, timedEvent{
+			After: input.After,
+			Kind:  timedEventInput,
+			Index: index,
+			Input: input,
+		})
+	}
+	sort.Slice(events, func(left, right int) bool {
+		if events[left].After != events[right].After {
+			return events[left].After < events[right].After
+		}
+		if events[left].Kind != events[right].Kind {
+			return events[left].Kind < events[right].Kind
+		}
+		return events[left].Index < events[right].Index
+	})
+	return events
 }
 
 func advanceReadinessTracker(

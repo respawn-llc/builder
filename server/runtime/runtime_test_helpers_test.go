@@ -205,9 +205,6 @@ func mustCreateNamedTestSessionAt(t *testing.T, root string, workspaceContainerN
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("persist store: %v", err)
-	}
 	return store
 }
 

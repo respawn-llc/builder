@@ -531,6 +531,7 @@ func newMetadataTestStoreForWorkspace(t *testing.T, workspace string) (*Store, c
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
+	installMetadataTestDatabase(t, cfg.PersistenceRoot)
 	store, err := Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

@@ -368,7 +368,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 // kent run no longer starts servers, so tests drive the run client directly.
 func runHeadlessPromptViaEmbedded(t *testing.T, opts Options, clientRequestID, prompt string) serverapi.RunPromptResponse {
 	t.Helper()
-	boot, err := startEmbeddedServer(context.Background(), opts, newHeadlessAuthInteractor(), false)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), opts, newHeadlessAuthInteractor(), false)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestHeadlessRunPromptClientResumesExistingSessionByID(t *testing.T) {
 		OpenAIBaseURLExplicit: true,
 	}, "req-create-1", "first prompt")
 
-	boot, err := startEmbeddedServer(context.Background(), Options{
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		SessionID:             created.SessionID,
@@ -460,7 +460,7 @@ func TestHeadlessRunPromptClientRestoresContinuationContextFromSelectedSession(t
 		OpenAIBaseURLExplicit: true,
 	}, "req-create-2", "first prompt")
 
-	boot, err := startEmbeddedServer(context.Background(), Options{
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		SessionID:             created.SessionID,

@@ -2373,11 +2373,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	cfg.Settings.Reviewer.Frequency = "off"
 	cfg.Settings.Subagents["coder"] = config.SubagentRole{Description: "Coder", Settings: config.Settings{Model: "gpt-5.4-mini"}, Sources: map[string]string{"model": "test"}}
 	cfg.Settings.Subagents["reviewer"] = config.SubagentRole{Description: "Reviewer", Settings: config.Settings{Model: "gpt-5.4-reviewer"}, Sources: map[string]string{"model": "test"}}
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
@@ -3095,6 +3091,18 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 		}
 		return false
 	}, "timed out waiting for workflow run ask %s", askID)
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
+		snapshot, err := f.runtimeAuthority.CurrentTaskExecutionSnapshot(taskID)
+		if err != nil {
+			t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+		}
+		for _, execution := range snapshot.Executions {
+			if execution.Ref.RunID == waiting.ID && execution.Ref.Generation == waiting.Generation {
+				return execution.WaitingQuestion
+			}
+		}
+		return false
+	}, "timed out waiting for live workflow question on run %s generation %d", waiting.ID, waiting.Generation)
 	return waiting
 }
 

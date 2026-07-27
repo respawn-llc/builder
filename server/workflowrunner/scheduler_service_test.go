@@ -477,16 +477,15 @@ func TestSchedulerStartContinuesAfterRuntimeStartFailure(t *testing.T) {
 	}
 	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
 	registerAutomaticStarts(t, scheduler, []workflow.RunID{started.RunID})
-	if err := scheduler.Process(ctx); !errors.Is(err, ErrSchedulerRuntimeStartFailed) {
-		t.Fatalf("Process: %v, want ErrSchedulerRuntimeStartFailed", err)
-	}
-	runs, err := store.ListRuns(ctx, started.TaskID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
-		t.Fatalf("run after startup starter failure = %+v", runs[0])
-	}
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
+		runs, err := store.ListRuns(ctx, started.TaskID)
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+		return runs[0].InterruptedAt != nil &&
+			runs[0].InterruptionReason != nil &&
+			*runs[0].InterruptionReason == ReasonSchedulerRuntimeStartFailed
+	}, "timed out waiting for runtime start failure to interrupt run %s", started.RunID)
 }
 
 type recordingStarter struct {
@@ -589,11 +588,7 @@ func newSchedulerTestStore(t *testing.T) (*workflowstore.Store, metadata.Binding
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)

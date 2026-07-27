@@ -148,7 +148,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
 	store := mustCreateTestSession(t)
-	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(250 * time.Millisecond))
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"sleep 0.3; echo done","shell":"/bin/sh","login":false,"yield_time_ms":250}`),
+				Input: json.RawMessage(`{"cmd":"read line; echo done","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -171,7 +171,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_poll_1",
 				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":15000}`),
+				Input: json.RawMessage(`{"session_id":1000,"chars":"\n","yield_time_ms":15000}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -223,8 +223,6 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	if messageContent(assistant) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
 	}
-	time.Sleep(50 * time.Millisecond)
-
 	client.mu.Lock()
 	callCount := len(client.calls)
 	client.mu.Unlock()
@@ -469,6 +467,8 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 
 func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *testing.T) {
 	store := mustCreateTestSession(t)
+	watchdog, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
 
 	client := &fakeClient{responses: []llm.Response{
 		{
@@ -486,6 +486,13 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 	}}
 
 	slow := blockingTool{name: toolspec.ToolExecCommand, started: make(chan struct{}), release: make(chan struct{})}
+	var releaseSlow sync.Once
+	release := func() {
+		releaseSlow.Do(func() {
+			close(slow.release)
+		})
+	}
+	t.Cleanup(release)
 	toolCompleted := make(chan tools.Result, 4)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: slow},
@@ -506,21 +513,25 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 
 	submitDone := make(chan error, 1)
 	go func() {
-		_, submitErr := eng.SubmitUserMessage(context.Background(), "run tools")
+		_, submitErr := eng.SubmitUserMessage(watchdog, "run tools")
 		submitDone <- submitErr
 	}()
 
 	select {
 	case <-slow.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for slow tool to start")
+	case submitErr := <-submitDone:
+		t.Fatalf("submit completed before slow tool started: %v", submitErr)
+	case <-watchdog.Done():
+		t.Fatalf("timed out waiting for slow tool to start: %v", watchdog.Err())
 	}
 
 	var completed tools.Result
 	select {
 	case completed = <-toolCompleted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for fast tool completion")
+	case submitErr := <-submitDone:
+		t.Fatalf("submit completed before fast tool result: %v", submitErr)
+	case <-watchdog.Done():
+		t.Fatalf("timed out waiting for fast tool completion: %v", watchdog.Err())
 	}
 	if completed.CallID != "b" {
 		t.Fatalf("expected fast patch tool to complete first, got %+v", completed)
@@ -541,14 +552,14 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 		t.Fatalf("expected snapshot to expose pending a and completed b before slow tool finishes, got %+v", snapshot.Entries)
 	}
 
-	close(slow.release)
+	release()
 	select {
 	case submitErr := <-submitDone:
 		if submitErr != nil {
 			t.Fatalf("submit: %v", submitErr)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for submit completion")
+	case <-watchdog.Done():
+		t.Fatalf("timed out waiting for submit completion: %v", watchdog.Err())
 	}
 }
 

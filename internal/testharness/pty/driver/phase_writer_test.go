@@ -15,8 +15,13 @@ import (
 func TestPhaseWriterFixtureProducesResolvableWindow(t *testing.T) {
 	t.Parallel()
 
-	output := filepath.Join(t.TempDir(), "phase-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-writer", output); err != nil {
+	output, err := pty.BuildOrUsePrebuiltPackage(
+		context.Background(),
+		pty.PhaseWriterBinaryEnvName,
+		"core/internal/testharness/pty/testdata/cmd/phase-writer",
+		filepath.Join(t.TempDir(), "phase-writer"),
+	)
+	if err != nil {
 		t.Fatalf("BuildPackage: %v", err)
 	}
 	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -22,11 +21,8 @@ import (
 const cleanupTeardownTestMargin = time.Second
 
 func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "kent")
-	build := exec.CommandContext(context.Background(), "./scripts/build.sh", "server", "--output", binary)
-	build.Dir = filepath.Join("..", "..", "..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Logf("build output:\n%s", output)
+	binary, err := pty.BuildOrUsePrebuiltKent(context.Background(), filepath.Join(t.TempDir(), "kent"))
+	if err != nil {
 		t.Fatalf("build compiled Kent client: %v", err)
 	}
 	scenario, err := LoadScenario("testdata/go-model-boundary.json")
@@ -93,8 +89,13 @@ func TestTerminateProcessActionForceKillsTermIgnoringClient(t *testing.T) {
 
 func startTermIgnoringSession(t *testing.T) *driver.Session {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "ansi-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/ansi-writer", binary); err != nil {
+	binary, err := pty.BuildOrUsePrebuiltPackage(
+		context.Background(),
+		pty.AnsiWriterBinaryEnvName,
+		"core/internal/testharness/pty/testdata/cmd/ansi-writer",
+		filepath.Join(t.TempDir(), "ansi-writer"),
+	)
+	if err != nil {
 		t.Fatalf("build PTY helper: %v", err)
 	}
 	session, err := driver.StartSession(driver.SessionSpec{

@@ -17,7 +17,7 @@ func TestBootstrapAppIgnoresOAuthIssuerOverrideEnv(t *testing.T) {
 
 	readyAuth := readyMemoryAuthHandler()
 	readyAuth.lookupEnv = os.Getenv
-	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyAuth, false)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace}, readyAuth, false)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}

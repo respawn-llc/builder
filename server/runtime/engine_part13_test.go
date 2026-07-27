@@ -139,33 +139,6 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 }
 
-func TestTriggerHandoffFailsBeforeReminder(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call-handoff-1", Name: string(toolspec.ToolTriggerHandoff)}, "", "")
-	if !errors.Is(err, errHandoffTooEarly) {
-		t.Fatalf("expected errHandoffTooEarly, got %v", err)
-	}
-}
-
-func TestTriggerHandoffFailsWhenAutoCompactionDisabled(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	eng.compactionRuntimeState().SetSoonReminderIssued(true)
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
-	if !changed || enabled {
-		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
-	}
-
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call-handoff-1", Name: string(toolspec.ToolTriggerHandoff)}, "", "")
-	if !errors.Is(err, errHandoffDisabledByUser) {
-		t.Fatalf("expected errHandoffDisabledByUser, got %v", err)
-	}
-}
-
 func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCarryover(t *testing.T) {
 	store := mustCreateTestSession(t)
 

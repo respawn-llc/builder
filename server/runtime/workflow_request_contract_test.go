@@ -442,6 +442,16 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 			wantVision: false,
 		},
 		{
+			name:       "vision catalog model",
+			model:      "gpt-5.3-codex",
+			wantVision: true,
+		},
+		{
+			name:       "codex spark catalog model",
+			model:      "gpt-5.3-codex-spark",
+			wantVision: false,
+		},
+		{
 			name:         "explicit vision override",
 			model:        "gpt-4.1-2026-01-15",
 			capabilities: session.LockedModelCapabilities{SupportsVisionInputs: true},

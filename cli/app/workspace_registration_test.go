@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
-	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/projectview"
@@ -23,18 +22,6 @@ import (
 	"core/shared/config"
 	"core/shared/sessioncontract"
 )
-
-type appMetadataTemplateFile struct {
-	relativePath string
-	mode         fs.FileMode
-	data         []byte
-}
-
-var appMetadataTemplate struct {
-	once  sync.Once
-	files []appMetadataTemplateFile
-	err   error
-}
 
 func registerAppWorkspace(t *testing.T, workspace string) {
 	t.Helper()
@@ -135,7 +122,19 @@ func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL
 }
 
 func serveAppServer(t *testing.T, srv *serverstartup.ServeServer) func() {
-	return serveAppServerAfter(t, srv, func() {})
+	return serveAppServerAfter(t, srv, releaseConfiguredAppTestServerPort)
+}
+
+func startAppTestEmbeddedServer(
+	t *testing.T,
+	ctx context.Context,
+	opts Options,
+	interactor authInteractor,
+	interactive bool,
+) (*embeddedAppServer, error) {
+	t.Helper()
+	releaseConfiguredAppTestServerPort()
+	return startEmbeddedServer(ctx, opts, interactor, interactive)
 }
 
 func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeServe func()) func() {
@@ -156,19 +155,30 @@ func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeSer
 
 func reserveAppDirectServePort(t *testing.T) func() {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve direct serve port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	return reserveAppTestServerPort(t)
+}
+
+func configureAppTestServerPort(t *testing.T) {
+	t.Helper()
+	_ = reserveAppTestServerPort(t)
+}
+
+func reserveAppTestServerPort(t *testing.T) func() {
+	t.Helper()
+	releaseConfiguredAppTestServerPort()
+	reservation := testsetup.ReserveLoopbackPort(t)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
-	var once sync.Once
-	release := func() {
-		once.Do(func() { _ = listener.Close() })
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
+	return reservation.Release
+}
+
+func releaseConfiguredAppTestServerPort() {
+	host, hostFound := os.LookupEnv("KENT_SERVER_HOST")
+	port, portFound := os.LookupEnv("KENT_SERVER_PORT")
+	if !hostFound || !portFound {
+		return
 	}
-	t.Cleanup(release)
-	return release
+	testsetup.ReleaseLoopbackAddress(net.JoinHostPort(host, port))
 }
 
 func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
@@ -234,18 +244,24 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	return eng
 }
 
-func configureAppTestServerPort(t *testing.T) {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func TestConfigureAppTestServerPortKeepsAddressBoundUntilServerStarts(t *testing.T) {
+	release := reserveAppTestServerPort(t)
+	address := net.JoinHostPort(
+		os.Getenv("KENT_SERVER_HOST"),
+		os.Getenv("KENT_SERVER_PORT"),
+	)
+	if listener, err := net.Listen("tcp", address); err == nil {
+		_ = listener.Close()
+		t.Fatalf("test server port %q was not held", address)
+	}
+	release()
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		t.Fatalf("reserve server port: %v", err)
+		t.Fatalf("bind released test server port %q: %v", address, err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
 	if err := listener.Close(); err != nil {
-		t.Fatalf("release server port probe: %v", err)
+		t.Fatalf("close released test server port %q: %v", address, err)
 	}
-	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
 }
 
 func mustRegisterAppBinding(t *testing.T, persistenceRoot string, workspaceRoot string) metadata.Binding {
@@ -260,79 +276,7 @@ func mustRegisterAppBinding(t *testing.T, persistenceRoot string, workspaceRoot 
 
 func prepareAppTestPersistenceRoot(t *testing.T, persistenceRoot string) {
 	t.Helper()
-	appMetadataTemplate.once.Do(func() {
-		templateRoot := t.TempDir()
-		store, err := metadata.Open(templateRoot)
-		if err != nil {
-			appMetadataTemplate.err = err
-			return
-		}
-		if err := store.Close(); err != nil {
-			appMetadataTemplate.err = err
-			return
-		}
-		appMetadataTemplate.files, appMetadataTemplate.err = snapshotAppMetadataTemplate(templateRoot)
-	})
-	if appMetadataTemplate.err != nil {
-		t.Fatalf("initialize metadata template: %v", appMetadataTemplate.err)
-	}
-	for _, file := range appMetadataTemplate.files {
-		target := filepath.Join(persistenceRoot, file.relativePath)
-		if _, err := os.Stat(target); err == nil {
-			return
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("stat metadata template destination %q: %v", target, err)
-		}
-	}
-	for _, file := range appMetadataTemplate.files {
-		target := filepath.Join(persistenceRoot, file.relativePath)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			t.Fatalf("create metadata template directory %q: %v", filepath.Dir(target), err)
-		}
-		if err := os.WriteFile(target, file.data, file.mode.Perm()); err != nil {
-			t.Fatalf("copy metadata template file %q: %v", target, err)
-		}
-	}
-}
-
-func snapshotAppMetadataTemplate(root string) ([]appMetadataTemplateFile, error) {
-	files := make([]appMetadataTemplateFile, 0, 1)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return errors.New("metadata template contains a non-regular file")
-		}
-		relativePath, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		files = append(files, appMetadataTemplateFile{
-			relativePath: relativePath,
-			mode:         info.Mode(),
-			data:         data,
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(files) == 0 {
-		return nil, errors.New("metadata template contains no database files")
-	}
-	return files, nil
+	testsetup.PrepareMetadataPersistenceRoot(t, persistenceRoot)
 }
 
 func createAuthoritativeAppSession(t *testing.T, persistenceRoot string, workspaceRoot string) *session.Store {

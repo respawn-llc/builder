@@ -114,10 +114,7 @@ func TestRunCommandFeedsInputAndAppliesResize(t *testing.T) {
 }
 
 func TestRunCommandDelaysInputRelativeToPhase(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "phase-input-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
-		t.Fatalf("BuildPackage: %v", err)
-	}
+	output := phaseInputWriterBinary(t)
 	delay := 100 * time.Millisecond
 	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
 		Path:       output,
@@ -171,10 +168,7 @@ func TestRunCommandDelaysInputRelativeToPhase(t *testing.T) {
 }
 
 func TestRunCommandDispatchesFrameInputSequenceAfterCompletedFrames(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "phase-input-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
-		t.Fatalf("BuildPackage: %v", err)
-	}
+	output := phaseInputWriterBinary(t)
 	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
 		Path:       output,
 		Args:       []string{"frame-sequence"},
@@ -212,10 +206,7 @@ func TestRunCommandDispatchesFrameInputSequenceAfterCompletedFrames(t *testing.T
 }
 
 func TestRunCommandDispatchesFrameInputsAcrossTypedReadinessBoundaries(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "phase-input-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
-		t.Fatalf("BuildPackage: %v", err)
-	}
+	output := phaseInputWriterBinary(t)
 	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
 		Path:       output,
 		Args:       []string{"typed-readiness-sequence"},
@@ -535,11 +526,31 @@ func TestSessionWriteCommandCompletesOnlyAfterLargePTYInputIsAccepted(t *testing
 
 func buildHelper(t *testing.T) string {
 	t.Helper()
-	output := filepath.Join(t.TempDir(), "ansi-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/ansi-writer", output); err != nil {
+	output, err := pty.BuildOrUsePrebuiltPackage(
+		context.Background(),
+		pty.AnsiWriterBinaryEnvName,
+		"core/internal/testharness/pty/testdata/cmd/ansi-writer",
+		filepath.Join(t.TempDir(), "ansi-writer"),
+	)
+	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			t.Fatalf("BuildPackage: %v\n%s", err, string(exitErr.Stderr))
 		}
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	return output
+}
+
+func phaseInputWriterBinary(t *testing.T) string {
+	t.Helper()
+
+	output, err := pty.BuildOrUsePrebuiltPackage(
+		context.Background(),
+		pty.PhaseInputWriterBinaryEnvName,
+		"core/internal/testharness/pty/testdata/cmd/phase-input-writer",
+		filepath.Join(t.TempDir(), "phase-input-writer"),
+	)
+	if err != nil {
 		t.Fatalf("BuildPackage: %v", err)
 	}
 	return output

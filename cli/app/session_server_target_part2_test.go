@@ -55,7 +55,7 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 	}
 
 	t.Log("starting embedded server")
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
+	server, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
 	if err != nil {
 		t.Fatalf("startEmbeddedServer: %v", err)
 	}
