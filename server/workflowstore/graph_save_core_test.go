@@ -183,6 +183,157 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	}
 }
 
+func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testing.T) {
+	ctx, store, _, cfg := newTestStoreWithConfigContext(t)
+	remote, _ := openConcurrentWorkflowStores(t, cfg)
+	remote.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
+	workflowID := createValidWorkflow(t, ctx, store)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	local := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	local.Nodes = renameWorkflowGraphSaveNode(local.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Local agent")
+	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	store.roleResolver = resolver
+	type saveResult struct {
+		result WorkflowGraphSaveResult
+		err    error
+	}
+	localDone := make(chan saveResult, 1)
+	go func() {
+		result, err := store.SaveWorkflowGraph(ctx, local)
+		localDone <- saveResult{result: result, err: err}
+	}()
+	<-resolver.started
+
+	remoteRequest := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	remoteRequest.Nodes = renameWorkflowGraphSaveNode(remoteRequest.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Remote agent")
+	remoteResult, err := remote.SaveWorkflowGraph(ctx, remoteRequest)
+	if err != nil {
+		t.Fatalf("remote SaveWorkflowGraph: %v", err)
+	}
+	if !remoteResult.Saved || remoteResult.Version != record.Version+1 {
+		t.Fatalf("remote save = %+v, want committed next version", remoteResult)
+	}
+
+	close(resolver.release)
+	outcome := <-localDone
+	if outcome.err != nil {
+		t.Fatalf("local SaveWorkflowGraph: %v", outcome.err)
+	}
+	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "version_changed") != remoteResult.Version {
+		t.Fatalf("local save after remote version race = %+v, want version_changed", outcome.result)
+	}
+	current, currentRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after version race: %v", err)
+	}
+	if currentRecord.Version != remoteResult.Version || workflow.NodeDisplayName(nodeByID(t, current, workflow.NodeID("node-agent-"+string(workflowID)))) != "Remote agent" {
+		t.Fatalf("definition after version race = record=%+v definition=%+v, want only remote save", currentRecord, current)
+	}
+}
+
+func TestWorkflowGraphSaveCommitRejectsChangedConfirmationImpactDuringPreparation(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
+	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	spareDoneID := workflow.NodeID("node-spare-done-" + string(workflowID))
+	spareGroupID := workflow.TransitionGroupID("group-spare-done-" + string(workflowID))
+	spareEdgeID := workflow.EdgeID("edge-spare-done-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.Nodes = append(req.Nodes, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"})
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"})
+		req.Edges = append(req.Edges, EdgeRecord{ID: spareEdgeID, WorkflowID: workflowID, TransitionGroupID: spareGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession})
+	})
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, spareDoneID)
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, spareGroupID)
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, spareEdgeID)
+	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if preview.Impact.NodeTaskReferenceCount != 0 || preview.Impact.EdgeTaskReferenceCount != 0 {
+		t.Fatalf("preview impact = %+v, want no task references before race", preview.Impact)
+	}
+
+	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	store.roleResolver = resolver
+	type saveResult struct {
+		result WorkflowGraphSaveResult
+		err    error
+	}
+	saved := make(chan saveResult, 1)
+	go func() {
+		result, err := store.SaveWorkflowGraph(ctx, confirmWorkflowGraphSaveRequest(req, preview.Impact))
+		saved <- saveResult{result: result, err: err}
+	}()
+	<-resolver.started
+
+	task := createDefaultTask(t, ctx, activeStore, binding.ProjectID)
+	started := startTask(t, ctx, activeStore, task.ID)
+	completeRun(t, ctx, activeStore, CompleteRunRequest{RunID: started.RunID, TransitionID: "spare_done"})
+	close(resolver.release)
+
+	outcome := <-saved
+	if outcome.err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
+	}
+	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "impact_changed") != 1 {
+		t.Fatalf("save after confirmation-impact race = %+v, want impact_changed", outcome.result)
+	}
+	if outcome.result.Impact.NodeTaskReferenceCount == 0 {
+		t.Fatalf("save result impact = %+v, want authoritative new task reference", outcome.result.Impact)
+	}
+}
+
+func TestWorkflowGraphSaveCommitIgnoresUnrelatedTaskMetadataDuringPreparation(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	taskStore, _ := openConcurrentWorkflowStores(t, cfg)
+	taskStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, taskStore, binding.ProjectID)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Renamed agent")
+	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	store.roleResolver = resolver
+	type saveResult struct {
+		result WorkflowGraphSaveResult
+		err    error
+	}
+	saved := make(chan saveResult, 1)
+	go func() {
+		result, err := store.SaveWorkflowGraph(ctx, req)
+		saved <- saveResult{result: result, err: err}
+	}()
+	<-resolver.started
+
+	title := "Task metadata changed"
+	if _, err := taskStore.UpdateTask(ctx, UpdateTaskRequest{TaskID: task.ID, Title: &title}); err != nil {
+		t.Fatalf("UpdateTask unrelated metadata: %v", err)
+	}
+	close(resolver.release)
+
+	outcome := <-saved
+	if outcome.err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
+	}
+	if !outcome.result.Saved || outcome.result.Version != record.Version+1 || len(outcome.result.Blockers) != 0 {
+		t.Fatalf("save after unrelated task metadata = %+v, want committed graph", outcome.result)
+	}
+}
+
 func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	unconfirmed := f.request(f.record.Version, false, f.def)
