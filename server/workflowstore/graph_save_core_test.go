@@ -2,9 +2,11 @@ package workflowstore
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"core/server/workflow"
+	"core/shared/toolspec"
 )
 
 type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) workflow.WorkflowID
@@ -57,6 +59,71 @@ func (f graphSaveFixture) current(t *testing.T) (workflow.Definition, WorkflowRe
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	return def, record
+}
+
+type blockingGraphSaveRoleResolver struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingGraphSaveRoleResolver) RoleExists(string) bool {
+	r.once.Do(func() {
+		close(r.started)
+		<-r.release
+	})
+	return true
+}
+
+func (r *blockingGraphSaveRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
+	return true
+}
+
+func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	other, err := f.store.CreateWorkflow(f.ctx, CreateWorkflowRequest{Name: "Unrelated workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow unrelated: %v", err)
+	}
+	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	f.store.roleResolver = resolver
+	request := f.request(f.record.Version, false, f.def)
+	request.Nodes = renameWorkflowGraphSaveNode(request.Nodes, workflow.NodeID("node-agent-"+string(f.workflowID)), "Renamed agent")
+
+	saveDone := make(chan error, 1)
+	go func() {
+		_, err := f.store.SaveWorkflowGraph(f.ctx, request)
+		saveDone <- err
+	}()
+	<-resolver.started
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := f.store.GetDefinition(f.ctx, other.ID)
+		readDone <- err
+	}()
+	if err := <-readDone; err != nil {
+		t.Fatalf("unrelated workflow read during preparation: %v", err)
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := f.store.CreateWorkflow(f.ctx, CreateWorkflowRequest{Name: "Other unrelated workflow"})
+		writeDone <- err
+	}()
+	if err := <-writeDone; err != nil {
+		t.Fatalf("unrelated workflow write during preparation: %v", err)
+	}
+
+	select {
+	case err := <-saveDone:
+		t.Fatalf("save completed while validation was blocked: %v", err)
+	default:
+	}
+	close(resolver.release)
+	if err := <-saveDone; err != nil {
+		t.Fatalf("SaveWorkflowGraph after validation release: %v", err)
+	}
 }
 
 func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testing.T) {

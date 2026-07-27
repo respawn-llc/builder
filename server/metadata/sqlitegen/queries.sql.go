@@ -45,6 +45,21 @@ func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) 
 	return id, err
 }
 
+const acquireWorkflowGraphSaveWriteLock = `-- name: AcquireWorkflowGraphSaveWriteLock :execrows
+UPDATE workflows
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = ?1
+`
+
+func (q *Queries) AcquireWorkflowGraphSaveWriteLock(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireWorkflowGraphSaveWriteLock, id)
+	err = recordQueryError(ctx, err, acquireWorkflowGraphSaveWriteLock, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const acquireWorkspaceRegistrationLock = `-- name: AcquireWorkspaceRegistrationLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms

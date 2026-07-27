@@ -309,6 +309,124 @@ func TestDeleteProjectAllowsBacklogTasks(t *testing.T) {
 	}
 }
 
+func TestProjectDeleteRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	other, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding other project: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteProjectWithRuntimeBlockers(ctx, binding.ProjectID, nil,
+			func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+				close(started)
+				<-release
+				return nil, func() {}, nil
+			},
+			func(ProjectSessionArtifact, bool) error { return nil },
+		)
+		deleteDone <- err
+	}()
+	<-started
+
+	if _, err := store.ListProjects(ctx); err != nil {
+		t.Fatalf("ListProjects during project delete runtime preparation: %v", err)
+	}
+	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", other.ProjectKey); err != nil {
+		t.Fatalf("UpdateProjectMetadata during project delete runtime preparation: %v", err)
+	}
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("project delete completed while runtime preparation was blocked: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProjectWithRuntimeBlockers: %v", err)
+	}
+}
+
+func TestProjectDeleteCleanupDoesNotBlockUnrelatedMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	other, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding other project: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteProject(ctx, binding.ProjectID, func(ProjectSessionArtifact, bool) error {
+			close(started)
+			<-release
+			return nil
+		})
+		deleteDone <- err
+	}()
+	<-started
+
+	if _, err := store.GetProjectOverview(ctx, binding.ProjectID); err == nil {
+		t.Fatal("deleted project remained visible while post-commit cleanup was blocked")
+	}
+	if _, err := store.ListProjects(ctx); err != nil {
+		t.Fatalf("ListProjects during project cleanup: %v", err)
+	}
+	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", other.ProjectKey); err != nil {
+		t.Fatalf("UpdateProjectMetadata during project cleanup: %v", err)
+	}
+	close(release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProject during cleanup: %v", err)
+	}
+}
+
+func TestWorkspaceUnlinkRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	other, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding other project: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unlinkDone := make(chan error, 1)
+	go func() {
+		_, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
+			func(context.Context, []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+				close(started)
+				<-release
+				return nil, func() {}, nil
+			},
+		)
+		unlinkDone <- err
+	}()
+	<-started
+
+	if _, err := store.ListProjects(ctx); err != nil {
+		t.Fatalf("ListProjects during workspace unlink runtime preparation: %v", err)
+	}
+	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", other.ProjectKey); err != nil {
+		t.Fatalf("UpdateProjectMetadata during workspace unlink runtime preparation: %v", err)
+	}
+	select {
+	case err := <-unlinkDone:
+		t.Fatalf("workspace unlink completed while runtime preparation was blocked: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-unlinkDone; err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+}
+
 func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
