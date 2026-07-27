@@ -3,9 +3,36 @@ package databaseseed
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
+
+func MaterializeCurrentMetadataDatabase[T io.Closer](persistenceRoot string, open func(string) (T, error)) error {
+	if open == nil {
+		return errors.New("metadata database opener is required")
+	}
+	currentMetadataDatabaseSeed.once.Do(func() {
+		currentMetadataDatabaseSeed.seed, currentMetadataDatabaseSeed.err = Create(
+			"kent-test-metadata-database-",
+			CurrentMetadataDatabaseRelativePath,
+			func(root string) error {
+				store, err := open(root)
+				if err != nil {
+					return fmt.Errorf("open metadata database seed: %w", err)
+				}
+				if err := store.Close(); err != nil {
+					return fmt.Errorf("close metadata database seed: %w", err)
+				}
+				return nil
+			},
+		)
+	})
+	if currentMetadataDatabaseSeed.err != nil {
+		return currentMetadataDatabaseSeed.err
+	}
+	return currentMetadataDatabaseSeed.seed.Materialize(persistenceRoot, CurrentMetadataDatabaseRelativePath)
+}
 
 func Create(prefix string, databaseRelativePath string, initialize func(string) error) (seed Seed, resultErr error) {
 	if initialize == nil {

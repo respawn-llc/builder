@@ -12,16 +12,6 @@ import (
 	"core/server/metadata"
 )
 
-const metadataDatabaseRelativePath = "db/main.sqlite3"
-
-type databaseSeed = databaseseed.Seed
-
-var currentDatabaseSeed struct {
-	once sync.Once
-	seed databaseSeed
-	err  error
-}
-
 type metadataPersistenceRootLock struct {
 	mutex      sync.Mutex
 	references int
@@ -64,17 +54,13 @@ func prepareMetadataPersistenceRoot(persistenceRoot string) error {
 	release := acquireMetadataPersistenceRootLock(absolutePersistenceRoot)
 	defer release()
 
-	databasePath := filepath.Join(absolutePersistenceRoot, metadataDatabaseRelativePath)
+	databasePath := filepath.Join(absolutePersistenceRoot, databaseseed.CurrentMetadataDatabaseRelativePath)
 	if _, err := os.Stat(databasePath); err == nil {
 		return validateMetadataPersistenceRoot(absolutePersistenceRoot)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat metadata database %q: %w", databasePath, err)
 	}
-	seed, err := migratedDatabaseSeed()
-	if err != nil {
-		return fmt.Errorf("prepare migrated metadata database seed: %w", err)
-	}
-	if err := materializeDatabaseSeed(seed, absolutePersistenceRoot); err != nil {
+	if err := materializeCurrentMetadataDatabase(absolutePersistenceRoot); err != nil {
 		return fmt.Errorf("materialize migrated metadata database seed: %w", err)
 	}
 	return validateMetadataPersistenceRoot(absolutePersistenceRoot)
@@ -116,39 +102,11 @@ func validateMetadataPersistenceRoot(persistenceRoot string) error {
 
 func materializeCurrentDatabaseSeed(t testing.TB, persistenceRoot string) {
 	t.Helper()
-	seed, err := migratedDatabaseSeed()
-	if err != nil {
-		t.Fatalf("prepare migrated metadata database seed: %v", err)
-	}
-	if err := materializeDatabaseSeed(seed, persistenceRoot); err != nil {
+	if err := materializeCurrentMetadataDatabase(persistenceRoot); err != nil {
 		t.Fatalf("materialize migrated metadata database seed: %v", err)
 	}
 }
 
-func migratedDatabaseSeed() (databaseSeed, error) {
-	currentDatabaseSeed.once.Do(func() {
-		currentDatabaseSeed.seed, currentDatabaseSeed.err = createMigratedDatabaseSeed()
-	})
-	return currentDatabaseSeed.seed, currentDatabaseSeed.err
-}
-
-func createMigratedDatabaseSeed() (seed databaseSeed, resultErr error) {
-	return databaseseed.Create(
-		"kent-test-metadata-database-",
-		metadataDatabaseRelativePath,
-		func(root string) error {
-			store, err := metadata.Open(root)
-			if err != nil {
-				return fmt.Errorf("open metadata database seed: %w", err)
-			}
-			if err := store.Close(); err != nil {
-				return fmt.Errorf("close metadata database seed: %w", err)
-			}
-			return nil
-		},
-	)
-}
-
-func materializeDatabaseSeed(seed databaseSeed, persistenceRoot string) error {
-	return seed.Materialize(persistenceRoot, metadataDatabaseRelativePath)
+func materializeCurrentMetadataDatabase(persistenceRoot string) error {
+	return databaseseed.MaterializeCurrentMetadataDatabase(persistenceRoot, metadata.Open)
 }
