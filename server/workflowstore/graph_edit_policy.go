@@ -188,6 +188,22 @@ func workflowGraphEdgeIDsSlice(edges []EdgeRecord) []workflow.EdgeID {
 }
 
 func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, structural)
+	if err != nil {
+		return workflowGraphSaveDynamicImpact{}, err
+	}
+	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, string(workflowID))
+	if err != nil {
+		return workflowGraphSaveDynamicImpact{}, err
+	}
+	evaluation.EditPolicy.Impact.ActiveNodePlacementCount = activeImpact.ActiveNodePlacementCount
+	evaluation.EditPolicy.Impact.PendingApprovalCount = activeImpact.PendingApprovalCount
+	evaluation.EditPolicy.Impact.ActiveRunCount = activeImpact.ActiveRunCount
+	evaluation.EditPolicy.Impact.RunnableRunCount = activeImpact.RunnableRunCount
+	return evaluation, nil
+}
+
+func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
 	impact := WorkflowGraphSaveImpact{
 		RemovedNodeCount:            int64(len(structural.Removed.nodes)),
 		RemovedTransitionGroupCount: int64(len(structural.Removed.transitionGroups)),
@@ -213,17 +229,9 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 		impact.EdgeTaskReferenceCount += count
 	}
 
-	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, string(workflowID))
-	if err != nil {
-		return workflowGraphSaveDynamicImpact{}, err
-	}
 	editPolicyImpact := WorkflowGraphEditPolicyImpact{
-		ActiveNodePlacementCount: activeImpact.ActiveNodePlacementCount,
-		PendingApprovalCount:     activeImpact.PendingApprovalCount,
-		ActiveRunCount:           activeImpact.ActiveRunCount,
-		RunnableRunCount:         activeImpact.RunnableRunCount,
-		StartNodeChangeCount:     structural.EditPolicy.StartNodeChangeCount,
-		LastTerminalChangeCount:  structural.EditPolicy.LastTerminalChangeCount,
+		StartNodeChangeCount:    structural.EditPolicy.StartNodeChangeCount,
+		LastTerminalChangeCount: structural.EditPolicy.LastTerminalChangeCount,
 	}
 	for _, nodeID := range structural.EditPolicy.NodeKindChanges {
 		refCount, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))

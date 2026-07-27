@@ -180,7 +180,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		return plan, nil
 	}
 	if current.Version != req.ExpectedVersion {
-		plan.Blockers = []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: current.Version}}
+		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan, nil
 	}
 	blockingValidationErrors := validation.BlockingErrors()
@@ -241,13 +241,14 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 	}
 	if current.Version != plan.Version {
 		plan.Version = current.Version
-		plan.Blockers = []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: current.Version}}
+		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan.workflowGraphSaveResult(false), nil
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, plan.Structural)
+	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, plan.Structural)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
+	evaluation.EditPolicy.Impact = workflowGraphSaveCommitEditPolicyImpact(plan.EditPolicy.Impact, evaluation.EditPolicy.Impact)
 	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
 	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
 	if len(blockers) > 0 {
@@ -545,6 +546,18 @@ func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGrap
 		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "impact_changed", Message: "Workflow graph save impact changed. Refresh the preview before saving.", Count: 1})
 	}
 	return blockers
+}
+
+func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveBlocker {
+	return []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: version}}
+}
+
+func workflowGraphSaveCommitEditPolicyImpact(prepared WorkflowGraphEditPolicyImpact, revalidated WorkflowGraphEditPolicyImpact) WorkflowGraphEditPolicyImpact {
+	revalidated.ActiveNodePlacementCount = prepared.ActiveNodePlacementCount
+	revalidated.PendingApprovalCount = prepared.PendingApprovalCount
+	revalidated.ActiveRunCount = prepared.ActiveRunCount
+	revalidated.RunnableRunCount = prepared.RunnableRunCount
+	return revalidated
 }
 
 func workflowGraphSaveConfirmationMatches(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) bool {

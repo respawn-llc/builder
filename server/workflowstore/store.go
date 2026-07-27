@@ -14,6 +14,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/requestmemo"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -28,7 +29,7 @@ type Store struct {
 	roleResolver workflow.RoleResolver
 	now          func() time.Time
 	approvalGate chan struct{}
-	graphSaves   *metadata.MutationLaneRegistry[workflow.WorkflowID]
+	graphSaves   *requestmemo.MutationLaneRegistry[workflow.WorkflowID]
 	eventMu      sync.RWMutex
 	eventSink    WorkflowEventPublisher
 }
@@ -59,7 +60,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		queries:      metadataStore.Queries(),
 		now:          func() time.Time { return time.Now().UTC() },
 		approvalGate: make(chan struct{}, 1),
-		graphSaves:   metadata.NewMutationLaneRegistry[workflow.WorkflowID](),
+		graphSaves:   requestmemo.NewMutationLaneRegistry[workflow.WorkflowID](),
 		eventSink:    noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {

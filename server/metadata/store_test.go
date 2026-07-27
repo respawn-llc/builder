@@ -345,6 +345,36 @@ func TestProjectDeleteCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t 
 	}
 }
 
+func TestProjectDeleteCommitInvalidatesChangedSessionSetWithoutBlocker(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	_, err := store.DeleteProjectWithRuntimeBlockers(ctx, binding.ProjectID, nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+			if len(preparedSessionIDs) != 0 {
+				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+			}
+			if _, err := addMetadataRaceSession(ctx, store, cfg, binding, "delete-session-set"); err != nil {
+				return nil, nil, err
+			}
+			return nil, func() {}, nil
+		},
+		func(ProjectSessionArtifact, bool) error { return nil },
+	)
+	if err == nil || err.Error() != "project delete preparation was invalidated" {
+		t.Fatalf("DeleteProjectWithRuntimeBlockers error = %v, want preparation invalidated", err)
+	}
+	if _, err := store.GetProjectOverview(ctx, binding.ProjectID); err != nil {
+		t.Fatalf("project should remain after session-set invalidation: %v", err)
+	}
+	sessionIDs, err := store.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs: %v", err)
+	}
+	if len(sessionIDs) != 1 {
+		t.Fatalf("sessions after invalidated delete = %v, want concurrent session retained", sessionIDs)
+	}
+}
+
 func TestProjectDeleteRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
@@ -455,6 +485,43 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
 	if _, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID); err != nil {
 		t.Fatalf("workspace should remain after authoritative blocker: %v", err)
+	}
+}
+
+func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	_, err = store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			if len(preparedSessionIDs) != 0 {
+				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+			}
+			sessionID, err := addMetadataRaceSession(ctx, store, cfg, binding, "unlink-session-set")
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
+				SessionID: sessionID,
+				Workspace: &SessionExecutionTargetUpdateWorkspace{ID: attached.WorkspaceID},
+			}); err != nil {
+				return nil, nil, err
+			}
+			return nil, func() {}, nil
+		},
+	)
+	if err == nil || err.Error() != "workspace unlink preparation was invalidated" {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want preparation invalidated", err)
+	}
+	workspace, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceByID after invalidation: %v", err)
+	}
+	if workspace.ProjectID != binding.ProjectID {
+		t.Fatalf("workspace after invalidated unlink = %+v, want binding retained", workspace)
 	}
 }
 
@@ -649,6 +716,24 @@ WHERE id = ?`,
 		return fmt.Errorf("set concurrent task source workspace: %w", err)
 	}
 	return nil
+}
+
+func addMetadataRaceSession(ctx context.Context, store *Store, cfg config.App, binding Binding, suffix string) (string, error) {
+	projectSessionsDir := filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID, "sessions")
+	created, err := session.Create(
+		projectSessionsDir,
+		filepath.Base(projectSessionsDir),
+		cfg.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create concurrent session: %w", err)
+	}
+	if err := created.SetName(suffix); err != nil {
+		return "", fmt.Errorf("persist concurrent session: %w", err)
+	}
+	return created.Meta().SessionID, nil
 }
 
 func TestRebindWorkspacePreservesWorkspaceIdentity(t *testing.T) {
