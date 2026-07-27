@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,7 +75,7 @@ func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, se
 	}
 	return func() {
 		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
+			log.Printf("projectview: release session start block: %v", err)
 		}
 	}, nil
 }
