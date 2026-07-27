@@ -123,6 +123,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 		"none",
 		"",
 		"[]",
+		"[]",
 		int64(0),
 		int64(0),
 		int64(0),
