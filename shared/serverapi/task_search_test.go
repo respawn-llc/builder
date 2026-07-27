@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"core/shared/protocol"
 )
 
 func TestTaskSearchRequestValidation(t *testing.T) {
@@ -289,6 +291,37 @@ func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 	}
 	if err := (TaskSearchError{Reason: "other"}).Validate(); err == nil {
 		t.Fatal("unknown task search error reason validated")
+	}
+}
+
+func TestTaskSearchErrorRPCRoundTripsEveryTypedReason(t *testing.T) {
+	for _, reason := range []TaskSearchErrorReason{
+		TaskSearchErrorReasonNormalizedTooShort,
+		TaskSearchErrorReasonMalformedFTS5,
+		TaskSearchErrorReasonInvalidCursor,
+	} {
+		source := &TaskSearchError{Reason: reason}
+		decodedErr := DecodeTaskSearchError(mustRPCErrorData(t, source), source.Error())
+		var decoded *TaskSearchError
+		if !errors.As(decodedErr, &decoded) {
+			t.Fatalf("decoded error = %T %v, want TaskSearchError", decodedErr, decodedErr)
+		}
+		if decoded.Reason != reason {
+			t.Fatalf("decoded reason = %q, want %q", decoded.Reason, reason)
+		}
+		if decoded.RPCErrorCode() != protocol.ErrCodeWorkflowTaskSearch {
+			t.Fatalf("error code = %d, want %d", decoded.RPCErrorCode(), protocol.ErrCodeWorkflowTaskSearch)
+		}
+	}
+	for _, payload := range []string{
+		`{"type":"task_search_error","reason":"other"}`,
+		`{"type":"other","reason":"invalid_cursor"}`,
+	} {
+		decodedErr := DecodeTaskSearchError(json.RawMessage(payload), "fallback")
+		var typed *TaskSearchError
+		if errors.As(decodedErr, &typed) {
+			t.Fatalf("invalid payload decoded as typed TaskSearchError: %+v", typed)
+		}
 	}
 }
 

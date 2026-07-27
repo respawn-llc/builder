@@ -605,9 +605,49 @@ func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "62"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "72"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
 		t.Fatalf("expected previous protocol generation rejection, got %+v", respErr)
+	}
+}
+
+func TestGatewayTaskSearchDispatchesEmptyResponseAndTypedValidationError(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	}
+	var response serverapi.TaskSearchResponse
+	callGateway(t, conn, "search", protocol.MethodWorkflowTaskSearch, request, &response)
+	if err := response.Validate(); err != nil {
+		t.Fatalf("search response validation: %v", err)
+	}
+	if response.Mode != request.Mode || len(response.Groups) != 0 || response.NextPageToken != nil {
+		t.Fatalf("search response = %+v", response)
+	}
+
+	responseError := callGatewayExpectError(t, conn, "short", protocol.MethodWorkflowTaskSearch, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "ab",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if responseError.Code != protocol.ErrCodeWorkflowTaskSearch {
+		t.Fatalf("short literal error = %+v, want task search code", responseError)
+	}
+	decoded := serverapi.DecodeTaskSearchError(responseError.Data, responseError.Message)
+	var typed *serverapi.TaskSearchError
+	if !errors.As(decoded, &typed) || typed.Reason != serverapi.TaskSearchErrorReasonNormalizedTooShort {
+		t.Fatalf("short literal decoded error = %T %v", decoded, decoded)
 	}
 }
 

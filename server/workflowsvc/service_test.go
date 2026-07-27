@@ -244,6 +244,37 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	}
 }
 
+func TestServiceSearchWorkflowTasksValidatesAndDelegates(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	}
+	response, err := service.SearchWorkflowTasks(ctx, request)
+	if err != nil {
+		t.Fatalf("SearchWorkflowTasks: %v", err)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("search response validation: %v", err)
+	}
+	if response.Mode != request.Mode || len(response.Groups) != 0 {
+		t.Fatalf("search response = %+v", response)
+	}
+
+	_, err = service.SearchWorkflowTasks(ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "ab",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	var searchErr *serverapi.TaskSearchError
+	if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonNormalizedTooShort {
+		t.Fatalf("invalid task search error = %v", err)
+	}
+}
+
 func TestServiceCreatesAndUpdatesTaskSourceWorkspaceBeforeStart(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -3394,12 +3425,13 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 		name       string
 		readModels ReadModels
 	}{
-		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
-		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
+		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task search", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
+		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3468,6 +3500,10 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
+	taskSearch, err := workflowview.NewTaskSearch()
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskSearch: %v", err)
+	}
 	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
@@ -3484,6 +3520,7 @@ func newWorkflowServiceReadModels(
 		Definitions: definitions,
 		Board:       board,
 		TaskList:    taskList,
+		TaskSearch:  taskSearch,
 		TaskDetail:  taskDetail,
 		Activity:    activity,
 		Attention:   attention,

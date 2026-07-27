@@ -1,11 +1,13 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
+	"core/shared/protocol"
 	"core/shared/tasksearchtext"
 )
 
@@ -255,8 +257,47 @@ func (e TaskSearchError) Validate() error {
 	}
 }
 
+func (e *TaskSearchError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskSearch
+}
+
+func (e *TaskSearchError) RPCErrorData() json.RawMessage {
+	if e == nil || e.Validate() != nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type   string                `json:"type"`
+		Reason TaskSearchErrorReason `json:"reason"`
+	}{
+		Type:   "task_search_error",
+		Reason: e.Reason,
+	})
+}
+
+func DecodeTaskSearchError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type   string                `json:"type"`
+		Reason TaskSearchErrorReason `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "task_search_error" {
+		return taskSearchFallbackError(message)
+	}
+	decoded := &TaskSearchError{Reason: envelope.Reason}
+	if err := decoded.Validate(); err != nil {
+		return taskSearchFallbackError(message)
+	}
+	return decoded
+}
+
 func taskSearchFieldError(field string, message string) error {
 	return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidValue, Field: field, Message: message}
+}
+
+func taskSearchFallbackError(message string) error {
+	if trimmed := strings.TrimSpace(message); trimmed != "" {
+		return errors.New(trimmed)
+	}
+	return errors.New("task search error")
 }
 
 func validateTaskSearchResponseString(field string, value string) error {

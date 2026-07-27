@@ -530,6 +530,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskListScope && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskListScopeError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskSearch && len(resp.Data) > 0 {
+		return serverapi.DecodeTaskSearchError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskCreateSelection && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskCreateSelectionError(resp.Data, message)
 	}

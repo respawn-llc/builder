@@ -569,6 +569,28 @@ func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTa
 	return validateWorkflowResponse("list workflow tasks", response, err)
 }
 
+func (c *Remote) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+	response, err := callDedicatedRPC[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](
+		c,
+		ctx,
+		apicontract.TaskSearchDedicatedRequestID,
+		protocol.MethodWorkflowTaskSearch,
+		req,
+	)
+	response, err = validateWorkflowResponse("search workflow tasks", response, err)
+	if err != nil {
+		return response, err
+	}
+	if response.Mode != req.Mode {
+		return serverapi.TaskSearchResponse{}, fmt.Errorf(
+			"search workflow tasks returned mode %q for request mode %q",
+			response.Mode,
+			req.Mode,
+		)
+	}
+	return response, nil
+}
+
 func (c *Remote) GetWorkflowBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowBoardRequest, serverapi.WorkflowBoardResponse](c, ctx, protocol.MethodWorkflowBoardGet, req)
 }

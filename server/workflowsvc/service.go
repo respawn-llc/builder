@@ -1772,6 +1772,13 @@ func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowT
 	return s.readModels.TaskList.List(ctx, req)
 }
 
+func (s *Service) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.TaskSearchResponse{}, err
+	}
+	return s.readModels.TaskSearch.Search(ctx, req)
+}
+
 func (s *Service) GetWorkflowBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowBoardResponse{}, err
