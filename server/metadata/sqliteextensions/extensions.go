@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"core/server/tasksearchtext"
 	"core/server/workflow/label"
+	"core/shared/tasksearchtext"
 
 	sqlitedriver "modernc.org/sqlite"
 )

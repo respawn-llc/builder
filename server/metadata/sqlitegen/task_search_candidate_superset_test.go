@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	"core/server/tasksearchtext"
+	"core/shared/tasksearchtext"
 )
 
 func TestSensitiveLiteralMatchesRemainInsensitiveTrigramCandidates(t *testing.T) {
@@ -150,7 +150,7 @@ type normalizationMappingFixture struct {
 
 func generatedInsensitiveNormalizationMappings(t *testing.T) []normalizationMappingFixture {
 	t.Helper()
-	generatedPath := filepath.Join(taskSearchCandidateSupersetRepositoryRoot(t), "server", "tasksearchtext", "normalization_generated.go")
+	generatedPath := filepath.Join(taskSearchCandidateSupersetRepositoryRoot(t), "shared", "tasksearchtext", "normalization_generated.go")
 	file, err := parser.ParseFile(token.NewFileSet(), generatedPath, nil, 0)
 	if err != nil {
 		t.Fatalf("parse generated normalization data: %v", err)

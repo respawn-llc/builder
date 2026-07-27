@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"core/server/metadata/sqliteextensions"
-	"core/server/tasksearchtext"
+	"core/shared/tasksearchtext"
 
 	"github.com/pressly/goose/v3"
 	sqlitedriver "modernc.org/sqlite"

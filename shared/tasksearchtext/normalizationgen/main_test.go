@@ -59,7 +59,7 @@ func TestGeneratedNormalizationDataIsFreshAndDeterministic(t *testing.T) {
 	}
 	if !bytes.Equal(current, first) {
 		t.Fatalf(
-			"generated normalization data is stale; run go run ./server/tasksearchtext/normalizationgen generate --output %s",
+			"generated normalization data is stale; run go run ./shared/tasksearchtext/normalizationgen generate --output %s",
 			filepath.Clean(outputPath),
 		)
 	}

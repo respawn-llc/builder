@@ -10,7 +10,7 @@ import (
 	"testing/fstest"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/tasksearchtext"
+	"core/shared/tasksearchtext"
 
 	"github.com/pressly/goose/v3"
 )
