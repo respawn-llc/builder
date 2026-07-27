@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"core/server/metadata"
-	"core/server/mutationlane"
 	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -22,7 +21,7 @@ type Service struct {
 	metadata         *metadata.Store
 	projectID        string
 	authority        *sessionruntime.Authority
-	projectMutations *mutationlane.Registry[string]
+	projectMutations *metadata.MutationLaneRegistry[string]
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -44,7 +43,7 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 	return &Service{
 		metadata:         metadataStore,
 		projectID:        strings.TrimSpace(projectID),
-		projectMutations: mutationlane.NewRegistry[string](),
+		projectMutations: metadata.NewMutationLaneRegistry[string](),
 	}, nil
 }
 
@@ -323,11 +322,15 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	}
 	defer lease.Release()
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+		blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil || len(blockers) > 0 {
+			return blockers, nil, err
+		}
 		release, err := s.blockSessionStarts(ctx, sessionIDs)
 		if err != nil {
 			return nil, nil, err
 		}
-		blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+		blockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
 			release()
 			return nil, nil, err
@@ -378,11 +381,15 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil || len(blockers) > 0 {
+			return blockers, nil, err
+		}
 		release, err := s.blockSessionStarts(ctx, sessionIDs)
 		if err != nil {
 			return nil, nil, err
 		}
-		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
+		blockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
 			release()
 			return nil, nil, err
@@ -674,7 +681,7 @@ func (s *Service) requireProjectID(projectID string) error {
 	return nil
 }
 
-func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*mutationlane.Lease[string], error) {
+func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*metadata.MutationLaneLease[string], error) {
 	if s == nil || s.projectMutations == nil {
 		return nil, errors.New("project mutation lanes are required")
 	}

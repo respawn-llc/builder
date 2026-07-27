@@ -87,15 +87,6 @@ func (w *streamIdleWatchdog) run(idle time.Duration) {
 			timer.Stop()
 			timer.Reset(idle)
 		case <-timer.C:
-			// A stream event can race the timer expiry. Prefer the queued
-			// activity signal because it proves the stream was not idle for
-			// the entire interval observed by this goroutine.
-			select {
-			case <-w.pings:
-				timer.Reset(idle)
-				continue
-			default:
-			}
 			w.cancel(ErrModelStreamStalled)
 			return
 		}

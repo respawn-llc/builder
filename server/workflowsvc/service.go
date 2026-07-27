@@ -18,7 +18,6 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
-	"core/server/workflowvalidation"
 	"core/server/workflowview"
 	"core/server/worktree"
 	"core/shared/clientui"
@@ -551,7 +550,7 @@ func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVa
 	if mode == "" {
 		mode = workflow.ValidationContextDraft
 	}
-	result := workflowvalidation.EvaluateDefinition(def, []workflow.ValidationContext{mode}, s.roleResolver, nil)[mode]
+	result := workflow.EvaluateDefinition(def, []workflow.ValidationContext{mode}, s.roleResolver, nil)[mode]
 	resp := workflowValidationResponse(def.ID, result)
 	return resp, nil
 }
@@ -1899,7 +1898,7 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 	for _, mode := range modes {
 		contexts = append(contexts, workflow.ValidationContext(mode))
 	}
-	results := workflowvalidation.EvaluateDefinition(def, contexts, s.roleResolver, nil)
+	results := workflow.EvaluateDefinition(def, contexts, s.roleResolver, nil)
 	for _, mode := range modes {
 		out[mode] = workflowValidationResponse(def.ID, results[workflow.ValidationContext(mode)])
 	}

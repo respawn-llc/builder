@@ -11,7 +11,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
-	"core/server/workflowvalidation"
 )
 
 type WorkflowGraphSaveRequest struct {
@@ -171,7 +170,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		plan.Impact = evaluation.Impact
 		plan.EditPolicy = evaluation.EditPolicy
 	}
-	plan.ValidationResults = workflowvalidation.EvaluateDefinition(def, []workflow.ValidationContext{
+	plan.ValidationResults = workflow.EvaluateDefinition(def, []workflow.ValidationContext{
 		workflow.ValidationContextDraft,
 		workflow.ValidationContextExecution,
 	}, s.roleResolver, nil)

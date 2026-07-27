@@ -497,21 +497,16 @@ type ProjectSessionArtifact struct {
 type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
 type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
 
-func sameStringSet(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	remaining := make(map[string]struct{}, len(left))
-	for _, value := range left {
-		remaining[value] = struct{}{}
-	}
-	for _, value := range right {
-		if _, exists := remaining[value]; !exists {
-			return false
-		}
-		delete(remaining, value)
-	}
-	return len(remaining) == 0
+type sessionIDSet []string
+
+func newSessionIDSet(ids []string) sessionIDSet {
+	set := append(sessionIDSet(nil), ids...)
+	slices.Sort(set)
+	return set
+}
+
+func (ids sessionIDSet) Equal(other sessionIDSet) bool {
+	return slices.Equal(ids, other)
 }
 
 func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
@@ -587,9 +582,6 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 	if err != nil {
 		return nil, fmt.Errorf("list project sessions for commit: %w", err)
 	}
-	if !sameStringSet(preparedSessionIDs, commitSessionIDs) {
-		return nil, errors.New("project delete preparation was invalidated")
-	}
 	counts, err = q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("count project delete blockers: %w", err)
@@ -597,6 +589,9 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 	blockers = projectDeleteBlockersFromCounts(counts)
 	if len(blockers) > 0 {
 		return blockers, nil
+	}
+	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
+		return nil, errors.New("project delete preparation was invalidated")
 	}
 	if err := q.DeleteProjectTasks(ctx, trimmedProjectID); err != nil {
 		return nil, fmt.Errorf("delete project tasks: %w", err)
@@ -920,15 +915,15 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("list workspace sessions for commit: %w", err)
 	}
-	if !sameStringSet(preparedSessionIDs, commitSessionIDs) {
-		return nil, errors.New("workspace unlink preparation was invalidated")
-	}
 	blockers, err = workspaceUnlinkBlockersWithQueries(ctx, q, trimmedProjectID, workspace)
 	if err != nil {
 		return nil, err
 	}
 	if len(blockers) > 0 {
 		return blockers, nil
+	}
+	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
+		return nil, errors.New("workspace unlink preparation was invalidated")
 	}
 	rows, err := q.DeleteWorkspaceBindingByID(ctx, sqlitegen.DeleteWorkspaceBindingByIDParams{ProjectID: trimmedProjectID, WorkspaceID: trimmedWorkspaceID})
 	if err != nil {
