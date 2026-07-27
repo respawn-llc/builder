@@ -206,6 +206,10 @@ func TestTaskReadModelsStayAvailableDuringIndefiniteSchedulerStartup(t *testing.
 		t.Fatalf("newTaskStatusSnapshotCoordinator: %v", err)
 	}
 	list, board, detail := newTaskStatusTestReadModelsWithSnapshots(t, metadataStore, workflowStore, snapshots)
+	search, err := NewTaskSearch(metadataStore, NewTaskProjector(), snapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
 
 	startDone := make(chan error, 1)
 	go func() {
@@ -223,6 +227,21 @@ func TestTaskReadModelsStayAvailableDuringIndefiniteSchedulerStartup(t *testing.
 	}
 
 	assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "agent", serverapi.WorkflowTaskStatusKindActive, false, false)
+	searchResponse, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:        serverapi.TaskSearchModeLiteral,
+		Query:       "Body",
+		Context:     serverapi.TaskSearchDefaultContext,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
+		PageSize:    serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("Search during held startup: %v", err)
+	}
+	if len(searchResponse.Groups) != 1 ||
+		searchResponse.Groups[0].TaskID != string(task.ID) ||
+		searchResponse.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive {
+		t.Fatalf("search during held startup = %+v, want task %q active", searchResponse, task.ID)
+	}
 
 	starter.Unblock()
 	if err := <-startDone; err != nil {

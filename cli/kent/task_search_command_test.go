@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -19,6 +20,7 @@ type taskSearchCommandRemote struct {
 	requests []serverapi.TaskSearchRequest
 	response serverapi.TaskSearchResponse
 	err      error
+	resolve  func(serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
 }
 
 func (r *taskSearchCommandRemote) SearchWorkflowTasks(_ context.Context, request serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
@@ -26,7 +28,10 @@ func (r *taskSearchCommandRemote) SearchWorkflowTasks(_ context.Context, request
 	return r.response, r.err
 }
 
-func (r *taskSearchCommandRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+func (r *taskSearchCommandRemote) ResolveProjectPath(_ context.Context, request serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+	if r.resolve != nil {
+		return r.resolve(request)
+	}
 	return serverapi.ProjectResolvePathResponse{}, nil
 }
 
@@ -87,6 +92,87 @@ func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing
 	}
 	if !reflect.DeepEqual(output, response) {
 		t.Fatalf("JSON output = %#v, want %#v", output, response)
+	}
+}
+
+func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {
+	nextPageToken := "opaque-next-page"
+	response := taskSearchTestResponse(serverapi.TaskSearchModeLiteral)
+	response.NextPageToken = &nextPageToken
+	remote := &taskSearchCommandRemote{response: response}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"search", "\u2003needle\tinside\u2002"},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+	}
+	wantRequest := serverapi.TaskSearchRequest{
+		Mode:        serverapi.TaskSearchModeLiteral,
+		Query:       "needle\tinside",
+		Context:     serverapi.TaskSearchDefaultContext,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{},
+		PageSize:    serverapi.TaskSearchDefaultPageSize,
+	}
+	if !reflect.DeepEqual(remote.requests, []serverapi.TaskSearchRequest{wantRequest}) {
+		t.Fatalf("search requests = %#v, want %#v", remote.requests, []serverapi.TaskSearchRequest{wantRequest})
+	}
+	if !strings.Contains(stderr.String(), nextPageToken) {
+		t.Fatalf("next-page diagnostic = %q, want token %q", stderr.String(), nextPageToken)
+	}
+}
+
+func TestTaskSearchProjectResolutionIsAllOrNothing(t *testing.T) {
+	remote := &taskSearchCommandRemote{
+		response: taskSearchTestResponse(serverapi.TaskSearchModeLiteral),
+		resolve: func(serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+			return serverapi.ProjectResolvePathResponse{}, nil
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"search", "needle", "--project", t.TempDir()},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("search requests = %#v, want no partially scoped search", remote.requests)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unresolved project wrote stdout: %q", stdout.String())
+	}
+}
+
+func TestTaskSearchRejectsInvalidArityBeforeOpeningRemote(t *testing.T) {
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, nil, errors.New("remote should not open")
+	}
+	t.Cleanup(func() {
+		workflowCommandRemoteOpener = previous
+	})
+
+	for _, args := range [][]string{
+		{"search"},
+		{"search", "needle", "extra"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := taskSubcommand(args, &stdout, &stderr)
+		if exitCode != 2 {
+			t.Fatalf("args %q exit code = %d, want 2; stderr=%q", args, exitCode, stderr.String())
+		}
 	}
 }
 

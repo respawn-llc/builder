@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"testing"
 
 	"core/shared/serverapi"
@@ -84,6 +85,39 @@ func TestTaskSearchPlainRendererWritesOneRecordPerProjectedLine(t *testing.T) {
 	}
 	if writer.lines != 5 {
 		t.Fatalf("written line count = %d, want 5", writer.lines)
+	}
+}
+
+func TestTaskSearchPlainFragmentUsesOnlyStructuredLiteralEllipsesAndFoldsWhitespace(t *testing.T) {
+	literal := taskSearchPlainFragment(taskSearchPlainLine{
+		Kind: taskSearchPlainLineKindHit,
+		Literal: &serverapi.TaskSearchLiteralHit{
+			Before:         "  before\t",
+			Match:          "needle",
+			After:          "\nafter  ",
+			LeftTruncated:  true,
+			RightTruncated: true,
+		},
+	})
+	if literal != "… before needle after …" {
+		t.Fatalf("literal fragment = %q", literal)
+	}
+	raw := taskSearchPlainFragment(taskSearchPlainLine{
+		Kind:        taskSearchPlainLineKindHit,
+		FTS5Snippet: "  raw\t…\nfragment  ",
+	})
+	if raw != "raw … fragment" {
+		t.Fatalf("raw fragment = %q", raw)
+	}
+}
+
+func TestTaskSearchPlainRendererPrintsEmptyResponseWithoutMetadataRows(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeTaskSearchPlainProjection(&output, taskSearchPlainProjection{}); err != nil {
+		t.Fatalf("writeTaskSearchPlainProjection: %v", err)
+	}
+	if output.String() != "No matches.\n" {
+		t.Fatalf("empty plain output = %q", output.String())
 	}
 }
 

@@ -5174,7 +5174,7 @@ WITH matching_sources AS (
             -task_search_fts.rank * CASE document.source_kind
                 WHEN 'title' THEN 10.0
                 WHEN 'body' THEN 1.0
-                ELSE 1.0
+                ELSE 0.75
             END
             AS REAL
         ) AS weighted_rank

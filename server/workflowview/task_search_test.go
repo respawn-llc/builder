@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/server/metadata"
+	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -173,6 +174,76 @@ func TestTaskSearchAppliesProjectCommentAndStatusFilters(t *testing.T) {
 	last := group.Hits[len(group.Hits)-1]
 	if last.Source.Kind != serverapi.TaskSearchSourceKindComment || last.Source.CommentID == nil || *last.Source.CommentID != comment.ID {
 		t.Fatalf("comment hit = %+v, want %q", last, comment.ID)
+	}
+}
+
+func TestTaskSearchReflectsTaskAndCommentMutationsImmediately(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Mutation visibility",
+		Body:      "needle body",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	}
+	response, err := search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("search initial body: %v", err)
+	}
+	if len(response.Groups) != 1 || response.Groups[0].TaskID != string(task.ID) {
+		t.Fatalf("initial search response = %+v, want task %q", response, task.ID)
+	}
+
+	bodyWithoutNeedle := "replacement body"
+	if _, err := workflowStore.UpdateTask(ctx, workflowstore.UpdateTaskRequest{TaskID: task.ID, Body: &bodyWithoutNeedle}); err != nil {
+		t.Fatalf("replace task body: %v", err)
+	}
+	response, err = search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("search after task body replacement: %v", err)
+	}
+	if len(response.Groups) != 0 {
+		t.Fatalf("search after task body replacement = %+v, want no matches", response)
+	}
+
+	comment, err := workflowStore.AddComment(ctx, task.ID, "needle comment", "user", "user-1")
+	if err != nil {
+		t.Fatalf("add matching comment: %v", err)
+	}
+	request.IncludeComments = true
+	response, err = search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("search after comment create: %v", err)
+	}
+	if len(response.Groups) != 1 ||
+		len(response.Groups[0].Hits) != 1 ||
+		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindComment {
+		t.Fatalf("search after comment create = %+v, want one Comment hit", response)
+	}
+	if err := workflowStore.DeleteComment(ctx, comment.ID); err != nil {
+		t.Fatalf("delete matching comment: %v", err)
+	}
+	response, err = search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("search after comment delete: %v", err)
+	}
+	if len(response.Groups) != 0 {
+		t.Fatalf("search after comment delete = %+v, want no matches", response)
 	}
 }
 
@@ -472,6 +543,31 @@ func TestTaskSearchMapsMalformedRawExpressionAndRejectsForeignCursor(t *testing.
 	}
 }
 
+func TestTaskSearchChecksSchemaBeforeClassifyingRawExpressions(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(ctx, "DROP TABLE task_search_fts"); err != nil {
+		t.Fatalf("remove task-search FTS schema for operational-failure test: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	_, err = search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    `"`,
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	var searchErr *serverapi.TaskSearchError
+	if err == nil || errors.As(err, &searchErr) {
+		t.Fatalf("missing schema + malformed raw expression error = %T %v, want operational schema error", err, err)
+	}
+}
+
 func TestTaskSearchCursorCanonicalizesEmptyFiltersAndRejectsNonFiniteRank(t *testing.T) {
 	request := serverapi.TaskSearchRequest{
 		Mode:     serverapi.TaskSearchModeLiteral,
@@ -512,6 +608,91 @@ func TestTaskSearchCursorCanonicalizesEmptyFiltersAndRejectsNonFiniteRank(t *tes
 		if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonInvalidCursor {
 			t.Fatalf("rank bits %x error = %v, want invalid cursor", rankBits, err)
 		}
+	}
+}
+
+func TestTaskSearchUsesCanonicalStatusForFilteringAndResponse(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		prepare      func(t *testing.T, ctx context.Context, store *workflowstore.Store, task workflow.TaskID) (workflowstore.StartTaskResult, workflowstore.RunnableRunRecord)
+		observations func(task workflow.TaskID, started workflowstore.StartTaskResult, claimed workflowstore.RunnableRunRecord) taskStatusTestObservations
+		wantStatus   serverapi.WorkflowTaskStatusKind
+	}{
+		{
+			name:    "stale durable running without exact live authority remains active",
+			prepare: claimTaskStatusTestRun,
+			observations: func(workflow.TaskID, workflowstore.StartTaskResult, workflowstore.RunnableRunRecord) taskStatusTestObservations {
+				return taskStatusTestObservations{}
+			},
+			wantStatus: serverapi.WorkflowTaskStatusKindActive,
+		},
+		{
+			name: "durable terminal wins while exact live cleanup remains observable",
+			prepare: func(t *testing.T, ctx context.Context, store *workflowstore.Store, task workflow.TaskID) (workflowstore.StartTaskResult, workflowstore.RunnableRunRecord) {
+				t.Helper()
+				started, claimed := claimTaskStatusTestRun(t, ctx, store, task)
+				if _, err := store.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
+					t.Fatalf("CompleteRun: %v", err)
+				}
+				return started, claimed
+			},
+			observations: taskStatusTestExactRunningObservations,
+			wantStatus:   serverapi.WorkflowTaskStatusKindDone,
+		},
+		{
+			name: "durable and live question disagreement remains running",
+			prepare: func(t *testing.T, ctx context.Context, store *workflowstore.Store, task workflow.TaskID) (workflowstore.StartTaskResult, workflowstore.RunnableRunRecord) {
+				t.Helper()
+				started, claimed := claimTaskStatusTestRun(t, ctx, store, task)
+				if err := store.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-disagreement"); err != nil {
+					t.Fatalf("SetRunWaitingAsk: %v", err)
+				}
+				return started, claimed
+			},
+			observations: taskStatusTestExactRunningObservations,
+			wantStatus:   serverapi.WorkflowTaskStatusKindRunning,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+			workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+			if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+				t.Fatalf("LinkWorkflow: %v", err)
+			}
+			task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+				ProjectID: binding.ProjectID,
+				Title:     test.name,
+				Body:      "needle",
+			})
+			if err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+			started, claimed := test.prepare(t, ctx, workflowStore, task.ID)
+			observations := test.observations(task.ID, started, claimed)
+			snapshots := newTaskStatusTestSnapshotCoordinator(
+				t,
+				metadataStore,
+				&taskStatusTestAuthoritySource{snapshot: observations.authority},
+				observations.scheduler,
+			)
+			search, err := NewTaskSearch(metadataStore, NewTaskProjector(), snapshots)
+			if err != nil {
+				t.Fatalf("NewTaskSearch: %v", err)
+			}
+			response, err := search.Search(ctx, serverapi.TaskSearchRequest{
+				Mode:        serverapi.TaskSearchModeLiteral,
+				Query:       "needle",
+				Context:     serverapi.TaskSearchDefaultContext,
+				StatusKinds: []serverapi.WorkflowTaskStatusKind{test.wantStatus},
+				PageSize:    serverapi.TaskSearchDefaultPageSize,
+			})
+			if err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			if len(response.Groups) != 1 || response.Groups[0].TaskID != string(task.ID) || response.Groups[0].Status.Kind != test.wantStatus {
+				t.Fatalf("search response = %+v, want task %q status %q", response, task.ID, test.wantStatus)
+			}
+		})
 	}
 }
 
