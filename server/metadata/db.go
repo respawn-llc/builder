@@ -9,12 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
-	"core/server/workflow/label"
+	"core/server/metadata/sqliteextensions"
 
 	"github.com/pressly/goose/v3"
-	sqlitedriver "modernc.org/sqlite"
 )
 
 //go:embed migrations/*.up.sql
@@ -26,11 +24,6 @@ const metadataSQLiteConnectionPoolSize = 8
 // routine migration status output silent unless debug logging is explicitly enabled.
 var metadataMigrationDebugLogs = false
 var metadataMigrationLogWriter io.Writer = os.Stderr
-
-const labelCollationName = "kent_label_casefold_v1"
-
-var registerMetadataSQLiteCollationsOnce sync.Once
-var registerMetadataSQLiteCollationsErr error
 
 func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, error) {
 	trimmedRoot, err := filepath.Abs(filepath.Clean(persistenceRoot))
@@ -50,6 +43,9 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	}
 	if err := os.MkdirAll(filepath.Dir(trimmedDatabasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata db dir: %w", err)
+	}
+	if err := sqliteextensions.Register(); err != nil {
+		return nil, fmt.Errorf("register metadata SQLite extensions: %w", err)
 	}
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(trimmedDatabasePath))
 	if err != nil {
@@ -88,9 +84,6 @@ func isASCIILetter(r rune) bool {
 }
 
 func runMigrations(db *sql.DB) error {
-	if err := registerMetadataSQLiteCollations(); err != nil {
-		return err
-	}
 	goose.SetBaseFS(migrationsFS)
 	var logger goose.Logger = goose.NopLogger()
 	if metadataMigrationDebugLogs && metadataMigrationLogWriter != nil {
@@ -102,21 +95,6 @@ func runMigrations(db *sql.DB) error {
 	}
 	if err := goose.Up(db, "migrations"); err != nil {
 		return fmt.Errorf("apply metadata migrations: %w", err)
-	}
-	return nil
-}
-
-func registerMetadataSQLiteCollations() error {
-	registerMetadataSQLiteCollationsOnce.Do(func() {
-		registerMetadataSQLiteCollationsErr = sqlitedriver.RegisterCollationUtf8(
-			labelCollationName,
-			func(left string, right string) int {
-				return label.Compare(label.Name(left), label.Name(right))
-			},
-		)
-	})
-	if registerMetadataSQLiteCollationsErr != nil {
-		return fmt.Errorf("register metadata SQLite label collation %q: %w", labelCollationName, registerMetadataSQLiteCollationsErr)
 	}
 	return nil
 }

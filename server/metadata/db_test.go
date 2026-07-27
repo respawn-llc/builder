@@ -4,17 +4,25 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"core/server/metadata/sqliteextensions"
+	"core/server/tasksearchtext"
+
 	"github.com/pressly/goose/v3"
-	_ "modernc.org/sqlite"
+	sqlitedriver "modernc.org/sqlite"
 )
 
 //go:embed testdata/*.sql
@@ -51,6 +59,173 @@ func TestOpenSuppressesGooseStatusLogging(t *testing.T) {
 	if strings.Contains(buf.String(), "goose:") {
 		t.Fatalf("did not expect goose status log output, got %q", buf.String())
 	}
+}
+
+func TestOpenRegistersSQLiteExtensionsAcrossPoolAndReopen(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	type acquiredConnection struct {
+		connection *sql.Conn
+		err        error
+	}
+	acquiredConnections := make(chan acquiredConnection, metadataSQLiteConnectionPoolSize)
+	release := make(chan struct{})
+	extensionErrors := make(chan error, metadataSQLiteConnectionPoolSize)
+	var workers sync.WaitGroup
+	for range metadataSQLiteConnectionPoolSize {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			connection, err := store.db.Conn(t.Context())
+			if err != nil {
+				acquiredConnections <- acquiredConnection{err: err}
+				return
+			}
+			acquiredConnections <- acquiredConnection{connection: connection}
+			<-release
+			defer func() { _ = connection.Close() }()
+			extensionErrors <- metadataSQLiteExtensionsError(t.Context(), connection)
+		}()
+	}
+
+	var acquireErr error
+	for range metadataSQLiteConnectionPoolSize {
+		acquired := <-acquiredConnections
+		if acquired.err != nil && acquireErr == nil {
+			acquireErr = acquired.err
+		}
+		if acquired.connection == nil && acquired.err == nil {
+			acquireErr = errors.New("acquired a nil SQLite connection")
+		}
+	}
+	close(release)
+	workers.Wait()
+	close(extensionErrors)
+	if acquireErr != nil {
+		t.Fatalf("acquire pooled SQLite connection: %v", acquireErr)
+	}
+	for err := range extensionErrors {
+		if err != nil {
+			t.Fatalf("query pooled SQLite extensions: %v", err)
+		}
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("close initial metadata store: %v", err)
+	}
+	reopened, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if err := metadataSQLiteExtensionsError(t.Context(), reopened.db); err != nil {
+		t.Fatalf("query reopened SQLite extensions: %v", err)
+	}
+}
+
+func TestOpenSurfacesSQLiteExtensionRegistrationFailure(t *testing.T) {
+	const subprocessEnvironment = "KENT_METADATA_SQLITE_EXTENSION_FAILURE_SUBPROCESS"
+	if os.Getenv(subprocessEnvironment) != "1" {
+		command := exec.Command(os.Args[0], "-test.run=^TestOpenSurfacesSQLiteExtensionRegistrationFailure$")
+		command.Env = append(os.Environ(), subprocessEnvironment+"=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run registration-failure subprocess: %v\n%s", err, output)
+		}
+		return
+	}
+
+	if err := sqlitedriver.RegisterDeterministicScalarFunction(
+		sqliteextensions.LiteralOccurrenceCountFunctionName,
+		3,
+		func(*sqlitedriver.FunctionContext, []driver.Value) (driver.Value, error) {
+			return int64(0), nil
+		},
+	); err != nil {
+		t.Fatalf("pre-register occurrence-count function: %v", err)
+	}
+
+	root := t.TempDir()
+	firstStore, firstErr := Open(root)
+	if firstStore != nil {
+		t.Fatal("Open returned a metadata store after SQLite extension registration failed")
+	}
+	firstRegistrationError := requireSQLiteExtensionRegistrationError(t, firstErr)
+
+	secondStore, secondErr := Open(root)
+	if secondStore != nil {
+		t.Fatal("second Open returned a metadata store after SQLite extension registration failed")
+	}
+	secondRegistrationError := requireSQLiteExtensionRegistrationError(t, secondErr)
+	if firstRegistrationError != secondRegistrationError {
+		t.Fatal("SQLite extension registration failure was not cached")
+	}
+	if firstRegistrationError.ExtensionName != sqliteextensions.LiteralOccurrenceCountFunctionName {
+		t.Fatalf(
+			"registration failure extension = %q, want %q",
+			firstRegistrationError.ExtensionName,
+			sqliteextensions.LiteralOccurrenceCountFunctionName,
+		)
+	}
+	if firstRegistrationError.Cause == nil {
+		t.Fatal("SQLite extension registration failure does not expose its cause")
+	}
+	if _, err := os.Stat(filepath.Join(root, "db", "main.sqlite3")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata database was opened after extension registration failed: stat error = %v", err)
+	}
+}
+
+type metadataSQLiteExtensionQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func metadataSQLiteExtensionsError(ctx context.Context, queryer metadataSQLiteExtensionQueryer) error {
+	var firstLabel string
+	if err := queryer.QueryRowContext(
+		ctx,
+		`WITH labels(name) AS (VALUES ('Zulu'), ('alpha'))
+SELECT name
+FROM labels
+ORDER BY name COLLATE `+sqliteextensions.LabelCollationName+`
+LIMIT 1`,
+	).Scan(&firstLabel); err != nil {
+		return fmt.Errorf("query label collation: %w", err)
+	}
+	if firstLabel != "alpha" {
+		return fmt.Errorf("label collation first value = %q, want alpha", firstLabel)
+	}
+
+	var occurrences int64
+	if err := queryer.QueryRowContext(
+		ctx,
+		`SELECT `+sqliteextensions.LiteralOccurrenceCountFunctionName+`(?, ?, ?)`,
+		"Café café",
+		"cafe",
+		int64(tasksearchtext.LiteralCaseInsensitive),
+	).Scan(&occurrences); err != nil {
+		return fmt.Errorf("query occurrence-count function: %w", err)
+	}
+	if occurrences != 2 {
+		return fmt.Errorf("occurrence-count function result = %d, want 2", occurrences)
+	}
+	return nil
+}
+
+func requireSQLiteExtensionRegistrationError(t *testing.T, err error) *sqliteextensions.RegistrationError {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Open unexpectedly succeeded")
+	}
+	var registrationError *sqliteextensions.RegistrationError
+	if !errors.As(err, &registrationError) {
+		t.Fatalf("Open error = %T %v, want SQLite extension registration error", err, err)
+	}
+	return registrationError
 }
 
 func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testing.T) {
@@ -299,7 +474,7 @@ func TestOpenAllowsDatabaseAtRemovedMigrationVersion(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := openMetadataSQLiteForTest(dbPath)
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
@@ -1351,14 +1526,14 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := registerMetadataSQLiteCollations(); err != nil {
+	return openMetadataSQLiteForTest(metadataSQLiteDSN(dbPath))
+}
+
+func openMetadataSQLiteForTest(dataSourceName string) (*sql.DB, error) {
+	if err := sqliteextensions.Register(); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", metadataSQLiteDSN(dbPath))
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
+	return sql.Open("sqlite", dataSourceName)
 }
 
 func primaryWorkspaceIDsByProject(t *testing.T, db *sql.DB) map[string]string {

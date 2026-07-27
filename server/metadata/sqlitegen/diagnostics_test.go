@@ -18,15 +18,12 @@ var (
 )
 
 func TestQueryFailureDiagnosticsRecordArgumentCountWithoutValues(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 
 	output := captureQueryFailureDiagnostics(t)
 
-	_, err = New(db).GetTaskRun(
+	_, err := New(db).GetTaskRun(
 		WithQueryFailureDiagnostics(context.Background()),
 		"repository-secret",
 	)
@@ -79,10 +76,7 @@ func TestQueryRowsIterationFailureRecordsDiagnostics(t *testing.T) {
 }
 
 func TestGetTaskRunNoRowsPreservesSentinelIdentity(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE task_run_records (
@@ -110,7 +104,7 @@ CREATE TABLE task_run_records (
 		t.Fatalf("create task run table: %v", err)
 	}
 
-	_, err = New(db).GetTaskRun(context.Background(), "run-missing")
+	_, err := New(db).GetTaskRun(context.Background(), "run-missing")
 	if err != sql.ErrNoRows {
 		t.Fatalf("GetTaskRun error = %v, want the sql.ErrNoRows sentinel", err)
 	}
