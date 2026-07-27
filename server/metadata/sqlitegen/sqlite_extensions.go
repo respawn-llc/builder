@@ -1,4 +1,4 @@
-package sqliteextensions
+package sqlitegen
 
 import (
 	"database/sql/driver"
@@ -30,7 +30,7 @@ func (e *RegistrationError) Unwrap() error {
 var registrationOnce sync.Once
 var registrationErr error
 
-func Register() error {
+func RegisterSQLiteExtensions() error {
 	registrationOnce.Do(func() {
 		if err := sqlitedriver.RegisterCollationUtf8(
 			LabelCollationName,

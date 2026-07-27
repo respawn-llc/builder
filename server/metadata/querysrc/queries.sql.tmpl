@@ -4641,3 +4641,344 @@ ORDER BY
         WHEN 'trigger' THEN 3
     END,
     name;
+
+-- name: ListTaskSearchCandidateFeasibility :many
+WITH matching_sources AS (
+    SELECT
+        document.task_id,
+        document.source_kind,
+        document.document_id,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 1.0
+            END
+            AS REAL
+        ) AS weighted_rank
+    FROM task_search_fts
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    WHERE task_search_fts MATCH sqlc.arg(candidate_expression)
+      AND document.source_kind IN ('title', 'body')
+      AND kent_task_search_occurrence_count_v1(
+          COALESCE(content.title, content.body, content.comment),
+          CAST(sqlc.arg(literal_query) AS TEXT),
+          CAST(sqlc.arg(case_mode) AS INTEGER)
+      ) > 0
+),
+ranked_task_sources AS (
+    SELECT
+        task_id,
+        source_kind,
+        document_id,
+        weighted_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY
+                weighted_rank DESC,
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                document_id ASC
+        ) AS task_source_rank
+    FROM matching_sources
+)
+SELECT
+    task_id,
+    source_kind,
+    document_id,
+    weighted_rank
+FROM ranked_task_sources
+WHERE task_source_rank = 1
+  AND (
+      sqlc.narg(cursor_rank) IS NULL
+      OR weighted_rank < CAST(sqlc.narg(cursor_rank) AS REAL)
+      OR (
+          weighted_rank = CAST(sqlc.narg(cursor_rank) AS REAL)
+          AND task_id > sqlc.narg(cursor_task_id)
+      )
+  )
+ORDER BY weighted_rank DESC, task_id ASC
+LIMIT sqlc.arg(page_size);
+
+-- name: ListTaskSearchSchemaObjects :many
+SELECT
+    type AS object_kind,
+    name AS object_name
+FROM sqlite_schema
+WHERE
+    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
+    OR (type = 'view' AND name = 'task_search_content')
+    OR (
+        type = 'trigger'
+        AND name IN (
+            'task_search_document_insert',
+            'task_search_document_delete',
+            'task_search_task_insert',
+            'task_search_comment_insert',
+            'task_search_task_title_before_update',
+            'task_search_task_title_after_update',
+            'task_search_task_body_before_update',
+            'task_search_task_body_after_update',
+            'task_search_comment_body_before_update',
+            'task_search_comment_body_after_update',
+            'task_search_comment_delete',
+            'task_search_task_delete'
+        )
+    )
+ORDER BY type ASC, name ASC;
+
+-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(sqlc.arg(project_ids_json))
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC;
+
+-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = sqlc.arg(document_id)
+LIMIT 1;
+
+-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
+LIMIT 1;
+
+{{define "taskSearchPageDescriptors"}}
+WITH RECURSIVE
+args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS mode,
+        CAST(?2 AS TEXT) AS candidate_expression,
+        CAST(?3 AS TEXT) AS literal_query,
+        CAST(?4 AS INTEGER) AS case_mode,
+        CAST(?5 AS INTEGER) AS include_comments,
+        CAST(?6 AS TEXT) AS project_ids_json,
+        CAST(?7 AS INTEGER) AS status_filter_set,
+        CAST(?8 AS TEXT) AS status_kinds_json,
+        CAST(?9 AS INTEGER) AS context_clusters,
+        CAST(?10 AS INTEGER) AS cursor_set,
+        CAST(?11 AS INTEGER) AS cursor_ordinal,
+        CAST(?12 AS REAL) AS cursor_weighted_rank,
+        CAST(?13 AS TEXT) AS cursor_task_id,
+        CAST(?14 AS INTEGER) AS limit_rows,
+        CAST(?15 AS TEXT) AS authority_observations_json,
+        CAST(?16 AS TEXT) AS current_run_facts_json
+),
+{{taskStatusProjection "" "(SELECT authority_observations_json FROM args)" "(SELECT current_run_facts_json FROM args)" ","}}
+matching_sources AS (
+    SELECT
+        task.id AS task_id,
+        task.project_id,
+        project.project_key,
+        task.short_id,
+        task.workflow_id,
+        task.title AS task_title,
+        status.is_done,
+        status.kind AS status_kind,
+        status.node_ids_json,
+        status.run_ids_json,
+        status.attention_types_json,
+        document.document_id,
+        document.source_kind,
+        document.comment_id,
+        CASE document.source_kind
+            WHEN 'comment' THEN comment.created_at_unix_ms
+            ELSE NULL
+        END AS comment_created_at_unix_ms,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 1.0
+            END
+            AS REAL
+        ) AS weighted_rank,
+        CAST(
+            CASE args.mode
+                WHEN 'literal' THEN kent_task_search_occurrence_count_v1(
+                    COALESCE(content.title, content.body, content.comment),
+                    args.literal_query,
+                    args.case_mode
+                )
+                WHEN 'fts5' THEN 1
+            END
+            AS INTEGER
+        ) AS source_hit_count,
+        CASE args.mode
+            WHEN 'fts5' THEN snippet(
+                task_search_fts,
+                CASE document.source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END,
+                '',
+                '',
+                '…',
+                args.context_clusters
+            )
+        END AS raw_snippet
+    FROM task_search_fts
+    CROSS JOIN args
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    LEFT JOIN task_comments comment
+      ON comment.id = document.comment_id
+    JOIN task_records task
+      ON task.id = COALESCE(document.task_id, comment.task_id)
+    JOIN projects project
+      ON project.id = task.project_id
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    JOIN canonical_task_status status
+      ON status.task_id = task.id
+    WHERE task_search_fts MATCH ?2
+      AND (args.include_comments != 0 OR document.source_kind != 'comment')
+      AND (
+          NOT EXISTS (SELECT 1 FROM json_each(args.project_ids_json))
+          OR task.project_id IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.project_ids_json)
+          )
+      )
+      AND (
+          args.status_filter_set = 0
+          OR status.kind IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.status_kinds_json)
+          )
+      )
+      AND (
+          args.mode = 'fts5'
+          OR kent_task_search_occurrence_count_v1(
+              COALESCE(content.title, content.body, content.comment),
+              args.literal_query,
+              args.case_mode
+          ) > 0
+      )
+),
+ranked_sources AS (
+    SELECT
+        matching_sources.task_id,
+        matching_sources.project_id,
+        matching_sources.project_key,
+        matching_sources.short_id,
+        matching_sources.workflow_id,
+        matching_sources.task_title,
+        matching_sources.is_done,
+        matching_sources.status_kind,
+        matching_sources.node_ids_json,
+        matching_sources.run_ids_json,
+        matching_sources.attention_types_json,
+        matching_sources.document_id,
+        matching_sources.source_kind,
+        matching_sources.comment_id,
+        matching_sources.comment_created_at_unix_ms,
+        matching_sources.weighted_rank,
+        matching_sources.source_hit_count,
+        matching_sources.raw_snippet,
+        CAST(MAX(weighted_rank) OVER (
+            PARTITION BY task_id
+        ) AS REAL) AS task_weighted_rank,
+        CAST(SUM(source_hit_count) OVER (
+            PARTITION BY task_id
+        ) AS INTEGER) AS total_hit_count,
+        CAST(COALESCE(SUM(source_hit_count) OVER (
+            PARTITION BY task_id
+            ORDER BY
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                comment_created_at_unix_ms DESC,
+                comment_id DESC,
+                document_id ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS INTEGER) AS source_ordinal_before
+    FROM matching_sources
+),
+rounds AS (
+    SELECT
+        CASE args.cursor_set
+            WHEN 0 THEN 1
+            ELSE args.cursor_ordinal
+        END AS ordinal,
+        0 AS lookahead_count
+    FROM args
+    UNION ALL
+    SELECT
+        rounds.ordinal + 1,
+        rounds.lookahead_count + 1
+    FROM rounds
+    CROSS JOIN args
+    WHERE rounds.lookahead_count < args.limit_rows
+)
+SELECT
+    ranked_sources.task_id AS task_id,
+    ranked_sources.project_id AS project_id,
+    ranked_sources.project_key AS project_key,
+    ranked_sources.short_id AS short_id,
+    ranked_sources.workflow_id AS workflow_id,
+    ranked_sources.task_title AS task_title,
+    ranked_sources.is_done AS is_done,
+    ranked_sources.status_kind AS status_kind,
+    ranked_sources.node_ids_json AS node_ids_json,
+    ranked_sources.run_ids_json AS run_ids_json,
+    ranked_sources.attention_types_json AS attention_types_json,
+    ranked_sources.document_id AS document_id,
+    ranked_sources.source_kind AS source_kind,
+    ranked_sources.comment_id AS comment_id,
+    ranked_sources.total_hit_count AS total_hit_count,
+    CAST(rounds.ordinal AS INTEGER) AS ordinal,
+    CAST(rounds.ordinal - ranked_sources.source_ordinal_before AS INTEGER) AS source_ordinal,
+    ranked_sources.task_weighted_rank,
+    ranked_sources.raw_snippet
+FROM rounds
+JOIN ranked_sources
+  ON rounds.ordinal > ranked_sources.source_ordinal_before
+ AND rounds.ordinal <= ranked_sources.source_ordinal_before + ranked_sources.source_hit_count
+CROSS JOIN args
+WHERE args.cursor_set = 0
+   OR rounds.ordinal > args.cursor_ordinal
+   OR (
+       rounds.ordinal = args.cursor_ordinal
+       AND (
+           ranked_sources.task_weighted_rank < args.cursor_weighted_rank
+           OR (
+               ranked_sources.task_weighted_rank = args.cursor_weighted_rank
+               AND ranked_sources.task_id > args.cursor_task_id
+           )
+       )
+   )
+ORDER BY
+    rounds.ordinal ASC,
+    ranked_sources.task_weighted_rank DESC,
+    ranked_sources.task_id ASC
+LIMIT (SELECT limit_rows FROM args);
+{{end}}
+{{if .IncludeTaskSearchPageDescriptors}}{{template "taskSearchPageDescriptors" .}}{{end}}

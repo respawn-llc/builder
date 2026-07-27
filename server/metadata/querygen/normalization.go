@@ -65,28 +65,19 @@ type normalizationTables struct {
 }
 
 type normalizationMapping struct {
-	from rune
-	to   rune
+	from    rune
+	to      rune
+	removed bool
 }
 
-func main() {
-	if err := runCommand(os.Args[1:]); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func runCommand(args []string) error {
-	if len(args) == 0 {
-		return errors.New("normalization generator command is required")
-	}
-	switch args[0] {
+func runNormalizationCommand(command string, args []string) error {
+	switch command {
 	case "generate":
-		return generateCommand(args[1:])
+		return generateCommand(args)
 	case "check":
-		return checkCommand(args[1:])
+		return checkCommand(args)
 	default:
-		return fmt.Errorf("unknown normalization generator command %q", args[0])
+		return fmt.Errorf("unknown normalization generator command %q", command)
 	}
 }
 
@@ -701,11 +692,16 @@ func renderNormalizationData(source pinnedSQLiteSource, tables normalizationTabl
 	fmt.Fprintf(&output, "const normalizationSQLiteSourceUnit = %q\n", sqliteUnicodeSourceUnit)
 	fmt.Fprintf(&output, "const normalizationSourceChecksum = %q\n\n", sourceChecksum(source))
 	output.WriteString("type normalizationRuneMapping struct {\n")
-	output.WriteString("\tfrom rune\n")
-	output.WriteString("\tto   rune\n")
+	output.WriteString("\tfrom    rune\n")
+	output.WriteString("\tto      rune\n")
+	output.WriteString("\tremoved bool\n")
 	output.WriteString("}\n\n")
 	output.WriteString("var insensitiveNormalizationMappings = [...]normalizationRuneMapping{\n")
 	for _, mapping := range mappings {
+		if mapping.to == 0 {
+			fmt.Fprintf(&output, "\t{from: 0x%04X, removed: true},\n", mapping.from)
+			continue
+		}
 		fmt.Fprintf(&output, "\t{from: 0x%04X, to: 0x%04X},\n", mapping.from, mapping.to)
 	}
 	output.WriteString("}\n")

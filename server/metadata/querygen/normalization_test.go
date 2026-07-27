@@ -52,14 +52,14 @@ func TestGeneratedNormalizationDataIsFreshAndDeterministic(t *testing.T) {
 		t.Fatal("normalization generation is not deterministic")
 	}
 
-	const outputPath = "../normalization_generated.go"
+	const outputPath = "../../../shared/tasksearchtext/normalization_generated.go"
 	current, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatalf("read generated normalization data: %v", err)
 	}
 	if !bytes.Equal(current, first) {
 		t.Fatalf(
-			"generated normalization data is stale; run go run ./shared/tasksearchtext/normalizationgen generate --output %s",
+			"generated normalization data is stale; run go generate ./shared/tasksearchtext (output: %s)",
 			filepath.Clean(outputPath),
 		)
 	}

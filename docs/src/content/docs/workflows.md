@@ -311,6 +311,17 @@ kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
 
+### Search Tasks
+
+`kent task search <query>` searches Task titles and bodies across Projects. Literal search is the default and requires at least three normalized characters. Use `--fts5` for a raw FTS5 expression over the `title`, `body`, and `comment` columns.
+
+```bash
+kent task search "retry policy"
+kent task search 'body:"retry policy"' --fts5 --include-comments --status active --project .
+```
+
+`--include-comments` adds Task Comments, repeatable `--project` narrows the Project union, and repeatable or comma-separated `--status` filters canonical Task status. `--context` accepts `1..64`; `--page-size` accepts `1..100`. A continuation token is written to stderr when another page exists and can be passed to `--page-token`. `--json` writes the grouped server response unchanged.
+
 ### Choose The Execution Target
 
 The workflow's execution-target policy chooses where executable agent and script nodes run:

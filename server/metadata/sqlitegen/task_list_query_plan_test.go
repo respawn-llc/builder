@@ -71,6 +71,7 @@ FROM tasks t
 JOIN project_workflow_links pwl ON pwl.id = t.project_workflow_link_id;
 CREATE TABLE workflow_task_status_records (
 	task_id TEXT PRIMARY KEY,
+	is_done INTEGER NOT NULL,
 	kind TEXT NOT NULL,
 	primary_status_rank INTEGER NOT NULL,
 	node_ids_json TEXT NOT NULL,
@@ -112,6 +113,8 @@ CREATE INDEX task_label_assignments_label_task_idx
 		int64(0),
 		nil,
 		nil,
+		"[]",
+		"[]",
 		"[]",
 		int64(0),
 		"[]",
@@ -170,7 +173,7 @@ func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, que
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query plan: %v", err)
 	}
-	if groupingStructures > 1 {
-		t.Fatalf("task-list cardinality introduced an extra unbounded grouping structure: count=%d", groupingStructures)
+	if groupingStructures > 2 {
+		t.Fatalf("task-list canonical status and cardinality introduced extra grouping structures: count=%d", groupingStructures)
 	}
 }

@@ -198,10 +198,10 @@ func (c *TaskStatusSnapshotCoordinator) Capture(ctx context.Context) (*TaskStatu
 				retry = true
 				return nil
 			}
-			if reason := validateTaskStatusSnapshotObservations(afterAuthority, afterScheduler); reason != "" {
+			if validation := validateTaskStatusSnapshotObservations(afterAuthority, afterScheduler); !validation.Valid {
 				return errors.Join(
 					&TaskStatusSnapshotConsistencyError{
-						Reason:   reason,
+						Reason:   validation.Reason,
 						Attempts: attempt,
 						Before:   beforeRevisions,
 						After:    afterRevisions,
@@ -305,14 +305,27 @@ func (r TaskStatusObservationRevisions) equal(other TaskStatusObservationRevisio
 	return true
 }
 
+type taskStatusSnapshotObservationValidation struct {
+	Valid  bool
+	Reason TaskStatusSnapshotConsistencyReason
+}
+
+func validTaskStatusSnapshotObservations() taskStatusSnapshotObservationValidation {
+	return taskStatusSnapshotObservationValidation{Valid: true}
+}
+
+func invalidTaskStatusSnapshotObservations(reason TaskStatusSnapshotConsistencyReason) taskStatusSnapshotObservationValidation {
+	return taskStatusSnapshotObservationValidation{Reason: reason}
+}
+
 func validateTaskStatusSnapshotObservations(
 	authority sessionruntime.AllWorkflowExecutionSnapshot,
 	scheduler workflowexecution.SchedulerActiveRunSnapshot,
-) TaskStatusSnapshotConsistencyReason {
+) taskStatusSnapshotObservationValidation {
 	schedulerByRef := make(map[sessionruntime.WorkflowExecutionRef]struct{}, len(scheduler.ActiveRuns))
 	for _, observed := range scheduler.ActiveRuns {
 		if err := observed.Validate(); err != nil {
-			return TaskStatusSnapshotConsistencyReasonInvalidSchedulerObservation
+			return invalidTaskStatusSnapshotObservations(TaskStatusSnapshotConsistencyReasonInvalidSchedulerObservation)
 		}
 		ref := sessionruntime.WorkflowExecutionRef{
 			TaskID:     observed.TaskID,
@@ -320,23 +333,23 @@ func validateTaskStatusSnapshotObservations(
 			Generation: observed.Generation,
 		}
 		if _, exists := schedulerByRef[ref]; exists {
-			return TaskStatusSnapshotConsistencyReasonDuplicateSchedulerIdentity
+			return invalidTaskStatusSnapshotObservations(TaskStatusSnapshotConsistencyReasonDuplicateSchedulerIdentity)
 		}
 		schedulerByRef[ref] = struct{}{}
 	}
 	authorityByRef := make(map[sessionruntime.WorkflowExecutionRef]struct{}, len(authority.Executions))
 	for _, observed := range authority.Executions {
 		if err := observed.Validate(); err != nil {
-			return TaskStatusSnapshotConsistencyReasonInvalidAuthorityObservation
+			return invalidTaskStatusSnapshotObservations(TaskStatusSnapshotConsistencyReasonInvalidAuthorityObservation)
 		}
 		ref := observed.Execution.Ref
 		if _, exists := authorityByRef[ref]; exists {
-			return TaskStatusSnapshotConsistencyReasonDuplicateAuthorityIdentity
+			return invalidTaskStatusSnapshotObservations(TaskStatusSnapshotConsistencyReasonDuplicateAuthorityIdentity)
 		}
 		authorityByRef[ref] = struct{}{}
 		if _, exists := schedulerByRef[ref]; !exists {
-			return TaskStatusSnapshotConsistencyReasonAuthorityMissingScheduler
+			return invalidTaskStatusSnapshotObservations(TaskStatusSnapshotConsistencyReasonAuthorityMissingScheduler)
 		}
 	}
-	return ""
+	return validTaskStatusSnapshotObservations()
 }

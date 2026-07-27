@@ -119,21 +119,31 @@ func serializeLiteralFTS5(query []rune) string {
 func normalizeInsensitiveRunes(input []rune) []rune {
 	normalized := make([]rune, 0, len(input))
 	for _, character := range input {
-		if normalizedCharacter := normalizeInsensitiveRune(character); normalizedCharacter != 0 {
-			normalized = append(normalized, normalizedCharacter)
+		normalizedCharacter := normalizeInsensitiveRune(character)
+		if normalizedCharacter.present {
+			normalized = append(normalized, normalizedCharacter.character)
 		}
 	}
 	return normalized
 }
 
-func normalizeInsensitiveRune(character rune) rune {
+type normalizedRune struct {
+	character rune
+	present   bool
+}
+
+func normalizeInsensitiveRune(character rune) normalizedRune {
 	index := sort.Search(len(insensitiveNormalizationMappings), func(index int) bool {
 		return insensitiveNormalizationMappings[index].from >= character
 	})
 	if index < len(insensitiveNormalizationMappings) && insensitiveNormalizationMappings[index].from == character {
-		return insensitiveNormalizationMappings[index].to
+		mapping := insensitiveNormalizationMappings[index]
+		if mapping.removed {
+			return normalizedRune{}
+		}
+		return normalizedRune{character: mapping.to, present: true}
 	}
-	return character
+	return normalizedRune{character: character, present: true}
 }
 
 func kmpPrefix(query []rune) []int {
@@ -175,10 +185,11 @@ func newLiteralDocument(source string, caseMode LiteralCaseMode) literalDocument
 		document.clusters = append(document.clusters, cluster)
 		for _, character := range cluster {
 			if caseMode == LiteralCaseInsensitive {
-				character = normalizeInsensitiveRune(character)
-			}
-			if character == 0 {
-				continue
+				normalized := normalizeInsensitiveRune(character)
+				if !normalized.present {
+					continue
+				}
+				character = normalized.character
 			}
 			document.stream = append(document.stream, literalStreamRune{
 				character: character,

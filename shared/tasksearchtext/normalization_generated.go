@@ -11,8 +11,9 @@ const normalizationSQLiteSourceUnit = "fts5_unicode2.c"
 const normalizationSourceChecksum = "sha256:2d2a354b1eb98dcd6cb19e5a9ae5a699a964419608cbaea48735c89de5ed0f98"
 
 type normalizationRuneMapping struct {
-	from rune
-	to   rune
+	from    rune
+	to      rune
+	removed bool
 }
 
 var insensitiveNormalizationMappings = [...]normalizationRuneMapping{
@@ -365,31 +366,31 @@ var insensitiveNormalizationMappings = [...]normalizationRuneMapping{
 	{from: 0x024A, to: 0x024B},
 	{from: 0x024C, to: 0x024D},
 	{from: 0x024E, to: 0x024F},
-	{from: 0x0300, to: 0x0000},
-	{from: 0x0301, to: 0x0000},
-	{from: 0x0302, to: 0x0000},
-	{from: 0x0303, to: 0x0000},
-	{from: 0x0304, to: 0x0000},
-	{from: 0x0306, to: 0x0000},
-	{from: 0x0307, to: 0x0000},
-	{from: 0x0308, to: 0x0000},
-	{from: 0x0309, to: 0x0000},
-	{from: 0x030A, to: 0x0000},
-	{from: 0x030B, to: 0x0000},
-	{from: 0x030C, to: 0x0000},
-	{from: 0x030F, to: 0x0000},
-	{from: 0x0311, to: 0x0000},
-	{from: 0x031B, to: 0x0000},
-	{from: 0x0323, to: 0x0000},
-	{from: 0x0324, to: 0x0000},
-	{from: 0x0325, to: 0x0000},
-	{from: 0x0326, to: 0x0000},
-	{from: 0x0327, to: 0x0000},
-	{from: 0x0328, to: 0x0000},
-	{from: 0x032D, to: 0x0000},
-	{from: 0x032E, to: 0x0000},
-	{from: 0x0330, to: 0x0000},
-	{from: 0x0331, to: 0x0000},
+	{from: 0x0300, removed: true},
+	{from: 0x0301, removed: true},
+	{from: 0x0302, removed: true},
+	{from: 0x0303, removed: true},
+	{from: 0x0304, removed: true},
+	{from: 0x0306, removed: true},
+	{from: 0x0307, removed: true},
+	{from: 0x0308, removed: true},
+	{from: 0x0309, removed: true},
+	{from: 0x030A, removed: true},
+	{from: 0x030B, removed: true},
+	{from: 0x030C, removed: true},
+	{from: 0x030F, removed: true},
+	{from: 0x0311, removed: true},
+	{from: 0x031B, removed: true},
+	{from: 0x0323, removed: true},
+	{from: 0x0324, removed: true},
+	{from: 0x0325, removed: true},
+	{from: 0x0326, removed: true},
+	{from: 0x0327, removed: true},
+	{from: 0x0328, removed: true},
+	{from: 0x032D, removed: true},
+	{from: 0x032E, removed: true},
+	{from: 0x0330, removed: true},
+	{from: 0x0331, removed: true},
 	{from: 0x0345, to: 0x03B9},
 	{from: 0x0370, to: 0x0371},
 	{from: 0x0372, to: 0x0373},

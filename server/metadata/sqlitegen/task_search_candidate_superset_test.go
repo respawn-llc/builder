@@ -144,8 +144,9 @@ WHERE task_search_candidate_superset MATCH ?`,
 }
 
 type normalizationMappingFixture struct {
-	from rune
-	to   rune
+	from    rune
+	to      rune
+	removed bool
 }
 
 func generatedInsensitiveNormalizationMappings(t *testing.T) []normalizationMappingFixture {
@@ -210,11 +211,17 @@ func generatedNormalizationMapping(t *testing.T, expression ast.Expr) normalizat
 		case "to":
 			mapping.to = generatedRuneLiteral(t, field.Value)
 			foundTo = true
+		case "removed":
+			literal, ok := field.Value.(*ast.Ident)
+			if !ok || literal.Name != "true" {
+				t.Fatalf("generated normalization removal flag has invalid value %T/%v", field.Value, field.Value)
+			}
+			mapping.removed = true
 		default:
 			t.Fatalf("generated normalization mapping has unexpected field %q", name.Name)
 		}
 	}
-	if !foundFrom || !foundTo {
+	if !foundFrom || (!foundTo && !mapping.removed) {
 		t.Fatalf("generated normalization mapping completeness from=%t to=%t", foundFrom, foundTo)
 	}
 	return mapping

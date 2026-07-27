@@ -1,3 +1,3 @@
 package tasksearchtext
 
-//go:generate go run ./normalizationgen generate --output normalization_generated.go
+//go:generate go run ../../server/metadata/querygen generate-normalization --output normalization_generated.go

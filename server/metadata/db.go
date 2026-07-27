@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/server/metadata/sqliteextensions"
+	"core/server/metadata/sqlitegen"
 
 	"github.com/pressly/goose/v3"
 )
@@ -44,7 +44,7 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err := os.MkdirAll(filepath.Dir(trimmedDatabasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata db dir: %w", err)
 	}
-	if err := sqliteextensions.Register(); err != nil {
+	if err := sqlitegen.RegisterSQLiteExtensions(); err != nil {
 		return nil, fmt.Errorf("register metadata SQLite extensions: %w", err)
 	}
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(trimmedDatabasePath))

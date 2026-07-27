@@ -227,11 +227,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowTaskSearch, err := workflowview.NewTaskSearch()
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
-	}
 	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowDefinitions, workflowTaskProjector)
 	if err != nil {
 		cleanupNewFailure()
@@ -273,6 +268,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task status snapshots: %w", err)
+	}
+	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, workflowStatusSnapshots)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
 	}
 	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, workflowStatusSnapshots)
 	if err != nil {

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"core/server/metadata/sqliteextensions"
+	"core/server/metadata/sqlitegen"
 	"core/shared/tasksearchtext"
 
 	"github.com/pressly/goose/v3"
@@ -141,7 +141,7 @@ func TestOpenSurfacesSQLiteExtensionRegistrationFailure(t *testing.T) {
 	}
 
 	if err := sqlitedriver.RegisterDeterministicScalarFunction(
-		sqliteextensions.LiteralOccurrenceCountFunctionName,
+		sqlitegen.LiteralOccurrenceCountFunctionName,
 		3,
 		func(*sqlitedriver.FunctionContext, []driver.Value) (driver.Value, error) {
 			return int64(0), nil
@@ -165,11 +165,11 @@ func TestOpenSurfacesSQLiteExtensionRegistrationFailure(t *testing.T) {
 	if firstRegistrationError != secondRegistrationError {
 		t.Fatal("SQLite extension registration failure was not cached")
 	}
-	if firstRegistrationError.ExtensionName != sqliteextensions.LiteralOccurrenceCountFunctionName {
+	if firstRegistrationError.ExtensionName != sqlitegen.LiteralOccurrenceCountFunctionName {
 		t.Fatalf(
 			"registration failure extension = %q, want %q",
 			firstRegistrationError.ExtensionName,
-			sqliteextensions.LiteralOccurrenceCountFunctionName,
+			sqlitegen.LiteralOccurrenceCountFunctionName,
 		)
 	}
 	if firstRegistrationError.Cause == nil {
@@ -191,7 +191,7 @@ func metadataSQLiteExtensionsError(ctx context.Context, queryer metadataSQLiteEx
 		`WITH labels(name) AS (VALUES ('Zulu'), ('alpha'))
 SELECT name
 FROM labels
-ORDER BY name COLLATE `+sqliteextensions.LabelCollationName+`
+ORDER BY name COLLATE `+sqlitegen.LabelCollationName+`
 LIMIT 1`,
 	).Scan(&firstLabel); err != nil {
 		return fmt.Errorf("query label collation: %w", err)
@@ -203,7 +203,7 @@ LIMIT 1`,
 	var occurrences int64
 	if err := queryer.QueryRowContext(
 		ctx,
-		`SELECT `+sqliteextensions.LiteralOccurrenceCountFunctionName+`(?, ?, ?)`,
+		`SELECT `+sqlitegen.LiteralOccurrenceCountFunctionName+`(?, ?, ?)`,
 		"Café café",
 		"cafe",
 		int64(tasksearchtext.LiteralCaseInsensitive),
@@ -216,12 +216,12 @@ LIMIT 1`,
 	return nil
 }
 
-func requireSQLiteExtensionRegistrationError(t *testing.T, err error) *sqliteextensions.RegistrationError {
+func requireSQLiteExtensionRegistrationError(t *testing.T, err error) *sqlitegen.RegistrationError {
 	t.Helper()
 	if err == nil {
 		t.Fatal("Open unexpectedly succeeded")
 	}
-	var registrationError *sqliteextensions.RegistrationError
+	var registrationError *sqlitegen.RegistrationError
 	if !errors.As(err, &registrationError) {
 		t.Fatalf("Open error = %T %v, want SQLite extension registration error", err, err)
 	}
@@ -1530,7 +1530,7 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 }
 
 func openMetadataSQLiteForTest(dataSourceName string) (*sql.DB, error) {
-	if err := sqliteextensions.Register(); err != nil {
+	if err := sqlitegen.RegisterSQLiteExtensions(); err != nil {
 		return nil, err
 	}
 	return sql.Open("sqlite", dataSourceName)

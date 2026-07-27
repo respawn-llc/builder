@@ -3509,7 +3509,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskSearch, err := workflowview.NewTaskSearch()
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}

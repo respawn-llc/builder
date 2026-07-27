@@ -228,9 +228,11 @@ type TaskSearchDocument struct {
 }
 
 type TaskSearchFt struct {
-	Title   string
-	Body    string
-	Comment string
+	Title         string
+	Body          string
+	Comment       string
+	Rank          sql.NullFloat64
+	TaskSearchFts sql.NullString
 }
 
 type TaskTransition struct {

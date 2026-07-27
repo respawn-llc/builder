@@ -1,3 +1,4 @@
 package sqlitegen
 
 //go:generate sh -c "cd ../../.. && sqlc generate && go run ./server/metadata/querygen annotate-sqlc --input ./server/metadata/sqlitegen/queries.sql.go"
+//go:generate sh -c "cd ../../.. && go run ./server/metadata/querygen generate-task-search-page-descriptors --input ./server/metadata/querysrc/queries.sql.tmpl --fragment ./server/metadata/querysrc/task_label_filter.sql.tmpl --status-fragment ./server/metadata/querysrc/task_status_projection.sql.tmpl --output ./server/metadata/sqlitegen/task_search_page_descriptors_generated.go"
