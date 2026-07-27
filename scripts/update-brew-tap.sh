@@ -223,10 +223,8 @@ class ${formula_class} < Formula
   on_macos do
     depends_on arch: :arm64
 
-    on_arm do
-      url "${release_base}/kent_${bare_version}_darwin_arm64.tar.gz"
-      sha256 "$darwin_arm64_sha256"
-    end
+    url "${release_base}/kent_${bare_version}_darwin_arm64.tar.gz"
+    sha256 "$darwin_arm64_sha256"
   end
 
   on_linux do
