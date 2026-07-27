@@ -107,6 +107,9 @@ func TestTaskSearchProjectsKnownColumnFTS5SnippetWithoutSourcePointLoad(t *testi
 	if snippet == body {
 		t.Fatalf("FTS5 snippet returned the complete source body")
 	}
+	if !strings.Contains(snippet, "…") {
+		t.Fatalf("FTS5 snippet = %q, want the contract truncation marker", snippet)
+	}
 }
 
 func TestTaskSearchAppliesProjectCommentAndStatusFilters(t *testing.T) {
@@ -173,6 +176,80 @@ func TestTaskSearchAppliesProjectCommentAndStatusFilters(t *testing.T) {
 	}
 }
 
+func TestTaskSearchRawKeepsTermsWithinSourcesAndHonorsCommentInclusion(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "needle title",
+		Body:      "needle body",
+	})
+	if err != nil {
+		t.Fatalf("create searchable Task: %v", err)
+	}
+	if _, err := workflowStore.AddComment(ctx, task.ID, "needle comment", "user", "user-1"); err != nil {
+		t.Fatalf("add searchable Comment: %v", err)
+	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "alphaone",
+		Body:      "betatwo",
+	}); err != nil {
+		t.Fatalf("create split-term Task: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	response, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeFTS5,
+		Query:           "needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		PageSize:        serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw Search: %v", err)
+	}
+	if len(response.Groups) != 1 || response.Groups[0].TaskID != string(task.ID) {
+		t.Fatalf("raw response = %+v", response)
+	}
+	hits := response.Groups[0].Hits
+	if len(hits) != 3 ||
+		hits[0].Source.Kind != serverapi.TaskSearchSourceKindTitle ||
+		hits[1].Source.Kind != serverapi.TaskSearchSourceKindBody ||
+		hits[2].Source.Kind != serverapi.TaskSearchSourceKindComment {
+		t.Fatalf("raw source order = %+v, want title/body/comment", hits)
+	}
+	withoutComments, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    "comment:needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw Comment-only Search without inclusion: %v", err)
+	}
+	if len(withoutComments.Groups) != 0 {
+		t.Fatalf("raw Comment-only Search without inclusion = %+v, want no matches", withoutComments)
+	}
+	splitTerms, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    "alphaone betatwo",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw split-term Search: %v", err)
+	}
+	if len(splitTerms.Groups) != 0 {
+		t.Fatalf("raw split-term Search = %+v, want no matches", splitTerms)
+	}
+}
+
 func TestTaskSearchCursorContinuesAbsoluteOccurrences(t *testing.T) {
 	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -219,6 +296,124 @@ func TestTaskSearchCursorContinuesAbsoluteOccurrences(t *testing.T) {
 	}
 	if secondPage.NextPageToken != nil {
 		t.Fatalf("second page unexpectedly continued: %+v", secondPage)
+	}
+}
+
+func TestTaskSearchPaginatesBreadthFirstAcrossTasks(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	titleTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "needle title",
+		Body:      "different body",
+	})
+	if err != nil {
+		t.Fatalf("create title Task: %v", err)
+	}
+	bodyTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "body Task",
+		Body:      "needle first needle second",
+	})
+	if err != nil {
+		t.Fatalf("create body Task: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: 2,
+	}
+	first, err := search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	if len(first.Groups) != 2 || first.NextPageToken == nil {
+		t.Fatalf("first breadth-first page = %+v", first)
+	}
+	if first.Groups[0].TaskID != string(titleTask.ID) ||
+		len(first.Groups[0].Hits) != 1 ||
+		first.Groups[0].Hits[0].Ordinal != 1 ||
+		first.Groups[1].TaskID != string(bodyTask.ID) ||
+		len(first.Groups[1].Hits) != 1 ||
+		first.Groups[1].Hits[0].Ordinal != 1 {
+		t.Fatalf("first breadth-first page = %+v, want first hit for each Task", first)
+	}
+	request.PageToken = first.NextPageToken
+	second, err := search.Search(ctx, request)
+	if err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if len(second.Groups) != 1 ||
+		second.Groups[0].TaskID != string(bodyTask.ID) ||
+		len(second.Groups[0].Hits) != 1 ||
+		second.Groups[0].Hits[0].Ordinal != 2 ||
+		second.NextPageToken != nil {
+		t.Fatalf("second breadth-first page = %+v, want body Task's absolute second hit", second)
+	}
+}
+
+func TestTaskSearchDistinguishesEmptyResultsUnknownScopeAndCancellation(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "needle Task",
+		Body:      "needle body",
+	}); err != nil {
+		t.Fatalf("create Task: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	empty, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    "absentterm",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw empty Search: %v", err)
+	}
+	if empty.Groups == nil || len(empty.Groups) != 0 {
+		t.Fatalf("raw empty response = %+v, want groups: []", empty)
+	}
+	projectIDs := []string{binding.ProjectID, "unknown-project"}
+	if projectIDs[0] > projectIDs[1] {
+		projectIDs[0], projectIDs[1] = projectIDs[1], projectIDs[0]
+	}
+	_, err = search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:       serverapi.TaskSearchModeLiteral,
+		Query:      "needle",
+		Context:    serverapi.TaskSearchDefaultContext,
+		ProjectIDs: projectIDs,
+		PageSize:   serverapi.TaskSearchDefaultPageSize,
+	})
+	var searchErr *serverapi.TaskSearchError
+	if err == nil || errors.As(err, &searchErr) {
+		t.Fatalf("unknown Project error = %v, want operational scope error", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = search.Search(canceled, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Search error = %v, want context.Canceled", err)
 	}
 }
 
@@ -274,5 +469,110 @@ func TestTaskSearchMapsMalformedRawExpressionAndRejectsForeignCursor(t *testing.
 	_, err = search.Search(ctx, request)
 	if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonInvalidCursor {
 		t.Fatalf("foreign cursor error = %v, want invalid cursor", err)
+	}
+}
+
+func TestTaskSearchCursorCanonicalizesEmptyFiltersAndRejectsNonFiniteRank(t *testing.T) {
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: 1,
+	}
+	fingerprint, err := taskSearchRequestFingerprint(request)
+	if err != nil {
+		t.Fatalf("taskSearchRequestFingerprint without filters: %v", err)
+	}
+	request.ProjectIDs = []string{}
+	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{}
+	withExplicitEmptyFilters, err := taskSearchRequestFingerprint(request)
+	if err != nil {
+		t.Fatalf("taskSearchRequestFingerprint with explicit empty filters: %v", err)
+	}
+	if fingerprint != withExplicitEmptyFilters {
+		t.Fatalf("empty filter fingerprint = %q, want %q", withExplicitEmptyFilters, fingerprint)
+	}
+	for _, rankBits := range []uint64{
+		math.Float64bits(math.Inf(1)),
+		math.Float64bits(math.Inf(-1)),
+		math.Float64bits(math.NaN()),
+	} {
+		raw, err := encodeTaskSearchPageToken(taskSearchPageToken{
+			Version:     taskSearchPageTokenVersion,
+			Fingerprint: fingerprint,
+			Ordinal:     1,
+			RankBits:    rankBits,
+			TaskID:      "task-1",
+		})
+		if err != nil {
+			t.Fatalf("encodeTaskSearchPageToken: %v", err)
+		}
+		_, _, err = parseTaskSearchPageToken(&raw, fingerprint)
+		var searchErr *serverapi.TaskSearchError
+		if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonInvalidCursor {
+			t.Fatalf("rank bits %x error = %v, want invalid cursor", rankBits, err)
+		}
+	}
+}
+
+func TestTaskSearchRawRanksEquivalentBodyAboveComment(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	bodyTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Body Task",
+		Body:      "needle",
+	})
+	if err != nil {
+		t.Fatalf("create body Task: %v", err)
+	}
+	commentTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Comment Task",
+		Body:      "different",
+	})
+	if err != nil {
+		t.Fatalf("create comment Task: %v", err)
+	}
+	if _, err := workflowStore.AddComment(ctx, commentTask.ID, "needle", "user", "user-1"); err != nil {
+		t.Fatalf("add comment: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	snapshot, err := fixture.statusSnapshots.Capture(ctx)
+	if err != nil {
+		t.Fatalf("capture status snapshot: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := snapshot.Close(); err != nil {
+			t.Errorf("close status snapshot: %v", err)
+		}
+	})
+	rows, err := search.queryPage(ctx, snapshot, serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeFTS5,
+		Query:           "needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		PageSize:        serverapi.TaskSearchDefaultPageSize,
+	}, taskSearchPageToken{}, false)
+	if err != nil {
+		t.Fatalf("query raw search page: %v", err)
+	}
+	ranks := map[string]float64{}
+	for _, row := range rows {
+		ranks[row.TaskID] = row.TaskWeightedRank
+	}
+	bodyRank, bodyFound := ranks[string(bodyTask.ID)]
+	commentRank, commentFound := ranks[string(commentTask.ID)]
+	if !bodyFound || !commentFound {
+		t.Fatalf("raw search rows = %+v, want body and Comment Task", rows)
+	}
+	if bodyRank <= commentRank {
+		t.Fatalf("body rank = %f, comment rank = %f; want body above equivalent Comment", bodyRank, commentRank)
 	}
 }

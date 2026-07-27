@@ -151,11 +151,7 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	if len(required) != 0 {
 		return errors.New("task search schema is incomplete")
 	}
-	projectIDs := req.ProjectIDs
-	if projectIDs == nil {
-		projectIDs = []string{}
-	}
-	projectIDsJSON, err := json.Marshal(projectIDs)
+	projectIDsJSON, err := json.Marshal(taskSearchProjectIDs(req))
 	if err != nil {
 		return fmt.Errorf("encode task search project ids: %w", err)
 	}
@@ -182,11 +178,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, snapshot *TaskStatusSnapshot
 	if err != nil {
 		return nil, fmt.Errorf("encode task search project ids: %w", err)
 	}
-	statusKinds := make([]string, 0, len(req.StatusKinds))
-	for _, status := range req.StatusKinds {
-		statusKinds = append(statusKinds, string(status))
-	}
-	statusKindsJSON, err := json.Marshal(statusKinds)
+	statusKindsJSON, err := json.Marshal(taskSearchStatusKinds(req))
 	if err != nil {
 		return nil, fmt.Errorf("encode task search status kinds: %w", err)
 	}
@@ -367,10 +359,6 @@ func taskSearchSQLiteMalformedExpression(err error) bool {
 }
 
 func taskSearchRequestFingerprint(req serverapi.TaskSearchRequest) (string, error) {
-	statusKinds := make([]string, 0, len(req.StatusKinds))
-	for _, status := range req.StatusKinds {
-		statusKinds = append(statusKinds, string(status))
-	}
 	payload := struct {
 		Mode               serverapi.TaskSearchMode `json:"mode"`
 		Query              string                   `json:"query"`
@@ -390,8 +378,8 @@ func taskSearchRequestFingerprint(req serverapi.TaskSearchRequest) (string, erro
 		Context:            req.Context,
 		CaseSensitive:      req.CaseSensitive,
 		IncludeComments:    req.IncludeComments,
-		ProjectIDs:         req.ProjectIDs,
-		StatusKinds:        statusKinds,
+		ProjectIDs:         taskSearchProjectIDs(req),
+		StatusKinds:        taskSearchStatusKinds(req),
 		StatusModelVersion: workflowTaskStatusModelVersion,
 		Normalization:      tasksearchtext.NormalizationContractVersion,
 		SparseDocument:     serverapi.TaskSearchSparseDocumentContractVersion,
@@ -406,6 +394,18 @@ func taskSearchRequestFingerprint(req serverapi.TaskSearchRequest) (string, erro
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
+func taskSearchProjectIDs(req serverapi.TaskSearchRequest) []string {
+	return append([]string{}, req.ProjectIDs...)
+}
+
+func taskSearchStatusKinds(req serverapi.TaskSearchRequest) []string {
+	statuses := make([]string, 0, len(req.StatusKinds))
+	for _, status := range req.StatusKinds {
+		statuses = append(statuses, string(status))
+	}
+	return statuses
+}
+
 func parseTaskSearchPageToken(raw *string, fingerprint string) (taskSearchPageToken, bool, error) {
 	if raw == nil {
 		return taskSearchPageToken{}, false, nil
@@ -415,10 +415,15 @@ func parseTaskSearchPageToken(raw *string, fingerprint string) (taskSearchPageTo
 		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
 	}
 	var token taskSearchPageToken
-	if err := json.Unmarshal(decoded, &token); err != nil ||
-		token.Version != taskSearchPageTokenVersion ||
+	if err := json.Unmarshal(decoded, &token); err != nil {
+		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
+	}
+	rank := math.Float64frombits(token.RankBits)
+	if token.Version != taskSearchPageTokenVersion ||
 		token.Fingerprint != fingerprint ||
 		token.Ordinal < 1 ||
+		math.IsInf(rank, 0) ||
+		math.IsNaN(rank) ||
 		strings.TrimSpace(token.TaskID) == "" ||
 		strings.TrimSpace(token.TaskID) != token.TaskID {
 		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
