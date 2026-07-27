@@ -19,7 +19,6 @@ import (
 
 const (
 	workflowTaskListPageTokenVersion = 4
-	workflowTaskStatusModelVersion   = 1
 )
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
@@ -237,9 +236,12 @@ type workflowTaskListRow struct {
 	matchingWorkflowCount int
 }
 
-func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+func (l *TaskList) queryRows(ctx context.Context, statusSnapshot *TaskStatusSnapshot, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
 	if l == nil {
 		return nil, errors.New("task list is required")
+	}
+	if statusSnapshot == nil || statusSnapshot.queries == nil {
+		return nil, errors.New("task status snapshot is required")
 	}
 	workflowFilter := sql.NullString{}
 	canceledTerminalNodeID := sql.NullString{}
@@ -287,40 +289,46 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if req.cursor.ColumnRank != nil {
 		cursorColumnRank = sql.NullInt64{Int64: int64(*req.cursor.ColumnRank), Valid: true}
 	}
-	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
-		ProjectID:               req.projectID,
-		WorkflowID:              workflowFilter,
-		CanceledTerminalNodeID:  canceledTerminalNodeID,
-		VisibleColumnsJson:      visibleColumnsJSON,
-		ColumnFilterSet:         boolInt64(columnFilterSet),
-		ColumnKeysJson:          columnKeysJSON,
-		StatusFilterSet:         boolInt64(len(req.statusKinds) > 0),
-		StatusKindsJson:         string(statusKindsJSON),
-		AttentionFilterSet:      boolInt64(len(req.attentionKinds) > 0),
-		AttentionKindsJson:      string(attentionKindsJSON),
-		LabelFilterKind:         labelFilterArgs.kind,
-		LabelFilterMode:         labelFilterArgs.mode,
-		LabelIdsJson:            labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:    labelFilterArgs.excludedLabelIDsJSON,
-		CursorSet:               boolInt64(req.cursorSet),
-		CursorCreatedAtUnixMs:   req.cursor.CreatedAtUnixMs,
-		CursorUpdatedAtUnixMs:   req.cursor.UpdatedAtUnixMs,
-		CursorPrimaryStatusRank: int64(req.cursor.PrimaryStatusRank),
-		CursorColumnRank:        cursorColumnRank,
-		CursorRunCount:          int64(req.cursor.RunCount),
-		CursorTitleSort:         req.cursor.TitleSort,
-		CursorTaskID:            req.cursor.TaskID,
-		Sort1Field:              string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),
-		Sort1Desc:               workflowTaskListSortDescending(req.sortSelectors, 0),
-		Sort2Field:              string(workflowTaskListSortSelector(req.sortSelectors, 1).Field),
-		Sort2Desc:               workflowTaskListSortDescending(req.sortSelectors, 1),
-		Sort3Field:              string(workflowTaskListSortSelector(req.sortSelectors, 2).Field),
-		Sort3Desc:               workflowTaskListSortDescending(req.sortSelectors, 2),
-		Sort4Field:              string(workflowTaskListSortSelector(req.sortSelectors, 3).Field),
-		Sort4Desc:               workflowTaskListSortDescending(req.sortSelectors, 3),
-		Sort5Field:              string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
-		Sort5Desc:               workflowTaskListSortDescending(req.sortSelectors, 4),
-		LimitRows:               int64(req.limit),
+	statusProjection, err := statusSnapshot.statusProjectionArguments()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := statusSnapshot.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
+		ProjectID:                 req.projectID,
+		WorkflowID:                workflowFilter,
+		CanceledTerminalNodeID:    canceledTerminalNodeID,
+		VisibleColumnsJson:        visibleColumnsJSON,
+		ColumnFilterSet:           boolInt64(columnFilterSet),
+		ColumnKeysJson:            columnKeysJSON,
+		StatusFilterSet:           boolInt64(len(req.statusKinds) > 0),
+		StatusKindsJson:           string(statusKindsJSON),
+		AuthorityObservationsJson: statusProjection.authorityObservationsJSON,
+		CurrentRunFactsJson:       statusProjection.currentRunFactsJSON,
+		AttentionFilterSet:        boolInt64(len(req.attentionKinds) > 0),
+		AttentionKindsJson:        string(attentionKindsJSON),
+		LabelFilterKind:           labelFilterArgs.kind,
+		LabelFilterMode:           labelFilterArgs.mode,
+		LabelIdsJson:              labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson:      labelFilterArgs.excludedLabelIDsJSON,
+		CursorSet:                 boolInt64(req.cursorSet),
+		CursorCreatedAtUnixMs:     req.cursor.CreatedAtUnixMs,
+		CursorUpdatedAtUnixMs:     req.cursor.UpdatedAtUnixMs,
+		CursorPrimaryStatusRank:   int64(req.cursor.PrimaryStatusRank),
+		CursorColumnRank:          cursorColumnRank,
+		CursorRunCount:            int64(req.cursor.RunCount),
+		CursorTitleSort:           req.cursor.TitleSort,
+		CursorTaskID:              req.cursor.TaskID,
+		Sort1Field:                string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),
+		Sort1Desc:                 workflowTaskListSortDescending(req.sortSelectors, 0),
+		Sort2Field:                string(workflowTaskListSortSelector(req.sortSelectors, 1).Field),
+		Sort2Desc:                 workflowTaskListSortDescending(req.sortSelectors, 1),
+		Sort3Field:                string(workflowTaskListSortSelector(req.sortSelectors, 2).Field),
+		Sort3Desc:                 workflowTaskListSortDescending(req.sortSelectors, 2),
+		Sort4Field:                string(workflowTaskListSortSelector(req.sortSelectors, 3).Field),
+		Sort4Desc:                 workflowTaskListSortDescending(req.sortSelectors, 3),
+		Sort5Field:                string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
+		Sort5Desc:                 workflowTaskListSortDescending(req.sortSelectors, 4),
+		LimitRows:                 int64(req.limit),
 	})
 	if err != nil {
 		return nil, err

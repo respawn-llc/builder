@@ -50,19 +50,19 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 		t.Fatalf("backlog tasks = %+v", backlogResp.Tasks)
 	}
 
-	runningResp, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+	activeResp, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowIDString,
 		ColumnKeys:  []string{"agent"},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
 	})
 
 	if err != nil {
-		t.Fatalf("ListTasks running: %v", err)
+		t.Fatalf("ListTasks active: %v", err)
 	}
-	if len(runningResp.Tasks) != 1 || runningResp.Tasks[0].TaskID != string(running.ID) {
-		t.Fatalf("running tasks = %+v", runningResp.Tasks)
+	if len(activeResp.Tasks) != 1 || activeResp.Tasks[0].TaskID != string(running.ID) {
+		t.Fatalf("active tasks = %+v", activeResp.Tasks)
 	}
 }
 
@@ -165,25 +165,25 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		}
 		return response
 	}
-	wantByStatus := map[serverapi.WorkflowTaskStatusKind]string{
-		serverapi.WorkflowTaskStatusKindBacklog:         string(backlog.ID),
-		serverapi.WorkflowTaskStatusKindActive:          string(active.ID),
-		serverapi.WorkflowTaskStatusKindQueued:          string(queued.ID),
-		serverapi.WorkflowTaskStatusKindRunning:         string(running.ID),
-		serverapi.WorkflowTaskStatusKindInterrupted:     string(interrupted.ID),
-		serverapi.WorkflowTaskStatusKindWaitingQuestion: string(question.ID),
-		serverapi.WorkflowTaskStatusKindDone:            string(done.ID),
-		serverapi.WorkflowTaskStatusKindWaitingApproval: string(approval.ID),
-		serverapi.WorkflowTaskStatusKindCanceled:        string(canceled.ID),
+	wantByTaskID := map[string]serverapi.WorkflowTaskStatusKind{
+		string(backlog.ID):     serverapi.WorkflowTaskStatusKindBacklog,
+		string(active.ID):      serverapi.WorkflowTaskStatusKindActive,
+		string(queued.ID):      serverapi.WorkflowTaskStatusKindActive,
+		string(running.ID):     serverapi.WorkflowTaskStatusKindActive,
+		string(question.ID):    serverapi.WorkflowTaskStatusKindActive,
+		string(interrupted.ID): serverapi.WorkflowTaskStatusKindInterrupted,
+		string(done.ID):        serverapi.WorkflowTaskStatusKindDone,
+		string(approval.ID):    serverapi.WorkflowTaskStatusKindWaitingApproval,
+		string(canceled.ID):    serverapi.WorkflowTaskStatusKindCanceled,
 	}
 
 	all := list(serverapi.WorkflowTaskListRequest{
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}})
-	if len(all.Tasks) != len(wantByStatus) {
-		t.Fatalf("all list tasks = %+v, want %d tasks", all.Tasks, len(wantByStatus))
+	if len(all.Tasks) != len(wantByTaskID) {
+		t.Fatalf("all list tasks = %+v, want %d tasks", all.Tasks, len(wantByTaskID))
 	}
 	for _, item := range all.Tasks {
-		if wantTaskID, ok := wantByStatus[item.Status.Kind]; !ok || wantTaskID != item.TaskID {
+		if wantKind, ok := wantByTaskID[item.TaskID]; !ok || wantKind != item.Status.Kind {
 			t.Fatalf("list item = %+v, unexpected status/task pairing", item)
 		}
 	}
@@ -196,16 +196,27 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		}
 	}
 
-	for kind, taskID := range wantByStatus {
+	for kind, taskIDs := range map[serverapi.WorkflowTaskStatusKind]map[string]bool{
+		serverapi.WorkflowTaskStatusKindBacklog:         {string(backlog.ID): true},
+		serverapi.WorkflowTaskStatusKindActive:          {string(active.ID): true, string(queued.ID): true, string(running.ID): true, string(question.ID): true},
+		serverapi.WorkflowTaskStatusKindInterrupted:     {string(interrupted.ID): true},
+		serverapi.WorkflowTaskStatusKindDone:            {string(done.ID): true},
+		serverapi.WorkflowTaskStatusKindWaitingApproval: {string(approval.ID): true},
+		serverapi.WorkflowTaskStatusKindCanceled:        {string(canceled.ID): true},
+	} {
 		response := list(serverapi.WorkflowTaskListRequest{
 			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, StatusKinds: []serverapi.WorkflowTaskStatusKind{kind}})
-		if len(response.Tasks) != 1 || response.Tasks[0].TaskID != taskID || response.Tasks[0].Status.Kind != kind {
-			t.Fatalf("status filter %q = %+v, want task %q", kind, response.Tasks, taskID)
+		if len(response.Tasks) != len(taskIDs) {
+			t.Fatalf("status filter %q = %+v, want task IDs %v", kind, response.Tasks, taskIDs)
+		}
+		for _, task := range response.Tasks {
+			if !taskIDs[task.TaskID] || task.Status.Kind != kind {
+				t.Fatalf("status filter %q = %+v, want task IDs %v", kind, response.Tasks, taskIDs)
+			}
 		}
 	}
 	for attention, taskID := range map[serverapi.WorkflowTaskAttentionKind]string{
 		serverapi.WorkflowTaskAttentionKindApproval:    string(approval.ID),
-		serverapi.WorkflowTaskAttentionKindQuestion:    string(question.ID),
 		serverapi.WorkflowTaskAttentionKindInterrupted: string(interrupted.ID),
 	} {
 		response := list(serverapi.WorkflowTaskListRequest{
@@ -373,13 +384,13 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		want      []serverapi.WorkflowTaskStatusKind
 	}{
 		{name: "ascending", direction: serverapi.WorkflowTaskListSortDirectionAsc, want: []serverapi.WorkflowTaskStatusKind{
-			serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindRunning,
-			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog,
+			serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindBacklog,
+			serverapi.WorkflowTaskStatusKindActive, serverapi.WorkflowTaskStatusKindActive,
 			serverapi.WorkflowTaskStatusKindActive,
 		}},
 		{name: "descending", direction: serverapi.WorkflowTaskListSortDirectionDesc, want: []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindActive, serverapi.WorkflowTaskStatusKindActive,
 			serverapi.WorkflowTaskStatusKindActive, serverapi.WorkflowTaskStatusKindBacklog,
-			serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindRunning,
 			serverapi.WorkflowTaskStatusKindDone,
 		}},
 	} {
@@ -620,8 +631,8 @@ WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), strin
 		LabelFilter:    serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion},
 	})
-	if len(attentionFiltered) != 1 || attentionFiltered[0].TaskID != string(zulu.ID) {
-		t.Fatalf("question project-wide tasks = %+v, want zulu", attentionFiltered)
+	if len(attentionFiltered) != 0 {
+		t.Fatalf("question project-wide tasks = %+v, want none without exact live authority", attentionFiltered)
 	}
 
 	assertOrder := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection, want ...workflow.TaskID) {

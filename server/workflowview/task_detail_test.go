@@ -2,17 +2,14 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 
-	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -57,7 +54,8 @@ func TestTaskDetailSelectorsConvergeOnCompleteCoreDetail(t *testing.T) {
 		t.Fatalf("CompleteRun: %v", err)
 	}
 
-	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -124,7 +122,7 @@ func TestTaskDetailUsesLiveScriptTargetsForInterruptPrecedence(t *testing.T) {
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), authority)
+	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -213,7 +211,7 @@ func TestTaskDetailDoesNotOfferInterruptWhileScriptCompletionFinalizerIsBlocked(
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), authority)
+	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -264,171 +262,5 @@ func TestTaskDetailDoesNotOfferInterruptWhileScriptCompletionFinalizerIsBlocked(
 	close(releaseFinalize)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
-	}
-}
-
-func TestCurrentTaskExecutionsRequireExactDurableGeneration(t *testing.T) {
-	taskID := "task-1"
-	matched := sessionruntime.TaskExecution{
-		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: workflow.TaskID(taskID), RunID: "run-matched", Generation: 2},
-		Script: &sessionruntime.TaskScriptExecutionTarget{Path: "/bin/true"},
-	}
-	staleGeneration := sessionruntime.TaskExecution{
-		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: workflow.TaskID(taskID), RunID: "run-stale", Generation: 1},
-		Script: &sessionruntime.TaskScriptExecutionTarget{Path: "/bin/true"},
-	}
-	current, err := currentTaskExecutions(taskID, []sqlitegen.ListWorkflowTaskCurrentRunFactsRow{
-		{ID: "run-matched", RunGeneration: 2},
-		{ID: "run-stale", RunGeneration: 2},
-	}, []sessionruntime.TaskExecution{staleGeneration, matched})
-	if err != nil {
-		t.Fatalf("currentTaskExecutions: %v", err)
-	}
-	if !reflect.DeepEqual(current, []sessionruntime.TaskExecution{matched}) {
-		t.Fatalf("current executions = %+v, want exact generation match %+v", current, matched)
-	}
-}
-
-func TestTaskDetailStatusCombinesDurableFactsWithExactLiveExecutions(t *testing.T) {
-	live := sessionruntime.TaskExecution{
-		Ref:    sessionruntime.WorkflowExecutionRef{TaskID: "task-1", RunID: "run-live", Generation: 2},
-		Script: &sessionruntime.TaskScriptExecutionTarget{Path: "/bin/true"},
-	}
-	for _, test := range []struct {
-		name       string
-		durable    serverapi.WorkflowTaskStatus
-		done       bool
-		current    []sessionruntime.TaskExecution
-		wantStatus serverapi.WorkflowTaskStatus
-	}{
-		{
-			name:    "stale durable running becomes active",
-			durable: statusForTest(serverapi.WorkflowTaskStatusKindRunning, []string{"run-stale"}, nil),
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				nil,
-			),
-		},
-		{
-			name:    "stale durable queued becomes active",
-			durable: statusForTest(serverapi.WorkflowTaskStatusKindQueued, []string{"run-queued"}, nil),
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				nil,
-			),
-		},
-		{
-			name: "stale durable question removes question attention",
-			durable: statusForTest(
-				serverapi.WorkflowTaskStatusKindWaitingQuestion,
-				[]string{"run-question"},
-				[]serverapi.WorkflowTaskAttentionKind{
-					serverapi.WorkflowTaskAttentionKindInterrupted,
-					serverapi.WorkflowTaskAttentionKindQuestion,
-				},
-			),
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindActive,
-				nil,
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted},
-			),
-		},
-		{
-			name: "exact pending question wins",
-			durable: statusForTest(
-				serverapi.WorkflowTaskStatusKindRunning,
-				[]string{"run-live"},
-				nil,
-			),
-			current: []sessionruntime.TaskExecution{func() sessionruntime.TaskExecution {
-				value := live
-				value.WaitingQuestion = true
-				return value
-			}()},
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindWaitingQuestion,
-				[]string{"run-live"},
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion},
-			),
-		},
-		{
-			name: "approval keeps precedence and unions run references",
-			durable: statusForTest(
-				serverapi.WorkflowTaskStatusKindWaitingApproval,
-				[]string{"run-approval"},
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
-			),
-			current: []sessionruntime.TaskExecution{live},
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindWaitingApproval,
-				[]string{"run-approval", "run-live"},
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
-			),
-		},
-		{
-			name: "live execution wins over interrupted primary",
-			durable: statusForTest(
-				serverapi.WorkflowTaskStatusKindInterrupted,
-				[]string{"run-interrupted"},
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted},
-			),
-			current: []sessionruntime.TaskExecution{live},
-			wantStatus: statusForTest(
-				serverapi.WorkflowTaskStatusKindRunning,
-				[]string{"run-live"},
-				[]serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted},
-			),
-		},
-		{
-			name:       "done keeps durable precedence",
-			durable:    statusForTest(serverapi.WorkflowTaskStatusKindDone, nil, nil),
-			done:       true,
-			current:    []sessionruntime.TaskExecution{live},
-			wantStatus: statusForTest(serverapi.WorkflowTaskStatusKindDone, nil, nil),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got := taskDetailStatusFact(workflowTaskStatusFact{Status: test.durable, Done: test.done}, test.current)
-			if !reflect.DeepEqual(got.Status, test.wantStatus) || got.Done != test.done {
-				t.Fatalf("status fact = %+v, want status %+v done=%t", got, test.wantStatus, test.done)
-			}
-		})
-	}
-}
-
-func TestCurrentTaskExecutionsRequiresDurableAndLiveQuestionEvidence(t *testing.T) {
-	execution := sessionruntime.TaskExecution{
-		Ref:             sessionruntime.WorkflowExecutionRef{TaskID: "task-1", RunID: "run-1", Generation: 1},
-		Agent:           &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
-		WaitingQuestion: true,
-	}
-	for _, durableWaiting := range []bool{false, true} {
-		rows := []sqlitegen.ListWorkflowTaskCurrentRunFactsRow{{
-			ID:            "run-1",
-			RunGeneration: 1,
-			WaitingAskID:  sql.NullString{String: "ask-1", Valid: durableWaiting},
-		}}
-		current, err := currentTaskExecutions("task-1", rows, []sessionruntime.TaskExecution{execution})
-		if err != nil {
-			t.Fatalf("currentTaskExecutions durableWaiting=%t: %v", durableWaiting, err)
-		}
-		if len(current) != 1 || current[0].WaitingQuestion != durableWaiting {
-			t.Fatalf("current executions durableWaiting=%t = %+v", durableWaiting, current)
-		}
-	}
-}
-
-func statusForTest(kind serverapi.WorkflowTaskStatusKind, runIDs []string, attention []serverapi.WorkflowTaskAttentionKind) serverapi.WorkflowTaskStatus {
-	nativeState, ok := kind.NativeState()
-	if !ok {
-		panic("test status kind has no native state")
-	}
-	return serverapi.WorkflowTaskStatus{
-		Kind:           kind,
-		NativeState:    nativeState,
-		RunIDs:         runIDs,
-		AttentionTypes: attention,
 	}
 }

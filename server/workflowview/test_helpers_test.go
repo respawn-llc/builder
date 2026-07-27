@@ -13,7 +13,9 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -64,6 +66,51 @@ func newWorkflowViewTestContextFixture(t *testing.T) (context.Context, *metadata
 	t.Helper()
 	store, workflowStore, binding, view := newWorkflowViewTestFixtureWithStore(t)
 	return context.Background(), store, workflowStore, binding, view
+}
+
+type workflowViewSchedulerObservationSource struct {
+	authority *sessionruntime.Authority
+}
+
+func (s workflowViewSchedulerObservationSource) ActiveRunSnapshot() workflowexecution.SchedulerActiveRunSnapshot {
+	if s.authority == nil {
+		return workflowexecution.SchedulerActiveRunSnapshot{ActiveRuns: []workflowexecution.SchedulerActiveRunObservation{}}
+	}
+	authority, err := s.authority.AllWorkflowExecutionSnapshot()
+	if err != nil {
+		return workflowexecution.SchedulerActiveRunSnapshot{ActiveRuns: []workflowexecution.SchedulerActiveRunObservation{}}
+	}
+	activeRuns := make([]workflowexecution.SchedulerActiveRunObservation, 0, len(authority.Executions))
+	for _, observed := range authority.Executions {
+		ref := observed.Execution.Ref
+		activeRuns = append(activeRuns, workflowexecution.SchedulerActiveRunObservation{
+			RunID:       ref.RunID,
+			TaskID:      ref.TaskID,
+			PlacementID: "test-placement",
+			NodeID:      "test-node",
+			Generation:  ref.Generation,
+			Phase:       workflowexecution.SchedulerActiveRunPhaseRunning,
+		})
+	}
+	return workflowexecution.SchedulerActiveRunSnapshot{
+		Revision:   workflowexecution.SchedulerActiveRunRevision(authority.ExecutionMapRevision),
+		ActiveRuns: activeRuns,
+	}
+}
+
+func newWorkflowViewTestStatusSnapshots(t testing.TB, metadataStore *metadata.Store, authority *sessionruntime.Authority) *TaskStatusSnapshotCoordinator {
+	t.Helper()
+	coordinator, err := newTaskStatusSnapshotCoordinator(
+		metadataStore.DB(),
+		metadataStore.Queries(),
+		workflowexecution.NewMutationPermit(),
+		authority,
+		workflowViewSchedulerObservationSource{authority: authority},
+	)
+	if err != nil {
+		t.Fatalf("newTaskStatusSnapshotCoordinator: %v", err)
+	}
+	return coordinator
 }
 
 func runWorkflowViewGit(t *testing.T, dir string, args ...string) string {

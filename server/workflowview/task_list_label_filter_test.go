@@ -506,10 +506,7 @@ func TestTaskListLabelFilterComposesWithScopeStatusAttentionColumnAndSort(t *tes
 		ProjectID:   &fixture.projectID,
 		WorkflowID:  &workflowID,
 		ColumnKeys:  []string{"agent"},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
-		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{
-			serverapi.WorkflowTaskAttentionKindQuestion,
-		},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
 		Sort: []serverapi.WorkflowTaskListSort{{
 			Field:     serverapi.WorkflowTaskListSortFieldTitle,
 			Direction: serverapi.WorkflowTaskListSortDirectionAsc,

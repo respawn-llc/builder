@@ -1389,6 +1389,284 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: GetCanonicalWorkflowTaskStatusRecord :one
+WITH
+live_authority_observations AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each(sqlc.arg(authority_observations_json))
+),
+anchored_current_run_facts AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each(sqlc.arg(current_run_facts_json))
+),
+exact_live_runs AS (
+    SELECT
+        authority.task_id,
+        authority.run_id,
+        authority.run_generation,
+        CAST(
+            authority.waiting_question != 0
+            AND durable.waiting_question != 0
+            AS INTEGER
+        ) AS waiting_question
+    FROM live_authority_observations authority
+    JOIN anchored_current_run_facts durable
+      ON durable.task_id = authority.task_id
+     AND durable.run_id = authority.run_id
+     AND durable.run_generation = authority.run_generation
+),
+exact_live_task_facts AS (
+    SELECT
+        live.task_id,
+        CAST(MAX(live.waiting_question) AS INTEGER) AS has_waiting_question,
+        COALESCE((
+            SELECT json_group_array(ordered.run_id)
+            FROM (
+                SELECT candidate.run_id
+                FROM exact_live_runs candidate
+                WHERE candidate.task_id = live.task_id
+                ORDER BY candidate.run_id ASC
+            ) ordered
+        ), '[]') AS live_run_ids_json
+    FROM exact_live_runs live
+    GROUP BY live.task_id
+),
+canonical_task_status_decisions AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        durable.kind AS durable_kind,
+        durable.node_ids_json,
+        durable.run_ids_json,
+        durable.attention_types_json,
+        live.has_waiting_question,
+        live.live_run_ids_json,
+        CASE
+            WHEN durable.is_done != 0 OR durable.kind = 'canceled' THEN durable.kind
+            WHEN COALESCE(live.has_waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN live.task_id IS NOT NULL THEN 'running'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind
+    FROM workflow_task_status_records durable
+    LEFT JOIN exact_live_task_facts live ON live.task_id = durable.task_id
+),
+canonical_task_status AS (
+    SELECT
+        decisions.task_id,
+        decisions.is_done,
+        decisions.kind,
+        CASE decisions.kind
+            WHEN 'canceled' THEN 0
+            WHEN 'done' THEN 1
+            WHEN 'waiting_question' THEN 2
+            WHEN 'waiting_approval' THEN 3
+            WHEN 'interrupted' THEN 4
+            WHEN 'running' THEN 5
+            WHEN 'queued' THEN 6
+            WHEN 'backlog' THEN 7
+            WHEN 'active' THEN 8
+            ELSE NULL
+        END AS primary_status_rank,
+        decisions.node_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.run_ids_json
+            WHEN decisions.kind = 'waiting_approval' THEN COALESCE((
+                SELECT json_group_array(ordered.run_id)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(decisions.run_ids_json)
+                    UNION
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(COALESCE(decisions.live_run_ids_json, '[]'))
+                    ORDER BY run_id ASC
+                ) ordered
+            ), '[]')
+            WHEN decisions.kind IN ('waiting_question', 'running') THEN COALESCE(decisions.live_run_ids_json, '[]')
+            WHEN decisions.durable_kind IN ('running', 'queued', 'waiting_question') THEN '[]'
+            ELSE decisions.run_ids_json
+        END AS run_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.attention_types_json
+            WHEN decisions.kind = 'waiting_approval' THEN decisions.attention_types_json
+            ELSE COALESCE((
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS attention_type
+                    FROM json_each(decisions.attention_types_json)
+                    WHERE value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE decisions.kind = 'waiting_question'
+                    ORDER BY attention_type ASC
+                )
+            ), '[]')
+        END AS attention_types_json
+    FROM canonical_task_status_decisions decisions
+)
+
+SELECT
+    task_id,
+    is_done,
+    CAST(kind AS TEXT) AS kind,
+    CAST(primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(run_ids_json AS TEXT) AS run_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
+FROM canonical_task_status
+WHERE task_id = sqlc.arg(task_id)
+LIMIT 1;
+
+-- name: ListCanonicalWorkflowTaskStatusRecordsByTasks :many
+WITH
+requested_task_ids AS (
+    SELECT CAST(value AS TEXT) AS task_id
+    FROM json_each(sqlc.arg(task_ids_json))
+),
+live_authority_observations AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each(sqlc.arg(authority_observations_json))
+),
+anchored_current_run_facts AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each(sqlc.arg(current_run_facts_json))
+),
+exact_live_runs AS (
+    SELECT
+        authority.task_id,
+        authority.run_id,
+        authority.run_generation,
+        CAST(
+            authority.waiting_question != 0
+            AND durable.waiting_question != 0
+            AS INTEGER
+        ) AS waiting_question
+    FROM live_authority_observations authority
+    JOIN anchored_current_run_facts durable
+      ON durable.task_id = authority.task_id
+     AND durable.run_id = authority.run_id
+     AND durable.run_generation = authority.run_generation
+),
+exact_live_task_facts AS (
+    SELECT
+        live.task_id,
+        CAST(MAX(live.waiting_question) AS INTEGER) AS has_waiting_question,
+        COALESCE((
+            SELECT json_group_array(ordered.run_id)
+            FROM (
+                SELECT candidate.run_id
+                FROM exact_live_runs candidate
+                WHERE candidate.task_id = live.task_id
+                ORDER BY candidate.run_id ASC
+            ) ordered
+        ), '[]') AS live_run_ids_json
+    FROM exact_live_runs live
+    GROUP BY live.task_id
+),
+canonical_task_status_decisions AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        durable.kind AS durable_kind,
+        durable.node_ids_json,
+        durable.run_ids_json,
+        durable.attention_types_json,
+        live.has_waiting_question,
+        live.live_run_ids_json,
+        CASE
+            WHEN durable.is_done != 0 OR durable.kind = 'canceled' THEN durable.kind
+            WHEN COALESCE(live.has_waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN live.task_id IS NOT NULL THEN 'running'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind
+    FROM workflow_task_status_records durable
+    LEFT JOIN exact_live_task_facts live ON live.task_id = durable.task_id
+),
+canonical_task_status AS (
+    SELECT
+        decisions.task_id,
+        decisions.is_done,
+        decisions.kind,
+        CASE decisions.kind
+            WHEN 'canceled' THEN 0
+            WHEN 'done' THEN 1
+            WHEN 'waiting_question' THEN 2
+            WHEN 'waiting_approval' THEN 3
+            WHEN 'interrupted' THEN 4
+            WHEN 'running' THEN 5
+            WHEN 'queued' THEN 6
+            WHEN 'backlog' THEN 7
+            WHEN 'active' THEN 8
+            ELSE NULL
+        END AS primary_status_rank,
+        decisions.node_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.run_ids_json
+            WHEN decisions.kind = 'waiting_approval' THEN COALESCE((
+                SELECT json_group_array(ordered.run_id)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(decisions.run_ids_json)
+                    UNION
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(COALESCE(decisions.live_run_ids_json, '[]'))
+                    ORDER BY run_id ASC
+                ) ordered
+            ), '[]')
+            WHEN decisions.kind IN ('waiting_question', 'running') THEN COALESCE(decisions.live_run_ids_json, '[]')
+            WHEN decisions.durable_kind IN ('running', 'queued', 'waiting_question') THEN '[]'
+            ELSE decisions.run_ids_json
+        END AS run_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.attention_types_json
+            WHEN decisions.kind = 'waiting_approval' THEN decisions.attention_types_json
+            ELSE COALESCE((
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS attention_type
+                    FROM json_each(decisions.attention_types_json)
+                    WHERE value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE decisions.kind = 'waiting_question'
+                    ORDER BY attention_type ASC
+                )
+            ), '[]')
+        END AS attention_types_json
+    FROM canonical_task_status_decisions decisions
+)
+
+SELECT
+    status.task_id,
+    status.is_done,
+    CAST(status.kind AS TEXT) AS kind,
+    CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(status.node_ids_json AS TEXT) AS node_ids_json,
+    CAST(status.run_ids_json AS TEXT) AS run_ids_json,
+    CAST(status.attention_types_json AS TEXT) AS attention_types_json
+FROM canonical_task_status status
+JOIN requested_task_ids requested ON requested.task_id = status.task_id
+ORDER BY status.task_id ASC;
+
 -- name: ListWorkflowTaskCurrentRunFacts :many
 SELECT
     r.id,
@@ -1719,6 +1997,8 @@ args AS (
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
         CAST(sqlc.arg(status_filter_set) AS INTEGER) AS status_filter_set,
         CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
+        CAST(sqlc.arg(authority_observations_json) AS TEXT) AS authority_observations_json,
+        CAST(sqlc.arg(current_run_facts_json) AS TEXT) AS current_run_facts_json,
         CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
         CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
@@ -1745,6 +2025,129 @@ args AS (
         CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
+live_authority_observations AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each((SELECT authority_observations_json FROM args))
+),
+anchored_current_run_facts AS (
+    SELECT DISTINCT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
+        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM json_each((SELECT current_run_facts_json FROM args))
+),
+exact_live_runs AS (
+    SELECT
+        authority.task_id,
+        authority.run_id,
+        authority.run_generation,
+        CAST(
+            authority.waiting_question != 0
+            AND durable.waiting_question != 0
+            AS INTEGER
+        ) AS waiting_question
+    FROM live_authority_observations authority
+    JOIN anchored_current_run_facts durable
+      ON durable.task_id = authority.task_id
+     AND durable.run_id = authority.run_id
+     AND durable.run_generation = authority.run_generation
+),
+exact_live_task_facts AS (
+    SELECT
+        live.task_id,
+        CAST(MAX(live.waiting_question) AS INTEGER) AS has_waiting_question,
+        COALESCE((
+            SELECT json_group_array(ordered.run_id)
+            FROM (
+                SELECT candidate.run_id
+                FROM exact_live_runs candidate
+                WHERE candidate.task_id = live.task_id
+                ORDER BY candidate.run_id ASC
+            ) ordered
+        ), '[]') AS live_run_ids_json
+    FROM exact_live_runs live
+    GROUP BY live.task_id
+),
+canonical_task_status_decisions AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        durable.kind AS durable_kind,
+        durable.node_ids_json,
+        durable.run_ids_json,
+        durable.attention_types_json,
+        live.has_waiting_question,
+        live.live_run_ids_json,
+        CASE
+            WHEN durable.is_done != 0 OR durable.kind = 'canceled' THEN durable.kind
+            WHEN COALESCE(live.has_waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN live.task_id IS NOT NULL THEN 'running'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind
+    FROM workflow_task_status_records durable
+    LEFT JOIN exact_live_task_facts live ON live.task_id = durable.task_id
+),
+canonical_task_status AS (
+    SELECT
+        decisions.task_id,
+        decisions.is_done,
+        decisions.kind,
+        CASE decisions.kind
+            WHEN 'canceled' THEN 0
+            WHEN 'done' THEN 1
+            WHEN 'waiting_question' THEN 2
+            WHEN 'waiting_approval' THEN 3
+            WHEN 'interrupted' THEN 4
+            WHEN 'running' THEN 5
+            WHEN 'queued' THEN 6
+            WHEN 'backlog' THEN 7
+            WHEN 'active' THEN 8
+            ELSE NULL
+        END AS primary_status_rank,
+        decisions.node_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.run_ids_json
+            WHEN decisions.kind = 'waiting_approval' THEN COALESCE((
+                SELECT json_group_array(ordered.run_id)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(decisions.run_ids_json)
+                    UNION
+                    SELECT CAST(value AS TEXT) AS run_id
+                    FROM json_each(COALESCE(decisions.live_run_ids_json, '[]'))
+                    ORDER BY run_id ASC
+                ) ordered
+            ), '[]')
+            WHEN decisions.kind IN ('waiting_question', 'running') THEN COALESCE(decisions.live_run_ids_json, '[]')
+            WHEN decisions.durable_kind IN ('running', 'queued', 'waiting_question') THEN '[]'
+            ELSE decisions.run_ids_json
+        END AS run_ids_json,
+        CASE
+            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.attention_types_json
+            WHEN decisions.kind = 'waiting_approval' THEN decisions.attention_types_json
+            ELSE COALESCE((
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(value AS TEXT) AS attention_type
+                    FROM json_each(decisions.attention_types_json)
+                    WHERE value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE decisions.kind = 'waiting_question'
+                    ORDER BY attention_type ASC
+                )
+            ), '[]')
+        END AS attention_types_json
+    FROM canonical_task_status_decisions decisions
+),
+
 visible_columns AS (
     SELECT
         CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
@@ -1915,7 +2318,7 @@ selected_rows AS (
     CROSS JOIN project_workflow_links pwl
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
     JOIN workflows w ON w.id = pwl.workflow_id
-    JOIN workflow_task_status_records status ON status.task_id = t.id
+    JOIN canonical_task_status status ON status.task_id = t.id
     LEFT JOIN column_facts
         ON args.workflow_id IS NOT NULL
        AND column_facts.task_id = t.id
@@ -2088,11 +2491,11 @@ SELECT
     rows.metadata_json,
     rows.column_rank,
     rows.column_keys_json,
-    rows.kind,
-    rows.primary_status_rank,
-    rows.node_ids_json,
-    rows.run_ids_json,
-    rows.attention_types_json,
+    CAST(rows.kind AS TEXT) AS kind,
+    CAST(rows.primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(rows.node_ids_json AS TEXT) AS node_ids_json,
+    CAST(rows.run_ids_json AS TEXT) AS run_ids_json,
+    CAST(rows.attention_types_json AS TEXT) AS attention_types_json,
     rows.run_count,
     rows.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count

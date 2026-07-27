@@ -8,22 +8,24 @@ import (
 	"core/server/metadata"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 )
 
 type workflowViewTestFixture struct {
-	metadata     *metadata.Store
-	definitions  *DefinitionProjection
-	projector    *TaskProjector
-	roleResolver workflow.RoleResolver
-	transcripts  SessionActiveTranscriptProvider
-	prompts      PendingPromptSource
-	authority    *sessionruntime.Authority
-	boardModule  *Board
-	taskList     *TaskList
-	taskDetail   *TaskDetail
-	activity     *Activity
-	attention    *Attention
+	metadata        *metadata.Store
+	definitions     *DefinitionProjection
+	projector       *TaskProjector
+	roleResolver    workflow.RoleResolver
+	transcripts     SessionActiveTranscriptProvider
+	prompts         PendingPromptSource
+	authority       *sessionruntime.Authority
+	statusSnapshots *TaskStatusSnapshotCoordinator
+	boardModule     *Board
+	taskList        *TaskList
+	taskDetail      *TaskDetail
+	activity        *Activity
+	attention       *Attention
 }
 
 func newWorkflowViewTestFixture(metadataStore *metadata.Store, workflowStore *workflowstore.Store, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*workflowViewTestFixture, error) {
@@ -38,14 +40,26 @@ func newWorkflowViewTestFixture(metadataStore *metadata.Store, workflowStore *wo
 	if err != nil {
 		return nil, err
 	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	statusSnapshots, err := newTaskStatusSnapshotCoordinator(
+		metadataStore.DB(),
+		metadataStore.Queries(),
+		workflowexecution.NewMutationPermit(),
+		authority,
+		workflowViewSchedulerObservationSource{authority: authority},
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &workflowViewTestFixture{
-		metadata:     metadataStore,
-		definitions:  definitions,
-		projector:    NewTaskProjector(),
-		roleResolver: roleResolver,
-		transcripts:  transcripts,
-		prompts:      prompts,
-		authority:    sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		metadata:        metadataStore,
+		definitions:     definitions,
+		projector:       NewTaskProjector(),
+		roleResolver:    roleResolver,
+		transcripts:     transcripts,
+		prompts:         prompts,
+		authority:       authority,
+		statusSnapshots: statusSnapshots,
 	}, nil
 }
 
@@ -53,7 +67,7 @@ func (f *workflowViewTestFixture) board(t *testing.T) *Board {
 	t.Helper()
 	if f.boardModule == nil {
 		var err error
-		f.boardModule, err = NewBoard(f.metadata, f.definitions, f.roleResolver, f.projector, f.authority)
+		f.boardModule, err = NewBoard(f.metadata, f.definitions, f.roleResolver, f.projector, f.statusSnapshots)
 		if err != nil {
 			t.Fatalf("NewBoard: %v", err)
 		}
@@ -65,7 +79,7 @@ func (f *workflowViewTestFixture) tasks(t *testing.T) *TaskList {
 	t.Helper()
 	if f.taskList == nil {
 		var err error
-		f.taskList, err = NewTaskList(f.metadata, f.definitions, f.projector)
+		f.taskList, err = NewTaskList(f.metadata, f.definitions, f.projector, f.statusSnapshots)
 		if err != nil {
 			t.Fatalf("NewTaskList: %v", err)
 		}
@@ -77,7 +91,7 @@ func (f *workflowViewTestFixture) detail(t *testing.T) *TaskDetail {
 	t.Helper()
 	if f.taskDetail == nil {
 		var err error
-		f.taskDetail, err = NewTaskDetail(f.metadata, f.projector, f.authority)
+		f.taskDetail, err = NewTaskDetail(f.metadata, f.projector, f.statusSnapshots)
 		if err != nil {
 			t.Fatalf("NewTaskDetail: %v", err)
 		}

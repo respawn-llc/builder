@@ -140,6 +140,44 @@ func TestWorkflowTaskListPageTokenRejectsMalformedModeAndCardinality(t *testing.
 	}
 }
 
+func TestWorkflowTaskListPageTokenRejectsPriorStatusModelVersion(t *testing.T) {
+	payload := workflowTaskListPageTokenPayload{
+		Version: workflowTaskListPageTokenVersion,
+		Scope: workflowTaskListPageTokenScope{
+			ProjectID:   "project-1",
+			ProjectWide: &workflowTaskListProjectWidePageTokenInvariants{},
+		},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		StatusModelVersion:          1,
+		Fingerprint:                 "fingerprint",
+		Cursor:                      workflowTaskListCursor{TaskID: "task-1"},
+	}
+	if _, _, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, payload)); !errors.Is(err, ErrInvalidPageToken) {
+		t.Fatalf("parse version-1 status token error = %v, want ErrInvalidPageToken", err)
+	}
+}
+
+func TestWorkflowTaskListPageTokenRoundTripsCurrentStatusModelVersion(t *testing.T) {
+	payload := workflowTaskListPageTokenPayload{
+		Version: workflowTaskListPageTokenVersion,
+		Scope: workflowTaskListPageTokenScope{
+			ProjectID:   "project-1",
+			ProjectWide: &workflowTaskListProjectWidePageTokenInvariants{},
+		},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		StatusModelVersion:          workflowTaskStatusModelVersion,
+		Fingerprint:                 "fingerprint",
+		Cursor:                      workflowTaskListCursor{TaskID: "task-1"},
+	}
+	parsed, present, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, payload))
+	if err != nil || !present {
+		t.Fatalf("parse current-version status token = %+v/%t/%v", parsed, present, err)
+	}
+	if parsed.StatusModelVersion != workflowTaskStatusModelVersion {
+		t.Fatalf("current-version status token = %d, want %d", parsed.StatusModelVersion, workflowTaskStatusModelVersion)
+	}
+}
+
 func workflowTaskListPageTokenForTest(t *testing.T, payload workflowTaskListPageTokenPayload) string {
 	t.Helper()
 	token, err := workflowTaskListPageToken(payload)

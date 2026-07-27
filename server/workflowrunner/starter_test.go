@@ -2353,6 +2353,17 @@ type starterFixture struct {
 	automaticStarts      *workflowexecution.AutomaticStartRegistration
 }
 
+type starterSchedulerObservationSource struct {
+	target **SchedulerService
+}
+
+func (s starterSchedulerObservationSource) ActiveRunSnapshot() workflowexecution.SchedulerActiveRunSnapshot {
+	if s.target == nil || *s.target == nil {
+		return workflowexecution.SchedulerActiveRunSnapshot{ActiveRuns: []workflowexecution.SchedulerActiveRunObservation{}}
+	}
+	return (*s.target).ActiveRunSnapshot()
+}
+
 type starterRuntimeRegistry interface {
 	WorkflowAttentionRegistry
 	sessionruntime.ExecutionPromptFeed
@@ -2408,11 +2419,16 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 		PromptFeed:        runtimes,
 		ResourceLifecycle: runtimes,
 	})
-	taskDetail, err := workflowview.NewTaskDetail(
+	statusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(
 		metadataStore,
-		workflowview.NewTaskProjector(),
+		mutationPermit,
 		runtimeAuthority,
+		starterSchedulerObservationSource{target: schedulerTarget},
 	)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskStatusSnapshotCoordinator: %v", err)
+	}
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowview.NewTaskProjector(), statusSnapshots)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}

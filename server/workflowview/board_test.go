@@ -1,50 +1,17 @@
 package workflowview
 
 import (
-	"context"
-	"database/sql"
 	"reflect"
 	"slices"
 	"sort"
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
-
-func TestBoardBatchesCurrentRunFactLoadingForMultipleTasks(t *testing.T) {
-	ctx, metadataStore, _, _ := newWorkflowViewTestContextStore(t)
-	db := &workflowViewQueryCountingDB{DBTX: metadataStore.DB()}
-	board := &Board{
-		queries:   sqlitegen.New(db),
-		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-	}
-
-	current, err := board.liveExecutionsByTask(ctx, []string{"task-1", "task-2", "task-3"})
-	if err != nil {
-		t.Fatalf("liveExecutionsByTask: %v", err)
-	}
-	if len(current) != 3 {
-		t.Fatalf("current executions = %+v, want one entry per task", current)
-	}
-	if db.queryCount != 1 {
-		t.Fatalf("current run fact queries = %d, want one batched query", db.queryCount)
-	}
-}
-
-type workflowViewQueryCountingDB struct {
-	sqlitegen.DBTX
-	queryCount int
-}
-
-func (db *workflowViewQueryCountingDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	db.queryCount++
-	return db.DBTX.QueryContext(ctx, query, args...)
-}
 
 func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocusedInterface(t *testing.T) {
 	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
@@ -53,7 +20,8 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	projector := NewTaskProjector()
-	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
@@ -194,11 +162,13 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	projector := NewTaskProjector()
-	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	statusSnapshots := newWorkflowViewTestStatusSnapshots(t, metadataStore, authority)
+	boardView, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detailView, err := NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	detailView, err := NewTaskDetail(metadataStore, projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}

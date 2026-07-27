@@ -101,7 +101,7 @@ func newSQLitePoolBenchmarkFixture(b *testing.B) sqlitePoolBenchmarkFixture {
 			b.Errorf("close session authority: %v", err)
 		}
 	})
-	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), authority)
+	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), newWorkflowViewTestStatusSnapshots(b, metadataStore, authority))
 	if err != nil {
 		b.Fatalf("NewTaskDetail: %v", err)
 	}

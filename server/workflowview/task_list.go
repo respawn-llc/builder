@@ -13,13 +13,14 @@ import (
 )
 
 type TaskList struct {
-	metadata    *metadata.Store
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	projector   *TaskProjector
+	metadata        *metadata.Store
+	queries         *sqlitegen.Queries
+	definitions     *DefinitionProjection
+	projector       *TaskProjector
+	statusSnapshots *TaskStatusSnapshotCoordinator
 }
 
-func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector) (*TaskList, error) {
+func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, statusSnapshots *TaskStatusSnapshotCoordinator) (*TaskList, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -29,15 +30,19 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
+	if statusSnapshots == nil {
+		return nil, errors.New("task status snapshot coordinator is required")
+	}
 	return &TaskList{
-		metadata:    metadataStore,
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		projector:   projector,
+		metadata:        metadataStore,
+		queries:         metadataStore.Queries(),
+		definitions:     definitions,
+		projector:       projector,
+		statusSnapshots: statusSnapshots,
 	}, nil
 }
 
-func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
+func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (response serverapi.WorkflowTaskListResponse, err error) {
 	if l == nil {
 		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
@@ -141,7 +146,14 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			columnKeys:             req.ColumnKeys,
 		}
 	}
-	rows, err := l.queryRows(ctx, workflowTaskListQueryRequest{
+	statusSnapshot, err := l.statusSnapshots.Capture(ctx)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	defer func() {
+		err = errors.Join(err, statusSnapshot.Close())
+	}()
+	rows, err := l.queryRows(ctx, statusSnapshot, workflowTaskListQueryRequest{
 		projectID:      projectID,
 		narrowed:       narrowedQuery,
 		statusKinds:    req.StatusKinds,
@@ -170,7 +182,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	for _, row := range pageItems {
 		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
 	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, statusSnapshot.queries, pageTaskIDs)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}

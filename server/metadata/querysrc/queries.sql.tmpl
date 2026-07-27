@@ -1389,6 +1389,40 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: GetCanonicalWorkflowTaskStatusRecord :one
+WITH
+{{taskStatusProjection "" "sqlc.arg(authority_observations_json)" "sqlc.arg(current_run_facts_json)" ""}}
+SELECT
+    task_id,
+    is_done,
+    CAST(kind AS TEXT) AS kind,
+    CAST(primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(run_ids_json AS TEXT) AS run_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
+FROM canonical_task_status
+WHERE task_id = sqlc.arg(task_id)
+LIMIT 1;
+
+-- name: ListCanonicalWorkflowTaskStatusRecordsByTasks :many
+WITH
+requested_task_ids AS (
+    SELECT CAST(value AS TEXT) AS task_id
+    FROM json_each(sqlc.arg(task_ids_json))
+),
+{{taskStatusProjection "" "sqlc.arg(authority_observations_json)" "sqlc.arg(current_run_facts_json)" ""}}
+SELECT
+    status.task_id,
+    status.is_done,
+    CAST(status.kind AS TEXT) AS kind,
+    CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(status.node_ids_json AS TEXT) AS node_ids_json,
+    CAST(status.run_ids_json AS TEXT) AS run_ids_json,
+    CAST(status.attention_types_json AS TEXT) AS attention_types_json
+FROM canonical_task_status status
+JOIN requested_task_ids requested ON requested.task_id = status.task_id
+ORDER BY status.task_id ASC;
+
 -- name: ListWorkflowTaskCurrentRunFacts :many
 SELECT
     r.id,
@@ -1667,6 +1701,8 @@ args AS (
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
         CAST(sqlc.arg(status_filter_set) AS INTEGER) AS status_filter_set,
         CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
+        CAST(sqlc.arg(authority_observations_json) AS TEXT) AS authority_observations_json,
+        CAST(sqlc.arg(current_run_facts_json) AS TEXT) AS current_run_facts_json,
         CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
         CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
@@ -1693,6 +1729,7 @@ args AS (
         CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
+{{taskStatusProjection "" "(SELECT authority_observations_json FROM args)" "(SELECT current_run_facts_json FROM args)" ","}}
 visible_columns AS (
     SELECT
         CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
@@ -1863,7 +1900,7 @@ selected_rows AS (
     CROSS JOIN project_workflow_links pwl
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
     JOIN workflows w ON w.id = pwl.workflow_id
-    JOIN workflow_task_status_records status ON status.task_id = t.id
+    JOIN canonical_task_status status ON status.task_id = t.id
     LEFT JOIN column_facts
         ON args.workflow_id IS NOT NULL
        AND column_facts.task_id = t.id
@@ -1984,11 +2021,11 @@ SELECT
     rows.metadata_json,
     rows.column_rank,
     rows.column_keys_json,
-    rows.kind,
-    rows.primary_status_rank,
-    rows.node_ids_json,
-    rows.run_ids_json,
-    rows.attention_types_json,
+    CAST(rows.kind AS TEXT) AS kind,
+    CAST(rows.primary_status_rank AS INTEGER) AS primary_status_rank,
+    CAST(rows.node_ids_json AS TEXT) AS node_ids_json,
+    CAST(rows.run_ids_json AS TEXT) AS run_ids_json,
+    CAST(rows.attention_types_json AS TEXT) AS attention_types_json,
     rows.run_count,
     rows.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count

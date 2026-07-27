@@ -6,56 +6,59 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 type TaskDetail struct {
-	queries   *sqlitegen.Queries
-	projector *TaskProjector
-	authority *sessionruntime.Authority
+	projector       *TaskProjector
+	statusSnapshots *TaskStatusSnapshotCoordinator
 }
 
-func NewTaskDetail(metadataStore *metadata.Store, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskDetail, error) {
+func NewTaskDetail(metadataStore *metadata.Store, projector *TaskProjector, statusSnapshots *TaskStatusSnapshotCoordinator) (*TaskDetail, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
-	if authority == nil {
-		return nil, errors.New("session runtime authority is required")
+	if statusSnapshots == nil {
+		return nil, errors.New("task status snapshot coordinator is required")
 	}
 	return &TaskDetail{
-		queries:   metadataStore.Queries(),
-		projector: projector,
-		authority: authority,
+		projector:       projector,
+		statusSnapshots: statusSnapshots,
 	}, nil
 }
 
-func (d *TaskDetail) GetTask(ctx context.Context, taskID string) (serverapi.WorkflowTaskDetail, error) {
+func (d *TaskDetail) GetTask(ctx context.Context, taskID string) (detail serverapi.WorkflowTaskDetail, err error) {
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, ErrTaskIDRequired
 	}
-	task, err := d.queries.GetTask(ctx, taskID)
+	statusSnapshot, err := d.statusSnapshots.Capture(ctx)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	return d.task(ctx, task)
+	defer func() {
+		err = errors.Join(err, statusSnapshot.Close())
+	}()
+	task, err := statusSnapshot.queries.GetTask(ctx, taskID)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	return d.task(ctx, statusSnapshot, task)
 }
 
-func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
+func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (detail serverapi.WorkflowTaskDetail, err error) {
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
@@ -67,14 +70,21 @@ func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID stri
 	if trimmedShortID == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
 	}
-	task, err := d.queries.GetTaskByProjectShortID(ctx, sqlitegen.GetTaskByProjectShortIDParams{ProjectID: trimmedProjectID, ShortID: trimmedShortID})
+	statusSnapshot, err := d.statusSnapshots.Capture(ctx)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	return d.task(ctx, task)
+	defer func() {
+		err = errors.Join(err, statusSnapshot.Close())
+	}()
+	task, err := statusSnapshot.queries.GetTaskByProjectShortID(ctx, sqlitegen.GetTaskByProjectShortIDParams{ProjectID: trimmedProjectID, ShortID: trimmedShortID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	return d.task(ctx, statusSnapshot, task)
 }
 
-func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serverapi.WorkflowTaskDetail, error) {
+func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (detail serverapi.WorkflowTaskDetail, err error) {
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
@@ -82,7 +92,14 @@ func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serv
 	if trimmedShortID == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
 	}
-	tasks, err := d.queries.ListTasksByShortID(ctx, trimmedShortID)
+	statusSnapshot, err := d.statusSnapshots.Capture(ctx)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	defer func() {
+		err = errors.Join(err, statusSnapshot.Close())
+	}()
+	tasks, err := statusSnapshot.queries.ListTasksByShortID(ctx, trimmedShortID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
@@ -92,56 +109,56 @@ func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serv
 	if len(tasks) > 1 {
 		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task short_id %q is ambiguous; use task id", trimmedShortID)
 	}
-	return d.GetTask(ctx, tasks[0].ID)
+	task, err := statusSnapshot.queries.GetTask(ctx, tasks[0].ID)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	return d.task(ctx, statusSnapshot, task)
 }
 
-func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serverapi.WorkflowTaskDetail, error) {
-	workflowRecord, err := d.queries.GetWorkflow(ctx, task.WorkflowID)
+func (d *TaskDetail) task(ctx context.Context, statusSnapshot *TaskStatusSnapshot, task sqlitegen.TaskRecord) (serverapi.WorkflowTaskDetail, error) {
+	if statusSnapshot == nil || statusSnapshot.queries == nil {
+		return serverapi.WorkflowTaskDetail{}, errors.New("task status snapshot is required")
+	}
+	queries := statusSnapshot.queries
+	workflowRecord, err := queries.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	statusFact, err := loadWorkflowTaskStatusFact(ctx, d.queries, d.projector, task.ID)
+	statusFact, err := statusSnapshot.canonicalStatusFact(ctx, d.projector, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, d.queries, []string{task.ID})
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, queries, []string{task.ID})
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	currentRunFacts, err := d.queries.ListWorkflowTaskCurrentRunFacts(ctx, task.ID)
+	currentByTaskID, err := statusSnapshot.currentExecutionsByTask([]string{task.ID})
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	projectState, err := d.queries.GetProjectKeyState(ctx, task.ProjectID)
+	currentExecutions := currentByTaskID[task.ID]
+	projectState, err := queries.GetProjectKeyState(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	workspaceCount, err := d.queries.CountProjectWorkspaces(ctx, task.ProjectID)
+	workspaceCount, err := queries.CountProjectWorkspaces(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	primaryWorkspaceID, err := d.queries.GetProjectPrimaryWorkspaceID(ctx, task.ProjectID)
+	primaryWorkspaceID, err := queries.GetProjectPrimaryWorkspaceID(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	sourceWorkspace, err := d.sourceWorkspace(ctx, task, primaryWorkspaceID)
+	sourceWorkspace, err := d.sourceWorkspace(ctx, queries, task, primaryWorkspaceID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	executionTarget, worktreePath, err := d.executionTargetForTask(ctx, task, sourceWorkspace.WorkspaceID)
+	executionTarget, worktreePath, err := d.executionTargetForTask(ctx, queries, task, sourceWorkspace.WorkspaceID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	snapshot, err := d.authority.CurrentTaskExecutionSnapshot(workflow.TaskID(task.ID))
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	currentExecutions, err := currentTaskExecutions(task.ID, currentRunFacts, snapshot.Executions)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	statusFact = taskDetailStatusFact(statusFact, currentExecutions)
-	attentionCount, err := d.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
+	attentionCount, err := queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
@@ -188,112 +205,12 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	return detail, nil
 }
 
-func currentTaskExecutions(taskID string, rows []sqlitegen.ListWorkflowTaskCurrentRunFactsRow, executions []sessionruntime.TaskExecution) ([]sessionruntime.TaskExecution, error) {
-	type durableRunFact struct {
-		waitingQuestion bool
-	}
-	durable := make(map[sessionruntime.WorkflowExecutionRef]durableRunFact, len(rows))
-	for _, row := range rows {
-		ref := sessionruntime.WorkflowExecutionRef{
-			TaskID:     workflow.TaskID(taskID),
-			RunID:      workflow.RunID(row.ID),
-			Generation: row.RunGeneration,
-		}
-		if _, exists := durable[ref]; exists {
-			return nil, fmt.Errorf("task %q has duplicate current run %q generation %d", taskID, row.ID, row.RunGeneration)
-		}
-		durable[ref] = durableRunFact{waitingQuestion: row.WaitingAskID.Valid}
-	}
-	current := make([]sessionruntime.TaskExecution, 0, len(executions))
-	for _, execution := range executions {
-		fact, exists := durable[execution.Ref]
-		if !exists {
-			continue
-		}
-		execution.WaitingQuestion = execution.WaitingQuestion && fact.waitingQuestion
-		current = append(current, execution)
-	}
-	return current, nil
-}
-
-func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionruntime.TaskExecution) workflowTaskStatusFact {
-	if durable.Done || durable.Status.Kind == serverapi.WorkflowTaskStatusKindCanceled {
-		return durable
-	}
-	liveRunIDs := make([]string, 0, len(current))
-	hasWaitingQuestion := false
-	for _, execution := range current {
-		liveRunIDs = append(liveRunIDs, string(execution.Ref.RunID))
-		hasWaitingQuestion = hasWaitingQuestion || execution.WaitingQuestion
-	}
-	sort.Strings(liveRunIDs)
-	switch {
-	case hasWaitingQuestion:
-		return workflowTaskStatusFact{
-			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindWaitingQuestion, liveRunIDs, true),
-		}
-	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingApproval:
-		durable.Status.RunIDs = sortedUniqueStrings(durable.Status.RunIDs, liveRunIDs)
-		return durable
-	case len(current) != 0:
-		return workflowTaskStatusFact{
-			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindRunning, liveRunIDs, false),
-		}
-	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindRunning ||
-		durable.Status.Kind == serverapi.WorkflowTaskStatusKindQueued ||
-		durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion:
-		return workflowTaskStatusFact{
-			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindActive, nil, false),
-		}
-	default:
-		return durable
-	}
-}
-
-func sortedUniqueStrings(groups ...[]string) []string {
-	seen := make(map[string]struct{})
-	for _, group := range groups {
-		for _, value := range group {
-			seen[value] = struct{}{}
-		}
-	}
-	values := make([]string, 0, len(seen))
-	for value := range seen {
-		values = append(values, value)
-	}
-	sort.Strings(values)
-	return values
-}
-
-func taskDetailStatus(current serverapi.WorkflowTaskStatus, kind serverapi.WorkflowTaskStatusKind, runIDs []string, question bool) serverapi.WorkflowTaskStatus {
-	nativeState, ok := kind.NativeState()
-	if !ok {
-		panic(fmt.Sprintf("task detail status kind %q has no native state", kind))
-	}
-	current.Kind = kind
-	current.NativeState = nativeState
-	current.RunIDs = append([]string(nil), runIDs...)
-	current.AttentionTypes = slices.DeleteFunc(
-		append([]serverapi.WorkflowTaskAttentionKind(nil), current.AttentionTypes...),
-		func(value serverapi.WorkflowTaskAttentionKind) bool {
-			return value == serverapi.WorkflowTaskAttentionKindQuestion
-		},
-	)
-	if question {
-		current.AttentionTypes = append(current.AttentionTypes, serverapi.WorkflowTaskAttentionKindQuestion)
-		sort.Slice(current.AttentionTypes, func(i, j int) bool {
-			return current.AttentionTypes[i] < current.AttentionTypes[j]
-		})
-	}
-	return current
-}
-
-func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRecord, primaryWorkspaceID string) (serverapi.ProjectWorkspaceSummary, error) {
+func (d *TaskDetail) sourceWorkspace(ctx context.Context, queries *sqlitegen.Queries, task sqlitegen.TaskRecord, primaryWorkspaceID string) (serverapi.ProjectWorkspaceSummary, error) {
 	sourceWorkspaceID := primaryWorkspaceID
 	if task.SourceWorkspaceID.Valid {
 		sourceWorkspaceID = task.SourceWorkspaceID.String
 	}
-	row, err := d.queries.GetWorkspaceByID(ctx, sourceWorkspaceID)
+	row, err := queries.GetWorkspaceByID(ctx, sourceWorkspaceID)
 	if err == nil {
 		if row.ProjectID != task.ProjectID {
 			return serverapi.ProjectWorkspaceSummary{}, fmt.Errorf("task %q source workspace %q belongs to project %q", task.ID, row.ID, row.ProjectID)
@@ -327,7 +244,7 @@ func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRec
 	return snapshot, nil
 }
 
-func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.TaskRecord, sourceWorkspaceID string) (*serverapi.WorkflowExecutionTarget, *string, error) {
+func (d *TaskDetail) executionTargetForTask(ctx context.Context, queries *sqlitegen.Queries, task sqlitegen.TaskRecord, sourceWorkspaceID string) (*serverapi.WorkflowExecutionTarget, *string, error) {
 	if !task.ExecutionTargetMode.Valid {
 		if task.ExecutionTargetRequestedRef.Valid ||
 			task.ExecutionTargetResolvedRef.Valid ||
@@ -355,7 +272,7 @@ func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.
 	if worktreeID == "" {
 		return nil, nil, errors.New("task managed worktree id is blank")
 	}
-	row, err := d.queries.GetWorktreeByID(ctx, worktreeID)
+	row, err := queries.GetWorktreeByID(ctx, worktreeID)
 	if err != nil {
 		return nil, nil, err
 	}

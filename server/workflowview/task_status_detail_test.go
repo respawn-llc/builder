@@ -357,17 +357,17 @@ func TestDurableFanoutBoardUsesExactLiveStatusAndRetainsResume(t *testing.T) {
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ProjectID:   &binding.ProjectID,
 		WorkflowID:  &workflowIDString,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
 	})
 
 	if err != nil ||
 		len(tasks.Tasks) != 1 ||
 		tasks.Tasks[0].TaskID != string(fixture.task.ID) ||
-		tasks.Tasks[0].Status.Kind != fixture.status.Kind ||
-		tasks.Tasks[0].Status.NativeState != fixture.status.NativeState ||
-		!reflect.DeepEqual(tasks.Tasks[0].Status.RunIDs, fixture.status.RunIDs) ||
-		!reflect.DeepEqual(tasks.Tasks[0].Status.AttentionTypes, fixture.status.AttentionTypes) {
-		t.Fatalf("fanout list status = %+v/%v, want durable fanout status %+v", tasks.Tasks, err, fixture.status)
+		tasks.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		len(tasks.Tasks[0].Status.RunIDs) != 0 ||
+		len(tasks.Tasks[0].Status.AttentionTypes) != 1 ||
+		tasks.Tasks[0].Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindInterrupted {
+		t.Fatalf("fanout list status = %+v/%v, want durable-only active status", tasks.Tasks, err)
 	}
 	if tasks.Tasks[0].ColumnKeys == nil || !reflect.DeepEqual(*tasks.Tasks[0].ColumnKeys, []string{"impl_a", "impl_b", "impl_c"}) {
 		t.Fatalf("fanout list column order = %+v", tasks.Tasks[0].ColumnKeys)

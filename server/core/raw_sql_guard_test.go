@@ -108,6 +108,18 @@ func forward() {
 		}
 	})
 
+	t.Run("does not inspect repository code generators as production query paths", func(t *testing.T) {
+		repoRoot := findRepoRoot(t)
+		pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./shared/tasksearchtext/normalizationgen")
+		pkg := testharness.PackageByPath(t, pkgs, "core/shared/tasksearchtext/normalizationgen")
+		if !isRepositoryCodeGenerator(pkg) {
+			t.Fatalf("normalization generator was not classified as a repository code generator")
+		}
+		if violations := generatedQueryBoundaryViolations(pkg, repoRoot); len(violations) != 0 {
+			t.Fatalf("normalization generator query violations = %v, want none", violations)
+		}
+	})
+
 	violations := make([]string, 0)
 	repoRoot := findRepoRoot(t)
 	for _, platform := range []struct {
@@ -148,13 +160,20 @@ func generatedQueryGuardFixture(t *testing.T, source string) (*packages.Package,
 }
 
 func generatedQueryBoundaryViolations(pkg *packages.Package, repoRoot string) []string {
-	if generatedDatabaseQueryPackage[pkg.PkgPath] {
+	if generatedDatabaseQueryPackage[pkg.PkgPath] || isRepositoryCodeGenerator(pkg) {
 		return nil
 	}
 	violations := embeddedSQLViolations(pkg)
 	violations = append(violations, rawSQLConstantViolations(pkg, repoRoot)...)
 	violations = append(violations, databaseQueryFlowViolations(pkg, repoRoot)...)
 	return violations
+}
+
+func isRepositoryCodeGenerator(pkg *packages.Package) bool {
+	if pkg == nil {
+		return false
+	}
+	return pkg.PkgPath == "core/shared/tasksearchtext/normalizationgen"
 }
 
 func embeddedSQLViolations(pkg *packages.Package) []string {

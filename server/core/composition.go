@@ -227,25 +227,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, runtimeAuthority)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: board: %w", err)
-	}
-	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
-	}
 	workflowTaskSearch, err := workflowview.NewTaskSearch()
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
-	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowTaskProjector, runtimeAuthority)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
 	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowDefinitions, workflowTaskProjector)
 	if err != nil {
@@ -283,6 +268,26 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
+	}
+	workflowStatusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(metadataStore, workflowMutationPermit, runtimeAuthority, workflowScheduler)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task status snapshots: %w", err)
+	}
+	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, workflowStatusSnapshots)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: board: %w", err)
+	}
+	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector, workflowStatusSnapshots)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
+	}
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowTaskProjector, workflowStatusSnapshots)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions: workflowDefinitions,

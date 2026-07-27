@@ -87,8 +87,8 @@ func (e *TaskStatusSnapshotConsistencyError) Error() string {
 func NewTaskStatusSnapshotCoordinator(
 	metadataStore *metadata.Store,
 	permit *workflowexecution.MutationPermit,
-	authority *sessionruntime.Authority,
-	scheduler *workflowexecution.SchedulerService,
+	authority workflowExecutionObservationSource,
+	scheduler schedulerActiveRunObservationSource,
 ) (*TaskStatusSnapshotCoordinator, error) {
 	if metadataStore == nil {
 		return nil, errors.New("metadata store is required")

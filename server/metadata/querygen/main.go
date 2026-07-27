@@ -21,6 +21,13 @@ type taskLabelFilterTemplateData struct {
 	TaskID           string
 }
 
+type taskStatusProjectionTemplateData struct {
+	AuthorityObservationsJSON string
+	CurrentRunFactsJSON       string
+	Indent                    string
+	Suffix                    string
+}
+
 func main() {
 	if err := runCommand(os.Args[1:]); err != nil {
 		exitWithError(err)
@@ -46,6 +53,7 @@ func renderQueriesCommand(args []string) error {
 	fs.SetOutput(io.Discard)
 	input := fs.String("input", "", "metadata query template input file")
 	fragment := fs.String("fragment", "", "task label filter template fragment")
+	statusFragment := fs.String("status-fragment", "", "task status projection template fragment")
 	output := fs.String("output", "", "generated metadata query output file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -59,6 +67,9 @@ func renderQueriesCommand(args []string) error {
 	if strings.TrimSpace(*fragment) == "" {
 		return errors.New("fragment is required")
 	}
+	if strings.TrimSpace(*statusFragment) == "" {
+		return errors.New("status-fragment is required")
+	}
 	if strings.TrimSpace(*output) == "" {
 		return errors.New("output is required")
 	}
@@ -70,7 +81,11 @@ func renderQueriesCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("read fragment: %w", err)
 	}
-	generated, err := generateQueries(source, filterSource)
+	statusSource, err := os.ReadFile(*statusFragment)
+	if err != nil {
+		return fmt.Errorf("read status fragment: %w", err)
+	}
+	generated, err := generateQueries(source, filterSource, statusSource)
 	if err != nil {
 		return err
 	}
@@ -104,10 +119,14 @@ func exitWithError(err error) {
 	os.Exit(1)
 }
 
-func generateQueries(source []byte, filterSource []byte) ([]byte, error) {
+func generateQueries(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
 	filterTemplate, err := template.New("task_label_filter").Option("missingkey=error").Parse(string(filterSource))
 	if err != nil {
 		return nil, fmt.Errorf("parse task label filter template: %w", err)
+	}
+	statusTemplate, err := template.New("task_status_projection").Option("missingkey=error").Parse(string(statusSource))
+	if err != nil {
+		return nil, fmt.Errorf("parse task status projection template: %w", err)
 	}
 	renderTaskLabelFilter := func(
 		indent string,
@@ -134,9 +153,33 @@ func generateQueries(source []byte, filterSource []byte) ([]byte, error) {
 		}
 		return rendered.String(), nil
 	}
+	renderTaskStatusProjection := func(
+		indent string,
+		authorityObservationsJSON string,
+		currentRunFactsJSON string,
+		suffix string,
+	) (string, error) {
+		data := taskStatusProjectionTemplateData{
+			AuthorityObservationsJSON: authorityObservationsJSON,
+			CurrentRunFactsJSON:       currentRunFactsJSON,
+			Indent:                    indent,
+			Suffix:                    suffix,
+		}
+		if err := data.validate(); err != nil {
+			return "", err
+		}
+		var rendered bytes.Buffer
+		if err := statusTemplate.Execute(&rendered, data); err != nil {
+			return "", fmt.Errorf("render task status projection template: %w", err)
+		}
+		return rendered.String(), nil
+	}
 	queryTemplate, err := template.New("queries").
 		Option("missingkey=error").
-		Funcs(template.FuncMap{"taskLabelFilter": renderTaskLabelFilter}).
+		Funcs(template.FuncMap{
+			"taskLabelFilter":      renderTaskLabelFilter,
+			"taskStatusProjection": renderTaskStatusProjection,
+		}).
 		Parse(string(source))
 	if err != nil {
 		return nil, fmt.Errorf("parse metadata query template: %w", err)
@@ -160,6 +203,19 @@ func (d taskLabelFilterTemplateData) validate() error {
 		return errors.New("label IDs template expression is empty")
 	case strings.TrimSpace(d.ExcludedLabelIDs) == "":
 		return errors.New("excluded label IDs template expression is empty")
+	default:
+		return nil
+	}
+}
+
+func (d taskStatusProjectionTemplateData) validate() error {
+	switch {
+	case strings.TrimSpace(d.AuthorityObservationsJSON) == "":
+		return errors.New("authority observations JSON template expression is empty")
+	case strings.TrimSpace(d.CurrentRunFactsJSON) == "":
+		return errors.New("current run facts JSON template expression is empty")
+	case d.Suffix != "" && d.Suffix != ",":
+		return fmt.Errorf("task status projection suffix %q is invalid", d.Suffix)
 	default:
 		return nil
 	}

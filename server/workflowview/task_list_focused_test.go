@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
@@ -26,7 +27,8 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	taskList, err := NewTaskList(metadataStore, definitions, projector)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	taskList, err := NewTaskList(metadataStore, definitions, projector, newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
 	}
@@ -85,7 +87,16 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 	}
 	query := func(narrowedFacts *workflowTaskListNarrowedQueryFacts, statusKinds []serverapi.WorkflowTaskStatusKind, attentionKinds []serverapi.WorkflowTaskAttentionKind, sortSelectors ...serverapi.WorkflowTaskListSort) []workflowTaskListRow {
 		t.Helper()
-		rows, err := taskList.queryRows(ctx, workflowTaskListQueryRequest{
+		statusSnapshot, err := taskList.statusSnapshots.Capture(ctx)
+		if err != nil {
+			t.Fatalf("Capture task status snapshot: %v", err)
+		}
+		defer func() {
+			if closeErr := statusSnapshot.Close(); closeErr != nil {
+				t.Errorf("close task status snapshot: %v", closeErr)
+			}
+		}()
+		rows, err := taskList.queryRows(ctx, statusSnapshot, workflowTaskListQueryRequest{
 			projectID:      binding.ProjectID,
 			narrowed:       narrowedFacts,
 			statusKinds:    statusKinds,
@@ -152,7 +163,7 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 		t.Fatalf("run_count order = %v, want backlog then title-ordered one-run tasks", got)
 	}
 	assertOrder(serverapi.WorkflowTaskListSortFieldTitle, running.ID, done.ID, backlog.ID)
-	assertOrder(serverapi.WorkflowTaskListSortFieldStatus, done.ID, running.ID, backlog.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldStatus, done.ID, backlog.ID, running.ID)
 	assertOrder(serverapi.WorkflowTaskListSortFieldColumn, backlog.ID, running.ID, done.ID)
 
 	projectWideRows := query(nil, nil, nil, serverapi.WorkflowTaskListSort{
@@ -203,7 +214,8 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	taskList, err := NewTaskList(metadataStore, definitions, NewTaskProjector())
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	taskList, err := NewTaskList(metadataStore, definitions, NewTaskProjector(), newWorkflowViewTestStatusSnapshots(t, metadataStore, authority))
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
 	}

@@ -3492,11 +3492,20 @@ func newWorkflowServiceReadModels(
 	}
 	projector := workflowview.NewTaskProjector()
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority)
+	statusPermit := workflowexecution.NewMutationPermit()
+	scheduler, err := workflowexecution.NewSchedulerService(store, nil, statusPermit, workflowexecution.SchedulerConfig{})
+	if err != nil {
+		t.Fatalf("workflowexecution.NewSchedulerService: %v", err)
+	}
+	statusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(metadataStore, statusPermit, authority, scheduler)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskStatusSnapshotCoordinator: %v", err)
+	}
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
-	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector)
+	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
@@ -3504,7 +3513,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, authority)
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, statusSnapshots)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
