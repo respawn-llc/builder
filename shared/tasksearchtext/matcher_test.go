@@ -101,6 +101,12 @@ func TestLiteralMatcherRejectsCombiningOnlyInsensitiveQueryAndPreservesShortened
 	}
 }
 
+func TestNormalizedLiteralRuneCountUsesPinnedNormalization(t *testing.T) {
+	if got := NormalizedLiteralRuneCount("e\u0301"); got != 1 {
+		t.Fatalf("normalized literal rune count = %d, want 1", got)
+	}
+}
+
 func TestLiteralMatcherCaseSensitiveUsesExactOriginalCodePoints(t *testing.T) {
 	matcher, err := NewLiteralMatcher("café", LiteralCaseSensitive)
 	if err != nil {
