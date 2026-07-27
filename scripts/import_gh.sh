@@ -32,41 +32,40 @@ require_command() {
 	fi
 }
 
-load_project_label_catalog() {
-	"$kent_bin" task label list --project . --json >"$label_catalog_file"
-	if ! jq -e '.catalog.labels | type == "array"' "$label_catalog_file" >/dev/null; then
-		fail "Kent returned an invalid Project label catalog."
-	fi
-}
-
 ensure_project_label() {
 	local requested_name="$1"
-	local existing_name
-	existing_name="$(
-		jq -r --arg name "$requested_name" '
-			(
-				first(.catalog.labels[] | select(.name == $name) | .name)
-				//
-				first(
-					.catalog.labels[]
-					| select((.name | ascii_downcase) == ($name | ascii_downcase))
-					| .name
-				)
-			) // empty
-		' "$label_catalog_file"
-	)"
-	if [ -n "$existing_name" ]; then
-		printf '%s\n' "$existing_name"
+	local lookup_json existing_id
+	lookup_json="$("$kent_bin" task label list --project . --name "$requested_name" --json)"
+	if ! jq -e '
+		.catalog.labels
+		| type == "array"
+			and length <= 1
+			and all(
+				.[];
+				type == "object"
+					and (.id | type == "string")
+					and (.id | length > 0)
+					and (.name | type == "string")
+					and (.name | length > 0)
+			)
+	' <<<"$lookup_json" >/dev/null; then
+		fail "Kent returned an invalid Project label lookup response."
+	fi
+	existing_id="$(jq -r '.catalog.labels[0].id // empty' <<<"$lookup_json")"
+	if [ -n "$existing_id" ]; then
+		printf '%s\n' "$existing_id"
 		return
 	fi
 
-	local create_json created_label created_name updated_catalog
+	local create_json created_label created_id created_name
 	create_json="$("$kent_bin" task label create "$requested_name" --project . --json)"
 	if ! created_label="$(
 		jq -ce '
 			.label
 			| select(
 				type == "object"
+				and (.id | type == "string")
+				and (.id | length > 0)
 				and (.name | type == "string")
 				and (.name | length > 0)
 			)
@@ -74,14 +73,11 @@ ensure_project_label() {
 	)"; then
 		fail "Kent created label '$requested_name', but returned an invalid label response."
 	fi
+	created_id="$(jq -r '.id' <<<"$created_label")"
 	created_name="$(jq -r '.name' <<<"$created_label")"
 
-	updated_catalog="$label_catalog_file.updated"
-	jq --argjson label "$created_label" '.catalog.labels += [$label]' "$label_catalog_file" >"$updated_catalog"
-	mv "$updated_catalog" "$label_catalog_file"
-
 	echo "Created missing Kent label '$created_name'." >&2
-	printf '%s\n' "$created_name"
+	printf '%s\n' "$created_id"
 }
 
 issue_field_option() {
@@ -292,19 +288,19 @@ import_issue() {
 		fi
 	done < <(jq -r '.labels[]? | .name // empty' "$issue_file")
 
-	local -a task_labels=()
-	local requested_label resolved_label
+	local -a task_label_ids=()
+	local requested_label resolved_label_id existing_label_id
 	for requested_label in "${requested_labels[@]}"; do
-		resolved_label="$(ensure_project_label "$requested_label")"
+		resolved_label_id="$(ensure_project_label "$requested_label")"
 		duplicate=0
-		for existing_label in "${task_labels[@]}"; do
-			if [ "$resolved_label" = "$existing_label" ]; then
+		for existing_label_id in "${task_label_ids[@]}"; do
+			if [ "$resolved_label_id" = "$existing_label_id" ]; then
 				duplicate=1
 				break
 			fi
 		done
 		if [ "$duplicate" -eq 0 ]; then
-			task_labels+=("$resolved_label")
+			task_label_ids+=("$resolved_label_id")
 		fi
 	done
 
@@ -325,8 +321,8 @@ import_issue() {
 	local -a create_args
 	task_title="GH #$number: $title"
 	create_args=(task create --project . --title "$task_title" --body-file "$body_file" --source-url "$issue_url")
-	for resolved_label in "${task_labels[@]}"; do
-		create_args+=(--label "$resolved_label")
+	for resolved_label_id in "${task_label_ids[@]}"; do
+		create_args+=(--label "$resolved_label_id")
 	done
 	create_args+=(--json)
 	create_json="$("$kent_bin" "${create_args[@]}")"
@@ -401,9 +397,6 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT
-
-label_catalog_file="$tmpdir/project-labels.json"
-load_project_label_catalog
 
 repo=""
 number=""

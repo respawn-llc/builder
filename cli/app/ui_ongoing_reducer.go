@@ -51,6 +51,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		if m.ongoingTranscript.acceptedHydration(event.Message) {
 			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
 		}
+		m.inputController().notifyTurnQueueDrainedIfIdle()
 		m.layout().syncViewport()
 		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
 	case ongoingTranscriptEventLoss:

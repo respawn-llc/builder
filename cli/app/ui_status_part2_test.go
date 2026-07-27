@@ -171,15 +171,21 @@ func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
 }
 
 func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testing.T) {
-	persistenceRoot := t.TempDir()
-	parentStore := createAuthoritativeAppSession(t, persistenceRoot, "/tmp/work-a")
-	if err := parentStore.SetName("incident-root"); err != nil {
-		t.Fatalf("set parent name: %v", err)
-	}
-	sessionViews := sessionview.NewService(testSessionViewSessionResolver{store: parentStore}, nil, nil, nil)
-	previousSessionID, err := runtimeids.ParseSessionID(parentStore.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse previous session id: %v", err)
+	previousSessionID := runtimeids.NewSessionID()
+	sessionViews := stubSessionViewClient{
+		getSessionMainView: func(_ context.Context, request serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if request.SessionID != previousSessionID.String() {
+				t.Fatalf("previous session view request = %+v, want %s", request, previousSessionID)
+			}
+			return serverapi.SessionMainViewResponse{
+				MainView: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{
+						SessionID:   previousSessionID.String(),
+						SessionName: "incident-root",
+					},
+				},
+			}, nil
+		},
 	}
 	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{PreviousSessionID: &previousSessionID}}
 	model := newProjectedStaticUIModel(

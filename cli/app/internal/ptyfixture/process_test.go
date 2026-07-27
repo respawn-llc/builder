@@ -32,12 +32,12 @@ var (
 func buildPTYFixtureBinary(t *testing.T, _ context.Context) string {
 	t.Helper()
 
-	binary, configured, err := pty.PrebuiltExecutable(ptyFixtureBinaryEnv)
+	binary, err := pty.PrebuiltExecutable(ptyFixtureBinaryEnv)
 	if err != nil {
 		t.Fatalf("resolve configured PTY fixture binary: %v", err)
 	}
-	if configured {
-		return binary
+	if binary != nil {
+		return *binary
 	}
 
 	ptyFixtureBinaryBuildOnce.Do(func() {

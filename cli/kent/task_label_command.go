@@ -157,6 +157,7 @@ func taskLabelCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer
 func taskLabelListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task label list", stderr, taskLabelListUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
+	name := fs.String("name", "", "label name to match")
 	jsonOut := fs.Bool("json", false, "write the Project label catalog as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
@@ -165,16 +166,27 @@ func taskLabelListSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "task label list does not accept positional arguments")
 		return 2
 	}
+	nameProvided := flagWasProvided(fs, "name")
+	if nameProvided && strings.TrimSpace(*name) == "" {
+		fmt.Fprintln(stderr, "task label list --name requires a non-blank value")
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		catalog, _, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
+		catalog, snapshot, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
+		}
+		if nameProvided {
+			catalog.Catalog.Labels = []serverapi.WorkflowProjectLabel{}
+			if record, found := resolveWorkflowProjectLabelName(snapshot, *name); found {
+				catalog.Catalog.Labels = append(catalog.Catalog.Labels, record)
+			}
 		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, catalog)
@@ -374,6 +386,10 @@ func resolveWorkflowProjectLabelSelector(snapshot workflowProjectLabelCatalogSna
 		record, found := snapshot.LabelsByID[raw]
 		return record, found
 	}
+	return resolveWorkflowProjectLabelName(snapshot, raw)
+}
+
+func resolveWorkflowProjectLabelName(snapshot workflowProjectLabelCatalogSnapshot, raw string) (serverapi.WorkflowProjectLabel, bool) {
 	record, found := snapshot.LabelsByFoldedName[labelcontract.Fold(strings.TrimSpace(raw))]
 	return record, found
 }

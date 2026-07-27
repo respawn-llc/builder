@@ -2,6 +2,7 @@ package testsetup
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"core/server/metadata"
@@ -35,5 +36,39 @@ func TestPrepareMetadataPersistenceRootIsIdempotent(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close prepared metadata store: %v", err)
+	}
+}
+
+func TestPrepareMetadataPersistenceRootConcurrentCallers(t *testing.T) {
+	persistenceRoot := t.TempDir()
+	const callers = 16
+
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var callersWaitGroup sync.WaitGroup
+	for range callers {
+		callersWaitGroup.Add(1)
+		go func() {
+			defer callersWaitGroup.Done()
+			<-start
+			errs <- prepareMetadataPersistenceRoot(persistenceRoot)
+		}()
+	}
+	close(start)
+	callersWaitGroup.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("prepare metadata persistence root concurrently: %v", err)
+		}
+	}
+
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrently prepared metadata store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close concurrently prepared metadata store: %v", err)
 	}
 }

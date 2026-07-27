@@ -2047,7 +2047,7 @@ func TestWorkflowMutationPermitSerializesConcurrentTaskStarts(t *testing.T) {
 	}
 }
 
-func TestInterruptRejectsClaimedRunUntilExactExecutionScopeRegisters(t *testing.T) {
+func TestInterruptRejectsPreparingRunUntilExactExecutionScopeRegisters(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
 	runtime := newClaimScopeRaceRuntime()
@@ -2525,6 +2525,14 @@ func TestServiceResumeTaskRequeuesRunAndNotifiesScheduler(t *testing.T) {
 	if notifier.count != 1 {
 		t.Fatalf("scheduler notifications = %d, want 1", notifier.count)
 	}
+	if len(notifier.queuedExplicit) != 1 ||
+		len(notifier.queuedExplicit[0]) != 1 ||
+		notifier.queuedExplicit[0][0] != workflow.RunID(started.RunID) {
+		t.Fatalf("queued explicit runs = %+v, want %s", notifier.queuedExplicit, started.RunID)
+	}
+	if len(notifier.explicit) != 0 {
+		t.Fatalf("synchronously started runs = %+v, want none", notifier.explicit)
+	}
 	if len(finalizer.results) != 1 || len(finalizer.results[0].ResolvedInterruptedRunProjections) != 1 || finalizer.results[0].ResolvedInterruptedRunProjections[0].RunID != workflow.RunID(started.RunID) {
 		t.Fatalf("resolved interrupted runs = %+v, want %s", finalizer.results, started.RunID)
 	}
@@ -2555,11 +2563,47 @@ func TestServiceResumeTaskResolvesCapturedInterruptionWithFreshFinalizer(t *test
 	}
 }
 
+func TestServiceResumeTaskQueueFailureRestoresInterruption(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	queueErr := errors.New("explicit queue unavailable")
+	notifier := &recordingSchedulerNotifier{queueErr: queueErr}
+	finalizer := &recordingWorkflowAttentionFinalizer{}
+	installWorkflowServiceScheduler(t, service, notifier)
+	service.attentionFinalizer = finalizer
+
+	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID}); !errors.Is(err, queueErr) {
+		t.Fatalf("ResumeWorkflowTask error = %v, want explicit queue failure", err)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 ||
+		runs[0].InterruptedAt == nil ||
+		runs[0].InterruptionReason == nil ||
+		*runs[0].InterruptionReason != workflowexecution.ReasonSchedulerExplicitQueueFailed {
+		t.Fatalf("runs after failed queue = %+v, want restored interruption", runs)
+	}
+	if len(finalizer.interruptedRunIDs) != 1 || finalizer.interruptedRunIDs[0] != workflow.RunID(started.RunID) {
+		t.Fatalf("published interrupted run IDs = %+v, want %s", finalizer.interruptedRunIDs, started.RunID)
+	}
+}
+
 type recordingSchedulerNotifier struct {
 	count           int
 	automatic       [][]workflow.RunID
 	explicit        [][]workflow.RunID
+	queuedExplicit  [][]workflow.RunID
 	registrationErr error
+	queueErr        error
 }
 
 func (n *recordingSchedulerNotifier) RegisterAutomaticStarts(runIDs []workflow.RunID) error {
@@ -2574,12 +2618,22 @@ func (n *recordingSchedulerNotifier) StartExplicitRuns(_ context.Context, runIDs
 	return nil
 }
 
+func (n *recordingSchedulerNotifier) QueueExplicitRuns(runIDs []workflow.RunID) error {
+	n.count++
+	if n.queueErr != nil {
+		return n.queueErr
+	}
+	n.queuedExplicit = append(n.queuedExplicit, append([]workflow.RunID(nil), runIDs...))
+	return nil
+}
+
 func (n *recordingSchedulerNotifier) EnsureTaskQuiescent(context.Context, workflow.TaskID) error {
 	return nil
 }
 
 type recordingWorkflowAttentionFinalizer struct {
-	results []workflowattention.TransitionResult
+	results           []workflowattention.TransitionResult
+	interruptedRunIDs []workflow.RunID
 }
 
 type failingWorkflowPendingProjectionProvider struct {
@@ -2621,7 +2675,8 @@ func (f *recordingWorkflowAttentionFinalizer) FinalizeTransition(_ context.Conte
 	f.results = append(f.results, result)
 }
 
-func (f *recordingWorkflowAttentionFinalizer) PublishPendingInterruptedRun(context.Context, workflow.RunID) {
+func (f *recordingWorkflowAttentionFinalizer) PublishPendingInterruptedRun(_ context.Context, runID workflow.RunID) {
+	f.interruptedRunIDs = append(f.interruptedRunIDs, runID)
 }
 
 type recordingTaskRuntimeCanceler struct {
@@ -2705,22 +2760,30 @@ func newClaimScopeRaceRuntime() *claimScopeRaceRuntime {
 	}
 }
 
-func (r *claimScopeRaceRuntime) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
-	r.entered <- req
+func (r *claimScopeRaceRuntime) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
+	start := workflowexecution.SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	}
+	r.entered <- start
 	select {
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	case <-r.release:
 	}
-	r.mu.Lock()
-	r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
-		ScopeID:    runtimeids.NewExecutionScopeID(),
-		TaskID:     req.TaskID,
-		RunID:      req.RunID,
-		Generation: req.Generation,
-	}}}
-	r.mu.Unlock()
-	return nil
+	return claimScopeRacePreparedRun{activate: func() {
+		r.mu.Lock()
+		r.prepared = &recordingPreparedInterrupt{executions: []workflowexecution.ExactExecutionScope{{
+			ScopeID:    runtimeids.NewExecutionScopeID(),
+			TaskID:     req.TaskID,
+			RunID:      req.RunID,
+			Generation: req.Generation,
+		}}}
+		r.mu.Unlock()
+	}}, nil
 }
 
 func (r *claimScopeRaceRuntime) PrepareWorkflowInterrupt(selector workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
@@ -2730,6 +2793,26 @@ func (r *claimScopeRaceRuntime) PrepareWorkflowInterrupt(selector workflowexecut
 		return nil, workflowexecution.ErrNoInterruptibleExecution
 	}
 	return r.prepared, nil
+}
+
+type claimScopeRacePreparedRun struct {
+	activate func()
+}
+
+func (claimScopeRacePreparedRun) Admission() workflowexecution.RunAdmission {
+	return workflowexecution.RunAdmission{}
+}
+
+func (claimScopeRacePreparedRun) Commit() error {
+	return nil
+}
+
+func (p claimScopeRacePreparedRun) Activate() {
+	p.activate()
+}
+
+func (claimScopeRacePreparedRun) Abort(context.Context) error {
+	return nil
 }
 
 func (c *recordingTaskRuntimeRunCancelRequester) RequestCancelRun(runID workflow.RunID) bool {

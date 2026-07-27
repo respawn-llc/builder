@@ -181,13 +181,9 @@ if [ "$disable_wall_clock_cap" != "1" ]; then
     fi
 fi
 
-go_log_file="$(mktemp -t kent-go-test.XXXXXX.log)"
-tui_log_file="$(mktemp -t kent-tui-test.XXXXXX.log)"
-frontend_log_file="$(mktemp -t kent-frontend-test.XXXXXX.log)"
 pty_fixture_build_dir=""
 test_pid=""
 cleanup() {
-    rm -f "$go_log_file" "$tui_log_file" "$frontend_log_file"
     if [ -n "$pty_fixture_build_dir" ]; then
         unlink "$pty_fixture_build_dir/kent-pty-fixture.test" 2>/dev/null || true
         unlink "$pty_fixture_build_dir/kent" 2>/dev/null || true
@@ -289,19 +285,12 @@ run_tui_tests() {
     fi
     if [ "$disable_wall_clock_cap" != "1" ] && [ "$inside_tui_wall_clock_cap" != "1" ]; then
         set +e
-        python3 - "$tui_log_file" "$repo_root/scripts/test.sh" <<'PY' &
+        python3 - "$repo_root/scripts/test.sh" <<'PY' &
 import os
 import sys
 
-log_file = sys.argv[1]
-script = sys.argv[2]
+script = sys.argv[1]
 os.setsid()
-fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-try:
-    os.dup2(fd, 1)
-    os.dup2(fd, 2)
-finally:
-    os.close(fd)
 env = os.environ.copy()
 env["KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP"] = "1"
 os.execvpe("bash", ["bash", script, "tui", "--inherit-env"], env)
@@ -331,7 +320,6 @@ PY
         elif [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
             printf 'test process was terminated by a signal (exit status %d)\n' "$status"
         fi
-        cat "$tui_log_file"
         exit 1
     fi
     run_rust_policy_checks
@@ -345,12 +333,8 @@ run_desktop_tests() {
     if [ ! -f apps/package.json ]; then
         return
     fi
-    if ./scripts/install-frontend-dependencies.sh >"$frontend_log_file" 2>&1 &&
-        pnpm --dir apps test >>"$frontend_log_file" 2>&1; then
-        return
-    fi
-    cat "$frontend_log_file"
-    exit 1
+    ./scripts/install-frontend-dependencies.sh
+    pnpm --dir apps test
 }
 
 run_server_tests() {
@@ -372,18 +356,17 @@ run_server_tests() {
 
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        "${server_test_command[@]}" >"$go_log_file" 2>&1
+        "${server_test_command[@]}"
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
             return
         fi
-        cat "$go_log_file"
         exit "$status"
     fi
 
     set +e
-    python3 - "$go_log_file" "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
+    python3 - "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
 import json
 import os
 import selectors
@@ -392,9 +375,8 @@ import subprocess
 import sys
 import time
 
-log_file = sys.argv[1]
-runtime_limit_seconds = float(sys.argv[2])
-test_command = sys.argv[3:]
+runtime_limit_seconds = float(sys.argv[1])
+test_command = sys.argv[2:]
 test_env = os.environ.copy()
 process = subprocess.Popen(
     test_command,
@@ -431,17 +413,21 @@ last_observation = time.monotonic()
 timed_out = False
 pending_output = b""
 
-def observe_line(line, log):
+def emit(output):
+    sys.stdout.write(output)
+    sys.stdout.flush()
+
+def observe_line(line):
     global running_tests
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
-        log.write(line)
+        emit(line)
         return
 
     output = event.get("Output")
     if output is not None:
-        log.write(output)
+        emit(output)
 
     package = event.get("Package")
     action = event.get("Action")
@@ -454,7 +440,7 @@ def observe_line(line, log):
     elif action in {"pass", "fail", "skip"}:
         running_tests.discard(test_id)
 
-def consume_output(log):
+def consume_output():
     global pending_output
     while True:
         try:
@@ -466,26 +452,25 @@ def consume_output(log):
         pending_output += chunk
         while b"\n" in pending_output:
             raw_line, pending_output = pending_output.split(b"\n", 1)
-            observe_line(raw_line.decode("utf-8", errors="replace") + "\n", log)
+            observe_line(raw_line.decode("utf-8", errors="replace") + "\n")
 
-with open(log_file, "w", encoding="utf-8") as log:
-    while process.poll() is None:
-        now = time.monotonic()
-        if running_tests:
-            test_runtime_seconds += now - last_observation
-        last_observation = now
-        if test_runtime_seconds >= runtime_limit_seconds:
-            timed_out = True
-            terminate_test_process()
-            break
+while process.poll() is None:
+    now = time.monotonic()
+    if running_tests:
+        test_runtime_seconds += now - last_observation
+    last_observation = now
+    if test_runtime_seconds >= runtime_limit_seconds:
+        timed_out = True
+        terminate_test_process()
+        break
 
-        timeout = 0.1 if running_tests else 1.0
-        for _, _ in selector.select(timeout):
-            consume_output(log)
+    timeout = 0.1 if running_tests else 1.0
+    for _, _ in selector.select(timeout):
+        consume_output()
 
-    consume_output(log)
-    if pending_output:
-        observe_line(pending_output.decode("utf-8", errors="replace"), log)
+consume_output()
+if pending_output:
+    observe_line(pending_output.decode("utf-8", errors="replace"))
 
 status = process.wait()
 if timed_out:
@@ -506,7 +491,6 @@ PY
     elif [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
         printf 'test process was terminated by a signal (exit status %d)\n' "$status"
     fi
-    cat "$go_log_file"
     exit 1
 }
 

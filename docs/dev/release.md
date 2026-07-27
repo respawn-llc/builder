@@ -24,6 +24,40 @@ gh workflow run release.yml --repo respawn-llc/kent
 6. Wait for the tap automation in `respawn-llc/homebrew-tap` to finish.
 7. Verify the GitHub release and Homebrew install.
 
+## Release Notes
+
+### Audience Boundary
+
+Kent's server API, RPC methods, transport contracts, and protocol generations are internal interfaces used only by official Kent clients. Public release notes must not expose route names, protocol versions, wire schemas, DTO changes, or RPC contract changes.
+
+Translate client/server compatibility changes into user actions, such as upgrading and restarting the Kent server, CLI/TUI, and Desktop together. Treat an interface as a public third-party integration API only when an owning product specification and public documentation explicitly define that support.
+
+Announce only capabilities available through released Kent artifacts or public documentation. Exclude private repository helpers, operator scripts, and internal automation.
+
+### Editorial Structure
+
+GitHub renders the release name and tag above the body. Start the body with its opening summary; do not repeat the release title as a Markdown H1.
+
+Lead with the release's new capabilities and user-visible improvements. Put routine coordinated-upgrade guidance after the highlights. Lead with an upgrade warning only when users must act before upgrading to prevent data loss, outage, security exposure, or a broken installation.
+
+### Coverage Gate
+
+Before drafting:
+
+1. Identify the previous public release tag.
+2. Inventory merged PRs, linked issues, release commits, migration notes, public docs, measured outcomes, and user-facing safety changes.
+3. Classify each item as a public capability, a bug users could encounter in the previous public release, required user action, same-release stabilization, or private/internal work.
+4. Verify that each public capability, prior-release bug fix, measured outcome, and required action appears exactly once in the draft.
+5. Verify that same-release stabilization and private/internal items are absent from the draft.
+
+Do not classify release-note content from commit prefixes alone. A `fix:` commit can stabilize a feature first shipped in the same release, while a technical implementation change can contain a major user-facing storage, performance, or safety improvement.
+
+Preserve exact verified measurements and explain their user benefit. Treat protections against incorrect user work as public capabilities even when implemented through reminders, model context, validation, or guardrails.
+
+Use the previous public release as the baseline for `Bug Fixes`. Fixes made while developing features first shipped in the same release are stabilization work, not public bug fixes; describe the final capability once under the appropriate highlight.
+
+The remaining sections document internal release operations. Their repository scripts and local cleanup commands are not public release-note content unless they produce a separately verified public product capability.
+
 ## What The App Release Workflow Does
 
 The `release` workflow in `/.github/workflows/release.yml`:

@@ -93,7 +93,7 @@ func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHand
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	execution := a.byWorkflow[ref]
-	if execution == nil {
+	if execution == nil || !execution.activated.Load() || execution.finalizing.Load() {
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
@@ -106,7 +106,7 @@ func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionH
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	execution, ok := a.byScope[id]
-	if !ok {
+	if !ok || !execution.activated.Load() || execution.finalizing.Load() {
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
@@ -133,7 +133,10 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 			return errors.New("execution handle does not belong to this authority")
 		}
 		execution := exact.execution
-		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
+		if execution.authority != a ||
+			!execution.activated.Load() ||
+			execution.finalizing.Load() ||
+			a.byScope[execution.scope.ID()] != execution {
 			return ErrExecutionNoLongerLive
 		}
 		if workflowRef, ok := execution.scope.Workflow(); ok && a.byWorkflow[workflowRef] != execution {

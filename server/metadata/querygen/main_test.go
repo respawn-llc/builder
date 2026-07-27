@@ -47,14 +47,47 @@ func (q *Queries) read(ctx context.Context, value string) error {
 	err := row.Scan(&value)
 	return err
 }
+
+func (q *Queries) list(ctx context.Context, value string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listQuery, value)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var item string
+		if err := rows.Scan(&item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (q *Queries) switchExecute(ctx context.Context, execute bool) error {
+	switch {
+	case execute:
+		_, err := q.db.ExecContext(ctx, switchQuery)
+		return err
+	default:
+		return nil
+	}
+}
 `)
 	annotated, err := annotateSource(source)
 	if err != nil {
 		t.Fatalf("annotate source: %v", err)
 	}
 	diagnosticCalls := countDiagnosticCalls(t, annotated)
-	if diagnosticCalls != 2 {
-		t.Fatalf("diagnostic call count = %d, want 2", diagnosticCalls)
+	if diagnosticCalls != 7 {
+		t.Fatalf("diagnostic call count = %d, want 7", diagnosticCalls)
 	}
 	repeated, err := annotateSource(annotated)
 	if err != nil {

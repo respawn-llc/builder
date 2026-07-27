@@ -22,6 +22,18 @@ var currentDatabaseSeed struct {
 	err  error
 }
 
+type metadataPersistenceRootLock struct {
+	mutex      sync.Mutex
+	references int
+}
+
+var metadataPersistenceRootLocks = struct {
+	sync.Mutex
+	locks map[string]*metadataPersistenceRootLock
+}{
+	locks: make(map[string]*metadataPersistenceRootLock),
+}
+
 func OpenStore(t testing.TB, persistenceRoot string) *metadata.Store {
 	t.Helper()
 	materializeCurrentDatabaseSeed(t, persistenceRoot)
@@ -39,13 +51,67 @@ func OpenStore(t testing.TB, persistenceRoot string) *metadata.Store {
 
 func PrepareMetadataPersistenceRoot(t testing.TB, persistenceRoot string) {
 	t.Helper()
-	databasePath := filepath.Join(persistenceRoot, metadataDatabaseRelativePath)
-	if _, err := os.Stat(databasePath); err == nil {
-		return
-	} else if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stat metadata database %q: %v", databasePath, err)
+	if err := prepareMetadataPersistenceRoot(persistenceRoot); err != nil {
+		t.Fatalf("prepare metadata persistence root: %v", err)
 	}
-	materializeCurrentDatabaseSeed(t, persistenceRoot)
+}
+
+func prepareMetadataPersistenceRoot(persistenceRoot string) error {
+	absolutePersistenceRoot, err := filepath.Abs(persistenceRoot)
+	if err != nil {
+		return fmt.Errorf("resolve metadata persistence root %q: %w", persistenceRoot, err)
+	}
+	release := acquireMetadataPersistenceRootLock(absolutePersistenceRoot)
+	defer release()
+
+	databasePath := filepath.Join(absolutePersistenceRoot, metadataDatabaseRelativePath)
+	if _, err := os.Stat(databasePath); err == nil {
+		return validateMetadataPersistenceRoot(absolutePersistenceRoot)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat metadata database %q: %w", databasePath, err)
+	}
+	seed, err := migratedDatabaseSeed()
+	if err != nil {
+		return fmt.Errorf("prepare migrated metadata database seed: %w", err)
+	}
+	if err := materializeDatabaseSeed(seed, absolutePersistenceRoot); err != nil {
+		return fmt.Errorf("materialize migrated metadata database seed: %w", err)
+	}
+	return validateMetadataPersistenceRoot(absolutePersistenceRoot)
+}
+
+func acquireMetadataPersistenceRootLock(persistenceRoot string) func() {
+	metadataPersistenceRootLocks.Lock()
+	rootLock := metadataPersistenceRootLocks.locks[persistenceRoot]
+	if rootLock == nil {
+		rootLock = &metadataPersistenceRootLock{}
+		metadataPersistenceRootLocks.locks[persistenceRoot] = rootLock
+	}
+	rootLock.references++
+	metadataPersistenceRootLocks.Unlock()
+
+	rootLock.mutex.Lock()
+	return func() {
+		rootLock.mutex.Unlock()
+
+		metadataPersistenceRootLocks.Lock()
+		defer metadataPersistenceRootLocks.Unlock()
+		rootLock.references--
+		if rootLock.references == 0 {
+			delete(metadataPersistenceRootLocks.locks, persistenceRoot)
+		}
+	}
+}
+
+func validateMetadataPersistenceRoot(persistenceRoot string) error {
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		return fmt.Errorf("open metadata database: %w", err)
+	}
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("close metadata database: %w", err)
+	}
+	return nil
 }
 
 func materializeCurrentDatabaseSeed(t testing.TB, persistenceRoot string) {

@@ -22,6 +22,10 @@ type AutomaticStartRegistrar interface {
 	RegisterAutomaticStarts([]workflow.RunID) error
 }
 
+type automaticStartRequestRegistrar interface {
+	RegisterAutomaticStartRequest(AutomaticStartRegistrationRequest) error
+}
+
 type AutomaticStartRegistration struct {
 	registrar AutomaticStartRegistrar
 	fatal     *FatalSignal
@@ -98,6 +102,10 @@ func (r *AutomaticStartRegistration) Register(req AutomaticStartRegistrationRequ
 	if cause == nil {
 		if r == nil || r.registrar == nil {
 			cause = errors.New("automatic workflow start registration is required")
+		} else if registrar, ok := r.registrar.(automaticStartRequestRegistrar); ok {
+			request := req
+			request.RunIDs = runIDs
+			cause = registrar.RegisterAutomaticStartRequest(request)
 		} else {
 			cause = r.registrar.RegisterAutomaticStarts(runIDs)
 		}

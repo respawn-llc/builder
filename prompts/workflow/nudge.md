@@ -1,7 +1,8 @@
 Your response did not satisfy this workflow node's completion contract, so it was rejected. Exact reason:
 {{.RejectionReason}}.
 
-If the task you received is not yet fully done, **keep working**. Do not stop with `final_answer` until you're ready to submit your completed work. When you are, mark the task as completed:
+If the task you received is not yet fully done, **keep working** and do NOT ever attempt to stop with `final_answer` anymore until you're ready to submit your completed work, or you will be shut down (killed). Do not pause to check-in, worry about token/time budget, task scope, or report progress.
+When the work is fully complete and satisfies all task criteria, submit the result:
 {{.NodeCompletionInstructions}}
 
 Work mode:

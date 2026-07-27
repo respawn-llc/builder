@@ -6,7 +6,7 @@ import (
 )
 
 type runtimeWiring struct {
-	turnQueueHook         *bellHooks
+	turnQueueHook         turnQueueHook
 	terminalFocus         *terminalFocusState
 	eventDispatcher       *uiEventDispatcher
 	requestTranscriptOpen func()

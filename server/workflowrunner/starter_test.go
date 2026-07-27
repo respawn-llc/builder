@@ -1,6 +1,7 @@
 package workflowrunner
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	stdruntime "runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -828,9 +831,9 @@ func TestStarterAutoUsesRunStartSnapshotForContinuationDetection(t *testing.T) {
 			if input.WorkflowHasContinueSessionEdge != tt.wantFlag {
 				t.Fatalf("snapshot continuation flag = %v, want %v", input.WorkflowHasContinueSessionEdge, tt.wantFlag)
 			}
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
@@ -859,13 +862,13 @@ func TestStarterSkipsProviderCapabilityProbeWhenModeDoesNotNeedIt(t *testing.T) 
 				disableCoderShell(t, &fixture)
 				fixture.rebuildStarter(t)
 			}
-			claimed, input, plan := fixture.claimPlannedRun(t)
+			_, input, plan := fixture.claimPlannedRun(t)
 			input.WorkflowHasContinueSessionEdge = tt.hasContinueEdge
 			client := providerProbeForbiddenClient{}
 
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, client)
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, client)
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantCompletionMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantCompletionMode)
@@ -885,9 +888,9 @@ func TestStarterReusesPersistedEffectiveCompletionMode(t *testing.T) {
 		t.Fatalf("GetRunStartContext after set mode: %v", err)
 	}
 
-	mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+	mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 	if err != nil {
-		t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+		t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 	}
 	if mode != workflowruntime.CompletionModeTool {
 		t.Fatalf("mode = %q, want persisted tool", mode)
@@ -908,12 +911,12 @@ func TestStarterNodeCompletionModeOverridesGlobalConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newStarterFixture(t, tt.globalMode)
-			claimed, input, plan := fixture.claimPlannedRun(t)
+			_, input, plan := fixture.claimPlannedRun(t)
 			input.Node.CompletionMode = tt.nodeMode
 
-			mode, _, err := fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+			mode, _, err := fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 			if err != nil {
-				t.Fatalf("resolveAndPersistWorkflowCompletionMode: %v", err)
+				t.Fatalf("resolveWorkflowCompletionMode: %v", err)
 			}
 			if mode != tt.wantMode {
 				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
@@ -935,9 +938,9 @@ func TestStarterRechecksShellAvailabilityForPersistedShellMode(t *testing.T) {
 		t.Fatalf("GetRunStartContext after set mode: %v", err)
 	}
 
-	_, _, err = fixture.starter.resolveAndPersistWorkflowCompletionMode(context.Background(), SchedulerStartRunRequest{RunID: claimed.ID, Generation: claimed.Generation}, input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
+	_, _, err = fixture.starter.resolveWorkflowCompletionMode(context.Background(), input, plan, NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}))
 	if err == nil || !errors.Is(err, errWorkflowShellCompletionRequiresShell) {
-		t.Fatalf("resolveAndPersistWorkflowCompletionMode error = %v, want shell availability failure", err)
+		t.Fatalf("resolveWorkflowCompletionMode error = %v, want shell availability failure", err)
 	}
 }
 
@@ -1043,13 +1046,27 @@ func workflowTaskInstructionContext(promptTemplate string) workflowstore.RunStar
 			Title:      "Task title",
 			Body:       "Task body",
 		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Workflow: workflowstore.WorkflowRecord{
+			ID:   "workflow-1",
+			Name: "Release preparation",
+		},
 		Node: workflowstore.NodeRecord{
 			ID:          "node-review",
 			Key:         "review",
 			DisplayName: "Review",
 		},
 		PromptTemplate: promptTemplate,
+	}
+}
+
+func TestBuildWorkflowTaskInstructionsCarriesWorkflowName(t *testing.T) {
+	input := workflowTaskInstructionContext("Do the work.")
+	instructions, err := BuildWorkflowTaskInstructions(input)
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
+	}
+	if instructions.WorkflowName != input.Workflow.Name {
+		t.Fatalf("workflow name = %q, want %q", instructions.WorkflowName, input.Workflow.Name)
 	}
 }
 
@@ -1128,6 +1145,142 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
 	assertPromptContains(t, reqs[1], []string{"Use Run workflow and first summary."})
+}
+
+func TestWorkflowRuntimeContinueSessionWithActiveTranscriptSubscriberDoesNotStallLaterAutomaticIntent(t *testing.T) {
+	if stdruntime.GOOS == "windows" {
+		t.Skip("script fixture uses a POSIX shebang")
+	}
+	sourceResponseStarted := make(chan struct{})
+	sourceResponseRelease := make(chan struct{})
+	successorResponseStarted := make(chan struct{})
+	successorResponseRelease := make(chan struct{})
+	fixture := newStarterFixture(
+		t,
+		config.WorkflowCompletionModeShellCommand,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceResponseStarted)
+				select {
+				case <-sourceResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer("source completion observed").Response,
+		},
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(successorResponseStarted)
+				select {
+				case <-successorResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer("successor completion observed").Response,
+		},
+	)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("start source Process: %v", err)
+	}
+	activeCtx, cancelActive := context.WithTimeout(context.Background(), workflowRunnerTestWaitTimeout)
+	defer cancelActive()
+	select {
+	case <-sourceResponseStarted:
+	case <-activeCtx.Done():
+		t.Fatalf("wait for source runtime: %v", context.Cause(activeCtx))
+	}
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns source: %v", err)
+	}
+	if len(runs) != 1 || runs[0].StartedAt == nil || runs[0].SessionID == "" {
+		t.Fatalf("source run = %+v, want started Session-backed Agent", runs)
+	}
+	runtimes, ok := fixture.runtimes.(*registry.RuntimeRegistry)
+	if !ok {
+		t.Fatalf("runtime registry = %T, want production RuntimeRegistry", fixture.runtimes)
+	}
+	transcript, err := runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: runs[0].SessionID,
+	})
+	if err != nil {
+		t.Fatalf("subscribe source transcript: %v", err)
+	}
+	t.Cleanup(func() { _ = transcript.Close() })
+
+	controller := workflowruntime.StoreController{
+		Store:           fixture.store,
+		AutomaticStarts: fixture.automaticStarts,
+		MutationPermit:  fixture.starter.mutationPermit,
+	}
+	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
+		RunID:              runs[0].ID,
+		ExpectedGeneration: runs[0].Generation,
+		RequireGeneration:  true,
+		TransitionID:       "next",
+		OutputValues:       map[string]string{"prior_summary": "first summary"},
+		Commentary:         "first comments",
+	}); err != nil {
+		t.Fatalf("complete source through workflow controller: %v", err)
+	}
+	close(sourceResponseRelease)
+	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
+	if err := scheduler.Close(); err != nil {
+		t.Fatalf("close source scheduler: %v", err)
+	}
+
+	scriptTask := fixture.createStartedScriptTask(t, "watcher.sh")
+	scheduler = fixture.schedulerWithConcurrency(t, 2)
+
+	processCtx, cancelProcess := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelProcess()
+	if err := scheduler.Process(processCtx); err != nil {
+		t.Fatalf("process continued Session and unrelated script with active source transcript subscriber: %v", err)
+	}
+	select {
+	case <-successorResponseStarted:
+	case <-processCtx.Done():
+		t.Fatalf("wait for continued runtime: %v", context.Cause(processCtx))
+	}
+	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns continued Session: %v", err)
+	}
+	if len(runs) != 2 || runs[1].StartedAt == nil || runs[1].SessionID != runs[0].SessionID {
+		t.Fatalf("continued runs = %+v, want started successor on source Session", runs)
+	}
+	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
+		RunID:              runs[1].ID,
+		ExpectedGeneration: runs[1].Generation,
+		RequireGeneration:  true,
+		TransitionID:       "done",
+		Commentary:         "second done",
+	}); err != nil {
+		t.Fatalf("complete successor through workflow controller: %v", err)
+	}
+	close(successorResponseRelease)
+	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForCompletedRun(t, scriptTask.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
+
+	detail, err := fixture.view.GetTask(context.Background(), string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone {
+		t.Fatalf("task after continued Session replacement = %+v, want done", detail)
+	}
+	if requests := fixture.client.Requests(); len(requests) != 2 {
+		t.Fatalf("scripted model request count = %d, want exactly one request per externally completed Agent", len(requests))
+	}
 }
 
 func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *testing.T) {
@@ -1390,9 +1543,9 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 		t.Fatalf("run records by node: source=%q branches=%+v from runs %+v", sourceSessionID, branchRecords, runs)
 	}
 
-	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_a"])
+	startPreparedWorkflowRun(t, ctx, fixture, branchRecords["impl_a"])
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
-	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
+	startPreparedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
 	fixture.waitForCompletedRunCount(t, task.ID, 3)
 	if err := fixture.starter.Close(); err != nil {
 		t.Fatalf("starter.Close: %v", err)
@@ -1457,6 +1610,273 @@ func TestWorkflowRuntimeFanoutAutomaticallyStartsEverySuccessorAfterSourceRetire
 			t.Fatalf("run = %+v, want started and completed without interruption", run)
 		}
 	}
+}
+
+func TestWorkflowCompletionReachesDoneAfterFanoutJoinLoop(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput)
+	workflowID := createFanoutJoinLoopStarterWorkflow(t, fixture.store)
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow fanout join loop: %v", err)
+	}
+
+	var scheduler *SchedulerService
+	admissionBlock := newDeterministicAdmissionBlock("implementation", 2)
+	defer admissionBlock.release()
+	executor := &deterministicCompletionStarter{
+		t:              t,
+		store:          fixture.store,
+		admissionBlock: admissionBlock,
+		complete: func(ctx context.Context, req SchedulerStartRunRequest, transitionID string, outputs map[string]string) {
+			controller := workflowruntime.StoreController{
+				Store:           fixture.store,
+				AutomaticStarts: fixture.automaticStarts,
+				MutationPermit:  fixture.starter.mutationPermit,
+			}
+			if _, err := controller.CompleteWorkflowRun(ctx, workflowruntime.CompletionRequest{
+				RunID:              req.RunID,
+				ExpectedGeneration: req.Generation,
+				RequireGeneration:  true,
+				TransitionID:       transitionID,
+				OutputValues:       outputs,
+			}); err != nil {
+				t.Fatalf("CompleteWorkflowRun %s: %v", transitionID, err)
+			}
+		},
+	}
+	var err error
+	scheduler, err = NewSchedulerService(
+		fixture.store,
+		executor,
+		fixture.starter.mutationPermit,
+		SchedulerConfig{Concurrency: 4},
+		WithAutomaticIntents(fixture.automaticIntents),
+	)
+	if err != nil {
+		t.Fatalf("NewSchedulerService: %v", err)
+	}
+	t.Cleanup(func() { _ = scheduler.Close() })
+
+	task := fixture.createStartedTask(t)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process Implementation: %v", err)
+	}
+	for {
+		active := executor.activeExecutions()
+		if len(active) == 1 && active[0].NodeKey == "approval_gate" {
+			break
+		}
+		if len(active) == 0 {
+			t.Fatal("workflow stopped before Approval Gate")
+		}
+		executor.retire(scheduler, active...)
+		if err := scheduler.Process(context.Background()); err != nil {
+			t.Fatalf("Process review lifecycle: %v", err)
+		}
+	}
+	gate := executor.activeExecutions()
+	executor.retire(scheduler, gate...)
+	processResult := make(chan error, 1)
+	go func() {
+		processResult <- scheduler.Process(context.Background())
+	}()
+	blocked := admissionBlock.waitUntilReached(t)
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns during rejected-review successor admission: %v", err)
+	}
+	var blockedRun *workflowstore.RunRecord
+	for index := range runs {
+		if runs[index].ID == blocked.RunID {
+			blockedRun = &runs[index]
+			break
+		}
+	}
+	if blockedRun == nil {
+		t.Fatalf("blocked successor run %s not found in %+v", blocked.RunID, runs)
+	}
+	if blockedRun.StartedAt != nil {
+		t.Fatalf(
+			"looped Implementation became durably started before runtime admission completed: %+v",
+			*blockedRun,
+		)
+	}
+	admissionBlock.release()
+	if err := <-processResult; err != nil {
+		t.Fatalf("Process rejected-review loop: %v", err)
+	}
+	loopedImplementation := executor.activeExecutions()
+	if len(loopedImplementation) != 1 || loopedImplementation[0].NodeKey != "implementation" {
+		t.Fatalf("looped execution = %+v, want Implementation", loopedImplementation)
+	}
+	executor.retire(scheduler, loopedImplementation...)
+
+	detail, err := fixture.view.GetTask(context.Background(), string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone {
+		t.Fatalf("task did not reach done after fanout join loop: %+v", detail)
+	}
+	if got := executor.nodeStarts(); !reflect.DeepEqual(got, []workflow.ModelKey{
+		"implementation",
+		"code_review",
+		"qa",
+		"compliance_review",
+		"approval_gate",
+		"implementation",
+	}) {
+		t.Fatalf("started nodes = %+v, want one complete rejected review round followed by looped Implementation", got)
+	}
+}
+
+type deterministicExecution struct {
+	SchedulerStartRunRequest
+	NodeKey workflow.ModelKey
+}
+
+type deterministicCompletionStarter struct {
+	t              *testing.T
+	store          *workflowstore.Store
+	complete       func(context.Context, SchedulerStartRunRequest, string, map[string]string)
+	mu             sync.Mutex
+	started        []workflow.ModelKey
+	active         map[workflow.RunID]deterministicExecution
+	loops          int
+	admissionBlock *deterministicAdmissionBlock
+}
+
+func (s *deterministicCompletionStarter) PrepareWorkflowRun(ctx context.Context, req SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
+	input, err := s.store.GetRunStartContext(ctx, req.RunID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if input.Node.Key == "implementation" {
+		s.loops++
+	}
+	loopCount := s.loops
+	s.mu.Unlock()
+	if s.admissionBlock != nil && input.Node.Key == s.admissionBlock.nodeKey && loopCount == s.admissionBlock.occurrence {
+		s.admissionBlock.block(SchedulerStartRunRequest{
+			RunID:       req.RunID,
+			TaskID:      req.TaskID,
+			PlacementID: req.PlacementID,
+			NodeID:      req.NodeID,
+			Generation:  req.Generation,
+		})
+	}
+	startReq := SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	}
+	return schedulerPreparedRun{activate: func() {
+		s.mu.Lock()
+		if s.active == nil {
+			s.active = make(map[workflow.RunID]deterministicExecution)
+		}
+		s.started = append(s.started, input.Node.Key)
+		s.active[req.RunID] = deterministicExecution{SchedulerStartRunRequest: startReq, NodeKey: input.Node.Key}
+		gateLive := false
+		for _, active := range s.active {
+			if active.NodeKey == "approval_gate" {
+				gateLive = true
+				break
+			}
+		}
+		s.mu.Unlock()
+		switch input.Node.Key {
+		case "implementation":
+			if loopCount == 1 {
+				s.complete(ctx, startReq, "split", map[string]string{"summary": "plan"})
+			} else {
+				if gateLive {
+					s.t.Error("looped Implementation started before Approval Gate Exact Execution Scope retired")
+					return
+				}
+				s.complete(ctx, startReq, "done", nil)
+			}
+		case "code_review":
+			s.complete(ctx, startReq, "join", map[string]string{"joined": "branch a"})
+		case "qa", "compliance_review":
+			s.complete(ctx, startReq, "join", nil)
+		case "approval_gate":
+			s.complete(ctx, startReq, "review_rejected", nil)
+		default:
+			s.t.Errorf("unexpected executable Node %q", input.Node.Key)
+		}
+	}}, nil
+}
+
+type deterministicAdmissionBlock struct {
+	nodeKey    workflow.ModelKey
+	occurrence int
+	reached    chan SchedulerStartRunRequest
+	unblock    chan struct{}
+	releaseOne sync.Once
+}
+
+func newDeterministicAdmissionBlock(nodeKey workflow.ModelKey, occurrence int) *deterministicAdmissionBlock {
+	return &deterministicAdmissionBlock{
+		nodeKey:    nodeKey,
+		occurrence: occurrence,
+		reached:    make(chan SchedulerStartRunRequest, 1),
+		unblock:    make(chan struct{}),
+	}
+}
+
+func (b *deterministicAdmissionBlock) block(req SchedulerStartRunRequest) {
+	b.reached <- req
+	<-b.unblock
+}
+
+func (b *deterministicAdmissionBlock) waitUntilReached(t *testing.T) SchedulerStartRunRequest {
+	t.Helper()
+	select {
+	case req := <-b.reached:
+		return req
+	case <-time.After(workflowRunnerTestWaitTimeout):
+		t.Fatal("timed out waiting for blocked workflow runtime admission")
+		return SchedulerStartRunRequest{}
+	}
+}
+
+func (b *deterministicAdmissionBlock) release() {
+	b.releaseOne.Do(func() {
+		close(b.unblock)
+	})
+}
+
+func (s *deterministicCompletionStarter) activeExecutions() []deterministicExecution {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]deterministicExecution, 0, len(s.active))
+	for _, execution := range s.active {
+		out = append(out, execution)
+	}
+	slices.SortFunc(out, func(a, b deterministicExecution) int {
+		return cmp.Compare(string(a.NodeKey), string(b.NodeKey))
+	})
+	return out
+}
+
+func (s *deterministicCompletionStarter) retire(scheduler *SchedulerService, executions ...deterministicExecution) {
+	s.mu.Lock()
+	for _, execution := range executions {
+		delete(s.active, execution.RunID)
+	}
+	s.mu.Unlock()
+	for _, execution := range executions {
+		scheduler.RuntimeFinished(execution.RunID, execution.Generation)
+	}
+}
+
+func (s *deterministicCompletionStarter) nodeStarts() []workflow.ModelKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]workflow.ModelKey(nil), s.started...)
 }
 
 func TestWorkflowRuntimeCompletionWakesSchedulerForSuccessor(t *testing.T) {
@@ -1795,7 +2215,13 @@ func TestStartWorkflowRunWaitsForLockedTaskWorktreeRestoreBeforeRefreshingRunCon
 	}}, worktrees: ensurer}
 	done := make(chan error, 1)
 	go func() {
-		done <- starter.StartWorkflowRun(context.Background(), SchedulerStartRunRequest{TaskID: "task-1", RunID: "run-1", Generation: 1})
+		_, err := starter.PrepareWorkflowRun(context.Background(), SchedulerPrepareRunRequest{
+			TaskID:           "task-1",
+			RunID:            "run-1",
+			SourceGeneration: 0,
+			Generation:       1,
+		})
+		done <- err
 	}()
 	var req LockedTaskWorktreeRestoreRequest
 	select {
@@ -1808,17 +2234,17 @@ func TestStartWorkflowRunWaitsForLockedTaskWorktreeRestoreBeforeRefreshingRunCon
 	}
 	select {
 	case err := <-done:
-		t.Fatalf("StartWorkflowRun returned before ensure released: %v", err)
+		t.Fatalf("PrepareWorkflowRun returned before ensure released: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(releaseEnsure)
 	select {
 	case err := <-done:
 		if !errors.Is(err, ensureErr) {
-			t.Fatalf("StartWorkflowRun error = %v, want %v", err, ensureErr)
+			t.Fatalf("PrepareWorkflowRun error = %v, want %v", err, ensureErr)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for StartWorkflowRun")
+		t.Fatal("timed out waiting for PrepareWorkflowRun")
 	}
 }
 
@@ -2054,8 +2480,13 @@ func (f starterFixture) scheduler(t *testing.T) *SchedulerService {
 
 func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOption) *SchedulerService {
 	t.Helper()
+	return f.schedulerWithConcurrency(t, 1, opts...)
+}
+
+func (f starterFixture) schedulerWithConcurrency(t *testing.T, concurrency int, opts ...SchedulerOption) *SchedulerService {
+	t.Helper()
 	opts = append(opts, WithAutomaticIntents(f.automaticIntents))
-	scheduler, err := NewSchedulerService(f.store, f.starter, f.starter.mutationPermit, SchedulerConfig{Concurrency: 1}, opts...)
+	scheduler, err := NewSchedulerService(f.store, f.starter, f.starter.mutationPermit, SchedulerConfig{Concurrency: concurrency}, opts...)
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
 	}
@@ -2097,6 +2528,43 @@ func (f starterFixture) createStartedChainedTask(t *testing.T, contextMode workf
 	t.Helper()
 	f.linkChainedWorkflow(t, contextMode, targetRole)
 	return f.createStartedTask(t)
+}
+
+func (f starterFixture) createStartedScriptTask(t *testing.T, scriptPath string) workflowstore.TaskRecord {
+	t.Helper()
+	ctx := context.Background()
+	scriptWorkflowID := createWorkflowRunnerScriptWorkflow(t, f.store, scriptPath)
+	if _, err := f.store.LinkWorkflow(ctx, f.projectID, scriptWorkflowID, false); err != nil {
+		t.Fatalf("link script workflow: %v", err)
+	}
+	f.worktrees.afterCreate = func(worktreeRoot string) error {
+		return os.WriteFile(
+			filepath.Join(worktreeRoot, scriptPath),
+			[]byte("#!/bin/sh\nprintf '%s\\n' '{\"transition\":\"done\",\"commentary\":\"watcher complete\"}'\n"),
+			0o755,
+		)
+	}
+	task, err := f.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  f.projectID,
+		WorkflowID: &scriptWorkflowID,
+		Title:      "Watch pull request",
+		Body:       "Run the watcher.",
+	})
+	if err != nil {
+		t.Fatalf("create script task: %v", err)
+	}
+	if err := f.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("materialize script task worktree: %v", err)
+	}
+	executionTarget := f.worktrees.executionTargetCandidate(task)
+	started, err := f.store.StartTaskWithExecutionTarget(ctx, task.ID, &executionTarget)
+	if err != nil {
+		t.Fatalf("start script task: %v", err)
+	}
+	if err := f.automaticIntents.RegisterAutomaticStarts([]workflow.RunID{started.RunID}); err != nil {
+		t.Fatalf("register script automatic intent: %v", err)
+	}
+	return task
 }
 
 func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) workflowstore.TaskRecord {
@@ -2755,22 +3223,32 @@ func renderedPromptForRun(t *testing.T, store *workflowstore.Store, runID workfl
 	return prompt
 }
 
-func startClaimedWorkflowRun(t *testing.T, ctx context.Context, fixture starterFixture, run workflowstore.RunRecord) {
+func startPreparedWorkflowRun(t *testing.T, ctx context.Context, fixture starterFixture, run workflowstore.RunRecord) {
 	t.Helper()
-	claimed, err := fixture.store.ClaimRun(ctx, run.ID, run.Generation)
+	prepared, err := fixture.starter.PrepareWorkflowRun(ctx, SchedulerPrepareRunRequest{
+		RunID:            run.ID,
+		TaskID:           run.TaskID,
+		PlacementID:      run.PlacementID,
+		NodeID:           run.NodeID,
+		SourceGeneration: run.Generation,
+		Generation:       run.Generation + 1,
+	})
 	if err != nil {
-		t.Fatalf("ClaimRun %s: %v", run.ID, err)
+		t.Fatalf("PrepareWorkflowRun %s: %v", run.ID, err)
 	}
-	req := SchedulerStartRunRequest{
-		RunID:       claimed.ID,
-		TaskID:      claimed.TaskID,
-		PlacementID: claimed.PlacementID,
-		NodeID:      claimed.NodeID,
-		Generation:  claimed.Generation,
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("Commit workflow run %s: %v", run.ID, err)
 	}
-	if err := fixture.starter.StartWorkflowRun(ctx, req); err != nil {
-		t.Fatalf("StartWorkflowRun %s: %v", run.ID, err)
+	admission := prepared.Admission()
+	if _, err := fixture.store.AdmitRun(ctx, workflowstore.RunAdmission{
+		RunID:                   run.ID,
+		ExpectedGeneration:      run.Generation,
+		SessionID:               admission.SessionID,
+		EffectiveCompletionMode: admission.EffectiveCompletionMode,
+	}); err != nil {
+		t.Fatalf("AdmitRun %s: %v", run.ID, err)
 	}
+	prepared.Activate()
 }
 
 func workflowRequestAskQuestionToolMessages(reqs []llm.Request) []llm.Message {
@@ -3040,6 +3518,79 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 		{ID: joinBEdgeID, WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-synth-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
 		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("AddEdge %s: %v", edge.Key, err)
+		}
+	}
+	return created.ID
+}
+
+func createFanoutJoinLoopStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Fanout Join Loop Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := starterNodeByKind(t, def, workflow.NodeKindStart)
+	done := starterNodeByKind(t, def, workflow.NodeKindTerminal)
+	implementationID := workflow.NodeID("node-implementation-" + string(created.ID))
+	codeReviewID := workflow.NodeID("node-code-review-" + string(created.ID))
+	qaID := workflow.NodeID("node-qa-" + string(created.ID))
+	complianceReviewID := workflow.NodeID("node-compliance-review-" + string(created.ID))
+	joinID := workflow.NodeID("node-join-" + string(created.ID))
+	approvalGateID := workflow.NodeID("node-approval-gate-" + string(created.ID))
+	joinAEdgeID := workflow.EdgeID("edge-join-a-" + string(created.ID))
+	for _, node := range []workflowstore.NodeRecord{
+		{ID: implementationID, WorkflowID: created.ID, Key: "implementation", Kind: workflow.NodeKindAgent, DisplayName: "Implementation", SubagentRole: "coder", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}},
+		{ID: codeReviewID, WorkflowID: created.ID, Key: "code_review", Kind: workflow.NodeKindAgent, DisplayName: "Code Review", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: qaID, WorkflowID: created.ID, Key: "qa", Kind: workflow.NodeKindAgent, DisplayName: "QA", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: complianceReviewID, WorkflowID: created.ID, Key: "compliance_review", Kind: workflow.NodeKindAgent, DisplayName: "Compliance Review", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "summary", Description: "Summary."}}},
+		{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
+		{ID: approvalGateID, WorkflowID: created.ID, Key: "approval_gate", Kind: workflow.NodeKindAgent, DisplayName: "Approval Gate", SubagentRole: "coder", InputFields: []workflow.InputField{{Name: "joined", Description: "Joined result."}}},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("AddNode %s: %v", node.Key, err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
+	splitGroup := workflow.TransitionGroupID("group-split-" + string(created.ID))
+	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	joinAGroup := workflow.TransitionGroupID("group-join-a-" + string(created.ID))
+	joinBGroup := workflow.TransitionGroupID("group-join-b-" + string(created.ID))
+	joinCGroup := workflow.TransitionGroupID("group-join-c-" + string(created.ID))
+	joinGateGroup := workflow.TransitionGroupID("group-join-gate-" + string(created.ID))
+	rejectedGroup := workflow.TransitionGroupID("group-rejected-" + string(created.ID))
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: implementationID, TransitionID: "split", DisplayName: "Review"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implementationID, TransitionID: "done", DisplayName: "Done"},
+		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: codeReviewID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: qaID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinCGroup, WorkflowID: created.ID, SourceNodeID: complianceReviewID, TransitionID: "join", DisplayName: "Join"},
+		{ID: joinGateGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "review", DisplayName: "Review Findings"},
+		{ID: rejectedGroup, WorkflowID: created.ID, SourceNodeID: approvalGateID, TransitionID: "review_rejected", DisplayName: "Rejected"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddTransitionGroup %s: %v", group.TransitionID, err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: implementationID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
+		{ID: workflow.EdgeID("edge-split-a-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "code_review", TargetNodeID: codeReviewID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-split-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "qa", TargetNodeID: qaID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-split-c-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "compliance_review", TargetNodeID: complianceReviewID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Compliance {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+		{ID: joinAEdgeID, WorkflowID: created.ID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined result."}}},
+		{ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-join-c-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinCGroup, Key: "join_c", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-join-gate-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: joinGateGroup, Key: "approval_gate", TargetNodeID: approvalGateID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Decide {{.Params.joined}}."},
+		{ID: workflow.EdgeID("edge-rejected-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: rejectedGroup, Key: "implementation", TargetNodeID: implementationID, ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Address review findings."},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)

@@ -262,19 +262,29 @@ func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.Ses
 		return errors.New("session store callback is required")
 	}
 	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	a.mu.Lock()
-	resource := a.resources[sessionID]
-	a.mu.Unlock()
-	if resource != nil {
-		return resource.withStore(ctx, callback)
+	var resource *agentResource
+	callbackErr := func() error {
+		gate.mu.Lock()
+		defer gate.mu.Unlock()
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		a.mu.Lock()
+		resource = a.resources[sessionID]
+		a.mu.Unlock()
+		if resource != nil {
+			return resource.withStoreUnderAdmission(ctx, callback)
+		}
+		store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+		if err != nil {
+			return err
+		}
+		return callback(ctx, store)
+	}()
+	if resource == nil {
+		return callbackErr
 	}
-	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
-	if err != nil {
-		return err
-	}
-	return callback(ctx, store)
+	return errors.Join(callbackErr, a.closeRetiringResource(context.Background(), resource))
 }
 
 type DormantSessionStoreAdmission struct {

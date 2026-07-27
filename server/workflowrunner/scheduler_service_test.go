@@ -495,11 +495,22 @@ type recordingStarter struct {
 	err     error
 }
 
-func (s *recordingStarter) StartWorkflowRun(_ context.Context, req SchedulerStartRunRequest) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.started = append(s.started, req)
-	return s.err
+func (s *recordingStarter) PrepareWorkflowRun(_ context.Context, req SchedulerPrepareRunRequest) (PreparedWorkflowRun, error) {
+	start := SchedulerStartRunRequest{
+		RunID:       req.RunID,
+		TaskID:      req.TaskID,
+		PlacementID: req.PlacementID,
+		NodeID:      req.NodeID,
+		Generation:  req.Generation,
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return schedulerPreparedRun{activate: func() {
+		s.mu.Lock()
+		s.started = append(s.started, start)
+		s.mu.Unlock()
+	}}, nil
 }
 
 func (s *recordingStarter) requests() []SchedulerStartRunRequest {
@@ -514,7 +525,7 @@ type failingClaimStore struct {
 	failures int
 }
 
-func (s *failingClaimStore) ClaimRun(ctx context.Context, runID workflow.RunID, generation int64) (workflowstore.RunnableRunRecord, error) {
+func (s *failingClaimStore) AdmitRun(ctx context.Context, admission workflowstore.RunAdmission) (workflowstore.RunnableRunRecord, error) {
 	s.mu.Lock()
 	if s.failures > 0 {
 		s.failures--
@@ -522,7 +533,35 @@ func (s *failingClaimStore) ClaimRun(ctx context.Context, runID workflow.RunID, 
 		return workflowstore.RunnableRunRecord{}, errors.New("temporary claim failure")
 	}
 	s.mu.Unlock()
-	return s.SchedulerStore.ClaimRun(ctx, runID, generation)
+	return s.SchedulerStore.AdmitRun(ctx, admission)
+}
+
+type schedulerPreparedRun struct {
+	admission RunAdmission
+	activate  func()
+	abort     func(context.Context) error
+	commitErr error
+}
+
+func (p schedulerPreparedRun) Admission() RunAdmission {
+	return p.admission
+}
+
+func (p schedulerPreparedRun) Commit() error {
+	return p.commitErr
+}
+
+func (p schedulerPreparedRun) Activate() {
+	if p.activate != nil {
+		p.activate()
+	}
+}
+
+func (p schedulerPreparedRun) Abort(ctx context.Context) error {
+	if p.abort == nil {
+		return nil
+	}
+	return p.abort(ctx)
 }
 
 type pendingAskResolverFunc func(context.Context, string, workflow.RunID, string) (bool, error)

@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import type { TaskLabelAssignment } from "@/api";
 import { useAppServices } from "@/app-facade";
 import {
+  createTaskLabelAssignmentController,
   type TaskLabelAssignmentController,
   type TaskLabelAssignmentSnapshot,
   type TaskLabelUpdateInput,
@@ -11,8 +12,8 @@ import {
 import { taskLabelAssignmentRegistryFor } from "./taskLabelAssignmentRegistry";
 
 export type TaskLabelAssignmentData = Readonly<{
-  controller: TaskLabelAssignmentController | null;
-  snapshot: TaskLabelAssignmentSnapshot | null;
+  controller: TaskLabelAssignmentController;
+  snapshot: TaskLabelAssignmentSnapshot;
 }>;
 
 export function useManagedTaskLabelAssignment(
@@ -45,7 +46,21 @@ export function useManagedTaskLabelAssignment(
     (listener: () => void) => registry.subscribe(taskID, listener),
     [registry, taskID],
   );
-  const getController = useCallback(() => registry.get(taskID), [registry, taskID]);
+  const initialController = useMemo(
+    () =>
+      createTaskLabelAssignmentController({
+        availableLabelIDs,
+        initialLabelIDs: initialAssignment.labelIDs,
+        refetch,
+        taskID,
+        update,
+      }),
+    [availableLabelIDs, initialAssignment, refetch, taskID, update],
+  );
+  const getController = useCallback(
+    () => (enabled ? registry.get(taskID) : null) ?? initialController,
+    [enabled, initialController, registry, taskID],
+  );
   const controller = useSyncExternalStore(subscribeController, getController, getController);
   useEffect(() => {
     if (!enabled || taskID.length === 0) {
@@ -53,11 +68,10 @@ export function useManagedTaskLabelAssignment(
     }
     const lease = registry.acquire({
       availableLabelIDs,
+      controller: initialController,
       initialAssignment,
       projectID,
-      refetch,
       taskID,
-      update,
       workflowID,
     });
     return () => {
@@ -67,6 +81,7 @@ export function useManagedTaskLabelAssignment(
     availableLabelIDs,
     enabled,
     initialAssignment,
+    initialController,
     projectID,
     queryClient,
     refetch,
@@ -78,29 +93,22 @@ export function useManagedTaskLabelAssignment(
 
   useEffect(() => {
     if (enabled) {
-      controller?.replaceAvailableLabelIDs(availableLabelIDs);
+      controller.replaceAvailableLabelIDs(availableLabelIDs);
     }
   }, [availableLabelIDs, controller, enabled]);
 
   useEffect(() => {
     if (enabled) {
-      controller?.replaceAuthoritative(initialAssignment);
+      controller.replaceAuthoritative(initialAssignment);
     }
   }, [controller, enabled, initialAssignment]);
 
-  const subscribe = useCallback(
-    (listener: () => void) => controller?.subscribe(listener) ?? noOpUnsubscribe,
-    [controller],
-  );
-  const getSnapshot = useCallback(() => controller?.getSnapshot() ?? null, [controller]);
+  const subscribe = useCallback((listener: () => void) => controller.subscribe(listener), [controller]);
+  const getSnapshot = useCallback(() => controller.getSnapshot(), [controller]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   return {
     controller,
     snapshot,
   };
-}
-
-function noOpUnsubscribe(): void {
-  return;
 }

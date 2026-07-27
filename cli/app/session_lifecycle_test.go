@@ -17,6 +17,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -155,12 +156,21 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
 	service := sessionlaunch.NewService(launch.Planner{
 		Config:            cfg,
 		ContainerDir:      containerDir,
 		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
 		PersistedSessions: metadataStore,
-	})
+	}).WithRuntimeAuthority(authority)
 	server := &testEmbeddedServer{
 		cfg:               cfg,
 		projectID:         binding.ProjectID,

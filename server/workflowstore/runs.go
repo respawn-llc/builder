@@ -13,8 +13,44 @@ import (
 )
 
 func (s *Store) ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (RunnableRunRecord, error) {
+	return s.AdmitRun(ctx, RunAdmission{RunID: runID, ExpectedGeneration: expectedGeneration})
+}
+
+func (s *Store) AdmitRun(ctx context.Context, admission RunAdmission) (RunnableRunRecord, error) {
+	if strings.TrimSpace(string(admission.RunID)) == "" {
+		return RunnableRunRecord{}, errors.New("workflow run admission id is required")
+	}
+	if admission.ExpectedGeneration < 0 {
+		return RunnableRunRecord{}, errors.New("workflow run admission generation is invalid")
+	}
+	if (admission.SessionID == nil) != (admission.EffectiveCompletionMode == nil) {
+		return RunnableRunRecord{}, errors.New("workflow agent run admission requires both session and completion mode")
+	}
 	now := s.now().UnixMilli()
-	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{ID: string(runID), ExpectedGeneration: expectedGeneration, UpdatedAtUnixMs: now, StartedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}})
+	sessionID := sql.NullString{}
+	if admission.SessionID != nil {
+		value := strings.TrimSpace(*admission.SessionID)
+		if value == "" || value != *admission.SessionID {
+			return RunnableRunRecord{}, errors.New("workflow run admission session id is invalid")
+		}
+		sessionID = sql.NullString{String: value, Valid: true}
+	}
+	effectiveMode := sql.NullString{}
+	if admission.EffectiveCompletionMode != nil {
+		value := strings.TrimSpace(*admission.EffectiveCompletionMode)
+		if value == "" || value != *admission.EffectiveCompletionMode || !validEffectiveCompletionMode(value) {
+			return RunnableRunRecord{}, fmt.Errorf("%w %q", ErrInvalidEffectiveCompletionMode, *admission.EffectiveCompletionMode)
+		}
+		effectiveMode = sql.NullString{String: value, Valid: true}
+	}
+	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{
+		ID:                      string(admission.RunID),
+		ExpectedGeneration:      admission.ExpectedGeneration,
+		UpdatedAtUnixMs:         now,
+		StartedAtUnixMs:         sql.NullInt64{Int64: now, Valid: true},
+		SessionID:               sessionID,
+		EffectiveCompletionMode: effectiveMode,
+	})
 	if err != nil {
 		return RunnableRunRecord{}, err
 	}

@@ -5,7 +5,7 @@ description: Install Kent, authenticate on first launch, tune the most useful se
 
 ## 1. Install Kent Server and CLI
 
-#### Homebrew (macOS/Linux)
+#### Homebrew (macOS Apple Silicon/Linux)
 
 ```bash
 brew tap respawn-llc/tap

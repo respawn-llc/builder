@@ -2,11 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import type { TaskLabelAssignment } from "@/api";
 import { queryKeys } from "@/app-facade";
-import {
-  createTaskLabelAssignmentController,
-  type TaskLabelAssignmentController,
-  type TaskLabelUpdateInput,
-} from "./taskLabelAssignmentController";
+import type { TaskLabelAssignmentController } from "./taskLabelAssignmentController";
 import { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } from "./taskLabelCache";
 
 export type TaskLabelAssignmentControllerLease = Readonly<{
@@ -16,11 +12,10 @@ export type TaskLabelAssignmentControllerLease = Readonly<{
 
 type ControllerInput = Readonly<{
   availableLabelIDs: readonly string[];
+  controller: TaskLabelAssignmentController;
   initialAssignment: TaskLabelAssignment;
   projectID: string;
-  refetch: () => Promise<TaskLabelAssignment>;
   taskID: string;
-  update: (input: TaskLabelUpdateInput) => Promise<TaskLabelAssignment>;
   workflowID: string;
 }>;
 
@@ -127,13 +122,7 @@ class TaskLabelAssignmentRegistry {
       existing.controller.replaceAuthoritative(input.initialAssignment);
       return this.#lease(input.taskID, existing);
     }
-    const controller = createTaskLabelAssignmentController({
-      availableLabelIDs: input.availableLabelIDs,
-      initialLabelIDs: input.initialAssignment.labelIDs,
-      refetch: input.refetch,
-      taskID: input.taskID,
-      update: input.update,
-    });
+    const { controller } = input;
     const entry: RegistryEntry = {
       controller,
       projectID: input.projectID,

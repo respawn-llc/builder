@@ -33,7 +33,6 @@ import { labelIDListSchema } from "./workflowLabels";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
-export const workflowGraphNodeLimit = 200;
 export const numberValue = z.number().default(0);
 export const nullableString = z
   .string()
@@ -392,9 +391,7 @@ function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSche
 const approvalSnapshotSchema = z
   .object({
     source_node_display_name: nonBlankString,
-    targets: z
-      .array(z.object({ display_name: nonBlankString }).strict())
-      .max(workflowGraphNodeLimit),
+    targets: z.array(z.object({ display_name: nonBlankString }).strict()),
     commentary: emptyString,
     output_values: z.record(z.string(), z.string()),
     workflow_revision_seen: z.number().int().nonnegative(),

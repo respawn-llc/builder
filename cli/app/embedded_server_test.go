@@ -317,7 +317,7 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 			ContainerDir:      filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
 			StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
 			PersistedSessions: metadataStore,
-		})
+		}).WithRuntimeAuthority(s.sessionAuthority(metadataStore.AuthoritativeSessionStoreOptions()...))
 		return service
 	}
 	var storeOptions []session.StoreOption
@@ -329,7 +329,7 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 		ContainerDir:      s.containerDir,
 		StoreOptions:      storeOptions,
 		PersistedSessions: s.sessionPersistence,
-	})
+	}).WithRuntimeAuthority(s.sessionAuthority(storeOptions...))
 	return service
 }
 

@@ -287,6 +287,11 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
+	// Reject conflicting provider identity before durable append so one malformed
+	// response cannot poison the session or crash the server projection.
+	if err := e.transcriptRuntimeState().ValidateMessage(stepID, msg); err != nil {
+		return session.CommitReceipt{}, fmt.Errorf("validate message projection: %w", err)
+	}
 	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	receipt := session.CommitReceipt{}
 	var appendErr error
@@ -303,7 +308,9 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	e.transcriptRuntimeState().AppendMessage(stepID, msg)
+	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
+		return receipt, errors.Join(appendErr, fmt.Errorf("append message projection: %w", projectionErr))
+	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{
@@ -383,7 +390,9 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	e.transcriptRuntimeState().AppendMessage(stepID, msg)
+	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
+		return appended.CommitReceipt, errors.Join(appendErr, fmt.Errorf("append queued message projection: %w", projectionErr))
+	}
 	e.emitRaw(Event{
 		Kind:                         EventUserMessageFlushed,
 		StepID:                       stepID,

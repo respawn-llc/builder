@@ -1198,6 +1198,83 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 }
 
+func TestPreparedAgentExecutionIsHiddenUntilActivation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	workflowRef := WorkflowExecutionRef{
+		TaskID:     "task-prepared-agent",
+		RunID:      "run-prepared-agent",
+		Generation: 1,
+	}
+	runnerStarted := make(chan struct{})
+	runnerRelease := make(chan struct{})
+	var releaseRunner sync.Once
+	defer releaseRunner.Do(func() { close(runnerRelease) })
+	prepared, err := authority.PrepareAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &workflowRef,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(runnerStarted)
+			<-runnerRelease
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare agent execution: %v", err)
+	}
+	if _, ok := authority.ExecutionByWorkflow(workflowRef); ok {
+		t.Fatal("prepared agent execution was exposed as an Exact Execution Scope before activation")
+	}
+	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("current task execution snapshot before activation: %v", err)
+	}
+	if len(snapshot.Executions) != 0 {
+		t.Fatalf("prepared task executions = %+v, want none before activation", snapshot.Executions)
+	}
+	select {
+	case <-runnerStarted:
+		t.Fatal("prepared agent runner started before activation")
+	default:
+	}
+
+	prepared.Activate()
+	select {
+	case <-runnerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("activated agent runner did not start")
+	}
+	if _, ok := authority.ExecutionByWorkflow(workflowRef); !ok {
+		t.Fatal("activated agent execution was not exposed as an Exact Execution Scope")
+	}
+	snapshot, err = authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("current task execution snapshot after activation: %v", err)
+	}
+	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Ref != workflowRef {
+		t.Fatalf("activated task executions = %+v, want %v", snapshot.Executions, workflowRef)
+	}
+	releaseRunner.Do(func() { close(runnerRelease) })
+	if _, err := prepared.Handle().Wait(context.Background()); err != nil {
+		t.Fatalf("wait prepared agent execution: %v", err)
+	}
+}
+
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
@@ -1690,6 +1767,77 @@ func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackR
 	}
 	if _, releaseErr := result.attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
 		t.Fatalf("release opened runtime: %v", releaseErr)
+	}
+}
+
+func TestWithSessionStoreSkipsCanceledWaiterAfterAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close authority: %v", closeErr)
+		}
+	})
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new open session descriptor: %v", err)
+	}
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- authority.WithSessionStore(context.Background(), descriptor, func(context.Context, *session.Store) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Store callback did not enter")
+	}
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	secondCalled := make(chan struct{}, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- authority.WithSessionStore(waiterCtx, descriptor, func(context.Context, *session.Store) error {
+			secondCalled <- struct{}{}
+			return nil
+		})
+	}()
+	cancelWaiter()
+	close(releaseFirst)
+
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first Store callback: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Store callback did not complete")
+	}
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Store waiter error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled Store waiter did not complete")
+	}
+	select {
+	case <-secondCalled:
+		t.Fatal("canceled Store waiter invoked its callback")
+	default:
 	}
 }
 

@@ -132,6 +132,74 @@ func TestResetProtocolViolationBudgetResetsCurrentRunGeneration(t *testing.T) {
 	}
 }
 
+func TestResetProtocolViolationBudgetRevivesProtocolInterruptedRun(t *testing.T) {
+	f := newRunLifecycleFixture(t)
+	claimed := f.claim(t)
+	violation := f.recordViolation(t, RecordProtocolViolationRequest{
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           1,
+		Detail:             `{"detail":"invalid completion"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if !violation.Interrupted {
+		t.Fatalf("protocol violation = %+v, want interrupted run", violation)
+	}
+
+	if err := f.store.ResetProtocolViolationBudget(f.ctx, ResetProtocolViolationBudgetRequest{
+		RunID:              f.started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	}); err != nil {
+		t.Fatalf("ResetProtocolViolationBudget: %v", err)
+	}
+
+	runs := f.runs(t)
+	if len(runs) != 1 ||
+		runs[0].Generation != claimed.Generation ||
+		runs[0].InvalidCompletions != 0 ||
+		runs[0].InterruptedAt != nil ||
+		runs[0].InterruptionReason != nil {
+		t.Fatalf("run after protocol budget reset = %+v, want active current-generation run", runs)
+	}
+
+	afterReset := f.recordViolation(t, RecordProtocolViolationRequest{
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           2,
+		Detail:             `{"detail":"after reset"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if afterReset.Count != 1 || afterReset.Interrupted {
+		t.Fatalf("violation after revived budget reset = %+v, want first active violation", afterReset)
+	}
+}
+
+func TestResetProtocolViolationBudgetDoesNotReviveOtherInterruptions(t *testing.T) {
+	f := newRunLifecycleFixture(t)
+	claimed := f.claim(t)
+	if err := f.store.InterruptRun(f.ctx, f.started.RunID, "user_interrupt", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+
+	err := f.store.ResetProtocolViolationBudget(f.ctx, ResetProtocolViolationBudgetRequest{
+		RunID:              f.started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("ResetProtocolViolationBudget error = %v, want sql.ErrNoRows", err)
+	}
+
+	runs := f.runs(t)
+	if len(runs) != 1 ||
+		runs[0].InterruptedAt == nil ||
+		runs[0].InterruptionReason == nil ||
+		*runs[0].InterruptionReason != "user_interrupt" {
+		t.Fatalf("run after protocol budget reset = %+v, want user interruption preserved", runs)
+	}
+}
+
 func TestResumeTaskRunsResetsProtocolViolationBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
