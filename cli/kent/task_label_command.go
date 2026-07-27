@@ -365,10 +365,10 @@ func resolveWorkflowProjectLabelFilter(
 	if err != nil {
 		return serverapi.WorkflowTaskLabelFilter{}, err
 	}
-	if conflictID, conflicts := sharedWorkflowProjectLabelSelectorGroups(resolvedGroups[0], resolvedGroups[1]); conflicts {
+	if conflictID := sharedWorkflowProjectLabelSelectorGroups(resolvedGroups[0], resolvedGroups[1]); conflictID != nil {
 		return serverapi.WorkflowTaskLabelFilter{}, conflictingWorkflowProjectLabelSelectorsError{
-			Included: resolvedGroups[0].SelectorsByID[conflictID],
-			Excluded: resolvedGroups[1].SelectorsByID[conflictID],
+			Included: resolvedGroups[0].SelectorsByID[*conflictID],
+			Excluded: resolvedGroups[1].SelectorsByID[*conflictID],
 		}
 	}
 	filter := serverapi.WorkflowTaskLabelFilter{
@@ -427,13 +427,13 @@ func resolveWorkflowProjectLabelSelectorGroups(
 func sharedWorkflowProjectLabelSelectorGroups(
 	included resolvedWorkflowProjectLabelSelectorGroup,
 	excluded resolvedWorkflowProjectLabelSelectorGroup,
-) (string, bool) {
+) *string {
 	for _, labelID := range included.IDs {
 		if _, exists := excluded.SelectorsByID[labelID]; exists {
-			return labelID, true
+			return &labelID
 		}
 	}
-	return "", false
+	return nil
 }
 
 type conflictingWorkflowProjectLabelSelectorsError struct {

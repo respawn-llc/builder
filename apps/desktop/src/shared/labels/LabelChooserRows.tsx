@@ -249,10 +249,9 @@ function LabelSelectionRow({
       ) : (
         <span
           aria-hidden="true"
-          className={`pointer-events-none absolute top-1/2 right-[var(--space-2)] grid size-4 -translate-y-1/2 place-items-center transition-[opacity,transform] motion-reduce:transition-none ${
+          className={`label-filter-condition-indicator pointer-events-none absolute top-1/2 right-[var(--space-2)] grid size-4 -translate-y-1/2 place-items-center ${
             conditionIndicatorVisibility[presentation.conditionState]
           }`}
-          style={{ transition: "opacity var(--motion-fast), transform var(--motion-fast)" }}
         >
           {labelConditionIndicatorIcon(presentation.conditionState)}
         </span>
