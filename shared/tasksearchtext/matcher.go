@@ -18,6 +18,12 @@ const (
 
 var errEmptyLiteralQuery = errors.New("literal query has no matchable runes")
 
+// NormalizedLiteralRuneCount reports the pinned FTS5-normalized rune count
+// used to determine whether a literal can produce a trigram candidate.
+func NormalizedLiteralRuneCount(query string) int {
+	return len(normalizeInsensitiveRunes([]rune(query)))
+}
+
 type LiteralMatcher struct {
 	caseMode            LiteralCaseMode
 	matchQuery          []rune
