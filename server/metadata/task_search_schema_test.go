@@ -136,4 +136,17 @@ WHERE title MATCH '"changed task title"'`).Scan(&matched); err != nil {
 	if matched != 1 {
 		t.Fatalf("updated task title FTS match count = %d, want 1", matched)
 	}
+
+	if _, err := store.db.Exec(`DELETE FROM task_comments WHERE id = 'comment-1'`); err != nil {
+		t.Fatalf("delete task comment: %v", err)
+	}
+	if err := store.db.QueryRow(`
+SELECT COUNT(*)
+FROM task_search_documents
+WHERE comment_id = 'comment-1'`).Scan(&matched); err != nil {
+		t.Fatalf("count deleted comment mapping: %v", err)
+	}
+	if matched != 0 {
+		t.Fatalf("deleted comment mapping count = %d, want 0", matched)
+	}
 }
