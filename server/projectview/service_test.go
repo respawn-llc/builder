@@ -143,6 +143,53 @@ func TestServiceDeleteProjectRuntimeGuardChecksBeforeAndAfterBlockingSessionStar
 	guard.assertCalls(t, created.Meta().SessionID)
 }
 
+func TestProjectMutationsSerializeOnlyEqualProjectIDs(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, first := newProjectViewMetadataStore(t)
+	second, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding second project: %v", err)
+	}
+	created := createProjectViewSession(t, store, cfg, first.ProjectID, cfg.WorkspaceRoot, "serialized")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 0}, blockStarted: started, releaseBlock: release}
+	svc := newProjectViewMetadataService(t, store, "")
+	svc.runtimeGuard = guard
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: first.ProjectID})
+		deleteDone <- err
+	}()
+	<-started
+	sameDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: first.ProjectID, DisplayName: "same"})
+		sameDone <- err
+	}()
+	otherDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: second.ProjectID, DisplayName: "other"})
+		otherDone <- err
+	}()
+	if err := <-otherDone; err != nil {
+		t.Fatalf("unrelated project update: %v", err)
+	}
+	select {
+	case err := <-sameDone:
+		t.Fatalf("same-project update completed while delete was paused: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if err := <-sameDone; err == nil {
+		t.Fatal("same-project update succeeded after project deletion")
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
+}
+
 func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance")
@@ -784,6 +831,8 @@ type projectViewRuntimeGuard struct {
 	activityCounts []int
 	calls          []string
 	released       bool
+	blockStarted   chan struct{}
+	releaseBlock   <-chan struct{}
 }
 
 func (g *projectViewRuntimeGuard) CountBlockingRuntimeActivity(_ context.Context, sessionIDs []string) (int, error) {
@@ -798,6 +847,12 @@ func (g *projectViewRuntimeGuard) CountBlockingRuntimeActivity(_ context.Context
 
 func (g *projectViewRuntimeGuard) BlockSessionStarts(_ context.Context, sessionIDs []string) (func(), error) {
 	g.calls = append(g.calls, "block:"+strings.Join(sessionIDs, ","))
+	if g.blockStarted != nil {
+		close(g.blockStarted)
+	}
+	if g.releaseBlock != nil {
+		<-g.releaseBlock
+	}
 	return func() { g.released = true }, nil
 }
 
