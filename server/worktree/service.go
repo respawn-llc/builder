@@ -15,6 +15,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/mutationlane"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -57,9 +58,7 @@ type Service struct {
 	setupTimeoutSeconds int
 	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
-
-	workspaceMu    sync.Mutex
-	workspaceLocks map[string]*workspaceMutationLock
+	workspaceMutations  *mutationlane.Registry[string]
 
 	transitionCtx     context.Context
 	cancelTransitions context.CancelFunc
@@ -67,11 +66,6 @@ type Service struct {
 	transitions       map[string]pendingWorktreeTransition
 	transitionWG      sync.WaitGroup
 	transitionsClosed bool
-}
-
-type workspaceMutationLock struct {
-	token chan struct{}
-	refs  int
 }
 
 type syncedWorktree struct {
@@ -223,7 +217,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
-		workspaceLocks:      make(map[string]*workspaceMutationLock),
+		workspaceMutations:  mutationlane.NewRegistry[string](),
 		transitionCtx:       transitionCtx,
 		cancelTransitions:   cancelTransitions,
 		transitions:         make(map[string]pendingWorktreeTransition),
@@ -325,11 +319,11 @@ func (s *Service) materializeInitialTaskWorktree(ctx context.Context, taskID str
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	release, err := s.acquireWorkspaceMutationLock(ctx, workspace.WorkspaceID)
+	lease, err := s.acquireWorkspaceMutationLease(ctx, workspace.WorkspaceID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	defer release()
+	defer lease.Release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
@@ -416,11 +410,11 @@ func (s *Service) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskW
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	release, err := s.acquireWorkspaceMutationLock(ctx, workspace.WorkspaceID)
+	lease, err := s.acquireWorkspaceMutationLease(ctx, workspace.WorkspaceID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	defer release()
+	defer lease.Release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
@@ -811,11 +805,11 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if workspaceRoot == "" {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("workspace %q has no root path", strings.TrimSpace(record.WorkspaceID))
 	}
-	release, err := s.acquireWorkspaceMutationLock(ctx, record.WorkspaceID)
+	lease, err := s.acquireWorkspaceMutationLease(ctx, record.WorkspaceID)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	defer release()
+	defer lease.Release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -1327,23 +1321,23 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
-		workspaceLease, err := s.acquireWorkspaceMutationLock(ctx, workspaceCtx.workspaceID)
+		workspaceLease, err := s.acquireWorkspaceMutationLease(ctx, workspaceCtx.workspaceID)
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
 		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
-			workspaceLease()
+			workspaceLease.Release()
 			return nil, sessionWorkspaceContext{}, err
 		}
 		if strings.TrimSpace(lockedWorkspaceCtx.workspaceID) == strings.TrimSpace(workspaceCtx.workspaceID) {
-			return workspaceLease, lockedWorkspaceCtx, nil
+			return workspaceLease.Release, lockedWorkspaceCtx, nil
 		}
-		workspaceLease()
+		workspaceLease.Release()
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLock(ctx context.Context, workspaceID string) (func(), error) {
+func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*mutationlane.Lease[string], error) {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil {
 		return nil, errors.New("worktree service is required")
@@ -1354,58 +1348,10 @@ func (s *Service) acquireWorkspaceMutationLock(ctx context.Context, workspaceID 
 	if trimmedWorkspaceID == "" {
 		return nil, errors.New("workspace mutation requires a workspace id")
 	}
-	s.workspaceMu.Lock()
-	if s.workspaceLocks == nil {
-		s.workspaceLocks = make(map[string]*workspaceMutationLock)
+	if s.workspaceMutations == nil {
+		return nil, errors.New("worktree workspace mutation lanes are required")
 	}
-	lock := s.workspaceLocks[trimmedWorkspaceID]
-	if lock == nil {
-		token := make(chan struct{}, 1)
-		token <- struct{}{}
-		lock = &workspaceMutationLock{token: token}
-		s.workspaceLocks[trimmedWorkspaceID] = lock
-	}
-	lock.refs++
-	s.workspaceMu.Unlock()
-
-	select {
-	case <-ctx.Done():
-		s.releaseWorkspaceMutationLockReference(trimmedWorkspaceID, lock)
-		return nil, ctx.Err()
-	case <-lock.token:
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			select {
-			case lock.token <- struct{}{}:
-			default:
-				panic(fmt.Sprintf(
-					"release workspace mutation lock invariant violated: workspace_id=%q token already available",
-					trimmedWorkspaceID,
-				))
-			}
-			s.releaseWorkspaceMutationLockReference(trimmedWorkspaceID, lock)
-		})
-	}, nil
-}
-
-func (s *Service) releaseWorkspaceMutationLockReference(workspaceID string, lock *workspaceMutationLock) {
-	s.workspaceMu.Lock()
-	defer s.workspaceMu.Unlock()
-	registered := s.workspaceLocks[workspaceID]
-	if registered != lock || lock.refs <= 0 {
-		panic(fmt.Sprintf(
-			"release workspace mutation lock reference invariant violated: workspace_id=%q refs=%d registered_same=%t",
-			workspaceID,
-			lock.refs,
-			registered == lock,
-		))
-	}
-	lock.refs--
-	if lock.refs == 0 {
-		delete(s.workspaceLocks, workspaceID)
-	}
+	return s.workspaceMutations.Acquire(ctx, trimmedWorkspaceID)
 }
 
 func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID string) (sessionWorkspaceContext, error) {

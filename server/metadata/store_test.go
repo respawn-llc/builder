@@ -1041,6 +1041,62 @@ func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
 	}
 }
 
+func TestRebindWorkspaceExpectedBindingRejectsOldRootReuse(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, prepared := newMetadataTestStore(t)
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open second metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+
+	movedRoot := t.TempDir()
+	requestedRoot := t.TempDir()
+	moved, err := otherStore.RebindWorkspace(ctx, cfg.WorkspaceRoot, movedRoot)
+	if err != nil {
+		t.Fatalf("move prepared workspace: %v", err)
+	}
+	if moved.WorkspaceID != prepared.WorkspaceID {
+		t.Fatalf("moved workspace id = %q, want %q", moved.WorkspaceID, prepared.WorkspaceID)
+	}
+	replacement, err := otherStore.AttachWorkspaceToProject(ctx, prepared.ProjectID, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("reuse old workspace root: %v", err)
+	}
+	if replacement.WorkspaceID == prepared.WorkspaceID {
+		t.Fatalf("replacement workspace id = %q, want a new identity", replacement.WorkspaceID)
+	}
+
+	_, err = store.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		cfg.WorkspaceRoot,
+		requestedRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
+	if err == nil {
+		t.Fatal("stale expected workspace binding rebind succeeded")
+	}
+
+	currentMoved, err := store.EnsureWorkspaceBinding(ctx, movedRoot)
+	if err != nil {
+		t.Fatalf("resolve moved workspace: %v", err)
+	}
+	if currentMoved.WorkspaceID != prepared.WorkspaceID {
+		t.Fatalf("moved workspace id after stale request = %q, want %q", currentMoved.WorkspaceID, prepared.WorkspaceID)
+	}
+	currentReplacement, err := store.EnsureWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("resolve replacement workspace: %v", err)
+	}
+	if currentReplacement.WorkspaceID != replacement.WorkspaceID {
+		t.Fatalf("replacement workspace id after stale request = %q, want %q", currentReplacement.WorkspaceID, replacement.WorkspaceID)
+	}
+	if _, err := store.EnsureWorkspaceBinding(ctx, requestedRoot); !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("requested root after stale request error = %v, want ErrWorkspaceNotRegistered", err)
+	}
+}
+
 func TestRegisterWorkspaceBindingConvergesUnderConcurrentFirstRegistration(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

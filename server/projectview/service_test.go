@@ -370,6 +370,79 @@ func TestMetadataServiceUpdatesProjectKeyForEditPage(t *testing.T) {
 	}
 }
 
+func TestProjectMutationsSerializeOnlyEqualProjectIDs(t *testing.T) {
+	ctx := context.Background()
+	store, _, firstProject := newProjectViewMetadataStore(t)
+	secondProject, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("register second project workspace: %v", err)
+	}
+	svc := newProjectViewMetadataService(t, store, "")
+
+	firstLease, err := svc.projectMutations.Acquire(ctx, firstProject.ProjectID)
+	if err != nil {
+		t.Fatalf("acquire first project mutation lease: %v", err)
+	}
+	firstReleased := false
+	t.Cleanup(func() {
+		if !firstReleased {
+			firstLease.Release()
+		}
+	})
+
+	type mutationResult struct {
+		operation string
+		err       error
+	}
+	mutations := make(chan mutationResult, 2)
+	go func() {
+		_, deleteErr := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{
+			ProjectID: firstProject.ProjectID,
+		})
+		mutations <- mutationResult{operation: "delete", err: deleteErr}
+	}()
+	go func() {
+		_, updateErr := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{
+			ProjectID:   secondProject.ProjectID,
+			DisplayName: "Second project update",
+		})
+		mutations <- mutationResult{operation: "update", err: updateErr}
+	}()
+
+	select {
+	case result := <-mutations:
+		if result.err != nil {
+			t.Fatalf("unrelated project update: %v", result.err)
+		}
+		if result.operation != "update" {
+			t.Fatalf("blocked project delete completed before unrelated project update: %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("unrelated project update did not complete")
+	}
+
+	select {
+	case result := <-mutations:
+		t.Fatalf("same-project delete completed while its mutation lane was held: %+v", result)
+	default:
+	}
+
+	firstLease.Release()
+	firstReleased = true
+
+	select {
+	case result := <-mutations:
+		if result.err != nil {
+			t.Fatalf("same-project delete: %v", result.err)
+		}
+		if result.operation != "delete" {
+			t.Fatalf("post-release mutation = %+v, want delete", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("same-project delete did not complete after lane release")
+	}
+}
+
 func TestMetadataServiceSetsDefaultWorkspaceForEditPage(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
