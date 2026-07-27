@@ -98,18 +98,17 @@ fi
 
 server_test_requires_runtime_admission=0
 for server_test_arg in "${server_test_args[@]}"; do
-    case "$server_test_arg" in
-    ./... | ./server/... | ./server/runtime | ./server/runtime/... | core/server/... | core/server/runtime | core/server/runtime/...)
-        server_test_requires_runtime_admission=1
-        break
-        ;;
-    esac
-    if [ -d "$server_test_arg" ] && command -v go >/dev/null 2>&1; then
-        resolved_import_path="$(go list -f '{{.ImportPath}}' "$server_test_arg" 2>/dev/null || true)"
+    if [[ "$server_test_arg" == -* ]] || ! command -v go >/dev/null 2>&1; then
+        continue
+    fi
+    while IFS= read -r resolved_import_path; do
         if [ "$resolved_import_path" = "core/server/runtime" ]; then
             server_test_requires_runtime_admission=1
             break
         fi
+    done < <(go list -f '{{.ImportPath}}' "$server_test_arg" 2>/dev/null || true)
+    if [ "$server_test_requires_runtime_admission" = "1" ]; then
+        break
     fi
 done
 
