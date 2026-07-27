@@ -180,7 +180,16 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 }
 
 func (e *execution) beginFinalization() {
+	authority := e.authority
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	if e.finalizing.Load() {
+		return
+	}
 	e.finalizing.Store(true)
+	if workflowRef, ok := e.scope.Workflow(); ok && authority.byWorkflow[workflowRef] == e {
+		authority.recordWorkflowExecutionMapMutationLocked()
+	}
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
@@ -205,6 +214,7 @@ func (e *execution) retire() {
 	}
 	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
 		delete(authority.byWorkflow, workflowRef)
+		authority.recordWorkflowExecutionMapMutationLocked()
 	}
 	authority.mu.Unlock()
 }
@@ -260,11 +270,12 @@ type executionPromptEntry struct {
 }
 
 type executionPromptStore struct {
-	mu      sync.RWMutex
-	scope   ExecutionScope
-	feed    ExecutionPromptFeed
-	closed  bool
-	pending map[string]*executionPromptEntry
+	mu       sync.RWMutex
+	scope    ExecutionScope
+	feed     ExecutionPromptFeed
+	closed   bool
+	pending  map[string]*executionPromptEntry
+	revision WorkflowExecutionPromptRevision
 }
 
 func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
@@ -302,6 +313,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
+	s.recordMutationLocked()
 	s.mu.Unlock()
 	s.publishPending(snapshot)
 	defer func() {
@@ -309,6 +321,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		current := s.pending[requestID]
 		if current == entry {
 			delete(s.pending, requestID)
+			s.recordMutationLocked()
 		}
 		s.mu.Unlock()
 		if current == entry {
@@ -341,6 +354,7 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 		}
 	}
 	delete(s.pending, requestID)
+	s.recordMutationLocked()
 	s.mu.Unlock()
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	s.publishResolved(entry.snapshot)
@@ -362,6 +376,9 @@ func (s *executionPromptStore) Close(err error) {
 		entries = append(entries, entry)
 		delete(s.pending, requestID)
 	}
+	if len(entries) != 0 {
+		s.recordMutationLocked()
+	}
 	s.mu.Unlock()
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
@@ -370,9 +387,21 @@ func (s *executionPromptStore) Close(err error) {
 }
 
 func (s *executionPromptStore) hasPending() bool {
+	pending, _ := s.observation()
+	return pending
+}
+
+func (s *executionPromptStore) observation() (bool, WorkflowExecutionPromptRevision) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.pending) != 0
+	return len(s.pending) != 0, s.revision
+}
+
+func (s *executionPromptStore) recordMutationLocked() {
+	s.revision++
+	if s.revision == 0 {
+		panic("session runtime execution prompt observation revision overflow")
+	}
 }
 
 func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {

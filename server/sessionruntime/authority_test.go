@@ -1240,6 +1240,13 @@ func TestPreparedAgentExecutionIsHiddenUntilActivation(t *testing.T) {
 	if _, ok := authority.ExecutionByWorkflow(workflowRef); ok {
 		t.Fatal("prepared agent execution was exposed as an Exact Execution Scope before activation")
 	}
+	observed, err := authority.AllWorkflowExecutionSnapshot()
+	if err != nil {
+		t.Fatalf("all-workflow execution snapshot before activation: %v", err)
+	}
+	if len(observed.Executions) != 0 || observed.ExecutionMapRevision == 0 {
+		t.Fatalf("prepared all-workflow execution snapshot = %+v, want no visible execution with a registration revision", observed)
+	}
 	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
 	if err != nil {
 		t.Fatalf("current task execution snapshot before activation: %v", err)
@@ -1261,6 +1268,15 @@ func TestPreparedAgentExecutionIsHiddenUntilActivation(t *testing.T) {
 	}
 	if _, ok := authority.ExecutionByWorkflow(workflowRef); !ok {
 		t.Fatal("activated agent execution was not exposed as an Exact Execution Scope")
+	}
+	activatedObserved, err := authority.AllWorkflowExecutionSnapshot()
+	if err != nil {
+		t.Fatalf("all-workflow execution snapshot after activation: %v", err)
+	}
+	if len(activatedObserved.Executions) != 1 ||
+		activatedObserved.Executions[0].Execution.Ref != workflowRef ||
+		activatedObserved.ExecutionMapRevision <= observed.ExecutionMapRevision {
+		t.Fatalf("activated all-workflow execution snapshot = %+v, want exact execution with revision > %d", activatedObserved, observed.ExecutionMapRevision)
 	}
 	snapshot, err = authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
 	if err != nil {

@@ -134,7 +134,7 @@ func (p *PreparedScriptExecution) Activate() {
 	if state != preparedScriptExecutionRunning {
 		panic(fmt.Sprintf("prepared script execution cannot activate from state %d", state))
 	}
-	p.execution.activated.Store(true)
+	p.execution.authority.activateExecution(p.execution)
 	p.activate.Do(func() { close(p.activation) })
 }
 
@@ -189,6 +189,7 @@ func (a *Authority) PrepareScriptExecution(ctx context.Context, req ScriptExecut
 	a.byScope[execution.scope.ID()] = execution
 	if workflowRef, ok := execution.scope.Workflow(); ok {
 		a.byWorkflow[workflowRef] = execution
+		a.recordWorkflowExecutionMapMutationLocked()
 	}
 	a.mu.Unlock()
 	return &PreparedScriptExecution{

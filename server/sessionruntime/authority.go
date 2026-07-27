@@ -40,17 +40,18 @@ type AuthorityOptions struct {
 }
 
 type Authority struct {
-	mu                 sync.Mutex
-	closed             bool
-	nextExecution      ExecutionGeneration
-	nextResource       runtimeids.ResourceGeneration
-	byScope            map[runtimeids.ExecutionScopeID]*execution
-	byWorkflow         map[WorkflowExecutionRef]*execution
-	resources          map[runtimeids.SessionID]*agentResource
-	gates              map[runtimeids.SessionID]*sessionAdmissionGate
-	executionFinalized ExecutionFinalized
-	promptFeed         ExecutionPromptFeed
-	options            authorityRuntimeOptions
+	mu                   sync.Mutex
+	closed               bool
+	nextExecution        ExecutionGeneration
+	nextResource         runtimeids.ResourceGeneration
+	byScope              map[runtimeids.ExecutionScopeID]*execution
+	byWorkflow           map[WorkflowExecutionRef]*execution
+	executionMapRevision WorkflowExecutionMapRevision
+	resources            map[runtimeids.SessionID]*agentResource
+	gates                map[runtimeids.SessionID]*sessionAdmissionGate
+	executionFinalized   ExecutionFinalized
+	promptFeed           ExecutionPromptFeed
+	options              authorityRuntimeOptions
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
@@ -84,6 +85,30 @@ func (a *Authority) nextExecutionGenerationLocked() ExecutionGeneration {
 		panic("session runtime execution generation overflow")
 	}
 	return a.nextExecution
+}
+
+func (a *Authority) recordWorkflowExecutionMapMutationLocked() {
+	a.executionMapRevision++
+	if a.executionMapRevision == 0 {
+		panic("session runtime workflow execution observation revision overflow")
+	}
+}
+
+func (a *Authority) activateExecution(execution *execution) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.byScope[execution.scope.ID()] != execution {
+		panic(fmt.Sprintf("activate unregistered execution scope %s", execution.scope.ID()))
+	}
+	if workflowRef, ok := execution.scope.Workflow(); ok {
+		if a.byWorkflow[workflowRef] != execution {
+			panic(fmt.Sprintf("activate unregistered workflow execution run_id=%s generation=%d", workflowRef.RunID, workflowRef.Generation))
+		}
+		execution.activated.Store(true)
+		a.recordWorkflowExecutionMapMutationLocked()
+		return
+	}
+	execution.activated.Store(true)
 }
 
 func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHandle, bool) {

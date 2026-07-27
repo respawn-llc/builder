@@ -195,7 +195,7 @@ func (p *PreparedAgentExecution) Activate() {
 		panic(fmt.Sprintf("prepared agent execution cannot activate from state %d", state))
 	}
 	p.state = preparedAgentExecutionActivated
-	p.execution.activated.Store(true)
+	p.execution.authority.activateExecution(p.execution)
 	p.mu.Unlock()
 	p.decision <- true
 }
@@ -787,6 +787,7 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 	a.byScope[scope.ID()] = execution
 	if request.Workflow != nil {
 		a.byWorkflow[*request.Workflow] = execution
+		a.recordWorkflowExecutionMapMutationLocked()
 	}
 	a.mu.Unlock()
 

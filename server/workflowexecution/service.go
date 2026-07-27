@@ -33,17 +33,18 @@ type SchedulerService struct {
 	automaticIntents   *AutomaticIntents
 	mutationPermit     *MutationPermit
 
-	processGate chan struct{}
-	stoppedCh   chan struct{}
-	mu          sync.Mutex
-	active      map[workflow.RunID]SchedulerStartRunRequest
-	stopped     bool
-	started     bool
-	loopCancel  context.CancelFunc
-	loopWG      sync.WaitGroup
-	processWG   sync.WaitGroup
-	wake        chan struct{}
-	explicit    []workflow.RunID
+	processGate    chan struct{}
+	stoppedCh      chan struct{}
+	mu             sync.Mutex
+	active         map[workflow.RunID]schedulerActiveRun
+	activeRevision SchedulerActiveRunRevision
+	stopped        bool
+	started        bool
+	loopCancel     context.CancelFunc
+	loopWG         sync.WaitGroup
+	processWG      sync.WaitGroup
+	wake           chan struct{}
+	explicit       []workflow.RunID
 }
 
 const (
@@ -73,7 +74,7 @@ func NewSchedulerService(store SchedulerStore, starter SchedulerRuntimeStarter, 
 		processInterval:  defaultProcessInterval,
 		automaticIntents: NewAutomaticIntents(),
 		mutationPermit:   mutationPermit,
-		active:           map[workflow.RunID]SchedulerStartRunRequest{},
+		active:           map[workflow.RunID]schedulerActiveRun{},
 		wake:             make(chan struct{}, defaultWakeBuffer),
 		processGate:      make(chan struct{}, 1),
 		stoppedCh:        make(chan struct{}),
@@ -205,7 +206,7 @@ func (s *SchedulerService) EnsureTaskQuiescent(ctx context.Context, taskID workf
 	}
 	s.mu.Lock()
 	for _, active := range s.active {
-		if active.TaskID == taskID {
+		if active.request.TaskID == taskID {
 			s.mu.Unlock()
 			return ErrTaskExecutionNotQuiescent
 		}
@@ -236,9 +237,10 @@ func (s *SchedulerService) RuntimeFinished(runID workflow.RunID, generation int6
 func (s *SchedulerService) releaseActive(runID workflow.RunID, generation int64) {
 	s.mu.Lock()
 	current, ok := s.active[runID]
-	if ok && current.Generation == generation {
+	if ok && current.request.Generation == generation {
 		s.automaticIntents.SourceFinished(runID)
 		delete(s.active, runID)
+		s.recordActiveRunMutationLocked()
 	}
 	s.mu.Unlock()
 }
@@ -529,6 +531,7 @@ func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore
 	}
 	s.logf("workflow.scheduler.selection run_id=%s task_id=%s generation=%d action=start", req.RunID, req.TaskID, req.Generation)
 	prepared.Activate()
+	s.markActiveRunRunning(req)
 	return nil
 }
 
@@ -557,7 +560,11 @@ func (s *SchedulerService) prepareRun(
 		NodeID:      candidate.NodeID,
 		Generation:  targetGeneration,
 	}
-	s.active[candidate.ID] = reserved
+	s.active[candidate.ID] = schedulerActiveRun{
+		request: reserved,
+		phase:   SchedulerActiveRunPhaseStarting,
+	}
+	s.recordActiveRunMutationLocked()
 	s.automaticIntents.SourceStarted(candidate.ID)
 	s.mu.Unlock()
 

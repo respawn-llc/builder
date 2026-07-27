@@ -28,6 +28,20 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
+type WorkflowExecutionMapRevision uint64
+
+type WorkflowExecutionPromptRevision uint64
+
+type AllWorkflowExecutionSnapshot struct {
+	ExecutionMapRevision WorkflowExecutionMapRevision
+	Executions           []WorkflowExecutionObservation
+}
+
+type WorkflowExecutionObservation struct {
+	Execution      TaskExecution
+	PromptRevision WorkflowExecutionPromptRevision
+}
+
 func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentTaskExecutionSnapshots([]workflow.TaskID{taskID})
 	if err != nil {
@@ -61,35 +75,80 @@ func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (ma
 		if _, exists := wanted[ref.TaskID]; !exists {
 			continue
 		}
-		target := TaskExecution{
-			Ref:             ref,
-			WaitingQuestion: execution.prompts.hasPending(),
-		}
-		if resource, ok := execution.scope.Resource(); ok {
-			target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
-		} else {
-			if execution.script == nil {
-				return nil, errors.New("live workflow script execution is missing its target")
-			}
-			target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
-		}
-		if err := target.validate(); err != nil {
+		observed, err := workflowExecutionObservation(ref, execution)
+		if err != nil {
 			return nil, err
 		}
-		snapshot := snapshots[ref.TaskID]
-		snapshot.Executions = append(snapshot.Executions, target)
-		snapshots[ref.TaskID] = snapshot
+		taskSnapshot := snapshots[ref.TaskID]
+		taskSnapshot.Executions = append(taskSnapshot.Executions, observed.Execution)
+		snapshots[ref.TaskID] = taskSnapshot
 	}
-	for taskID, snapshot := range snapshots {
-		sort.Slice(snapshot.Executions, func(i, j int) bool {
-			if snapshot.Executions[i].Ref.RunID != snapshot.Executions[j].Ref.RunID {
-				return snapshot.Executions[i].Ref.RunID < snapshot.Executions[j].Ref.RunID
+	for taskID, taskSnapshot := range snapshots {
+		sort.Slice(taskSnapshot.Executions, func(i, j int) bool {
+			if taskSnapshot.Executions[i].Ref.RunID != taskSnapshot.Executions[j].Ref.RunID {
+				return taskSnapshot.Executions[i].Ref.RunID < taskSnapshot.Executions[j].Ref.RunID
 			}
-			return snapshot.Executions[i].Ref.Generation < snapshot.Executions[j].Ref.Generation
+			return taskSnapshot.Executions[i].Ref.Generation < taskSnapshot.Executions[j].Ref.Generation
 		})
-		snapshots[taskID] = snapshot
+		snapshots[taskID] = taskSnapshot
 	}
 	return snapshots, nil
+}
+
+func (a *Authority) AllWorkflowExecutionSnapshot() (AllWorkflowExecutionSnapshot, error) {
+	if a == nil {
+		return AllWorkflowExecutionSnapshot{}, errors.New("session runtime authority is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.allWorkflowExecutionSnapshotLocked()
+}
+
+func (a *Authority) allWorkflowExecutionSnapshotLocked() (AllWorkflowExecutionSnapshot, error) {
+	snapshot := AllWorkflowExecutionSnapshot{
+		ExecutionMapRevision: a.executionMapRevision,
+		Executions:           make([]WorkflowExecutionObservation, 0, len(a.byWorkflow)),
+	}
+	for ref, execution := range a.byWorkflow {
+		if !execution.activated.Load() || execution.finalizing.Load() {
+			continue
+		}
+		target, err := workflowExecutionObservation(ref, execution)
+		if err != nil {
+			return AllWorkflowExecutionSnapshot{}, err
+		}
+		snapshot.Executions = append(snapshot.Executions, target)
+	}
+	sort.Slice(snapshot.Executions, func(i, j int) bool {
+		if snapshot.Executions[i].Execution.Ref.TaskID != snapshot.Executions[j].Execution.Ref.TaskID {
+			return snapshot.Executions[i].Execution.Ref.TaskID < snapshot.Executions[j].Execution.Ref.TaskID
+		}
+		if snapshot.Executions[i].Execution.Ref.RunID != snapshot.Executions[j].Execution.Ref.RunID {
+			return snapshot.Executions[i].Execution.Ref.RunID < snapshot.Executions[j].Execution.Ref.RunID
+		}
+		return snapshot.Executions[i].Execution.Ref.Generation < snapshot.Executions[j].Execution.Ref.Generation
+	})
+	return snapshot, nil
+}
+
+func workflowExecutionObservation(ref WorkflowExecutionRef, execution *execution) (WorkflowExecutionObservation, error) {
+	waitingQuestion, promptRevision := execution.prompts.observation()
+	target := TaskExecution{
+		Ref:             ref,
+		WaitingQuestion: waitingQuestion,
+	}
+	if resource, ok := execution.scope.Resource(); ok {
+		target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
+	} else {
+		if execution.script == nil {
+			return WorkflowExecutionObservation{}, errors.New("live workflow script execution is missing its target")
+		}
+		target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
+	}
+	if err := target.validate(); err != nil {
+		return WorkflowExecutionObservation{}, err
+	}
+	return WorkflowExecutionObservation{Execution: target, PromptRevision: promptRevision}, nil
 }
 
 func (e TaskExecution) validate() error {
