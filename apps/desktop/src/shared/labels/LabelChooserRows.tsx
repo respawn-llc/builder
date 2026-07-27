@@ -45,11 +45,6 @@ const conditionIndicatorVisibility = {
   included: "scale-100 opacity-100",
   excluded: "scale-100 opacity-100",
 } as const;
-const conditionIndicatorIcon: Readonly<Record<LabelFilterCondition, ReactNode>> = {
-  neutral: null,
-  included: <Check className="text-[var(--color-success)]" size={16} strokeWidth={1.8} />,
-  excluded: <X className="text-[var(--color-error)]" size={16} strokeWidth={1.8} />,
-};
 
 export function LabelRenameEditor({
   onCancel,
@@ -259,7 +254,7 @@ function LabelSelectionRow({
           }`}
           style={{ transition: "opacity var(--motion-fast), transform var(--motion-fast)" }}
         >
-          {conditionIndicatorIcon[presentation.conditionState]}
+          {labelConditionIndicatorIcon(presentation.conditionState)}
         </span>
       )}
     </ActionableListRow>
@@ -274,5 +269,16 @@ function labelConditionDescription(t: TFunction, state: LabelFilterCondition): s
       return t("labels.filterConditionIncluded");
     case "excluded":
       return t("labels.filterConditionExcluded");
+  }
+}
+
+function labelConditionIndicatorIcon(state: LabelFilterCondition): ReactNode {
+  switch (state) {
+    case "neutral":
+      return null;
+    case "included":
+      return <Check className="text-[var(--color-success)]" size={16} strokeWidth={1.8} />;
+    case "excluded":
+      return <X className="text-[var(--color-error)]" size={16} strokeWidth={1.8} />;
   }
 }

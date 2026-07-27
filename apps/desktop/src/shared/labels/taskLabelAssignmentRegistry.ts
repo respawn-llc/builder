@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { TaskLabelAssignment } from "@/api";
+import { labelIDListsEqual, type TaskLabelAssignment } from "@/api";
 import { queryKeys } from "@/app-facade";
 import type { TaskLabelAssignmentController } from "./taskLabelAssignmentController";
 import { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } from "./taskLabelCache";
@@ -113,7 +113,9 @@ class TaskLabelAssignmentRegistry {
     const existing = this.#entries.get(input.taskID);
     if (existing !== undefined) {
       if (existing.projectID !== input.projectID || existing.workflowID !== input.workflowID) {
-        throw new Error(`Task ${input.taskID} label assignment scope changed while its controller is active.`);
+        throw new Error(
+          `Task ${input.taskID} label assignment scope changed while its controller is active.`,
+        );
       }
       existing.stopCleanupWatch?.();
       existing.stopCleanupWatch = null;
@@ -228,10 +230,6 @@ function controllerHasUnsettledWork(controller: TaskLabelAssignmentController): 
     snapshot.dirty ||
     snapshot.reconciling
   );
-}
-
-function labelIDListsEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((labelID, index) => labelID === right[index]);
 }
 
 function noOp(): void {

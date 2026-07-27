@@ -149,6 +149,7 @@ export type {
 } from "./workflowLabels";
 export {
   canonicalTaskLabelFilter,
+  labelIDListsEqual,
   noTaskLabelFilter,
   taskLabelFilterConditionCount,
   taskLabelFiltersEqual,

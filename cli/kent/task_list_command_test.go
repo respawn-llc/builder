@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -209,34 +208,24 @@ func TestTaskListRejectsInvalidNamedFilterFlagCombinations(t *testing.T) {
 	}
 }
 
-func TestTaskListReportsConflictingLabelSelectorsWithoutInternalFilterFields(t *testing.T) {
+func TestResolveWorkflowProjectLabelFilterReportsConflictingSelectors(t *testing.T) {
 	remote := newTaskListCommandRemote()
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := taskSubcommand(
-		[]string{
-			"list",
-			"--project",
-			taskListCommandTestProjectID,
-			"--label",
-			"Alpha",
-			"--not-label",
-			taskListCommandAlphaID,
-		},
-		&stdout,
-		&stderr,
+	_, snapshot, err := loadWorkflowProjectLabelCatalog(t.Context(), remote, taskListCommandTestProjectID)
+	if err != nil {
+		t.Fatalf("loadWorkflowProjectLabelCatalog: %v", err)
+	}
+	_, err = resolveWorkflowProjectLabelFilter(
+		snapshot,
+		serverapi.WorkflowTaskNamedLabelFilterModeAny,
+		[]string{"Alpha"},
+		[]string{taskListCommandAlphaID},
 	)
-
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q", exitCode, stderr.String())
+	var conflict conflictingWorkflowProjectLabelSelectorsError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("resolver error = %T %v, want conflicting selector error", err, err)
 	}
-	if strings.Contains(stderr.String(), "label_filter.") {
-		t.Fatalf("stderr leaked an internal filter field: %q", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), `--label "Alpha" conflicts with --not-label "`+taskListCommandAlphaID+`"`) {
-		t.Fatalf("stderr = %q, want selector-specific conflict diagnostic", stderr.String())
+	if conflict.Included != "Alpha" || conflict.Excluded != taskListCommandAlphaID {
+		t.Fatalf("selector conflict = %+v", conflict)
 	}
 }
 

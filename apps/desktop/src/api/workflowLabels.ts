@@ -68,12 +68,12 @@ export function taskLabelFiltersEqual(left: TaskLabelFilter, right: TaskLabelFil
   }
   return (
     canonicalLeft.mode === canonicalRight.mode &&
-    labelIDArraysEqual(canonicalLeft.labelIDs, canonicalRight.labelIDs) &&
-    labelIDArraysEqual(canonicalLeft.excludedLabelIDs, canonicalRight.excludedLabelIDs)
+    labelIDListsEqual(canonicalLeft.labelIDs, canonicalRight.labelIDs) &&
+    labelIDListsEqual(canonicalLeft.excludedLabelIDs, canonicalRight.excludedLabelIDs)
   );
 }
 
-function labelIDArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+export function labelIDListsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((labelID, index) => labelID === right[index]);
 }
 
