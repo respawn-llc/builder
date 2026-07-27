@@ -22,6 +22,10 @@ import (
 const (
 	shardThreshold = 30
 	maxShards      = 24
+
+	runtimePackagePath                 = "core/server/runtime"
+	runtimeAdmissionHeldEnvironment    = "KENT_TESTSHARD_RUNTIME_ADMISSION_HELD"
+	runtimeAdmissionLockScriptRelative = "scripts/runtime-test-lock.py"
 )
 
 func main() {
@@ -40,9 +44,40 @@ func main() {
 	if err != nil {
 		fatalf("plan Go test shards: %v", err)
 	}
+	if requiresRuntimeAdmission(jobs) {
+		if err := runWithRuntimeAdmission(); err != nil {
+			fatalf("admit runtime test shards: %v", err)
+		}
+		return
+	}
 	if err := runJobs(jobs, *workers); err != nil {
 		fatalf("run Go test shards: %v", err)
 	}
+}
+
+func requiresRuntimeAdmission(jobs []testJob) bool {
+	if os.Getenv(runtimeAdmissionHeldEnvironment) == "1" {
+		return false
+	}
+	for _, job := range jobs {
+		if job.packagePath == runtimePackagePath {
+			return true
+		}
+	}
+	return false
+}
+
+func runWithRuntimeAdmission() error {
+	arguments := append(
+		[]string{runtimeAdmissionLockScriptRelative, os.Args[0]},
+		os.Args[1:]...,
+	)
+	command := exec.Command("python3", arguments...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	command.Env = append(os.Environ(), runtimeAdmissionHeldEnvironment+"=1")
+	return command.Run()
 }
 
 func listPackages(pattern string) ([]goPackage, error) {

@@ -155,7 +155,9 @@ if [ "$go_test_package_parallelism" -le 0 ]; then
     printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
     exit 2
 fi
+server_test_uses_sharder=0
 if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+    server_test_uses_sharder=1
     server_test_command=(
         go run ./tools/testshard
         --workers "$go_test_package_parallelism"
@@ -364,7 +366,10 @@ run_server_tests() {
         export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_build_dir/phase-writer"
     fi
 
-    if [ "$server_test_requires_runtime_admission" = "1" ]; then
+    # The sharder acquires one admission for its complete job graph when it
+    # plans core/server/runtime. Wrapping it here would recurse through its
+    # script-integration test, which invokes this script.
+    if [ "$server_test_requires_runtime_admission" = "1" ] && [ "$server_test_uses_sharder" != "1" ]; then
         server_test_command=(python3 "$repo_root/scripts/runtime-test-lock.py" "${server_test_command[@]}")
     fi
 
