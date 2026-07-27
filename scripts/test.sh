@@ -96,6 +96,22 @@ if [ "${#go_test_args[@]}" -gt 0 ]; then
     server_test_args=("${go_test_args[@]}")
 fi
 
+server_test_requires_runtime_admission=0
+for server_test_arg in "${server_test_args[@]}"; do
+    if [[ "$server_test_arg" == -* ]] || ! command -v go >/dev/null 2>&1; then
+        continue
+    fi
+    while IFS= read -r resolved_import_path; do
+        if [ "$resolved_import_path" = "core/server/runtime" ]; then
+            server_test_requires_runtime_admission=1
+            break
+        fi
+    done < <(go list -f '{{.ImportPath}}' "$server_test_arg" 2>/dev/null || true)
+    if [ "$server_test_requires_runtime_admission" = "1" ]; then
+        break
+    fi
+done
+
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
@@ -145,7 +161,9 @@ if [ "$go_test_package_parallelism" -le 0 ]; then
     printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
     exit 2
 fi
+server_test_uses_sharder=0
 if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+    server_test_uses_sharder=1
     server_test_command=(
         go run ./tools/testshard
         --workers "$go_test_package_parallelism"
@@ -241,7 +259,7 @@ require_command() {
 check_dependencies() {
     if target_selected server; then
         require_command go "run server tests"
-        if [ "$disable_wall_clock_cap" != "1" ]; then
+        if [ "$disable_wall_clock_cap" != "1" ] || [ "$server_test_requires_runtime_admission" = "1" ]; then
             require_command python3 "enforce the server test-runtime timeout"
         fi
     fi
@@ -352,6 +370,13 @@ run_server_tests() {
         export KENT_PTY_ANSI_WRITER_BINARY="$pty_fixture_build_dir/ansi-writer"
         export KENT_PTY_PHASE_INPUT_WRITER_BINARY="$pty_fixture_build_dir/phase-input-writer"
         export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_build_dir/phase-writer"
+    fi
+
+    # The sharder acquires one admission for its complete job graph when it
+    # plans core/server/runtime. Wrapping it here would recurse through its
+    # script-integration test, which invokes this script.
+    if [ "$server_test_requires_runtime_admission" = "1" ] && [ "$server_test_uses_sharder" != "1" ]; then
+        server_test_command=(python3 "$repo_root/scripts/runtime-test-lock.py" "${server_test_command[@]}")
     fi
 
     if [ "$disable_wall_clock_cap" = "1" ]; then

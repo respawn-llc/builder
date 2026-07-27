@@ -17,6 +17,7 @@ import (
 )
 
 func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -84,6 +85,7 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 }
 
 func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -138,6 +140,7 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 }
 
 func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "malformed request"}},
@@ -153,6 +156,7 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 }
 
 func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -195,6 +199,7 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 }
 
 func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -218,6 +223,7 @@ func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 }
 
 func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, chatStoreTestStepID, llm.Message{
 		Role:      llm.RoleAssistant,
@@ -238,6 +244,7 @@ func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 }
 
 func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	legacyMessage, err := sessionMessageRecordFromLLM(llm.Message{
 		Role:      llm.RoleAssistant,
@@ -262,6 +269,7 @@ func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T
 }
 
 func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, chatStoreTestStepID, llm.Message{
 		Role:      llm.RoleAssistant,
@@ -322,6 +330,7 @@ func repairCompletionRecord(
 }
 
 func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -345,6 +354,7 @@ func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 }
 
 func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role: llm.RoleAssistant,
@@ -368,6 +378,7 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 }
 
 func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -401,6 +412,7 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 }
 
 func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:      llm.RoleAssistant,
@@ -430,6 +442,7 @@ func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 }
 
 func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
@@ -515,6 +528,7 @@ func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T
 }
 
 func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		compactionErrors: []error{

@@ -488,27 +488,62 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	defer mu.Unlock()
 
 	var deltaIndex int
-	var hasDelta bool
-	var resetIndex int
-	var hasReset bool
+	hasDelta := false
+	var delta Event
+	var terminals []Event
+	assistantMessageCount := 0
 	for i, evt := range events {
-		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && !hasDelta {
+		switch evt.Kind {
+		case EventAssistantDelta:
+			if hasDelta {
+				t.Fatalf("multiple assistant deltas before terminal error: %+v", events)
+			}
 			deltaIndex = i
 			hasDelta = true
-		}
-		if evt.Kind == EventAssistantDeltaReset && !hasReset {
-			resetIndex = i
-			hasReset = true
+			delta = evt
+		case EventAssistantDeltaReset:
+			terminals = append(terminals, evt)
+		case EventAssistantMessage:
+			assistantMessageCount++
 		}
 	}
-	if !hasDelta {
+	if !hasDelta || delta.AssistantTranscriptStreamID == nil {
 		t.Fatalf("missing streamed delta before terminal error: %+v", events)
 	}
-	if !hasReset {
-		t.Fatalf("missing reset after terminal error: %+v", events)
+	if len(terminals) != 1 {
+		t.Fatalf("assistant stream terminals = %+v, want exactly one: %+v", terminals, events)
 	}
-	if deltaIndex > resetIndex {
-		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", deltaIndex, resetIndex)
+	terminal := terminals[0]
+	if terminal.AssistantTranscriptStreamID == nil ||
+		*terminal.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID ||
+		terminal.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
+		t.Fatalf("assistant stream terminal = %+v, delta = %+v", terminal, delta)
+	}
+	if assistantMessageCount != 0 {
+		t.Fatalf("final assistant events = %d, want none: %+v", assistantMessageCount, events)
+	}
+
+	var cleanupKinds []EventKind
+	for _, evt := range events[deltaIndex+1:] {
+		switch evt.Kind {
+		case EventConversationUpdated, EventAssistantDeltaReset, EventReasoningDeltaReset:
+			cleanupKinds = append(cleanupKinds, evt.Kind)
+		}
+	}
+	wantCleanupKinds := []EventKind{
+		EventConversationUpdated,
+		EventAssistantDeltaReset,
+		EventReasoningDeltaReset,
+		EventConversationUpdated,
+		EventReasoningDeltaReset,
+	}
+	if len(cleanupKinds) != len(wantCleanupKinds) {
+		t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
+	}
+	for i, want := range wantCleanupKinds {
+		if cleanupKinds[i] != want {
+			t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
+		}
 	}
 }
 

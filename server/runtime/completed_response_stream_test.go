@@ -17,6 +17,7 @@ import (
 )
 
 func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
+	t.Parallel()
 	step := scriptedllm.FinalAnswer("completed")
 	step.StreamDeltas = []llm.AssistantDelta{{
 		Text:  "draft",
@@ -99,6 +100,7 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 }
 
 func TestCompletedResponseWithoutActiveStreamPublishesNoStreamTerminal(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewExecTestEngine(
 		t,
@@ -143,6 +145,7 @@ func TestCompletedResponseWithoutActiveStreamPublishesNoStreamTerminal(t *testin
 }
 
 func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T) {
+	t.Parallel()
 	runID := workflow.RunID("workflow-run")
 	controller := &workflowCompletionAccountingController{}
 	rejected := scriptedllm.ToolBatch(
@@ -197,6 +200,7 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 }
 
 func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
+	t.Parallel()
 	reasoning := scriptedllm.Step{
 		Response: llm.Response{
 			Assistant: llm.Message{
@@ -329,6 +333,7 @@ func assertSupersededStreamPrecedesFinalContinuation(t *testing.T, events []Even
 }
 
 func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *testing.T) {
+	t.Parallel()
 	const callID = "final-tool"
 	step := scriptedllm.ToolBatch("completed", llm.ToolCall{
 		ID:    callID,
@@ -493,6 +498,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 }
 
 func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBeforeSingleFinal(t *testing.T) {
+	t.Parallel()
 	calls := []llm.ToolCall{
 		{ID: "final-tool-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
 		{ID: "final-tool-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
@@ -570,6 +576,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 }
 
 func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), fakeNoopStreamClient{}, Config{
 		Model:   "gpt-5",
@@ -597,6 +604,7 @@ func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
 }
 
 func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutPersistence(t *testing.T) {
+	t.Parallel()
 	controller := &externallyCompletedWorkflowController{}
 	step := scriptedllm.ToolBatch("", llm.ToolCall{
 		ID:    "stale-call",
@@ -681,6 +689,7 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 }
 
 func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.T) {
+	t.Parallel()
 	controller := &externallyCompletedWorkflowController{}
 	controller.completed.Store(true)
 	runID := workflow.RunID("workflow-run")
@@ -718,6 +727,7 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 }
 
 func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.T) {
+	t.Parallel()
 	const callID = "workflow-delayed-completion-call"
 	controller := &externallyCompletedWorkflowController{completeAfterObservations: 4}
 	runID := workflow.RunID("workflow-run")
@@ -793,6 +803,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 }
 
 func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.T) {
+	t.Parallel()
 	runID := workflow.RunID("workflow-run")
 	controller := &interruptingWorkflowProtocolViolationController{}
 	client := &fakeClient{responses: []llm.Response{{
@@ -839,6 +850,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 }
 
 func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
+	t.Parallel()
 	runID := workflow.RunID("workflow-run")
 	controller := &failingWorkflowCompletionController{}
 	completionResponse := llm.Response{Assistant: llm.Message{
@@ -900,6 +912,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 }
 
 func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
+	t.Parallel()
 	runID := workflow.RunID("workflow-run")
 	controller := &externallyCompletedWorkflowController{}
 	controller.completed.Store(true)
@@ -959,6 +972,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 }
 
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
+	t.Parallel()
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
 	second := scriptedllm.FinalAnswer("second")
