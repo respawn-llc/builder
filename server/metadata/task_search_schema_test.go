@@ -1,6 +1,9 @@
 package metadata
 
-import "testing"
+import (
+	"database/sql"
+	"testing"
+)
 
 func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 	store, err := Open(t.TempDir())
@@ -82,5 +85,41 @@ func TestTaskSearchSchemaBackfillsCanonicalSourceDocuments(t *testing.T) {
 	}
 	if _, err := store.db.Exec(`INSERT INTO task_search_fts(task_search_fts) VALUES ('integrity-check')`); err != nil {
 		t.Fatalf("run task-search FTS integrity check: %v", err)
+	}
+}
+
+func TestTaskSearchDocumentTriggersCreateCanonicalSources(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	seedWorkflowTask(t, store, binding.ProjectID, "KNT-1")
+	if _, err := store.db.Exec(`
+INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('comment-1', 'task-1', 'comment body', 'user', 'operator', ?, ?)`, now, now); err != nil {
+		t.Fatalf("insert task comment: %v", err)
+	}
+
+	rows, err := store.db.Query(`
+SELECT source_kind, task_id, comment_id
+FROM task_search_documents
+ORDER BY document_id ASC`)
+	if err != nil {
+		t.Fatalf("list task-search documents: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var kind string
+		var taskID, commentID sql.NullString
+		if err := rows.Scan(&kind, &taskID, &commentID); err != nil {
+			t.Fatalf("scan task-search document: %v", err)
+		}
+		got = append(got, kind+":"+taskID.String+":"+commentID.String)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate task-search documents: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("task-search documents = %v, want title/body/comment mappings", got)
 	}
 }
