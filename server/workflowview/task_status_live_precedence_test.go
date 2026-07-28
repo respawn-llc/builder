@@ -101,7 +101,7 @@ func TestTaskListCanonicalStatusDistinguishesStaleDurableFactsAndExactLiveExecut
 			}
 			started, claimed := test.prepare(t, ctx, workflowStore, task.ID)
 			observations := test.observations(task.ID, started, claimed)
-			list, _, _ := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
+			list, _, _, _ := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
 			projectID := binding.ProjectID
 			workflowIDValue := string(workflowID)
 			response, err := list.List(ctx, serverapi.WorkflowTaskListRequest{
@@ -138,8 +138,8 @@ func TestTaskReadModelsStayAvailableAcrossHeldLifecycleStates(t *testing.T) {
 			t.Fatalf("CompleteRun: %v", err)
 		}
 		observations := taskStatusTestExactRunningObservations(task.ID, started, claimed)
-		list, board, detail := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
-		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "done", serverapi.WorkflowTaskStatusKindDone, false, false)
+		list, board, detail, search := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
+		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, search, "done", serverapi.WorkflowTaskStatusKindDone, false, false)
 	})
 
 	t.Run("durable canceled wins while authority and scheduler cleanup remain observable", func(t *testing.T) {
@@ -149,16 +149,16 @@ func TestTaskReadModelsStayAvailableAcrossHeldLifecycleStates(t *testing.T) {
 			t.Fatalf("CancelTask: %v", err)
 		}
 		observations := taskStatusTestExactRunningObservations(task.ID, started, claimed)
-		list, board, detail := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
-		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "done", serverapi.WorkflowTaskStatusKindCanceled, false, false)
+		list, board, detail, search := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
+		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, search, "done", serverapi.WorkflowTaskStatusKindCanceled, false, false)
 	})
 
 	t.Run("retired script with durable active and scheduler running stays active", func(t *testing.T) {
 		ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
 		workflowID, task, started, claimed := newClaimedTaskStatusTestFixture(t, ctx, workflowStore, binding.ProjectID)
 		observations := taskStatusTestSchedulerOnlyObservations(task.ID, started, claimed, workflowexecution.SchedulerActiveRunPhaseRunning)
-		list, board, detail := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
-		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "agent", serverapi.WorkflowTaskStatusKindActive, false, false)
+		list, board, detail, search := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
+		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, search, "agent", serverapi.WorkflowTaskStatusKindActive, false, false)
 	})
 
 	t.Run("durable live question disagreement remains running", func(t *testing.T) {
@@ -168,8 +168,8 @@ func TestTaskReadModelsStayAvailableAcrossHeldLifecycleStates(t *testing.T) {
 			t.Fatalf("SetRunWaitingAsk: %v", err)
 		}
 		observations := taskStatusTestExactRunningObservations(task.ID, started, claimed)
-		list, board, detail := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
-		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "agent", serverapi.WorkflowTaskStatusKindRunning, true, false)
+		list, board, detail, search := newTaskStatusTestReadModels(t, metadataStore, workflowStore, observations)
+		assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, search, "agent", serverapi.WorkflowTaskStatusKindRunning, true, false)
 	})
 }
 
@@ -205,11 +205,7 @@ func TestTaskReadModelsStayAvailableDuringIndefiniteSchedulerStartup(t *testing.
 	if err != nil {
 		t.Fatalf("newTaskStatusSnapshotCoordinator: %v", err)
 	}
-	list, board, detail := newTaskStatusTestReadModelsWithSnapshots(t, metadataStore, workflowStore, snapshots)
-	search, err := NewTaskSearch(metadataStore, NewTaskProjector(), snapshots)
-	if err != nil {
-		t.Fatalf("NewTaskSearch: %v", err)
-	}
+	list, board, detail, search := newTaskStatusTestReadModelsWithSnapshots(t, metadataStore, workflowStore, snapshots)
 
 	startDone := make(chan error, 1)
 	go func() {
@@ -226,7 +222,7 @@ func TestTaskReadModelsStayAvailableDuringIndefiniteSchedulerStartup(t *testing.
 		t.Fatalf("held startup scheduler observation = %+v, want one starting run", activeRuns)
 	}
 
-	assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, "agent", serverapi.WorkflowTaskStatusKindActive, false, false)
+	assertTaskStatusTestReadSurfaces(t, ctx, binding.ProjectID, workflowID, task, list, board, detail, search, "agent", serverapi.WorkflowTaskStatusKindActive, false, false)
 	searchResponse, err := search.Search(ctx, serverapi.TaskSearchRequest{
 		Mode:        serverapi.TaskSearchModeLiteral,
 		Query:       "Body",
@@ -336,7 +332,7 @@ func newTaskStatusTestReadModels(
 	metadataStore *metadata.Store,
 	workflowStore *workflowstore.Store,
 	observations taskStatusTestObservations,
-) (*TaskList, *Board, *TaskDetail) {
+) (*TaskList, *Board, *TaskDetail, *TaskSearch) {
 	t.Helper()
 	snapshots := newTaskStatusTestSnapshotCoordinator(t, metadataStore, &taskStatusTestAuthoritySource{snapshot: observations.authority}, observations.scheduler)
 	return newTaskStatusTestReadModelsWithSnapshots(t, metadataStore, workflowStore, snapshots)
@@ -347,7 +343,7 @@ func newTaskStatusTestReadModelsWithSnapshots(
 	metadataStore *metadata.Store,
 	workflowStore *workflowstore.Store,
 	snapshots *TaskStatusSnapshotCoordinator,
-) (*TaskList, *Board, *TaskDetail) {
+) (*TaskList, *Board, *TaskDetail, *TaskSearch) {
 	t.Helper()
 	definitions, err := NewDefinitionProjection(workflowStore)
 	if err != nil {
@@ -366,7 +362,11 @@ func newTaskStatusTestReadModelsWithSnapshots(
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
-	return list, board, detail
+	search, err := NewTaskSearch(metadataStore, projector, snapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	return list, board, detail, search
 }
 
 func newTaskStatusTestSnapshotCoordinator(
@@ -500,6 +500,7 @@ func assertTaskStatusTestReadSurfaces(
 	list *TaskList,
 	board *Board,
 	detail *TaskDetail,
+	search *TaskSearch,
 	nodeKey string,
 	wantStatus serverapi.WorkflowTaskStatusKind,
 	wantInterrupt bool,
@@ -556,6 +557,22 @@ func assertTaskStatusTestReadSurfaces(
 	}
 	if containsTaskStatusAttention(cards.Cards[0].Status.AttentionTypes, serverapi.WorkflowTaskAttentionKindQuestion) != wantQuestion {
 		t.Fatalf("board attention = %+v, want question=%t", cards.Cards[0].Status.AttentionTypes, wantQuestion)
+	}
+
+	searchResponse, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:        serverapi.TaskSearchModeLiteral,
+		Query:       "Body",
+		Context:     serverapi.TaskSearchDefaultContext,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{wantStatus},
+		PageSize:    serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(searchResponse.Groups) != 1 ||
+		searchResponse.Groups[0].TaskID != string(task.ID) ||
+		searchResponse.Groups[0].Status.Kind != wantStatus {
+		t.Fatalf("search = %+v, want task %q status %q", searchResponse, task.ID, wantStatus)
 	}
 }
 

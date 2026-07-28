@@ -271,6 +271,13 @@ func TestTaskSearchRawKeepsTermsWithinSourcesAndHonorsCommentInclusion(t *testin
 	}); err != nil {
 		t.Fatalf("create split-term Task: %v", err)
 	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "ab",
+		Body:      "short raw term fixture",
+	}); err != nil {
+		t.Fatalf("create short raw term Task: %v", err)
+	}
 	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
@@ -318,6 +325,81 @@ func TestTaskSearchRawKeepsTermsWithinSourcesAndHonorsCommentInclusion(t *testin
 	}
 	if len(splitTerms.Groups) != 0 {
 		t.Fatalf("raw split-term Search = %+v, want no matches", splitTerms)
+	}
+
+	for _, test := range []struct {
+		name            string
+		query           string
+		includeComments bool
+		wantKind        serverapi.TaskSearchSourceKind
+	}{
+		{
+			name:     "exact title column",
+			query:    "title:needle",
+			wantKind: serverapi.TaskSearchSourceKindTitle,
+		},
+		{
+			name:     "exact body column",
+			query:    "body:needle",
+			wantKind: serverapi.TaskSearchSourceKindBody,
+		},
+		{
+			name:            "exact comment column",
+			query:           "comment:needle",
+			includeComments: true,
+			wantKind:        serverapi.TaskSearchSourceKindComment,
+		},
+		{
+			name:     "phrase stays within body source",
+			query:    `body:"needle body"`,
+			wantKind: serverapi.TaskSearchSourceKindBody,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filtered, err := search.Search(ctx, serverapi.TaskSearchRequest{
+				Mode:            serverapi.TaskSearchModeFTS5,
+				Query:           test.query,
+				Context:         serverapi.TaskSearchDefaultContext,
+				IncludeComments: test.includeComments,
+				PageSize:        serverapi.TaskSearchDefaultPageSize,
+			})
+			if err != nil {
+				t.Fatalf("raw Search: %v", err)
+			}
+			if len(filtered.Groups) != 1 ||
+				filtered.Groups[0].TaskID != string(task.ID) ||
+				len(filtered.Groups[0].Hits) != 1 ||
+				filtered.Groups[0].Hits[0].Source.Kind != test.wantKind {
+				t.Fatalf("raw %s response = %+v", test.name, filtered)
+			}
+		})
+	}
+
+	boolean, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeFTS5,
+		Query:           "title:needle OR comment:needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		PageSize:        serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw boolean Search: %v", err)
+	}
+	if len(boolean.Groups) != 1 || len(boolean.Groups[0].Hits) != 2 ||
+		boolean.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindTitle ||
+		boolean.Groups[0].Hits[1].Source.Kind != serverapi.TaskSearchSourceKindComment {
+		t.Fatalf("raw boolean response = %+v, want title then Comment", boolean)
+	}
+
+	for _, rawTerm := range []string{"a", "ab"} {
+		if _, err := search.Search(ctx, serverapi.TaskSearchRequest{
+			Mode:     serverapi.TaskSearchModeFTS5,
+			Query:    rawTerm,
+			Context:  serverapi.TaskSearchDefaultContext,
+			PageSize: serverapi.TaskSearchDefaultPageSize,
+		}); err != nil {
+			t.Fatalf("short raw term %q was rejected: %v", rawTerm, err)
+		}
 	}
 }
 
