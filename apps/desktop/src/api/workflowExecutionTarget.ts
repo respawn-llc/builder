@@ -57,26 +57,13 @@ export const defaultWorkflowExecutionTargetPolicy: WorkflowExecutionTargetPolicy
   customRef: null,
 };
 
-export type TaskStartApplied = Readonly<{
-  transitionID: string;
-  placementID: string;
-  runID: string;
-}>;
+import type { TaskCurrentNode } from "./models";
 
-export type TaskMoveApplied = Readonly<{
-  transitionID: string;
-  state: string;
-  placementIDs: readonly string[];
-  runIDs: readonly string[];
-}>;
+export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
-export type TaskApproveApplied = Readonly<{
-  transitionID: string;
-  taskID: string;
-  state: string;
-  placementIDs: readonly string[];
-  runIDs: readonly string[];
-}>;
+export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+
+export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
 export type WorkflowExecutionTargetActionResponse<TApplied> =
   | Readonly<{

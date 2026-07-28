@@ -22,18 +22,19 @@ import (
 )
 
 type RuntimeRegistry struct {
-	authorityMu              sync.RWMutex
-	authorityBySession       map[string]*authorityRuntimeEntry
-	sleepObserverMu          sync.Mutex
-	sleepObserver            func(active bool)
-	runStateMu               sync.Mutex
-	blockingActivitySessions map[string]bool
-	operations               *runtimeops.Coordinator
-	readModels               *runtimeactivity.CoordinatorCache
-	pendingPrompts           *pendingPromptStore
-	attentionBroker          *attentionnotify.Broker
-	questionBatches          *attentionnotify.QuestionBatchTracker
-	executionTargetResolver  func(context.Context, string) (clientui.SessionExecutionTarget, error)
+	authorityMu               sync.RWMutex
+	authorityBySession        map[string]*authorityRuntimeEntry
+	sleepObserverMu           sync.Mutex
+	sleepObserver             func(active bool)
+	runStateMu                sync.Mutex
+	blockingActivitySessions  map[string]bool
+	operations                *runtimeops.Coordinator
+	readModels                *runtimeactivity.CoordinatorCache
+	pendingPrompts            *pendingPromptStore
+	attentionBroker           *attentionnotify.Broker
+	questionBatches           *attentionnotify.QuestionBatchTracker
+	workflowAttentionSnapshot WorkflowAttentionNotificationSnapshotSource
+	executionTargetResolver   func(context.Context, string) (clientui.SessionExecutionTarget, error)
 }
 
 type authorityRuntimeEntry struct {

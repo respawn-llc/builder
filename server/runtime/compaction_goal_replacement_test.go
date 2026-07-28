@@ -7,8 +7,8 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -50,7 +50,6 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 	})
 
 	t.Run("workflow", func(t *testing.T) {
-		runID := workflow.RunID("workflow-run")
 		workflowClient := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 			remoteCompactionReplacement(1_000, 100, 200_000),
 		}}
@@ -58,9 +57,8 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			t,
 			mustCreateTestSession(t),
 			workflowClient,
-			&workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			&workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        runtimeids.NewExecutionScopeID(),
 				CompletionMode: workflowruntime.CompletionModeTool,
 				Controller:     &externallyCompletedWorkflowController{},
 			},

@@ -8,12 +8,15 @@ import (
 	"core/server/llm"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
 func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
+	branchKey := workflow.TransitionBranchKey("implementation")
 	counter := &workflowTaskCommentCounterProbe{count: 3}
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
@@ -22,13 +25,12 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID:              runID,
-			Contract:           workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:            scopeID,
 			CompletionMode:     workflowruntime.CompletionModeTool,
 			Controller:         &externallyCompletedWorkflowController{},
 			TaskCommentCounter: counter,
-			Instructions:       workflowruntime.TaskInstructions{TaskID: "task"},
+			Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &branchKey)},
 		},
 		Config{Model: "gpt-5"},
 	)
@@ -62,8 +64,8 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeWorkflowMode {
-			if item.SourcePath == nil || *item.SourcePath != string(runID) {
-				t.Fatalf("workflow replacement source identity = %+v, want %q", item, runID)
+			if item.SourcePath == nil || *item.SourcePath != "workflow-current-node/task/node/branch/implementation" {
+				t.Fatalf("workflow replacement source identity = %+v, want branch-scoped Current Node", item)
 			}
 			workflowModes++
 		}
@@ -79,21 +81,32 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 }
 
 func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name          string
-		existingRunID workflow.RunID
-		compact       func(context.Context, *Engine) error
+		name                string
+		existingCurrentNode bool
+		existingBranchKey   *workflow.TransitionBranchKey
+		compact             func(context.Context, *Engine) error
 	}{
 		{
-			name:          "same assignment reminder",
-			existingRunID: "workflow-run",
+			name:                "same assignment reminder",
+			existingCurrentNode: true,
 			compact: func(ctx context.Context, engine *Engine) error {
 				return engine.CompactContext(ctx, "")
 			},
 		},
 		{
-			name:          "compact and continue reassignment",
-			existingRunID: "previous-workflow-run",
+			name: "compact and continue reassignment",
+			compact: func(ctx context.Context, engine *Engine) error {
+				return engine.CompactContextForWorkflowContinuation(ctx)
+			},
+		},
+		{
+			name: "parallel same-node branch reassignment after compaction",
+			existingBranchKey: func() *workflow.TransitionBranchKey {
+				key := workflow.TransitionBranchKey("implementation")
+				return &key
+			}(),
 			compact: func(ctx context.Context, engine *Engine) error {
 				return engine.CompactContextForWorkflowContinuation(ctx)
 			},
@@ -101,7 +114,8 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			runID := workflow.RunID("workflow-run")
+			scopeID := runtimeids.NewExecutionScopeID()
+			currentBranchKey := workflow.TransitionBranchKey("review")
 			client := &fakeCompactionClient{
 				compactionResponses: []llm.CompactionResponse{
 					remoteCompactionReplacement(1_000, 100, 200_000),
@@ -121,10 +135,9 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 				t,
 				mustCreateTestSession(t),
 				client,
-				&workflowruntime.Config{
-					RunID: runID,
+				&workflowruntime.CurrentNodeExecutionConfig{
+					ScopeID: scopeID,
 					Contract: workflowruntime.CompletionContract{
-						RunID: runID,
 						Transitions: []workflowruntime.CompletionTransition{{
 							ID:         "done",
 							Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -132,9 +145,20 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					},
 					CompletionMode: workflowruntime.CompletionModeTool,
 					Controller:     &externallyCompletedWorkflowController{},
+					Instructions:   workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &currentBranchKey)},
 				},
 				Config{Model: "gpt-5"},
 			)
+			currentNodeIdentity := workflowruntime.CurrentNodePromptIdentity(engine.cfg.CurrentNodeExecution.Instructions.CurrentNode)
+			existingIdentity := "previous-task/previous-node"
+			if test.existingCurrentNode {
+				existingIdentity = currentNodeIdentity
+			}
+			if test.existingBranchKey != nil {
+				existingIdentity = workflowruntime.CurrentNodePromptIdentity(
+					mustTestCurrentNodeReference(t, "task", "node", test.existingBranchKey),
+				)
+			}
 			if err := engine.steer("input", steerMessagesWithPersistenceIntent(
 				steeringPriorityNormal,
 				steeringMessageEventNone,
@@ -143,7 +167,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					{
 						Role:        llm.RoleDeveloper,
 						MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-						SourcePath:  textutil.Value(string(test.existingRunID)),
+						SourcePath:  textutil.Value(existingIdentity),
 						Content:     textutil.Value("existing workflow instructions"),
 					},
 					{Role: llm.RoleUser, Content: textutil.Value("input")},
@@ -154,9 +178,6 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 
 			if err := test.compact(context.Background(), engine); err != nil {
 				t.Fatalf("compact workflow context: %v", err)
-			}
-			if got := engine.LastCompactionWorkflowRunID(); got != string(runID) {
-				t.Fatalf("compaction workflow run ID = %q, want %q", got, runID)
 			}
 			if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
 				t.Fatalf("submit workflow turn: %v", err)
@@ -172,8 +193,8 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					*item.MessageType != llm.MessageTypeWorkflowMode {
 					continue
 				}
-				if item.SourcePath == nil || *item.SourcePath != string(runID) {
-					t.Fatalf("workflow request mode item = %+v, want source identity %q", item, runID)
+				if item.SourcePath == nil || *item.SourcePath != currentNodeIdentity {
+					t.Fatalf("workflow request mode item = %+v, want source identity %q", item, currentNodeIdentity)
 				}
 				workflowModes++
 			}
@@ -185,7 +206,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 }
 
 func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
 	controller := &workflowProtocolBudgetController{}
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
@@ -194,9 +215,8 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID:                        runID,
-			Contract:                     workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:                      runtimeids.NewExecutionScopeID(),
 			CompletionMode:               workflowruntime.CompletionModeTool,
 			MaxInvalidCompletionAttempts: 3,
 			Controller:                   controller,
@@ -258,14 +278,14 @@ type workflowProtocolBudgetController struct {
 	violationCount atomic.Int64
 }
 
-func (c *workflowProtocolBudgetController) RecordWorkflowProtocolViolation(
+func (c *workflowProtocolBudgetController) RecordProtocolViolation(
 	context.Context,
 	workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {
 	return workflowruntime.ViolationResult{Count: c.violationCount.Add(1)}, nil
 }
 
-func (c *workflowProtocolBudgetController) ResetWorkflowProtocolViolationBudget(
+func (c *workflowProtocolBudgetController) ResetProtocolViolationBudget(
 	context.Context,
 	workflowruntime.ViolationResetRequest,
 ) error {

@@ -11,10 +11,8 @@ import (
 )
 
 type WorkflowGraphEditPolicyImpact struct {
-	ActiveNodePlacementCount             int64
+	ActiveCurrentNodeCount               int64
 	PendingApprovalCount                 int64
-	ActiveRunCount                       int64
-	RunnableRunCount                     int64
 	StartNodeChangeCount                 int64
 	LastTerminalChangeCount              int64
 	TaskReferencedNodeKindChangeCount    int64
@@ -83,7 +81,6 @@ type workflowGraphEditPolicyStructuralDescriptor struct {
 }
 
 type workflowGraphTransitionChangeDescriptor struct {
-	WorkflowID   workflow.WorkflowID
 	SourceNodeID workflow.NodeID
 	EdgeIDs      []workflow.EdgeID
 }
@@ -141,7 +138,6 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			continue
 		}
 		descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
-			WorkflowID:   currentGroup.WorkflowID,
 			SourceNodeID: currentGroup.SourceNodeID,
 			EdgeIDs:      workflowGraphEdgeIDsSlice(currentEdgesByGroupID[currentGroup.ID]),
 		})
@@ -155,7 +151,6 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			}
 			if currentGroup, hasGroup := currentGroups[currentEdge.TransitionGroupID]; hasGroup {
 				descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
-					WorkflowID:   currentEdge.WorkflowID,
 					SourceNodeID: currentGroup.SourceNodeID,
 					EdgeIDs:      []workflow.EdgeID{currentEdge.ID},
 				})
@@ -170,7 +165,6 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 		}
 		if currentGroup, hasGroup := currentGroups[currentEdge.TransitionGroupID]; hasGroup {
 			descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
-				WorkflowID:   currentEdge.WorkflowID,
 				SourceNodeID: currentGroup.SourceNodeID,
 				EdgeIDs:      []workflow.EdgeID{currentEdge.ID},
 			})
@@ -196,10 +190,8 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
-	evaluation.EditPolicy.Impact.ActiveNodePlacementCount = activeImpact.ActiveNodePlacementCount
+	evaluation.EditPolicy.Impact.ActiveCurrentNodeCount = activeImpact.ActiveCurrentNodeCount
 	evaluation.EditPolicy.Impact.PendingApprovalCount = activeImpact.PendingApprovalCount
-	evaluation.EditPolicy.Impact.ActiveRunCount = activeImpact.ActiveRunCount
-	evaluation.EditPolicy.Impact.RunnableRunCount = activeImpact.RunnableRunCount
 	return evaluation, nil
 }
 
@@ -210,12 +202,12 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		RemovedEdgeCount:            int64(len(structural.Removed.edges)),
 	}
 	for _, nodeID := range structural.Removed.nodes {
-		count, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))
+		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
 		impact.NodeTaskReferenceCount += count
-		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
+		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
@@ -234,7 +226,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		LastTerminalChangeCount: structural.EditPolicy.LastTerminalChangeCount,
 	}
 	for _, nodeID := range structural.EditPolicy.NodeKindChanges {
-		refCount, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))
+		refCount, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
@@ -244,7 +236,10 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		}
 	}
 	for _, change := range structural.EditPolicy.TransitionChanges {
-		refCount := int64(0)
+		refCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(change.SourceNodeID))
+		if err != nil {
+			return workflowGraphSaveDynamicImpact{}, err
+		}
 		for _, edgeID := range change.EdgeIDs {
 			count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
 			if err != nil {
@@ -252,14 +247,6 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 			}
 			refCount += count
 		}
-		runCount, err := q.CountUnresolvedTaskRunsAtWorkflowNode(ctx, sqlitegen.CountUnresolvedTaskRunsAtWorkflowNodeParams{
-			WorkflowID: string(change.WorkflowID),
-			NodeID:     sql.NullString{String: string(change.SourceNodeID), Valid: true},
-		})
-		if err != nil {
-			return workflowGraphSaveDynamicImpact{}, err
-		}
-		refCount += runCount
 		if refCount > 0 {
 			editPolicyImpact.UnsafeTransitionChangeCount++
 			editPolicyImpact.UnsafeTransitionChangeRefCount += refCount

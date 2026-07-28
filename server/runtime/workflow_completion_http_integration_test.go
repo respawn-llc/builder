@@ -19,6 +19,7 @@ func (workflowCompatibleHTTPAuth) AuthorizationHeader(context.Context) (string, 
 }
 
 func TestWorkflowCompatibleResponsesHTTPBlackBoxGatesUnphasedAnswer(t *testing.T) {
+	t.Parallel()
 	invalid := "ordinary prose"
 	valid := `{"commentary":"complete","summary":"done"}`
 	stub, err := modelstub.StartResponsesStub([]modelstub.RequiredOperation{

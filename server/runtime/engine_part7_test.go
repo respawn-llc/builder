@@ -15,6 +15,7 @@ import (
 )
 
 func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(250 * time.Millisecond))
@@ -96,6 +97,7 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 }
 
 func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -211,6 +213,7 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 }
 
 func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
+	t.Parallel()
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -279,6 +282,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 }
 
 func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -310,6 +314,7 @@ func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 }
 
 func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -406,6 +411,7 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 }
 
 func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierContiguous(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -478,6 +484,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 }
 
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 

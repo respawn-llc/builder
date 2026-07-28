@@ -12,6 +12,7 @@ import (
 )
 
 func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
+	t.Parallel()
 	result, err := newMetaContextBuilder(
 		t.TempDir(),
 		"",
@@ -68,6 +69,7 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 }
 
 func TestReviewerReconstructionPlacesActiveGoalBeforeTranscriptBoundary(t *testing.T) {
+	t.Parallel()
 	continuation := llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation),
@@ -117,6 +119,7 @@ func TestReviewerReconstructionPlacesActiveGoalBeforeTranscriptBoundary(t *testi
 }
 
 func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
+	t.Parallel()
 	entries := VisibleChatEntriesFromMessage(llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation),

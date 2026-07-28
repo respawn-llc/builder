@@ -509,15 +509,15 @@ func TestRemoteWorkflowAttentionAndActivityRejectMalformedResponses(t *testing.T
 		}
 	})
 
-	t.Run("global attention cross variant field", func(t *testing.T) {
-		runID := "run-1"
+	t.Run("global attention approval session field", func(t *testing.T) {
+		sessionID := "session-1"
 		item := workflowRemoteApprovalAttention()
-		item.RunID = &runID
+		item.SessionID = &sessionID
 		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
 			Items: []serverapi.WorkflowAttentionItem{item},
 		})
 		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
-			t.Fatal("ListWorkflowAttention accepted an approval carrying run_id")
+			t.Fatal("ListWorkflowAttention accepted an approval carrying session_id")
 		}
 	})
 
@@ -532,16 +532,15 @@ func TestRemoteWorkflowAttentionAndActivityRejectMalformedResponses(t *testing.T
 		}
 	})
 
-	t.Run("activity nested attention mismatch", func(t *testing.T) {
+	t.Run("activity unsupported type", func(t *testing.T) {
 		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowTaskActivityList, serverapi.WorkflowTaskActivityListResponse{
 			Items: []serverapi.WorkflowTaskActivityItem{{
-				Type:      "run_interrupted",
-				TaskID:    "task-requested",
-				Attention: workflowRemoteInterruptedAttention("task-other"),
+				Type:   "unsupported",
+				TaskID: "task-requested",
 			}},
 		})
 		if _, err := remote.ListWorkflowTaskActivity(context.Background(), serverapi.WorkflowTaskActivityListRequest{TaskID: "task-requested"}); err == nil {
-			t.Fatal("ListWorkflowTaskActivity accepted incoherent nested attention")
+			t.Fatal("ListWorkflowTaskActivity accepted an unsupported type")
 		}
 	})
 }
@@ -590,32 +589,31 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 }
 
 func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
-	workflowID := "workflow-1"
 	return &serverapi.WorkflowAttentionItem{
 		ProjectID:   "project-1",
-		Kind:        "interrupted_run",
+		Kind:        "interrupted",
 		TaskID:      taskID,
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
-		WorkflowID:  &workflowID,
-		RunID:       workflowRemoteString("run-1"),
+		WorkflowID:  "workflow-1",
+		CurrentNode: &serverapi.WorkflowTaskCurrentNode{NodeID: "review"},
 	}
 }
 
 func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
-	workflowID := "workflow-1"
 	return serverapi.WorkflowAttentionItem{
-		ProjectID:        "project-1",
-		Kind:             "approval",
-		TaskID:           "task-requested",
-		TaskShortID:      "KENT-1",
-		TaskTitle:        "Task",
-		WorkflowID:       &workflowID,
-		TaskTransitionID: workflowRemoteString("transition-1"),
+		ProjectID:   "project-1",
+		Kind:        "approval",
+		TaskID:      "task-requested",
+		TaskShortID: "KENT-1",
+		TaskTitle:   "Task",
+		WorkflowID:  "workflow-1",
+		ApprovalID:  workflowRemoteString("approval-1"),
 		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
 			SourceNodeDisplayName: "Review",
 			Targets:               []serverapi.WorkflowAttentionApprovalTarget{{DisplayName: "Done"}},
 			OutputValues:          map[string]string{},
+			WorkflowRevisionSeen:  1,
 		},
 	}
 }

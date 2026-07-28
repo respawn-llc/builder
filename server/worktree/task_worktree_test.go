@@ -975,8 +975,14 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if _, err := workflowStore.CompleteRun(env.ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
-		t.Fatalf("CompleteRun: %v", err)
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("StartTask mutation = %+v, want one current node", started.Mutation)
+	}
+	if _, err := workflowStore.CompleteCurrentNode(env.ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source:       started.Mutation.Created[0].Reference,
+		TransitionID: "done",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{

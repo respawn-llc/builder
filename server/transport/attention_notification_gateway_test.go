@@ -22,7 +22,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndLiveOnly(t *testing.T) {
+func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndKeepsQuestionsLiveOnly(t *testing.T) {
 	appCore, prompts, server := newGatewayAttentionTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
@@ -167,6 +167,7 @@ func gatewayPromptResource(sessionID string) runtimeids.SessionResourceRef {
 }
 
 func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
+	currentNodeID := "node-" + taskID
 	return askquestion.AskQuestionRequest{
 		ID:       askID,
 		StepID:   gatewayAttentionStepID,
@@ -182,11 +183,11 @@ func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, s
 			PreparedPromptCount: 1,
 		},
 		AttentionTarget: &clientui.AttentionNotificationTarget{
-			Kind:      clientui.AttentionNotificationTargetWorkflowTask,
-			ProjectID: projectID,
-			TaskID:    taskID,
-			SessionID: sessionID,
-			RunID:     "run-" + taskID,
+			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			ProjectID:     projectID,
+			TaskID:        taskID,
+			SessionID:     sessionID,
+			CurrentNodeID: &currentNodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
 				Kind:   clientui.AttentionNotificationFocusQuestion,
 				AskIDs: []string{askID},

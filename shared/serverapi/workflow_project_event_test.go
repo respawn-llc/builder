@@ -16,7 +16,7 @@ func TestWorkflowProjectEventValidatesTypedResourceActionAndScope(t *testing.T) 
 				Resource:         WorkflowProjectEventResourceTask,
 				Action:           WorkflowProjectEventActionStarted,
 				PrimaryEntityID:  "task-1",
-				RelatedIDs:       []string{"run-1"},
+				RelatedIDs:       []string{"session-1"},
 				OccurredAtUnixMs: 1,
 			},
 			valid: true,

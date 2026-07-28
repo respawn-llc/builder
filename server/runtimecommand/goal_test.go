@@ -11,13 +11,13 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type goalAuthorityPersistenceObserver struct {
@@ -190,9 +190,20 @@ func TestGoalAuthorityDormantSetRespectsAdmissionFence(t *testing.T) {
 }
 
 func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
-	var liveEvents int
-	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(sessionruntime.AgentResourceDescriptor, runtime.Event) {
-		liveEvents++
+	var eventMu sync.Mutex
+	var goalFeedbackEvents int
+	var goalStatusEvents int
+	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(_ sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		if event.Kind == runtime.EventGoalStatusUpdated && event.GoalStatus != nil {
+			goalStatusEvents++
+		}
+		for _, entry := range runtime.TranscriptEntriesFromEvent(event) {
+			if entry.Role == string(transcript.EntryRoleGoalFeedback) {
+				goalFeedbackEvents++
+			}
+		}
 	})
 	sessionID := mustGoalAuthoritySessionID(t, store)
 	plan := workflowGoalAuthorityPlan(t, store.Meta().WorkspaceRoot)
@@ -230,8 +241,14 @@ func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 	if count := goalAuthorityNoticeCount(t, reopened); count != 1 {
 		t.Fatalf("live goal notice count = %d, want 1", count)
 	}
-	if liveEvents != 2 {
-		t.Fatalf("live goal events = %d, want feedback and status", liveEvents)
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	if goalFeedbackEvents != 1 || goalStatusEvents != 1 {
+		t.Fatalf(
+			"live goal events = feedback:%d status:%d, want one of each",
+			goalFeedbackEvents,
+			goalStatusEvents,
+		)
 	}
 }
 
@@ -279,13 +296,11 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		Workdir:      workdir,
-		Client:       goalAuthorityClient{},
-		WorkflowRun: &workflowruntime.Config{Contract: workflowruntime.CompletionContract{
-			RunID: workflow.RunID("goal-authority-workflow"),
-		}},
+		Settings:             settings,
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+		Workdir:              workdir,
+		Client:               goalAuthorityClient{},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

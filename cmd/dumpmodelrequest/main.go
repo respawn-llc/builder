@@ -145,18 +145,24 @@ func captureSessionRequest(
 	activeToolIDs := resolved.EnabledTools
 	activeSources := resolved.Source.Sources
 	workingDirectory := ""
-	var workflowConfig *workflowruntime.Config
-	if store.Meta().WorkflowSession != nil {
+	var workflowPrompt *workflowruntime.PromptContract
+	workflowOwned, err := md.SessionHasWorkflowTask(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve workflow session ownership: %w", err)
+	}
+	if workflowOwned {
 		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
-		if workflowErr != nil {
+		if workflowErr != nil && !errors.Is(workflowErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
 			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)
 		}
-		resolved = workflowInspection.Plan
-		workflowConfig = workflowInspection.Runtime
-		workingDirectory = workflowInspection.ExecutionRoot
-		activeSettings = resolved.ActiveSettings
-		activeToolIDs = resolved.EnabledTools
-		activeSources = resolved.Source.Sources
+		if workflowErr == nil {
+			resolved = workflowInspection.Plan
+			workflowPrompt = workflowInspection.Prompt
+			workingDirectory = workflowInspection.ExecutionRoot
+			activeSettings = resolved.ActiveSettings
+			activeToolIDs = resolved.EnabledTools
+			activeSources = resolved.Source.Sources
+		}
 	}
 	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
@@ -175,7 +181,7 @@ func captureSessionRequest(
 		return capturedRequest{}, err
 	}
 	mode := llm.OpenAIAuthModeForAuthState(authState)
-	if workflowConfig == nil {
+	if workflowPrompt == nil {
 		target, targetErr := md.ResolveSessionExecutionTarget(ctx, sessionID)
 		if targetErr != nil {
 			return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", targetErr)
@@ -186,7 +192,7 @@ func captureSessionRequest(
 	if forceProviderContract {
 		providerCapabilitiesOverride = &caps
 	}
-	headless := meta.HeadlessActive || workflowConfig != nil
+	headless := meta.HeadlessActive || workflowPrompt != nil
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
 		eventLog,
@@ -203,7 +209,7 @@ func captureSessionRequest(
 			SkipContinuationAgentRoleValidation: resolved.SkipContinuationAgentRoleValidation,
 			ProviderCapabilitiesOverride:        providerCapabilitiesOverride,
 			GlobalConfigDir:                     persistenceRoot,
-			WorkflowRun:                         workflowConfig,
+			WorkflowPrompt:                      workflowPrompt,
 		},
 	)
 	if err != nil {

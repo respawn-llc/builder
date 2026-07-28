@@ -12,6 +12,7 @@ import { errorMessage } from "@/api";
 import {
   attentionToastID,
   attentionNotificationIDKey,
+  advancesAttentionNotificationRevision,
   deliverPendingSurface,
   dismissSurface,
   notificationBody,
@@ -165,6 +166,14 @@ export function AttentionNotificationController() {
       }
       const notificationKey = attentionNotificationIDKey(notification.id);
       const existing = surfacedRef.current.get(notificationKey);
+      if (
+        !advancesAttentionNotificationRevision(
+          existing?.notification.revision,
+          notification.revision,
+        )
+      ) {
+        return;
+      }
       if (existing !== undefined) {
         if (existing.state === "activation_failed" || existing.state === "toast") {
           showAttentionToast(notification);

@@ -55,6 +55,7 @@ func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() erro
 }
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
+	t.Parallel()
 	steps := &blockingBackgroundStepLifecycle{
 		started: make(chan struct{}, 1),
 		stopped: make(chan error, 1),

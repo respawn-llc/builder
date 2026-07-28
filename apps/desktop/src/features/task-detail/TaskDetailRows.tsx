@@ -11,9 +11,6 @@ import {
   Button,
   Island,
   MarkdownText,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
@@ -354,7 +351,7 @@ export function PropertiesIsland({
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
         <TaskPropertyLine
           label={t("task.sessions")}
-          value={detail.currentSessionIDs.length.toString()}
+          value={detail.retainedSessionCount.toString()}
         />
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
@@ -398,27 +395,6 @@ function TaskActionPanel({
             {t("board.interrupt")}
           </Button>
         ) : null}
-        {detail.actions.canCancel ? (
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button disabled={disabled} variant="danger">
-                {t("task.cancel")}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-56" side="top">
-              <strong>{t("task.cancelConfirmTitle")}</strong>
-              <Button
-                disabled={disabled}
-                onClick={() => {
-                  void mutations.cancel.mutateAsync();
-                }}
-                variant="danger"
-              >
-                {t("app.confirm")}
-              </Button>
-            </PopoverContent>
-          </Popover>
-        ) : null}
       </div>
     </>
   );
@@ -446,7 +422,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
 
   return (
     <>
-      {detail.currentSessionIDs.map((sessionID) => (
+      {detail.liveSessionIDs.map((sessionID) => (
         <Button
           disabled={disabled}
           key={sessionID}
@@ -465,7 +441,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
         ? detail.currentScripts.map((script) => (
             <Button
               disabled={disabled}
-              key={script.runID}
+              key={`${script.currentNode.nodeID}:${script.currentNode.transitionBranchKey ?? "serial"}`}
               onClick={() => {
                 setOpenError("");
                 void openScript(script.path).catch((cause: unknown) => {

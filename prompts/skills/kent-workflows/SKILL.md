@@ -8,7 +8,7 @@ This skill describes workflow creation and editing. For creating, inspecting, an
 ## Workflow Concepts
 
 - A workflow is a graph of node states connected by transition branches.
-- A task is the durable user-facing unit of work moving through one workflow.
+- A task is the durable user-facing unit of work moving through one workflow. It directly owns its Current Nodes: normally one, or several during parallel fan-out.
 - A node is a visible workflow state. `start` is where tasks are created, `agent` node runs Kent sessions, `join` waits for parallel branches of a group, and `terminal` is a sink where automation stops.
 - An edge connects a transition group to a target node. A transition group is selected by a `transition_id`; if the group has multiple edges, it fans out to parallel target nodes.
 - A graph revision increments when graph-affecting edits are made.
@@ -65,7 +65,18 @@ kent workflow node add "$workflow_uuid" --key release_notes --kind script --scri
 kent workflow edge add "$workflow_uuid" --from implement --transition release_notes --edge-key release_notes --to release_notes --context new_session
 ```
 
-Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains runtime identifiers such as `run_id` and `placement_id`. Prefer placing scripts in the repository main workspace (checked into VCS or not depends on user choice) for workflows that are tailored to a project, and at `~/.kent/scripts` or similar generic directory for reusable workflows, unless the user gives guidance.
+Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains exactly `task_id`, `node_id`, and an optional `transition_branch_key` for parallel work. It contains no other execution identity. Prefer placing scripts in the repository main workspace (checked into VCS or not depends on user choice) for workflows that are tailored to a project, and at `~/.kent/scripts` or similar generic directory for reusable workflows, unless the user gives guidance.
+
+```json
+{
+  "release_notes_path": "docs/release-notes.md",
+  "_kent": {
+    "task_id": "task_123",
+    "node_id": "node_456",
+    "transition_branch_key": "release_notes"
+  }
+}
+```
 
 Stdout of your scripts must be workflow completion JSON. Stderr is diagnostics only. A typical stdout payload is:
 
@@ -105,9 +116,9 @@ Note that to prevent high costs due to cache invalidation, only compact and new_
 Continuation modes also have a context source. Use `--context-source <source>` on `workflow edge add` or `workflow edge update`.
 
 - `immediate_source`: continue or compact the session from the node that selected the transition. This is the default.
-- `node:<node-key>`: continue or compact the latest completed run of a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
-- `previous_target`: continue or compact the latest completed run of this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no completed prior target run exists, the transition fails.
-- `previous_target_or_new`: continue or compact the latest completed run of this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review session. This is good for looping re-checks, re-reviews, or re-verification.
+- `node:<node-key>`: continue or compact the latest retained Session associated with a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
+- `previous_target`: continue or compact the latest retained Session associated with this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no retained target Session exists, the transition fails.
+- `previous_target_or_new`: continue or compact the latest retained Session associated with this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review Session. This is good for looping re-checks, re-reviews, or re-verification.
 
 Examples:
 
@@ -129,7 +140,7 @@ Context source constraints:
 - `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
 - Manual task moves support `previous_target` and `previous_target_or_new` through concrete edges. `node:<node-key>` remains blocked.
 
-Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
+Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later retained Session associations do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
 
 ## Completion modes
 The completion mode controls the technicality of how an agent node signals task completion.
@@ -137,7 +148,7 @@ The completion mode controls the technicality of how an agent node signals task 
 Set it per node with `--completion-mode <mode>` on `node add` or `node update`. Omit the flag to default to user-configured default or resolve automatically based on surrounding configuration.
 
 - `auto`: resolve the effective mode based on configuration. This is the default and the right choice for most nodes, because it dynamically applies the rules below.
-- `structured_output`: provider-native structured output. Lowest-friction on capable providers, but fails run start when the provider does not support it, and **causes full cache invalidation** when applied to continued sessions.
+- `structured_output`: provider-native structured output. Lowest-friction on capable providers, but prevents the Current Node from starting when the provider does not support it, and **causes full cache invalidation** when applied to continued sessions.
 - `tool`: completion via the dynamic `complete_node` tool. Use it for tool-driven completion on providers without structured-output support. Also causes **full cache invalidation** for continued sessions.
 - `shell_command`: the agent runs `kent task complete` from its shell. Requires a runtime `shell` tool to be enabled in the subagent role config, but the shell tool gives the agent full access to the host system. Prefer this when the workflow contains `continue_session` transitions, because this mode does not cause cache invalidation.
 - `unstructured_output`: the agent tries a best-effort JSON submission as its answer. This is the most fragile configuration, use it only if you must use `continue_session` for the node chain and the agents there do not have the `shell` tool that'd have enabled the `shell_command` mode.

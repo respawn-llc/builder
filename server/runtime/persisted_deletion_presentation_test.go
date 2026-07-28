@@ -12,6 +12,7 @@ import (
 )
 
 func TestPersistedToolCompletionRestoresDeletionDispositionWithoutFilesystemAccess(t *testing.T) {
+	t.Parallel()
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {
 		name        string
@@ -38,6 +39,7 @@ func TestPersistedToolCompletionRestoresDeletionDispositionWithoutFilesystemAcce
 }
 
 func TestPersistedToolCompletionPreservesLegacyMissingDispositionState(t *testing.T) {
+	t.Parallel()
 	const legacySummary, legacyDetail = "legacy summary", "legacy detail"
 	meta := restoredDeletionPresentation(t, map[string]any{
 		"ToolName":     "patch",

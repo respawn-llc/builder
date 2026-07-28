@@ -6,6 +6,7 @@ import (
 )
 
 func TestAgentsInjectionPathsUsesGlobalConfigDirWhenSet(t *testing.T) {
+	t.Parallel()
 	globalDir := t.TempDir()
 	workspace := t.TempDir()
 	paths, err := agentsInjectionPaths(workspace, globalDir)

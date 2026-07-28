@@ -55,7 +55,7 @@ export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
   ApprovalAttentionItem,
   AttentionItem,
-  InterruptedRunAttentionItem,
+  InterruptedCurrentNodeAttentionItem,
   QuestionAttentionItem,
 } from "./attention";
 export type {
@@ -88,10 +88,9 @@ export type {
   ApprovalSnapshot,
   TaskStartApplied,
   TaskStartResponse,
-  TaskRun,
+  TaskCurrentNode,
   TaskStatus,
   TaskStatusKind,
-  TaskTransition,
   WorkflowBoard,
   WorkflowContextSource,
   WorkflowDefinition,

@@ -31,7 +31,11 @@ func (r *RuntimeRegistry) SubscribeAttentionNotifications(_ context.Context, req
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
-	return r.attentionBroker.SubscribeDesktop()
+	live, err := r.attentionBroker.SubscribeDesktop()
+	if err != nil {
+		return nil, err
+	}
+	return newWorkflowAttentionNotificationSubscription(live, r.workflowAttentionSnapshot), nil
 }
 
 func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {

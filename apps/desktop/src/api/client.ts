@@ -553,21 +553,8 @@ export class ApiClient implements ApiService {
     await this.#transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
-  async approveTransition(
-    taskTransitionID: string,
-    setupOperationID?: SetupOperationID,
-    executionTarget?: WorkflowExecutionTargetSelection,
-  ): Promise<TaskApproveResponse> {
-    return taskLifecycle.approveTransition(
-      this.#transport,
-      taskTransitionID,
-      setupOperationID,
-      executionTarget,
-    );
-  }
-
-  async cancelTask(taskID: string): Promise<void> {
-    await this.#transport.call("workflow.task.cancel", { task_id: taskID });
+  async approveApproval(approvalID: string): Promise<TaskApproveResponse> {
+    return taskLifecycle.approveApproval(this.#transport, approvalID);
   }
 
   async deleteTask(taskID: string): Promise<void> {
@@ -646,7 +633,6 @@ export class ApiClient implements ApiService {
       compactJsonObject({
         client_request_id: input.clientRequestID,
         task_id: input.taskID,
-        run_id: input.runID,
         ask_id: input.askID,
         ...answer,
       }),

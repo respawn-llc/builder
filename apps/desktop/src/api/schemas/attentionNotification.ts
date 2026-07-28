@@ -2,131 +2,82 @@ import { z } from "zod";
 
 import type {
   AttentionNotification,
-  AttentionNotificationApprovalState,
   AttentionNotificationEvent,
   AttentionNotificationEventParams,
-  AttentionNotificationID,
-  AttentionNotificationInterruptedRunState,
-  AttentionNotificationQuestionState,
   AttentionNotificationTarget,
   AttentionNotificationTaskDetailFocus,
 } from "../attentionNotifications";
 
-const idString = z.string().min(1);
-const stringList = z.array(idString);
-const nonEmptyStringList = stringList.refine((value) => value.length > 0, {
-  message: "Expected at least one id",
-});
+const id = z.string().min(1);
+const ids = z.array(id);
+const nonEmptyIDs = ids.min(1);
+const notificationKind = z.enum(["question", "approval", "workflow_approval", "interrupted_current_node"]);
 
-const attentionIDWireSchema = z.object({
-  kind: z.enum(["question", "approval", "interrupted_run"]),
-  uuid: z.string().min(1),
-});
-
-function attentionID(value: z.infer<typeof attentionIDWireSchema>): AttentionNotificationID {
-  return { kind: value.kind, uuid: value.uuid };
-}
-
-const questionFocusWireSchema = z.object({
-  kind: z.literal("question"),
-  ask_ids: nonEmptyStringList,
-});
-
-const approvalFocusWireSchema = z.object({
-  kind: z.literal("approval"),
-  task_transition_id: z.string().min(1),
-});
-
-const interruptedRunFocusWireSchema = z.object({
-  kind: z.literal("interrupted_run"),
-  run_id: z.string().min(1),
-});
-
-const workflowTaskFocusWireSchema = z.discriminatedUnion("kind", [
-  questionFocusWireSchema,
-  approvalFocusWireSchema,
-  interruptedRunFocusWireSchema,
+const identifierSchema = z.object({ kind: notificationKind, uuid: id }).strict();
+const questionFocusSchema = z.object({ kind: z.literal("question"), ask_ids: nonEmptyIDs }).strict();
+const approvalFocusSchema = z.object({ kind: z.literal("approval"), approval_id: id }).strict();
+const interruptedFocusSchema = z.object({ kind: z.literal("interrupted_current_node") }).strict();
+const focusSchema = z.discriminatedUnion("kind", [
+  questionFocusSchema,
+  approvalFocusSchema,
+  interruptedFocusSchema,
 ]);
 
-function workflowTaskFocus(
-  value: z.infer<typeof workflowTaskFocusWireSchema>,
-): AttentionNotificationTaskDetailFocus {
-  if (value.kind === "question") {
-    return { kind: "question", askIDs: value.ask_ids };
+function focus(value: z.infer<typeof focusSchema>): AttentionNotificationTaskDetailFocus {
+  switch (value.kind) {
+    case "question":
+      return { kind: value.kind, askIDs: value.ask_ids };
+    case "approval":
+      return { kind: value.kind, approvalID: value.approval_id };
+    case "interrupted_current_node":
+      return { kind: value.kind };
   }
-  if (value.kind === "approval") {
-    return { kind: "approval", taskTransitionID: value.task_transition_id };
-  }
-  return { kind: "interrupted_run", runID: value.run_id };
 }
 
-const workflowTaskTargetWireSchema = z.object({
-  kind: z.literal("workflow_task"),
-  project_id: z.string().optional(),
-  workflow_id: z.string().optional(),
-  task_id: z.string().min(1),
-  task_short_id: z.string().optional(),
-  task_title: z.string().optional(),
-  session_id: z.string().optional(),
-  run_id: z.string().optional(),
-  focus: workflowTaskFocusWireSchema,
-});
-
-const sessionPromptTargetWireSchema = z.object({
-  kind: z.literal("session_prompt"),
-  session_id: z.string().min(1),
-});
-
-const targetWireSchema = z.discriminatedUnion("kind", [
-  workflowTaskTargetWireSchema,
-  sessionPromptTargetWireSchema,
+const targetSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("workflow_task"),
+      project_id: id.optional(),
+      workflow_id: id.optional(),
+      task_id: id,
+      task_short_id: id.optional(),
+      task_title: z.string().optional(),
+      session_id: id.optional(),
+      current_node_id: id.optional(),
+      current_node_branch_key: id.optional(),
+      focus: focusSchema,
+    })
+    .strict()
+    .transform((value): AttentionNotificationTarget => ({
+      kind: value.kind,
+      projectID: value.project_id,
+      workflowID: value.workflow_id,
+      taskID: value.task_id,
+      taskShortID: value.task_short_id,
+      taskTitle: value.task_title,
+      sessionID: value.session_id,
+      currentNodeID: value.current_node_id,
+      currentNodeBranchKey: value.current_node_branch_key,
+      focus: focus(value.focus),
+    })),
+  z
+    .object({ kind: z.literal("session_prompt"), session_id: id })
+    .strict()
+    .transform((value): AttentionNotificationTarget => ({ kind: value.kind, sessionID: value.session_id })),
 ]);
 
-function target(value: z.infer<typeof targetWireSchema>): AttentionNotificationTarget {
-  if (value.kind === "session_prompt") {
-    return { kind: "session_prompt", sessionID: value.session_id };
-  }
-  return {
-    kind: "workflow_task",
-    projectID: value.project_id,
-    workflowID: value.workflow_id,
-    taskID: value.task_id,
-    taskShortID: value.task_short_id,
-    taskTitle: value.task_title,
-    sessionID: value.session_id,
-    runID: value.run_id,
-    focus: workflowTaskFocus(value.focus),
-  };
-}
-
-const questionStateSchema: z.ZodType<AttentionNotificationQuestionState> = z
+const questionStateSchema = z
   .object({
-    prepared_ask_ids: stringList,
-    materialized_ask_ids: stringList,
-    current_unresolved_ask_ids: stringList,
-    skipped_ask_ids: stringList,
+    prepared_ask_ids: ids,
+    materialized_ask_ids: ids,
+    current_unresolved_ask_ids: ids,
+    skipped_ask_ids: ids,
     preview: z.string().optional(),
-    display_count: z.number(),
-    materialized_count: z.number(),
+    display_count: z.number().int().nonnegative(),
+    materialized_count: z.number().int().nonnegative(),
   })
-  .superRefine((value, context) => {
-    if (value.prepared_ask_ids.length === 0) {
-      context.addIssue({ code: "custom", message: "prepared_ask_ids is required" });
-    }
-    if (value.display_count !== value.prepared_ask_ids.length - value.skipped_ask_ids.length) {
-      context.addIssue({ code: "custom", message: "display_count must match non-skipped prepared asks" });
-    }
-    if (value.materialized_count !== value.materialized_ask_ids.length) {
-      context.addIssue({ code: "custom", message: "materialized_count must match materialized_ask_ids" });
-    }
-    if (
-      !stringListSubset(value.materialized_ask_ids, value.prepared_ask_ids) ||
-      !stringListSubset(value.current_unresolved_ask_ids, value.materialized_ask_ids) ||
-      !stringListSubset(value.skipped_ask_ids, value.prepared_ask_ids)
-    ) {
-      context.addIssue({ code: "custom", message: "question ask id lists must be consistent" });
-    }
-  })
+  .strict()
   .transform((value) => ({
     preparedAskIDs: value.prepared_ask_ids,
     materializedAskIDs: value.materialized_ask_ids,
@@ -137,313 +88,184 @@ const questionStateSchema: z.ZodType<AttentionNotificationQuestionState> = z
     materializedCount: value.materialized_count,
   }));
 
-const approvalStateSchema: z.ZodType<AttentionNotificationApprovalState> = z
+const notificationPayloadSchema = z
   .object({
-    task_transition_id: z.string().optional(),
-    message: z.string().optional(),
+    id: identifierSchema,
+    kind: notificationKind,
+    occurred_at: id,
+    revision: z.number().int().positive(),
+    question: questionStateSchema.nullish(),
+    approval: z.object({ message: id }).strict().nullish(),
+    workflow_approval: z.object({ approval_id: id, message: z.string().optional() }).strict().nullish(),
+    interrupted_current_node: z
+      .object({
+        message: z.string().optional(),
+        reason: z.string().optional(),
+        detail_json: z.string().optional(),
+      })
+      .strict()
+      .nullish(),
+    target: targetSchema,
   })
-  .transform((value) => ({
-    taskTransitionID: value.task_transition_id,
-    message: value.message,
-  }));
+  .strict();
 
-const interruptedRunStateSchema: z.ZodType<AttentionNotificationInterruptedRunState> = z
-  .object({
-    run_id: z.string().min(1),
-    message: z.string().optional(),
-    reason: z.string().optional(),
-    detail_json: z.string().optional(),
-  })
-  .transform((value) => ({
-    runID: value.run_id,
-    message: value.message,
-    reason: value.reason,
-    detailJSON: value.detail_json,
-  }));
+type NotificationPayload = z.output<typeof notificationPayloadSchema>;
 
-const notificationWireSchema = z.object({
-  id: attentionIDWireSchema,
-  kind: z.enum(["question", "approval", "interrupted_run"]),
-  occurred_at: z.string().min(1),
-  revision: z.number().min(1),
-  question: questionStateSchema.nullish(),
-  approval: approvalStateSchema.nullish(),
-  interrupted_run: interruptedRunStateSchema.nullish(),
-  target: targetWireSchema,
-});
-
-const notificationSchema: z.ZodType<AttentionNotification> = notificationWireSchema
-  .superRefine((value, context) => {
-    if (value.id.kind !== value.kind) {
-      context.addIssue({ code: "custom", message: "id kind must match notification kind" });
-    }
-    if (value.kind === "question") {
-      validateQuestionNotification(value, context);
-      return;
-    }
-    if (value.kind === "approval") {
-      validateApprovalNotification(value, context);
-      return;
-    }
-    validateInterruptedRunNotification(value, context);
-  })
+const notificationSchema: z.ZodType<AttentionNotification> = notificationPayloadSchema
+  .superRefine(validateNotificationCoherence)
   .transform((value) => ({
-    id: attentionID(value.id),
+    id: value.id,
     kind: value.kind,
     occurredAt: value.occurred_at,
     revision: value.revision,
     question: value.question ?? null,
     approval: value.approval ?? null,
-    interruptedRun: value.interrupted_run ?? null,
-    target: target(value.target),
+    workflowApproval:
+      value.workflow_approval == null
+        ? null
+        : { approvalID: value.workflow_approval.approval_id, message: value.workflow_approval.message },
+    interruptedCurrentNode:
+      value.interrupted_current_node == null
+        ? null
+        : {
+            message: value.interrupted_current_node.message,
+            reason: value.interrupted_current_node.reason,
+            detailJSON: value.interrupted_current_node.detail_json,
+          },
+    target: value.target,
   }));
 
-const pendingEventSchema = z
-  .object({
-    type: z.literal("pending"),
-    sequence: z.number().min(1),
-    source: z.enum(["live", "snapshot"]),
-    pending: notificationSchema,
-  })
-  .transform((value) => ({
-    type: value.type,
-    sequence: value.sequence,
-    source: value.source,
-    pending: value.pending,
-  }));
-
-const resolvedEventSchema = z
-  .object({
-    type: z.literal("resolved"),
-    sequence: z.number().min(1),
-    source: z.enum(["live", "snapshot"]),
-    id: attentionIDWireSchema,
-    kind: z.enum(["question", "approval", "interrupted_run"]),
-    occurred_at: z.string().min(1),
-  })
-  .transform((value) => ({
-    type: value.type,
-    sequence: value.sequence,
-    source: value.source,
-    id: attentionID(value.id),
-    kind: value.kind,
-    occurredAt: value.occurred_at,
-  }));
-
-const snapshotCompleteEventSchema = z
-  .object({
-    type: z.literal("snapshot_complete"),
-    sequence: z.number().min(1),
-    source: z.literal("snapshot"),
-    session_id: z.string().min(1),
-  })
-  .transform((value) => ({
-    type: value.type,
-    sequence: value.sequence,
-    source: value.source,
-    sessionID: value.session_id,
-  }));
-
-export const attentionNotificationEventSchema: z.ZodType<AttentionNotificationEvent> = z.union([
-  pendingEventSchema,
-  resolvedEventSchema,
-  snapshotCompleteEventSchema,
-]);
+export const attentionNotificationEventSchema: z.ZodType<AttentionNotificationEvent> = z.discriminatedUnion(
+  "type",
+  [
+    z
+      .object({
+        type: z.literal("pending"),
+        sequence: z.number().int().positive(),
+        source: z.enum(["live", "snapshot"]),
+        pending: notificationSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("resolved"),
+        sequence: z.number().int().positive(),
+        source: z.enum(["live", "snapshot"]),
+        id: identifierSchema,
+        kind: notificationKind,
+        occurred_at: id,
+      })
+      .strict()
+      .transform((value) => ({ ...value, occurredAt: value.occurred_at })),
+    z
+      .object({
+        type: z.literal("snapshot_complete"),
+        sequence: z.number().int().positive(),
+        source: z.literal("snapshot"),
+        session_id: id,
+      })
+      .strict()
+      .transform((value) => ({ ...value, sessionID: value.session_id })),
+  ],
+);
 
 export const attentionNotificationEventParamsSchema: z.ZodType<AttentionNotificationEventParams> = z
-  .object({
-    event: attentionNotificationEventSchema,
-  })
-  .transform((value) => ({ event: value.event }));
+  .object({ event: attentionNotificationEventSchema })
+  .strict();
 
-export function isUnsupportedAttentionNotificationEventParams(value: unknown): boolean {
-  const parsed = unsupportedEventProbeSchema.safeParse(value);
-  if (!parsed.success) {
-    return false;
-  }
-  const { event } = parsed.data;
-  if (event.type === undefined) {
-    return false;
-  }
-  if (event.type === "resolved") {
-    return event.kind !== undefined && !supportedAttentionKind(event.kind);
-  }
-  if (event.type === "pending") {
-    return isUnsupportedPendingEvent(event);
-  }
-  return event.type !== "snapshot_complete";
+function sameIDSet(left: readonly string[], right: readonly string[]): boolean {
+  const rightIDs = new Set(right);
+  return new Set(left).size === rightIDs.size && left.every((value) => rightIDs.has(value));
 }
 
-const unsupportedEventProbeSchema = z.looseObject({
-  event: z.looseObject({
-    type: z.string().optional(),
-    kind: z.string().optional(),
-    pending: z
-      .looseObject({
-        kind: z.string().optional(),
-        target: z
-          .looseObject({
-            kind: z.string().optional(),
-            focus: z
-              .looseObject({
-                kind: z.string().optional(),
-              })
-              .optional(),
-          })
-          .optional(),
-      })
-      .optional(),
-  }),
-});
-
-function isUnsupportedPendingEvent(event: z.infer<typeof unsupportedEventProbeSchema>["event"]): boolean {
-  const pending = event.pending;
-  if (pending === undefined) {
-    return false;
-  }
-  if (pending.kind !== undefined && !supportedAttentionKind(pending.kind)) {
-    return true;
-  }
-  const target = pending.target;
-  if (target === undefined) {
-    return false;
-  }
-  if (target.kind !== undefined && !supportedTargetKind(target.kind)) {
-    return true;
-  }
-  if (target.kind !== "workflow_task") {
-    return false;
-  }
-  const focus = target.focus;
-  if (focus === undefined) {
-    return false;
-  }
-  return focus.kind !== undefined && !supportedFocusKind(focus.kind);
-}
-
-function supportedAttentionKind(kind: string): boolean {
-  return kind === "question" || kind === "approval" || kind === "interrupted_run";
-}
-
-function supportedTargetKind(kind: string): boolean {
-  return kind === "workflow_task" || kind === "session_prompt";
-}
-
-function supportedFocusKind(kind: string): boolean {
-  return kind === "question" || kind === "approval" || kind === "interrupted_run";
-}
-
-function validateQuestionNotification(
-  value: z.infer<typeof notificationWireSchema>,
-  context: z.RefinementCtx,
-): void {
-  if (value.question === null || value.question === undefined) {
-    context.addIssue({ code: "custom", message: "question payload is required" });
-  }
-  if (value.approval !== null && value.approval !== undefined) {
-    context.addIssue({ code: "custom", message: "question notification must not carry approval payload" });
-  }
-  if (value.interrupted_run !== null && value.interrupted_run !== undefined) {
-    context.addIssue({
-      code: "custom",
-      message: "question notification must not carry interrupted_run payload",
-    });
-  }
-  if (value.target.kind === "workflow_task") {
-    const { focus } = value.target;
-    if (focus.kind !== "question") {
-      context.addIssue({ code: "custom", message: "question workflow-task focus kind must be question" });
-      return;
-    }
-    if (
-      value.question !== null &&
-      value.question !== undefined &&
-      !sameStringSet(focus.ask_ids, value.question.preparedAskIDs)
-    ) {
-      context.addIssue({ code: "custom", message: "question focus ask_ids must match prepared_ask_ids" });
-    }
-  }
-}
-
-function validateApprovalNotification(
-  value: z.infer<typeof notificationWireSchema>,
-  context: z.RefinementCtx,
-): void {
-  if (value.approval === null || value.approval === undefined) {
-    context.addIssue({ code: "custom", message: "approval payload is required" });
-  }
-  if (value.question !== null && value.question !== undefined) {
-    context.addIssue({ code: "custom", message: "approval notification must not carry question payload" });
-  }
-  if (value.interrupted_run !== null && value.interrupted_run !== undefined) {
-    context.addIssue({
-      code: "custom",
-      message: "approval notification must not carry interrupted_run payload",
-    });
-  }
-  if (value.target.kind === "workflow_task") {
-    const { focus } = value.target;
-    if (focus.kind !== "approval") {
-      context.addIssue({ code: "custom", message: "approval workflow-task focus kind must be approval" });
-      return;
-    }
-    if (value.approval?.taskTransitionID !== focus.task_transition_id) {
-      context.addIssue({ code: "custom", message: "approval focus task_transition_id must match payload" });
-    }
-  }
-}
-
-function validateInterruptedRunNotification(
-  value: z.infer<typeof notificationWireSchema>,
-  context: z.RefinementCtx,
-): void {
-  if (value.interrupted_run === null || value.interrupted_run === undefined) {
-    context.addIssue({ code: "custom", message: "interrupted_run payload is required" });
-  }
-  if (value.question !== null && value.question !== undefined) {
-    context.addIssue({
-      code: "custom",
-      message: "interrupted_run notification must not carry question payload",
-    });
-  }
-  if (value.approval !== null && value.approval !== undefined) {
-    context.addIssue({
-      code: "custom",
-      message: "interrupted_run notification must not carry approval payload",
-    });
-  }
-  validateInterruptedRunTarget(value, context);
-}
-
-function validateInterruptedRunTarget(
-  value: z.infer<typeof notificationWireSchema>,
-  context: z.RefinementCtx,
-): void {
-  if (value.target.kind !== "workflow_task") {
-    context.addIssue({ code: "custom", message: "interrupted_run target must be workflow_task" });
+function validateNotificationCoherence(value: NotificationPayload, context: z.RefinementCtx): void {
+  if (value.id.kind !== value.kind) {
+    context.addIssue({ code: "custom", message: "notification kind mismatch" });
     return;
   }
-  const { focus } = value.target;
-  if (focus.kind !== "interrupted_run") {
-    context.addIssue({
-      code: "custom",
-      message: "interrupted_run workflow-task focus kind must be interrupted_run",
-    });
+  switch (value.kind) {
+    case "question":
+      validateQuestionNotification(value, context);
+      return;
+    case "approval":
+      validateApprovalNotification(value, context);
+      return;
+    case "workflow_approval":
+      validateWorkflowApprovalNotification(value, context);
+      return;
+    case "interrupted_current_node":
+      validateInterruptedCurrentNodeNotification(value, context);
+  }
+}
+
+function validateQuestionNotification(value: NotificationPayload, context: z.RefinementCtx): void {
+  if (value.question == null) {
+    context.addIssue({ code: "custom", message: "question state required" });
+  }
+  if (value.approval != null || value.workflow_approval != null || value.interrupted_current_node != null) {
+    context.addIssue({ code: "custom", message: "question notification has unrelated payload" });
+  }
+  if (value.target.kind !== "workflow_task" || value.target.focus.kind !== "question") {
+    context.addIssue({ code: "custom", message: "question notification target mismatch" });
+    return;
+  }
+  if (value.question != null && !sameIDSet(value.question.preparedAskIDs, value.target.focus.askIDs)) {
+    context.addIssue({ code: "custom", message: "question notification IDs do not match target focus" });
+  }
+}
+
+function validateApprovalNotification(value: NotificationPayload, context: z.RefinementCtx): void {
+  if (value.approval == null) {
+    context.addIssue({ code: "custom", message: "approval state required" });
+  }
+  if (value.question != null || value.workflow_approval != null || value.interrupted_current_node != null) {
+    context.addIssue({ code: "custom", message: "approval notification has unrelated payload" });
+  }
+  if (value.target.kind !== "session_prompt") {
+    context.addIssue({ code: "custom", message: "approval notification target mismatch" });
+  }
+}
+
+function validateWorkflowApprovalNotification(value: NotificationPayload, context: z.RefinementCtx): void {
+  if (value.workflow_approval == null) {
+    context.addIssue({ code: "custom", message: "workflow approval state required" });
+  }
+  if (value.question != null || value.approval != null || value.interrupted_current_node != null) {
+    context.addIssue({ code: "custom", message: "workflow approval notification has unrelated payload" });
+  }
+  if (value.target.kind !== "workflow_task" || value.target.focus.kind !== "approval") {
+    context.addIssue({ code: "custom", message: "workflow approval notification target mismatch" });
     return;
   }
   if (
-    value.interrupted_run !== null &&
-    value.interrupted_run !== undefined &&
-    (value.interrupted_run.runID !== value.target.run_id || value.interrupted_run.runID !== focus.run_id)
+    value.workflow_approval != null &&
+    value.workflow_approval.approval_id !== value.target.focus.approvalID
   ) {
-    context.addIssue({ code: "custom", message: "interrupted_run ids must match target and focus" });
+    context.addIssue({
+      code: "custom",
+      message: "workflow approval notification ID does not match target focus",
+    });
   }
 }
 
-function stringListSubset(values: readonly string[], allowed: readonly string[]): boolean {
-  return values.every((value) => allowed.includes(value));
-}
-
-function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
-  return stringListSubset(left, right) && stringListSubset(right, left);
+function validateInterruptedCurrentNodeNotification(
+  value: NotificationPayload,
+  context: z.RefinementCtx,
+): void {
+  if (value.interrupted_current_node == null) {
+    context.addIssue({ code: "custom", message: "interrupted-current-node state required" });
+  }
+  if (value.question != null || value.approval != null || value.workflow_approval != null) {
+    context.addIssue({
+      code: "custom",
+      message: "interrupted-current-node notification has unrelated payload",
+    });
+  }
+  if (
+    value.target.kind !== "workflow_task" ||
+    value.target.focus.kind !== "interrupted_current_node" ||
+    value.target.currentNodeID === undefined
+  ) {
+    context.addIssue({ code: "custom", message: "interrupted-current-node notification target mismatch" });
+  }
 }

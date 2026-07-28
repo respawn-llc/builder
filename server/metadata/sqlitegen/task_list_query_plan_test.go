@@ -40,8 +40,6 @@ CREATE TABLE tasks (
 	execution_target_resolved_ref TEXT,
 	execution_target_commit_oid TEXT,
 	execution_target_provenance TEXT,
-	canceled_at_unix_ms INTEGER,
-	cancellation_reason TEXT,
 	created_at_unix_ms INTEGER NOT NULL,
 	updated_at_unix_ms INTEGER NOT NULL,
 	metadata_json TEXT NOT NULL
@@ -67,8 +65,6 @@ SELECT
 	t.execution_target_resolved_ref,
 	t.execution_target_commit_oid,
 	t.execution_target_provenance,
-	t.canceled_at_unix_ms,
-	t.cancellation_reason,
 	t.created_at_unix_ms,
 	t.updated_at_unix_ms,
 	t.metadata_json
@@ -76,28 +72,15 @@ FROM tasks t
 JOIN project_workflow_links pwl ON pwl.id = t.project_workflow_link_id;
 CREATE TABLE workflow_task_status_records (
 	task_id TEXT PRIMARY KEY,
+	is_done INTEGER NOT NULL,
 	kind TEXT NOT NULL,
 	primary_status_rank INTEGER NOT NULL,
 	node_ids_json TEXT NOT NULL,
-	run_ids_json TEXT NOT NULL,
 	attention_types_json TEXT NOT NULL
 );
-CREATE TABLE task_node_placements (
+CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
-	node_id TEXT,
-	state TEXT NOT NULL
-);
-CREATE TABLE workflow_nodes (
-	id TEXT PRIMARY KEY,
-	kind TEXT NOT NULL
-);
-CREATE TABLE task_transition_records (
-	task_id TEXT NOT NULL,
-	source_node_id TEXT,
-	state TEXT NOT NULL
-);
-CREATE TABLE task_run_records (
-	task_id TEXT NOT NULL
+	node_id TEXT NOT NULL
 );
 CREATE TABLE task_label_assignments (
 	task_id TEXT NOT NULL,

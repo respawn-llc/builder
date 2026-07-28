@@ -8,6 +8,7 @@ import (
 )
 
 func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
+	t.Parallel()
 	planner := newCompactionPlanner()
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         true,
@@ -69,6 +70,7 @@ func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
 }
 
 func TestCompactionPlannerPanicsAtForcedLimit(t *testing.T) {
+	t.Parallel()
 	planner := newCompactionPlanner()
 	tests := []struct {
 		name              string
@@ -95,6 +97,7 @@ func TestCompactionPlannerPanicsAtForcedLimit(t *testing.T) {
 }
 
 func TestCompactionPlannerAppliesFallbacksAndSelectsEngine(t *testing.T) {
+	t.Parallel()
 	planner := newCompactionPlanner()
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         true,

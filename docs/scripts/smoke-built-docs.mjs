@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fromHtml } from 'hast-util-from-html';
+import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
+import remarkParse from 'remark-parse';
 
 import { resolveDocsConfig } from './site-config.mjs';
 
@@ -28,6 +30,11 @@ const representativePages = [
   {
     path: 'sandboxing/index.html',
     canonicalPath: '/sandboxing/',
+    requiresDescription: true,
+  },
+  {
+    path: 'workflows/index.html',
+    canonicalPath: '/workflows/',
     requiresDescription: true,
   },
 ];
@@ -256,6 +263,103 @@ async function assertNotFoundPage() {
   );
 }
 
+function parsedJSONExamples(sources) {
+  return sources
+    .map((source) => source.trim())
+    .flatMap((source) => {
+      try {
+        return [{ source, value: JSON.parse(source) }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function parsedCodeExamples(tree) {
+  return parsedJSONExamples(
+    collectElements(tree, (node) => node.tagName === 'code').map((node) => textContent(node)),
+  );
+}
+
+function parsedMarkdownCodeExamples(markdown) {
+  const tree = unified().use(remarkParse).parse(markdown);
+  const sources = [];
+  const collectCodeBlocks = (node) => {
+    if (node.type === 'code') {
+      sources.push(node.value);
+    }
+    if (Array.isArray(node.children)) {
+      node.children.forEach(collectCodeBlocks);
+    }
+  };
+  collectCodeBlocks(tree);
+  return parsedJSONExamples(sources);
+}
+
+function assertScriptKentIdentity(value, label) {
+  assert(
+    value !== null && typeof value === 'object' && !Array.isArray(value),
+    `${label} must be an object`,
+  );
+  const kent = value._kent;
+  assert(
+    kent !== null && typeof kent === 'object' && !Array.isArray(kent),
+    `${label} must contain an object _kent identity`,
+  );
+  const allowedKeys = new Set(['task_id', 'node_id', 'transition_branch_key']);
+  assert(
+    Object.keys(kent).every((key) => allowedKeys.has(key)),
+    `${label} _kent identity must contain only task_id, node_id, and optional transition_branch_key`,
+  );
+  for (const key of ['task_id', 'node_id']) {
+    assert(
+      typeof kent[key] === 'string' && kent[key].trim().length > 0,
+      `${label} _kent.${key} must be a non-empty string`,
+    );
+  }
+  if ('transition_branch_key' in kent) {
+    assert(
+      typeof kent.transition_branch_key === 'string' && kent.transition_branch_key.trim().length > 0,
+      `${label} _kent.transition_branch_key must be a non-empty string when present`,
+    );
+  }
+}
+
+async function assertWorkflowGuide() {
+  const relativePath = 'workflows/index.html';
+  const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
+  const scriptInputs = parsedCodeExamples(tree).filter(
+    ({ value }) => value !== null && typeof value === 'object' && !Array.isArray(value) && '_kent' in value,
+  );
+  assert(scriptInputs.length === 1, `${relativePath} should contain one structured Script input example`);
+  assertScriptKentIdentity(scriptInputs[0].value, `${relativePath} Script input`);
+
+  const completionCommands = collectElements(tree, (node) => node.tagName === 'code')
+    .map((node) => textContent(node).trim())
+    .filter((source) => source.startsWith('kent task complete '));
+  assert(
+    completionCommands.some((command) => command.includes('--force --session ')),
+    `${relativePath} should document Session-selected forced completion`,
+  );
+  assert(
+    completionCommands.some((command) => command.includes('--force --task ')),
+    `${relativePath} should document Task-selected forced completion`,
+  );
+  assert(
+    completionCommands.every((command) => !command.includes('--node')),
+    `${relativePath} completion examples must not select Current Nodes`,
+  );
+}
+
+async function assertWorkflowSkill() {
+  const skillPath = path.join(docsRoot, '..', 'prompts', 'skills', 'kent-workflows', 'SKILL.md');
+  const scriptInputs = parsedMarkdownCodeExamples(await readFile(skillPath, 'utf8')).filter(
+    ({ value }) => value !== null && typeof value === 'object' && !Array.isArray(value) && '_kent' in value,
+  );
+  assert(scriptInputs.length === 1, `${skillPath} should contain one structured Script input example`);
+  assertScriptKentIdentity(scriptInputs[0].value, `${skillPath} Script input`);
+}
+
 async function walkFiles(root, prefix = '') {
   const entries = await readdir(path.join(root, prefix), { withFileTypes: true });
   const files = [];
@@ -293,6 +397,8 @@ async function assertBuiltStaticArtifacts() {
     assertFileExists('docs.md'),
     assertFileExists('quickstart.md'),
     assertFileExists('sandboxing.md'),
+    assertWorkflowGuide(),
+    assertWorkflowSkill(),
     assertNoPagefindArtifacts(),
   ]);
 }

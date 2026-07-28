@@ -9,12 +9,14 @@ import (
 )
 
 func TestEnvironmentContextRequiresModel(t *testing.T) {
+	t.Parallel()
 	if _, err := environmentContextMessage(t.TempDir(), "", time.Unix(0, 0).UTC()); !errors.Is(err, errEnvironmentContextModelRequired) {
 		t.Fatalf("environment context error = %v", err)
 	}
 }
 
 func TestEngineNewRequiresModel(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	_, err := New(
 		store,

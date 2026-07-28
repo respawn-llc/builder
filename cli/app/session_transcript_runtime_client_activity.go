@@ -130,7 +130,6 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	if update.Workflow != nil {
 		status.WorkflowActive = update.Workflow.Active
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
-			RunID:      update.Workflow.RunID,
 			TaskID:     update.Workflow.TaskID,
 			WorkflowID: update.Workflow.WorkflowID,
 		}

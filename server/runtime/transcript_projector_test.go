@@ -32,6 +32,7 @@ func applyPersistedTranscriptRecords(t *testing.T, scan *PersistedTranscriptScan
 }
 
 func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	toolOutput, err := json.Marshal(map[string]any{"ok": true})
 	if err != nil {
@@ -77,6 +78,7 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanRestoresMaterializedToolResultFromCompletion(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	const callID = "call-materialized"
 	output := json.RawMessage(`{"output":"/tmp","exit_code":0,"truncated":false}`)
@@ -114,6 +116,7 @@ func TestPersistedTranscriptScanRestoresMaterializedToolResultFromCompletion(t *
 }
 
 func TestPersistedTranscriptScanSurfacesPersistedCompactionSummaries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	records := []session.EventRecord{
 		appendPersistedTranscriptRecord(t, store, llm.Message{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("user summary")}),
@@ -135,6 +138,7 @@ func TestPersistedTranscriptScanSurfacesPersistedCompactionSummaries(t *testing.
 }
 
 func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	record := appendPersistedTranscriptRecord(t, store, storedLocalEntry{Role: "error", Text: "Exact token counting failed"})
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
@@ -150,6 +154,7 @@ func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanPreservesPersistedLocalEntryNoticeID(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	record := appendPersistedTranscriptRecord(t, store, storedLocalEntry{Role: "system", Text: "Mirrored notice", NoticeID: textutil.Value("notice-1")})
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
@@ -165,6 +170,7 @@ func TestPersistedTranscriptScanPreservesPersistedLocalEntryNoticeID(t *testing.
 }
 
 func TestPersistedTranscriptScanProjectsTypedDeveloperAndToolResultMetadata(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	const callID = "call-summary"
 	records := []session.EventRecord{
@@ -208,6 +214,7 @@ func TestPersistedTranscriptScanProjectsTypedDeveloperAndToolResultMetadata(t *t
 }
 
 func TestPersistedTranscriptScanProjectsCacheWarningWithConfiguredVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.CacheWarningMode
@@ -240,6 +247,7 @@ func TestPersistedTranscriptScanProjectsCacheWarningWithConfiguredVisibility(t *
 }
 
 func TestPersistedTranscriptScanPreservesWholeFileDeletionDisposition(t *testing.T) {
+	t.Parallel()
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {
 		name        string
@@ -268,6 +276,7 @@ func TestPersistedTranscriptScanPreservesWholeFileDeletionDisposition(t *testing
 }
 
 func TestPersistedTranscriptScanPreservesLegacyDeletionPresentation(t *testing.T) {
+	t.Parallel()
 	const legacySummary, legacyDetail = "legacy summary", "legacy detail"
 	meta := persistedDeletionPresentation(t, transcript.ToolCallMeta{
 		ToolName:     "patch",

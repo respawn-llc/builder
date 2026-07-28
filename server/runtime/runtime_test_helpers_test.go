@@ -16,7 +16,9 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -211,8 +213,6 @@ func mustCreateNamedTestSessionAt(t *testing.T, root string, workspaceContainerN
 
 func initializeTestEventLog(t *testing.T, store *session.Store) {
 	t.Helper()
-	// Fresh runtime fixtures always need a materializable current log. Writing
-	// its stable header here avoids repeating header initialization per engine.
 	sessiontest.WriteEventLogHeaderFixture(t, store, session.EventLogHeader{
 		Contract: session.EventLogContract,
 		Version:  session.EventLogVersionV1,
@@ -232,6 +232,21 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	t.Helper()
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
+	}
+	if cfg.CurrentNodeExecution != nil {
+		if cfg.CurrentNodeExecution.ScopeID.IsZero() {
+			cfg.CurrentNodeExecution.ScopeID = runtimeids.NewExecutionScopeID()
+		}
+		instructions := &cfg.CurrentNodeExecution.Instructions
+		if instructions.CurrentNode.TaskID == "" && instructions.CurrentNode.NodeID == "" {
+			reference, err := workflow.NewCurrentNodeReference("test-task", "test-current-node", nil)
+			if err != nil {
+				t.Fatalf("create test current node reference: %v", err)
+			}
+			instructions.CurrentNode = reference
+		} else if err := instructions.CurrentNode.Validate(); err != nil {
+			t.Fatalf("invalid test current node reference: %v", err)
+		}
 	}
 	eventLog := mustMaterializeTestEventLog(t, store)
 	engine, err := New(store, eventLog, client, registry, cfg)
@@ -469,10 +484,19 @@ func mustNewHandoffTestEngine(t *testing.T, store *session.Store, client llm.Cli
 	return mustNewExecTestEngine(t, store, client, cfg)
 }
 
-func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.Config, cfg Config) *Engine {
+func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.CurrentNodeExecutionConfig, cfg Config) *Engine {
 	t.Helper()
-	cfg.WorkflowRun = workflowCfg
+	cfg.CurrentNodeExecution = workflowCfg
 	return mustNewExecTestEngine(t, store, client, cfg)
+}
+
+func mustTestCurrentNodeReference(t *testing.T, taskID string, nodeID string, branchKey *workflow.TransitionBranchKey) workflow.CurrentNodeReference {
+	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(taskID), workflow.NodeID(nodeID), branchKey)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	return reference
 }
 
 func mustSetWorktreeReminderState(t *testing.T, store *session.Store, state session.WorktreeReminderState) session.WorktreeReminderState {

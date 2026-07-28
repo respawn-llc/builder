@@ -181,6 +181,9 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "active_transition_contract_changed") == 0 {
 		t.Fatalf("save after dynamic policy race = %+v, want active_transition_contract_changed blocker", outcome.result)
 	}
+	if outcome.result.EditPolicyImpact.ActiveCurrentNodeCount != 1 {
+		t.Fatalf("save result policy impact = %+v, want authoritative active Current Node count", outcome.result.EditPolicyImpact)
+	}
 }
 
 func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testing.T) {
@@ -279,7 +282,15 @@ func TestWorkflowGraphSaveCommitRejectsChangedConfirmationImpactDuringPreparatio
 
 	task := createDefaultTask(t, ctx, activeStore, binding.ProjectID)
 	started := startTask(t, ctx, activeStore, task.ID)
-	completeRun(t, ctx, activeStore, CompleteRunRequest{RunID: started.RunID, TransitionID: "spare_done"})
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("StartTask mutation = %+v, want one current node", started.Mutation)
+	}
+	if _, err := activeStore.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       started.Mutation.Created[0].Reference,
+		TransitionID: "spare_done",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
 	close(resolver.release)
 
 	outcome := <-saved

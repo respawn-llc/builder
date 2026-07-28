@@ -244,11 +244,12 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 
 	background := callExecCommand(t, tool, "raw-background", map[string]any{
-		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.6; printf '\\033[32mlate\\033[0m'",
+		"cmd":           "printf '\\033[31mearly\\033[0m'; read trigger; printf '\\033[32mlate\\033[0m'",
 		"shell":         "/bin/sh",
 		"login":         false,
+		"tty":           true,
 		"raw":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 1_000,
 	})
 	if background.IsError {
 		t.Fatalf("raw background error: %s", string(background.Output))
@@ -269,6 +270,7 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 	poll := callWriteStdin(t, pollTool, "raw-poll", map[string]any{
 		"session_id":    processID,
+		"chars":         "continue\n",
 		"yield_time_ms": 15_000,
 	})
 	if poll.IsError {

@@ -21,7 +21,6 @@ import (
 )
 
 type taskCompleteArgs struct {
-	RunID          string
 	SessionID      string
 	TaskRef        string
 	ProjectRef     string
@@ -54,7 +53,7 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "at most one completion target selector is allowed")
 		return 2
 	} else if !agentContext && count != 1 {
-		fmt.Fprintln(stderr, "task complete --force requires exactly one explicit selector: --run, --session, or --task")
+		fmt.Fprintln(stderr, "task complete --force requires exactly one explicit selector: --session or --task")
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -76,12 +75,9 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		}
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
 			return writeCommandJSON(stdout, stderr, taskCompleteJSONResponse{
-				TransitionID: resp.TransitionID,
-				TaskID:       resp.TaskID,
-				RunID:        resp.RunID,
-				State:        resp.State,
-				PlacementIDs: resp.PlacementIDs,
-				RunIDs:       resp.RunIDs,
+				TaskID:            resp.TaskID,
+				CurrentNodes:      resp.CurrentNodes,
+				PendingApprovalID: resp.PendingApprovalID,
 			})
 		}
 		writeTaskCompleteResult(stdout, resp)
@@ -91,7 +87,7 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 
 func (a taskCompleteArgs) selectorCount() int {
 	count := 0
-	for _, value := range []string{a.RunID, a.SessionID, a.TaskRef} {
+	for _, value := range []string{a.SessionID, a.TaskRef} {
 		if strings.TrimSpace(value) != "" {
 			count++
 		}
@@ -101,7 +97,6 @@ func (a taskCompleteArgs) selectorCount() int {
 
 func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote workflowCommandRemote, agentSessionID string, agentContext bool) (serverapi.WorkflowTaskCompleteRequest, error) {
 	req := serverapi.WorkflowTaskCompleteRequest{
-		RunID:        strings.TrimSpace(a.RunID),
 		SessionID:    strings.TrimSpace(a.SessionID),
 		TransitionID: strings.TrimSpace(a.TransitionID),
 		OutputValues: maps.Clone(a.OutputValues),
@@ -121,16 +116,11 @@ func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote wo
 	if taskRef == "" {
 		return req, nil
 	}
-	if strings.HasPrefix(taskRef, "task-") {
-		req.TaskID = taskRef
-		return req, nil
-	}
-	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, a.ProjectRef)
+	taskID, err := resolveWorkflowTaskID(ctx, cfg, remote, a.ProjectRef, taskRef)
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteRequest{}, err
 	}
-	req.ProjectID = projectID
-	req.ShortID = taskRef
+	req.TaskID = taskID
 	return req, nil
 }
 
@@ -154,14 +144,6 @@ func parseTaskCompleteArgs(args []string, stderr io.Writer) (taskCompleteArgs, b
 				return taskCompleteArgs{}, false, 2
 			}
 			parsed.Force = value
-		case "run":
-			value, next, err := taskCompleteStringFlagValue(args, index, inlineValue, hasInlineValue, name)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return taskCompleteArgs{}, false, 2
-			}
-			index = next
-			parsed.RunID = strings.TrimSpace(value)
 		case "session":
 			value, next, err := taskCompleteStringFlagValue(args, index, inlineValue, hasInlineValue, name)
 			if err != nil {
@@ -386,7 +368,7 @@ func parseTaskCompleteJSONPayload(raw string) (taskCompleteJSONFields, error) {
 			if ok {
 				out.Commentary = value
 			}
-		case "run_id", "session_id", "task_id", "project_id", "short_id", "actor_kind", "agent_session_id", "force":
+		case "session_id", "task_id", "actor_kind", "agent_session_id", "force":
 			return taskCompleteJSONFields{}, fmt.Errorf("parse --json payload: %s must be passed as a flag, not in the JSON payload", key)
 		default:
 			value, ok, err := taskCompleteJSONParameterValue(payload[key], key)
@@ -459,9 +441,9 @@ func sortedRawJSONKeys(payload map[string]json.RawMessage) []string {
 func taskCompleteErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, sql.ErrNoRows), errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound):
-		return "no active unfinished agent run matched the completion selector. Retry with --run <run-id>, --session <session-id>, or --task <task-id-or-short-id>."
+		return "no idle or live workflow Session matched the completion selector. Retry with --session <session-id> or --task <task-id-or-short-id>."
 	case errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous):
-		return "the completion selector matched multiple active workflow runs. Retry with --run <run-id> or the current Kent session."
+		return "the completion selector matched multiple Current Nodes. Retry with --session <session-id> or a narrower task."
 	default:
 		return err.Error()
 	}
@@ -469,9 +451,8 @@ func taskCompleteErrorMessage(err error) string {
 
 func writeTaskCompleteUsage(stderr io.Writer) {
 	fs := newCommandFlagSet(config.Command+" task complete", stderr, taskCompleteUsage)
-	fs.String("run", "", "active workflow run ID to complete")
-	fs.String("session", "", "session whose active workflow run should be completed")
-	fs.String("task", "", "task ID or short ID whose active workflow run should be completed")
+	fs.String("session", "", "Session whose idle workflow node should be completed")
+	fs.String("task", "", "Task ID or short ID whose unambiguous idle workflow node should be completed")
 	fs.String("project", ".", "project ID or attached workspace path used to resolve a task short ID")
 	fs.String("transition", "", "selected transition key; required when the node has multiple transitions")
 	fs.String("commentary", "", "note recorded with the transition result")
@@ -483,14 +464,15 @@ func writeTaskCompleteUsage(stderr io.Writer) {
 }
 
 func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskCompleteResponse) {
+	if resp.PendingApprovalID != nil {
+		fmt.Fprintf(stdout, "Completion is awaiting approval %s.\n", *resp.PendingApprovalID)
+		return
+	}
 	fmt.Fprintf(stdout, "Completion scheduled. The transition %s → %s will execute now. Your next agent turn will begin with the next workflow instructions.\n", resp.Handoff.SourceNodeDisplayName, resp.Handoff.DestinationDisplayName)
 }
 
 type taskCompleteJSONResponse struct {
-	TransitionID string   `json:"transition_id"`
-	TaskID       string   `json:"task_id"`
-	RunID        string   `json:"run_id"`
-	State        string   `json:"state"`
-	PlacementIDs []string `json:"placement_ids,omitempty"`
-	RunIDs       []string `json:"run_ids,omitempty"`
+	TaskID            string                              `json:"task_id"`
+	CurrentNodes      []serverapi.WorkflowTaskCurrentNode `json:"current_nodes"`
+	PendingApprovalID *string                             `json:"pending_approval_id,omitempty"`
 }

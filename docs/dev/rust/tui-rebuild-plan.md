@@ -1,5 +1,8 @@
 # TUI Rebuild — Master Sequence
 
+> [!CAUTION]
+> Rust work is frozen. This document is a historical planning record and does not authorize implementation. Do not edit or run `tui-rs/` unless Rust work is explicitly reactivated.
+
 Context: the Go→Rust parity migration was terminated 2026-07-02 (post-mortem: docs/tmp/rust-tui-continuation-assessment.md). The parity apparatus was removed (−409K LOC, squashed into the single "rust tui foundation" commit). The Go TUI is condemned; the Rust client becomes THE client, built against specs, not against Go output. The retained Rust workspace contains client contracts, test support, and policy tooling; product and networking crates are built in their owning phases.
 
 Operator decisions to date: spec-driven rebuild; black-box PTY harness is the acceptance mechanism; agents run QA themselves, operator QAs only at dogfood threshold + taste/edge-case passes; Kent workflow orchestration replaces manual babysitting; tasks strictly ordered (cross-task dependency machinery NOT built yet — sequence tasks manually until it exists).

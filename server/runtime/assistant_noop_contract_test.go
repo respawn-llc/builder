@@ -13,6 +13,7 @@ import (
 )
 
 func TestNoopFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{

@@ -9,6 +9,7 @@ import (
 	"core/server/auth"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 )
 
@@ -16,14 +17,14 @@ var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
 
 type ExecutionFinalized interface {
-	ExecutionFinalized(WorkflowExecutionRef)
+	ExecutionFinalized(ExecutionScope)
 }
 
-type ExecutionFinalizedFunc func(WorkflowExecutionRef)
+type ExecutionFinalizedFunc func(ExecutionScope)
 
-func (f ExecutionFinalizedFunc) ExecutionFinalized(ref WorkflowExecutionRef) {
+func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
 	if f != nil {
-		f(ref)
+		f(scope)
 	}
 }
 
@@ -45,7 +46,7 @@ type Authority struct {
 	nextExecution      ExecutionGeneration
 	nextResource       runtimeids.ResourceGeneration
 	byScope            map[runtimeids.ExecutionScopeID]*execution
-	byWorkflow         map[WorkflowExecutionRef]*execution
+	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
 	executionFinalized ExecutionFinalized
@@ -56,7 +57,7 @@ type Authority struct {
 func NewAuthority(options AuthorityOptions) *Authority {
 	authority := &Authority{
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
-		byWorkflow:         make(map[WorkflowExecutionRef]*execution),
+		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
 		executionFinalized: options.ExecutionFinalized,
@@ -86,17 +87,145 @@ func (a *Authority) nextExecutionGenerationLocked() ExecutionGeneration {
 	return a.nextExecution
 }
 
+func (a *Authority) NewWorkflowExecutionLease(ref WorkflowExecutionRef) (WorkflowExecutionLease, error) {
+	if a == nil {
+		return WorkflowExecutionLease{}, errors.New("session runtime authority is required")
+	}
+	if err := ref.Validate(); err != nil {
+		return WorkflowExecutionLease{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return WorkflowExecutionLease{}, ErrAuthorityClosed
+	}
+	return WorkflowExecutionLease{
+		authority:           a,
+		workflow:            ref,
+		scopeID:             runtimeids.NewExecutionScopeID(),
+		executionGeneration: a.nextExecutionGenerationLocked(),
+		start:               make(chan struct{}),
+		canceled:            make(chan struct{}),
+		startOnce:           &sync.Once{},
+		cancelOnce:          &sync.Once{},
+	}, nil
+}
+
+func (a *Authority) validateWorkflowExecutionLeaseLocked(lease *WorkflowExecutionLease) (WorkflowExecutionRef, error) {
+	if lease == nil {
+		return WorkflowExecutionRef{}, errors.New("workflow execution lease is required")
+	}
+	if lease.authority != a {
+		return WorkflowExecutionRef{}, errors.New("workflow execution lease belongs to another authority")
+	}
+	if lease.scopeID.IsZero() || lease.executionGeneration == 0 || lease.start == nil || lease.canceled == nil || lease.startOnce == nil || lease.cancelOnce == nil {
+		return WorkflowExecutionRef{}, errors.New("workflow execution lease is invalid")
+	}
+	if err := lease.workflow.Validate(); err != nil {
+		return WorkflowExecutionRef{}, err
+	}
+	return lease.workflow, nil
+}
+
 func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHandle, bool) {
-	if a == nil || ref.Validate() != nil {
+	if a == nil {
+		return nil, false
+	}
+	key, err := workflowExecutionKeyFor(ref)
+	if err != nil {
 		return nil, false
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	execution := a.byWorkflow[ref]
-	if execution == nil || !execution.activated.Load() || execution.finalizing.Load() {
+	execution := a.workflowExecutionLocked(ref, key)
+	if execution == nil {
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
+}
+
+func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		return nil
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		return nil
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil {
+		return nil
+	}
+	return byTask[key]
+}
+
+func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		byProject = make(map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
+		a.workflowExecutions[ref.ProjectID] = byProject
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		byWorkflow = make(map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
+		byProject[ref.WorkflowID] = byWorkflow
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil {
+		byTask = make(map[workflow.CurrentNodeReferenceKey]*execution)
+		byWorkflow[ref.CurrentNode.TaskID] = byTask
+	}
+	byTask[key] = item
+}
+
+func (a *Authority) beginWorkflowExecution(item *execution) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.byScope[item.scope.ID()] != item {
+		return
+	}
+	if item.phase != executionPhaseQueued {
+		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
+	}
+	item.phase = executionPhaseRunning
+}
+
+func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
+	byProject := a.workflowExecutions[ref.ProjectID]
+	if byProject == nil {
+		return
+	}
+	byWorkflow := byProject[ref.WorkflowID]
+	if byWorkflow == nil {
+		return
+	}
+	byTask := byWorkflow[ref.CurrentNode.TaskID]
+	if byTask == nil || byTask[key] != item {
+		return
+	}
+	delete(byTask, key)
+	if len(byTask) == 0 {
+		delete(byWorkflow, ref.CurrentNode.TaskID)
+	}
+	if len(byWorkflow) == 0 {
+		delete(byProject, ref.WorkflowID)
+	}
+	if len(byProject) == 0 {
+		delete(a.workflowExecutions, ref.ProjectID)
+	}
+}
+
+func (a *Authority) forEachWorkflowExecutionLocked(fn func(*execution)) {
+	for _, byWorkflow := range a.workflowExecutions {
+		for _, byTask := range byWorkflow {
+			for _, byCurrentNode := range byTask {
+				for _, execution := range byCurrentNode {
+					fn(execution)
+				}
+			}
+		}
+	}
 }
 
 func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionHandle, bool) {
@@ -106,15 +235,16 @@ func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionH
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	execution, ok := a.byScope[id]
-	if !ok || !execution.activated.Load() || execution.finalizing.Load() {
+	if !ok {
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
 }
 
 // WithExactExecutions linearizes an operation against retirement of the exact
-// execution handles. The operation runs while the authority lock keeps those
-// scopes registered as live.
+// execution handles. A script finalizer may retire a workflow scope from
+// liveness indexes before it commits completion, while retaining its exact
+// scope registration for that commit.
 func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation func() error) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
@@ -133,13 +263,7 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 			return errors.New("execution handle does not belong to this authority")
 		}
 		execution := exact.execution
-		if execution.authority != a ||
-			!execution.activated.Load() ||
-			execution.finalizing.Load() ||
-			a.byScope[execution.scope.ID()] != execution {
-			return ErrExecutionNoLongerLive
-		}
-		if workflowRef, ok := execution.scope.Workflow(); ok && a.byWorkflow[workflowRef] != execution {
+		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
 			return ErrExecutionNoLongerLive
 		}
 	}
@@ -164,10 +288,10 @@ func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {
 		return nil
 	}
 	a.mu.Lock()
-	executions := make(map[runtimeids.ExecutionScopeID]ExecutionHandle, len(a.byWorkflow))
-	for _, running := range a.byWorkflow {
+	executions := make(map[runtimeids.ExecutionScopeID]ExecutionHandle)
+	a.forEachWorkflowExecutionLocked(func(running *execution) {
 		executions[running.scope.ID()] = executionHandle{execution: running}
-	}
+	})
 	a.mu.Unlock()
 	var stopErrs []error
 	for _, running := range executions {
@@ -225,24 +349,42 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 	if a.closed {
 		return nil, ErrAuthorityClosed
 	}
+	var workflowRef *WorkflowExecutionRef
+	var scopeID runtimeids.ExecutionScopeID
+	var executionGeneration ExecutionGeneration
 	if req.Workflow != nil {
-		if err := req.Workflow.Validate(); err != nil {
+		ref, err := a.validateWorkflowExecutionLeaseLocked(req.Workflow)
+		if err != nil {
 			return nil, err
 		}
-		if existing := a.byWorkflow[*req.Workflow]; existing != nil {
+		workflowRef = &ref
+		scopeID = req.Workflow.scopeID
+		executionGeneration = req.Workflow.executionGeneration
+		workflowKey, err := workflowExecutionKeyFor(ref)
+		if err != nil {
+			return nil, err
+		}
+		if existing := a.workflowExecutionLocked(ref, workflowKey); existing != nil {
 			return nil, fmt.Errorf(
-				"workflow execution %q generation %d is already live",
-				req.Workflow.RunID,
-				req.Workflow.Generation,
+				"workflow current node %v is already live",
+				ref.CurrentNode,
 			)
 		}
 	}
-	executionGeneration, resourceGeneration := a.nextGenerationsLocked()
+	if scopeID.IsZero() {
+		scopeID = runtimeids.NewExecutionScopeID()
+		executionGeneration = a.nextExecutionGenerationLocked()
+	}
+	a.nextResource++
+	resourceGeneration := a.nextResource
+	if resourceGeneration == 0 {
+		panic("session runtime resource generation overflow")
+	}
 	scope := newScriptExecutionScope(
-		runtimeids.NewExecutionScopeID(),
+		scopeID,
 		executionGeneration,
 		resourceGeneration,
-		req.Workflow,
+		workflowRef,
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
 	reserved := &execution{
@@ -252,9 +394,11 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		prompts:   newExecutionPromptStore(scope, a.promptFeed),
+		phase:     executionPhaseRunning,
 	}
-	if req.Workflow != nil {
+	if workflowRef != nil {
 		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}
+		reserved.phase = executionPhaseQueued
 	}
 	return reserved, nil
 }

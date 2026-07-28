@@ -46,6 +46,7 @@ func finalAnswerCompactionRecord(t *testing.T, answer string) session.HistoryRep
 }
 
 func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *testing.T) {
+	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
@@ -66,6 +67,7 @@ func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *tes
 }
 
 func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals(t *testing.T) {
+	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
@@ -94,6 +96,7 @@ func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals
 }
 
 func TestLatestCommittedAssistantFinalAnswerCompactionBoundaryReturnsAbsence(t *testing.T) {
+	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
@@ -112,6 +115,7 @@ func TestLatestCommittedAssistantFinalAnswerCompactionBoundaryReturnsAbsence(t *
 }
 
 func TestLatestCommittedAssistantFinalAnswerReturnsPostCompactionAnswer(t *testing.T) {
+	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
@@ -135,6 +139,7 @@ func TestLatestCommittedAssistantFinalAnswerReturnsPostCompactionAnswer(t *testi
 }
 
 func TestLatestCommittedAssistantFinalAnswerReturnsAbsenceWithoutFinal(t *testing.T) {
+	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{Role: llm.RoleUser, Content: textutil.Value("task")}))
 
@@ -148,6 +153,7 @@ func TestLatestCommittedAssistantFinalAnswerReturnsAbsenceWithoutFinal(t *testin
 }
 
 func TestLatestCommittedAssistantFinalAnswerFailsOnMalformedRelevantEvents(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eventLog := mustMaterializeTestEventLog(t, store)
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{

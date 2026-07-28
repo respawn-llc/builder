@@ -1,10 +1,12 @@
 package metadata
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -91,19 +93,39 @@ func runMigrations(db *sql.DB) error {
 	if err := registerMetadataSQLiteCollations(); err != nil {
 		return err
 	}
-	goose.SetBaseFS(migrationsFS)
+	if err := registerMetadataSQLiteFunctions(); err != nil {
+		return err
+	}
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.Up(context.Background()); err != nil {
+		return fmt.Errorf("apply metadata migrations: %w", err)
+	}
+	return nil
+}
+
+func newMetadataMigrationProvider(db *sql.DB) (*goose.Provider, error) {
+	migrations, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("open embedded metadata migrations: %w", err)
+	}
 	var logger goose.Logger = goose.NopLogger()
 	if metadataMigrationDebugLogs && metadataMigrationLogWriter != nil {
 		logger = &metadataMigrationLogger{out: metadataMigrationLogWriter, debug: metadataMigrationDebugLogs}
 	}
-	goose.SetLogger(logger)
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		return fmt.Errorf("set metadata migration dialect: %w", err)
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		db,
+		migrations,
+		goose.WithLogger(logger),
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata migration provider: %w", err)
 	}
-	if err := goose.Up(db, "migrations"); err != nil {
-		return fmt.Errorf("apply metadata migrations: %w", err)
-	}
-	return nil
+	return provider, nil
 }
 
 func registerMetadataSQLiteCollations() error {

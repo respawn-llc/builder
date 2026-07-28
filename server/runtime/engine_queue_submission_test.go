@@ -13,6 +13,7 @@ import (
 )
 
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	providerErr := &llm.ProviderAPIError{
 		ProviderID: "test",
@@ -40,6 +41,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 }
 
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizationError(t *testing.T) {
+	t.Parallel()
 	finalizationErr := errors.New("step finalization failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(
@@ -81,6 +83,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 }
 
 func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenceFails(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -126,6 +129,7 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 }
 
 func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("queued flush observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(

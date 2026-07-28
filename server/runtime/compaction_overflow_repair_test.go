@@ -17,6 +17,7 @@ import (
 )
 
 func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testing.T) {
+	t.Parallel()
 	const staleRawMarker = "raw-stale-shell-output"
 	originalRaw := json.RawMessage(`{"type":"function_call_output","call_id":"call-shell","output":"` + staleRawMarker + strings.Repeat("raw", 40_000) + `"}`)
 	items := []llm.ResponseItem{
@@ -56,6 +57,7 @@ func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testin
 }
 
 func TestCompactionOverflowRepairCollapsesWriteStdinOutput(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
 		{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call-stdin"), CallID: textutil.Value("call-stdin"), Name: textutil.Value(string(toolspec.ToolWriteStdin)), Arguments: json.RawMessage(`{"session_id":1,"chars":""}`)},
 		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call-stdin"), Name: textutil.Value(string(toolspec.ToolWriteStdin)), Output: json.RawMessage(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)},
@@ -74,6 +76,7 @@ func TestCompactionOverflowRepairCollapsesWriteStdinOutput(t *testing.T) {
 }
 
 func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.T) {
+	t.Parallel()
 	const staleRawMarker = "raw-stale-patch-input"
 	patchInput := "*** Begin Patch\n*** Add File: big.txt\n+" + strings.Repeat("x", 120_000) + "\n*** End Patch\n"
 	originalRaw := json.RawMessage(`{"type":"custom_tool_call","call_id":"call-patch","name":"patch","input":` + strconv.Quote(staleRawMarker+patchInput) + `}`)
@@ -107,6 +110,7 @@ func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.
 }
 
 func TestCompactionOverflowRepairLeavesUnsupportedToolsUnchanged(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
 		{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call-ask"), CallID: textutil.Value("call-ask"), Name: textutil.Value(string(toolspec.ToolAskQuestion)), Arguments: json.RawMessage(`{"question":"` + strings.Repeat("x", 80_000) + `"}`)},
 		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call-ask"), Name: textutil.Value(string(toolspec.ToolAskQuestion)), Output: json.RawMessage(`{"answer":"` + strings.Repeat("y", 80_000) + `"}`)},
@@ -123,6 +127,7 @@ func TestCompactionOverflowRepairLeavesUnsupportedToolsUnchanged(t *testing.T) {
 }
 
 func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
 		shellOutputRepairItem("call-1", strings.Repeat("a", 48_000)),
 		shellOutputRepairItem("call-2", strings.Repeat("b", 48_000)),
@@ -150,6 +155,7 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 }
 
 func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
+	t.Parallel()
 	if got, want := compactionOverflowRepairTargetTokens(100_000, 1), 10_000; got != want {
 		t.Fatalf("first repair target = %d, want %d", got, want)
 	}
@@ -165,6 +171,7 @@ func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 }
 
 func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
@@ -224,6 +231,7 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 }
 
 func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
@@ -256,6 +264,7 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 }
 
 func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredContextWindow(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
@@ -326,6 +335,7 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 }
 
 func TestGenerateWithRetryDoesNotRetryContextOverflow(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		errors: []error{

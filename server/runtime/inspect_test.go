@@ -9,6 +9,7 @@ import (
 )
 
 func TestPrepareInspectionRequestWithoutToolsUsesAutomaticChoice(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewWorkflowTestEngine(
 		t,

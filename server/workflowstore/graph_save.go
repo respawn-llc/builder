@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
+	"core/server/workflowscript"
 )
 
 type WorkflowGraphSaveRequest struct {
@@ -170,7 +171,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		plan.Impact = evaluation.Impact
 		plan.EditPolicy = evaluation.EditPolicy
 	}
-	plan.ValidationResults = workflow.EvaluateDefinition(def, []workflow.ValidationContext{
+	plan.ValidationResults = workflowscript.EvaluateDefinition(def, []workflow.ValidationContext{
 		workflow.ValidationContextDraft,
 		workflow.ValidationContextExecution,
 	}, s.roleResolver, nil)
@@ -244,11 +245,10 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan.workflowGraphSaveResult(false), nil
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, plan.Structural)
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, plan.Structural)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
-	evaluation.EditPolicy.Impact = workflowGraphSaveCommitEditPolicyImpact(plan.EditPolicy.Impact, evaluation.EditPolicy.Impact)
 	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
 	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
 	if len(blockers) > 0 {
@@ -357,8 +357,8 @@ type removedWorkflowGraphRows struct {
 }
 
 // workflowGraphSaveStructuralDescriptor is derived from one immutable graph
-// snapshot. Dynamic task and run counts are intentionally absent: they are
-// evaluated again immediately before a save commits.
+// snapshot. Dynamic Task and Current Node references are intentionally absent:
+// they are evaluated again immediately before a save commits.
 type workflowGraphSaveStructuralDescriptor struct {
 	Removed    removedWorkflowGraphRows
 	EditPolicy workflowGraphEditPolicyStructuralDescriptor
@@ -550,14 +550,6 @@ func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGrap
 
 func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveBlocker {
 	return []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: version}}
-}
-
-func workflowGraphSaveCommitEditPolicyImpact(prepared WorkflowGraphEditPolicyImpact, revalidated WorkflowGraphEditPolicyImpact) WorkflowGraphEditPolicyImpact {
-	revalidated.ActiveNodePlacementCount = prepared.ActiveNodePlacementCount
-	revalidated.PendingApprovalCount = prepared.PendingApprovalCount
-	revalidated.ActiveRunCount = prepared.ActiveRunCount
-	revalidated.RunnableRunCount = prepared.RunnableRunCount
-	return revalidated
 }
 
 func workflowGraphSaveConfirmationMatches(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) bool {

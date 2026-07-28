@@ -81,8 +81,6 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	eng.mu.Lock()
 	eng.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       "workflow-run",
-		Generation:  1,
 		Source:      WorkflowCompletionSourceTool,
 		CompletedAt: time.Now().UTC(),
 	}

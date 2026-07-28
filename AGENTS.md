@@ -77,7 +77,14 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 
 --- End of critical rules --- 
 
-## Rust Rules.
+## Frozen Rust code
+
+- `tui-rs/` and all Rust client, contract, fixture, manifest, and test code are dead and frozen.
+- Do not edit, regenerate, migrate, build, or test Rust code unless the User explicitly reactivates Rust work for the task.
+- Rust artifacts do not constrain Go server/API, Desktop, CLI, or protocol changes. Do not include `./scripts/test.sh tui` in non-Rust completion criteria.
+- Documents under `docs/dev/rust/` and `docs/dev/rust-tui-tests.md` are historical records and do not authorize Rust implementation.
+
+## Rust Rules (only after explicit User reactivation).
 
 - Do not use `unsafe`. Every crate root must include `#![forbid(unsafe_code)]`.
 - Do not use `unwrap` outside Rust test code. Production code, examples, tools, build scripts, and binaries must handle errors explicitly. Test code is the only exception.

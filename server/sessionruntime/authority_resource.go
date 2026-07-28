@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -155,76 +156,10 @@ type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestion
 type AgentExecutionRequest struct {
 	Descriptor session.SessionDescriptor
 	Runtime    *AgentRuntimePlan
-	Workflow   *WorkflowExecutionRef
+	Workflow   *WorkflowExecutionLease
 	Resource   AgentResourceSelection
 	Ask        ExecutionAskHandler
 	Runner     AgentRunner
-}
-
-type preparedAgentExecutionState uint8
-
-const (
-	preparedAgentExecutionPrepared preparedAgentExecutionState = iota + 1
-	preparedAgentExecutionActivated
-	preparedAgentExecutionAborted
-)
-
-type PreparedAgentExecution struct {
-	execution *execution
-	decision  chan bool
-
-	mu    sync.Mutex
-	state preparedAgentExecutionState
-}
-
-func (p *PreparedAgentExecution) Handle() ExecutionHandle {
-	if p == nil || p.execution == nil {
-		panic("prepared agent execution is uninitialized")
-	}
-	return executionHandle{execution: p.execution}
-}
-
-func (p *PreparedAgentExecution) Activate() {
-	if p == nil || p.execution == nil {
-		panic("prepared agent execution is uninitialized")
-	}
-	p.mu.Lock()
-	if p.state != preparedAgentExecutionPrepared {
-		state := p.state
-		p.mu.Unlock()
-		panic(fmt.Sprintf("prepared agent execution cannot activate from state %d", state))
-	}
-	p.state = preparedAgentExecutionActivated
-	p.execution.activated.Store(true)
-	p.mu.Unlock()
-	p.decision <- true
-}
-
-func (p *PreparedAgentExecution) Abort(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	if p.execution == nil {
-		return errors.New("prepared agent execution is uninitialized")
-	}
-	p.mu.Lock()
-	switch p.state {
-	case preparedAgentExecutionPrepared:
-		p.state = preparedAgentExecutionAborted
-		p.mu.Unlock()
-		p.decision <- false
-	case preparedAgentExecutionAborted:
-		p.mu.Unlock()
-	case preparedAgentExecutionActivated:
-		p.mu.Unlock()
-		return errors.New("activated agent execution preparation cannot be aborted")
-	default:
-		state := p.state
-		p.mu.Unlock()
-		return fmt.Errorf("prepared agent execution cannot abort from state %d", state)
-	}
-	_, err := p.Handle().Wait(ctx)
-	return err
 }
 
 type agentResource struct {
@@ -277,9 +212,7 @@ func (r *agentResource) signalLocked() {
 func (r *agentResource) currentExecution() (ExecutionHandle, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.current == nil ||
-		!r.current.activated.Load() ||
-		r.current.finalizing.Load() {
+	if r.current == nil {
 		return nil, false
 	}
 	return executionHandle{execution: r.current}, true
@@ -686,7 +619,7 @@ func (a *Authority) closeAdmittedResourceLocked(ctx context.Context, resource *a
 	return closed, closeErr
 }
 
-func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExecutionRequest) (*PreparedAgentExecution, error) {
+func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (ExecutionHandle, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -703,11 +636,6 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 	if request.Runner == nil {
 		return nil, errors.New("agent runner is required")
 	}
-	if request.Workflow != nil {
-		if err := request.Workflow.Validate(); err != nil {
-			return nil, err
-		}
-	}
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
@@ -723,9 +651,28 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
-	if request.Workflow != nil && a.byWorkflow[*request.Workflow] != nil {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("workflow execution %q generation %d is already live", request.Workflow.RunID, request.Workflow.Generation)
+	var workflowKey workflow.CurrentNodeReferenceKey
+	var workflowRef *WorkflowExecutionRef
+	var scopeID runtimeids.ExecutionScopeID
+	var executionGeneration ExecutionGeneration
+	if request.Workflow != nil {
+		ref, leaseErr := a.validateWorkflowExecutionLeaseLocked(request.Workflow)
+		if leaseErr != nil {
+			a.mu.Unlock()
+			return nil, leaseErr
+		}
+		workflowRef = &ref
+		scopeID = request.Workflow.scopeID
+		executionGeneration = request.Workflow.executionGeneration
+		workflowKey, err = workflowExecutionKeyFor(ref)
+		if err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		if a.workflowExecutionLocked(ref, workflowKey) != nil {
+			a.mu.Unlock()
+			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
+		}
 	}
 	resource.mu.Lock()
 	if resource.current != nil {
@@ -738,8 +685,11 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 		a.mu.Unlock()
 		return nil, err
 	}
-	executionGeneration := a.nextExecutionGenerationLocked()
-	scope := newAgentExecutionScope(runtimeids.NewExecutionScopeID(), executionGeneration, resource.ref, request.Workflow)
+	if scopeID.IsZero() {
+		scopeID = runtimeids.NewExecutionScopeID()
+		executionGeneration = a.nextExecutionGenerationLocked()
+	}
+	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, workflowRef)
 	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
 	if err != nil {
 		resource.pins--
@@ -767,6 +717,10 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 		done:          make(chan struct{}),
 		prompts:       newExecutionPromptStore(scope, a.promptFeed),
 		closeResource: closeResource,
+		phase:         executionPhaseRunning,
+	}
+	if workflowRef != nil {
+		execution.phase = executionPhaseQueued
 	}
 	if resource.askBroker != nil {
 		scopeID := scope.ID()
@@ -785,22 +739,18 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
-	if request.Workflow != nil {
-		a.byWorkflow[*request.Workflow] = execution
+	if workflowRef != nil {
+		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
 
-	decision := make(chan bool, 1)
 	go func() {
-		select {
-		case activate := <-decision:
-			if !activate {
-				execution.finish(ExecutionResult{}, nil, nil)
+		if request.Workflow != nil {
+			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
+				execution.finish(ExecutionResult{}, waitErr, nil)
 				return
 			}
-		case <-execution.ctx.Done():
-			execution.finish(ExecutionResult{}, context.Cause(execution.ctx), nil)
-			return
+			a.beginWorkflowExecution(execution)
 		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,
@@ -808,20 +758,7 @@ func (a *Authority) PrepareAgentExecution(ctx context.Context, request AgentExec
 		})
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
-	return &PreparedAgentExecution{
-		execution: execution,
-		decision:  decision,
-		state:     preparedAgentExecutionPrepared,
-	}, nil
-}
-
-func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (ExecutionHandle, error) {
-	prepared, err := a.PrepareAgentExecution(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	prepared.Activate()
-	return prepared.Handle(), nil
+	return executionHandle{execution: execution}, nil
 }
 
 func (a *Authority) RunCurrentAgentExecution(

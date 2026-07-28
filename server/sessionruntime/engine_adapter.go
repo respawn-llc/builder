@@ -33,7 +33,7 @@ type AgentRuntimePlanOptions struct {
 	Client                              llm.Client
 	ClientFactory                       runtimewire.RuntimeClientFactory
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
-	WorkflowRun                         *workflowruntime.Config
+	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	AskQuestionBatchSkipped             func(tools.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
@@ -208,7 +208,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		Client:                              options.Client,
 		ClientFactory:                       options.ClientFactory,
 		ReviewerClientFactory:               options.ReviewerClientFactory,
-		WorkflowRun:                         options.WorkflowRun,
+		CurrentNodeExecution:                options.CurrentNodeExecution,
 		AskQuestionBatchSkipped:             options.AskQuestionBatchSkipped,
 		PromptFacingSnapshotReloader:        options.PromptFacingSnapshotReloader,
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,

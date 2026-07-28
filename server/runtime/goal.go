@@ -209,7 +209,7 @@ func (e *Engine) queueGoalSetForStep(stepID string, objective string, actor sess
 		if actor == session.GoalActorAgent && current != nil && current.Status != session.GoalStatusComplete {
 			return session.GoalState{}, session.GoalAgentOverwriteBlockedError{Goal: *current}
 		}
-		if !e.workflowRunActive() {
+		if !e.currentNodeExecutionActive() {
 			if err := e.RequireGoalLoopStartAllowed(); err != nil {
 				return session.GoalState{}, err
 			}
@@ -243,7 +243,7 @@ func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
-	if status == session.GoalStatusActive && !e.workflowRunActive() {
+	if status == session.GoalStatusActive && !e.currentNodeExecutionActive() {
 		if err := e.RequireGoalLoopStartAllowed(); err != nil {
 			return session.GoalState{}, false, err
 		}
@@ -400,15 +400,15 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		if _, err := e.setGoalForStep(stepID, mutation.objective, mutation.actor); err != nil {
 			return err
 		}
-		if !e.workflowRunActive() {
+		if !e.currentNodeExecutionActive() {
 			e.deferGoalLoopStart()
 		}
 		return nil
 	case activeStepGoalMutationStatus:
-		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, mutation.status, mutation.actor, !e.workflowRunActive()); err != nil {
+		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, mutation.status, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
 			return err
 		}
-		if mutation.status == session.GoalStatusActive && !e.workflowRunActive() {
+		if mutation.status == session.GoalStatusActive && !e.currentNodeExecutionActive() {
 			e.deferGoalLoopStart()
 		}
 		return nil
@@ -416,7 +416,7 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		_, err := e.clearGoalForStep(stepID, mutation.actor)
 		return err
 	case activeStepGoalMutationRestartGoalLoop:
-		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, session.GoalStatusActive, mutation.actor, !e.workflowRunActive()); err != nil {
+		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, session.GoalStatusActive, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
 			return err
 		}
 		e.deferGoalLoopStart()
@@ -578,7 +578,7 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 	if !e.goalActive() {
 		return nil
 	}
-	if e.workflowRunActive() {
+	if e.currentNodeExecutionActive() {
 		return nil
 	}
 	if err := e.RequireGoalLoopStartAllowed(); err != nil {

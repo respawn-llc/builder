@@ -12,6 +12,7 @@ import (
 )
 
 func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, func(event Event) {
@@ -40,6 +41,7 @@ func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing
 }
 
 func TestReopenPreservesCompactionSoonReminderAdmission(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	seedReminderUsage(t, engine)
@@ -62,6 +64,7 @@ func TestReopenPreservesCompactionSoonReminderAdmission(t *testing.T) {
 }
 
 func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -91,6 +94,7 @@ func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
 }
 
 func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(

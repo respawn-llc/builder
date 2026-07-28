@@ -7,10 +7,10 @@ import (
 
 const ApprovalRequiredMessage = "Approval required"
 
-func InterruptedRunMessage(reason *string, detailJSON *string) string {
-	message := "Run interrupted"
-	if reason != nil && strings.TrimSpace(*reason) != "" {
-		message += ": " + strings.TrimSpace(*reason)
+func InterruptedCurrentNodeMessage(reason string, detailJSON string) string {
+	message := "Workflow execution interrupted"
+	if strings.TrimSpace(reason) != "" {
+		message += ": " + strings.TrimSpace(reason)
 	}
 	if detail := interruptionErrorDetail(detailJSON); detail != nil {
 		message += ": " + *detail
@@ -18,11 +18,8 @@ func InterruptedRunMessage(reason *string, detailJSON *string) string {
 	return message
 }
 
-func interruptionErrorDetail(detailJSON *string) *string {
-	if detailJSON == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(*detailJSON)
+func interruptionErrorDetail(detailJSON string) *string {
+	trimmed := strings.TrimSpace(detailJSON)
 	if trimmed == "" {
 		return nil
 	}

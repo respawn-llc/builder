@@ -12,6 +12,7 @@ import (
 )
 
 func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	started := make(chan struct{})
 	engine := mustNewTestEngine(

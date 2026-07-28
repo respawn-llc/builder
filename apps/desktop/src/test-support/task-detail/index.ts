@@ -6,12 +6,7 @@ import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail 
 import { ApiClient } from "@/api/composition";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
-import {
-  createTestServices,
-  startupRoutes,
-  TestAppProviders,
-  type TestAppServices,
-} from "../app-services";
+import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -42,7 +37,7 @@ const taskActions = {
   can_start: false,
   can_interrupt: true,
   can_resume: false,
-  can_cancel: true,
+  can_delete: false,
 };
 
 const attentionBase = {
@@ -65,7 +60,6 @@ export const taskDetailResponse = {
       created_at_unix_ms: 1,
       updated_at_unix_ms: 2,
       done: false,
-      canceled_at_unix_ms: null,
     },
     project: { display_name: "Project" },
     workflow,
@@ -79,13 +73,20 @@ export const taskDetailResponse = {
       provenance: "resolved",
     },
     worktree_path: "/tmp/worktree",
-    current_session_ids: ["session-1"],
+    current_nodes: [
+      {
+        node_id: "node-1",
+        transition_branch_key: null,
+        session_id: "session-1",
+      },
+    ],
+    live_session_ids: ["session-1"],
     current_scripts: [],
+    retained_session_count: 1,
     status: {
       kind: "running",
       native_state: "running",
       node_ids: ["node-1"],
-      run_ids: ["run-1"],
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
@@ -100,16 +101,20 @@ export const taskAttentionResponse = {
       ...attentionBase,
       id: "attention-question",
       kind: "question",
-      run_id: "run-1",
+      current_node: {
+        node_id: "node-1",
+        transition_branch_key: null,
+        session_id: "session-1",
+      },
       session_id: "session-1",
-      ask_id: "ask-1",
+      question_id: "ask-1",
       message: "",
     },
     {
       ...attentionBase,
       id: "attention-approval",
       kind: "approval",
-      task_transition_id: "transition-1",
+      approval_id: "approval-1",
       message: "Approve transition",
       approval_snapshot: {
         source_node_display_name: "Implement",
@@ -135,10 +140,10 @@ export async function createTaskDetailFixture(): Promise<TaskDetail> {
   return client.getTask("task-1");
 }
 
-export const taskDetailResponseWithNewerActiveRun = {
+export const taskDetailResponseWithAdditionalLiveSession = {
   task: {
     ...taskDetailResponse.task,
-    current_session_ids: ["session-1", "session-2"],
+    live_session_ids: ["session-1", "session-2"],
   },
 };
 
@@ -149,17 +154,23 @@ export const taskDetailNoInboxResponse = {
   },
 };
 
-export const taskDetailResponseWithScriptRun = {
+export const taskDetailResponseWithCurrentScript = {
   task: {
     ...taskDetailNoInboxResponse.task,
-    current_session_ids: [],
-    current_scripts: [{ run_id: "run-script", path: "scripts/run" }],
+    current_nodes: [{ node_id: "node-script", transition_branch_key: null, session_id: null }],
+    live_session_ids: [],
+    current_scripts: [
+      {
+        current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
+        path: "scripts/run",
+      },
+    ],
   },
 };
 
-export const taskDetailResponseWithInterruptedScriptRun = {
+export const taskDetailResponseWithInterruptedCurrentScript = {
   task: {
-    ...taskDetailResponseWithScriptRun.task,
+    ...taskDetailResponseWithCurrentScript.task,
     actions: { ...taskActions, can_interrupt: false, can_resume: true },
     attention_count: 1,
     current_scripts: [],
@@ -171,8 +182,9 @@ export const interruptedTaskAttentionResponse = {
     {
       ...attentionBase,
       id: "attention-interrupted",
-      kind: "interrupted_run",
-      run_id: "run-script",
+      kind: "interrupted_current_node",
+      current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
+      session_id: null,
       message: "Script failed",
       detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
     },
@@ -184,9 +196,13 @@ export const questionAttention = {
   ...attentionBase,
   id: "attention-question",
   kind: "question",
-  run_id: "run-1",
+  current_node: {
+    node_id: "node-1",
+    transition_branch_key: null,
+    session_id: "session-1",
+  },
   session_id: "session-1",
-  ask_id: "ask-1",
+  question_id: "ask-1",
   message: "Choose snack",
   recommended_option_index: 1,
   suggestions: ["Trail mix", "Dark chocolate"],
@@ -199,7 +215,7 @@ export const taskQuestionWaitingEvent = {
     occurred_at_unix_ms: 1,
     primary_entity_id: "task-1",
     project_id: "project-1",
-    related_ids: ["run-1", "ask-1"],
+    related_ids: ["session-1", "ask-1"],
     workflow_id: "workflow-1",
   },
 };
@@ -223,12 +239,14 @@ export const activityResponse = {
       task_id: "task-1",
       occurred_at_unix_ms: 2,
       updated_at_unix_ms: 2,
-      actor: "GUI",
-      summary: "Comment added",
-      comment: null,
-      transition: null,
-      run: null,
-      attention: null,
+      comment: {
+        id: "comment-activity-1",
+        task_id: "task-1",
+        body: "Comment added",
+        author: "user",
+        created_at_unix_ms: 2,
+        updated_at_unix_ms: 2,
+      },
     },
   ],
   next_page_token: "",
@@ -366,7 +384,7 @@ export function mountTaskDetailSurface(
 }
 
 function taskAttentionFixture(task: JsonValue): JsonValue {
-  if (task === taskDetailResponseWithInterruptedScriptRun) {
+  if (task === taskDetailResponseWithInterruptedCurrentScript) {
     return interruptedTaskAttentionResponse;
   }
   if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {

@@ -26,12 +26,10 @@ import {
   commentSchema,
   emptyString,
   nonBlankString,
-  nullableString,
-  runSchema,
-  stringList,
+  currentNodeSchema,
+  scriptCurrentNodeSchema,
   taskActionsSchema,
   taskStatusSchema,
-  transitionSchema,
   workflowPickerItemSchema,
   workspaceSummarySchema,
 } from "./common";
@@ -79,7 +77,6 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
           updated_at_unix_ms: z.number(),
           column_keys: z.array(z.string()).optional(),
           status: taskStatusSchema,
-          run_count: z.number().int().nonnegative(),
           label_ids: labelIDListSchema,
         })
         .strict()
@@ -93,7 +90,6 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
           updatedAt: value.updated_at_unix_ms,
           columnKeys: value.column_keys ?? null,
           status: value.status,
-          runCount: value.run_count,
           labelIDs: value.label_ids,
         })),
     ),
@@ -171,9 +167,7 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
       outcome: z.literal("applied"),
       applied: z
         .object({
-          transition_id: z.string().trim().min(1),
-          placement_id: z.string().trim().min(1),
-          run_id: z.string().trim().min(1),
+          current_nodes: z.array(currentNodeSchema).min(1),
         })
         .strict(),
     })
@@ -182,11 +176,7 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
       (value) =>
         ({
           outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            placementID: value.applied.placement_id,
-            runID: value.applied.run_id,
-          },
+          applied: { currentNodes: value.applied.current_nodes },
         }) as const,
     ),
   selectionRequiredResponseSchema,
@@ -198,10 +188,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
       outcome: z.literal("applied"),
       applied: z
         .object({
-          transition_id: z.string().trim().min(1),
-          state: z.string().trim().min(1),
-          placement_ids: stringList,
-          run_ids: stringList,
+          current_nodes: z.array(currentNodeSchema).min(1),
         })
         .strict(),
     })
@@ -210,12 +197,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
       (value) =>
         ({
           outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            state: value.applied.state,
-            placementIDs: value.applied.placement_ids,
-            runIDs: value.applied.run_ids,
-          },
+          applied: { currentNodes: value.applied.current_nodes },
         }) as const,
     ),
   selectionRequiredResponseSchema,
@@ -227,11 +209,8 @@ export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discr
       outcome: z.literal("applied"),
       applied: z
         .object({
-          transition_id: z.string().trim().min(1),
           task_id: z.string().trim().min(1),
-          state: z.string().trim().min(1),
-          placement_ids: stringList,
-          run_ids: stringList,
+          current_nodes: z.array(currentNodeSchema).min(1),
         })
         .strict(),
     })
@@ -240,13 +219,7 @@ export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discr
       (value) =>
         ({
           outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            taskID: value.applied.task_id,
-            state: value.applied.state,
-            placementIDs: value.applied.placement_ids,
-            runIDs: value.applied.run_ids,
-          },
+          applied: { taskID: value.applied.task_id, currentNodes: value.applied.current_nodes },
         }) as const,
     ),
   selectionRequiredResponseSchema,
@@ -385,8 +358,6 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
         created_at_unix_ms: z.number(),
         updated_at_unix_ms: z.number(),
         done: z.boolean(),
-        canceled_at_unix_ms: z.number().nullable().optional(),
-        cancel_reason: nullableString,
       }),
       project: z.object({
         display_name: z.string(),
@@ -401,15 +372,17 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       source_workspace: workspaceSummarySchema,
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
       worktree_path: nonBlankString.nullable(),
-      current_session_ids: z.array(nonBlankString),
+      current_nodes: z.array(currentNodeSchema),
+      live_session_ids: z.array(nonBlankString),
       current_scripts: z.array(
         z
           .object({
-            run_id: nonBlankString,
+            current_node: scriptCurrentNodeSchema,
             path: nonBlankString,
           })
           .strict(),
       ),
+      retained_session_count: z.number().int().nonnegative(),
       status: taskStatusSchema,
       actions: taskActionsSchema,
       label_ids: labelIDListSchema,
@@ -434,72 +407,58 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     attentionCount: value.task.attention_count,
     executionTarget: value.task.execution_target,
     worktreePath: value.task.worktree_path,
-    currentSessionIDs: value.task.current_session_ids,
+    currentNodes: value.task.current_nodes,
+    liveSessionIDs: value.task.live_session_ids,
     currentScripts: value.task.current_scripts.map((script) => ({
-      runID: script.run_id,
+      currentNode: script.current_node,
       path: script.path,
     })),
+    retainedSessionCount: value.task.retained_session_count,
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,
-    canceledAt: value.task.summary.canceled_at_unix_ms ?? null,
-    cancelReason: value.task.summary.cancel_reason,
   }));
 
 const activityItemSchema = z
-  .object({
-    activity_id: z.string(),
-    type: z.string(),
-    task_id: z.string(),
-    occurred_at_unix_ms: z.number(),
-    updated_at_unix_ms: z.number(),
-    actor: emptyString,
-    summary: z.string(),
-    comment: commentSchema.nullish(),
-    transition: transitionSchema.nullish(),
-    run: runSchema.nullish(),
-    attention: attentionItemSchema.nullish(),
-  })
-  .superRefine((value, context) => {
-    const attention = value.attention;
-    if (attention === null || attention === undefined) {
-      return;
-    }
-    if (value.type !== "run_interrupted") {
-      context.addIssue({
-        code: "custom",
-        path: ["type"],
-        message: "attention is only allowed on run_interrupted activity",
-      });
-    }
-    if (attention.kind !== "interrupted_run") {
-      context.addIssue({
-        code: "custom",
-        path: ["attention", "kind"],
-        message: "activity attention must be interrupted_run",
-      });
-    }
-    if (attention.taskID !== value.task_id) {
-      context.addIssue({
-        code: "custom",
-        path: ["attention", "task_id"],
-        message: "activity attention task_id must match activity task_id",
-      });
-    }
-  })
-  .transform((value) => ({
-    id: value.activity_id,
-    type: value.type,
-    taskID: value.task_id,
-    occurredAt: value.occurred_at_unix_ms,
-    updatedAt: value.updated_at_unix_ms,
-    actor: value.actor,
-    summary: value.summary,
-    comment: value.comment ?? null,
-    transition: value.transition ?? null,
-    run: value.run ?? null,
-    attention: value.attention ?? null,
-  }));
+  .discriminatedUnion("type", [
+    z
+      .object({
+        activity_id: nonBlankString,
+        type: z.literal("comment"),
+        task_id: nonBlankString,
+        occurred_at_unix_ms: z.number(),
+        updated_at_unix_ms: z.number(),
+        comment: commentSchema,
+      })
+      .strict()
+      .transform((value) => ({
+        id: value.activity_id,
+        type: value.type,
+        taskID: value.task_id,
+        occurredAt: value.occurred_at_unix_ms,
+        updatedAt: value.updated_at_unix_ms,
+        comment: value.comment,
+      })),
+    z
+      .object({
+        activity_id: nonBlankString,
+        type: z.literal("session_started"),
+        task_id: nonBlankString,
+        occurred_at_unix_ms: z.number(),
+        updated_at_unix_ms: z.number(),
+        session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
+      })
+      .strict()
+      .transform((value) => ({
+        id: value.activity_id,
+        type: value.type,
+        taskID: value.task_id,
+        occurredAt: value.occurred_at_unix_ms,
+        updatedAt: value.updated_at_unix_ms,
+        sessionID: value.session_started.session_id,
+        sessionName: value.session_started.name,
+      })),
+  ]);
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z
   .object({

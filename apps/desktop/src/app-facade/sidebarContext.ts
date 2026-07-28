@@ -38,8 +38,8 @@ export type WorkflowInspectorInitialFocus = "firstEditableControl";
 
 export type TaskDetailInitialFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
-  | Readonly<{ kind: "approval"; taskTransitionID: string }>
-  | Readonly<{ kind: "interrupted_run"; runID: string }>;
+  | Readonly<{ kind: "approval"; approvalID: string }>
+  | Readonly<{ kind: "interrupted_current_node" }>;
 
 export type SidebarResult =
   SidebarCanceledResult | SidebarNewTaskResult | SidebarTaskDetailResult | SidebarWorkflowResult;

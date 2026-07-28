@@ -15,12 +15,14 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
 func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
@@ -74,6 +76,7 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 }
 
 func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) {
+	t.Parallel()
 	t.Run("non-legacy payload fails materialization", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		writeMalformedLegacyHistoryReplacement(t, store, "local")
@@ -123,6 +126,7 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 }
 
 func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	diagnosticKey := preciseTokenCountFailureDiagnostic
@@ -169,6 +173,7 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 }
 
 func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	diagnosticKey := preciseTokenCountFailureDiagnostic
@@ -268,6 +273,7 @@ func writeMalformedLegacyHistoryReplacement(t *testing.T, store *session.Store, 
 }
 
 func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReopen(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("history replacement metadata observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -321,6 +327,7 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 }
 
 func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("history replacement observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -465,6 +472,7 @@ func newCommittedRemoteCompactionFixture(
 }
 
 func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("history replacement observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
@@ -520,6 +528,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 }
 
 func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("compaction usage observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
@@ -568,6 +577,7 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 }
 
 func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("prompt snapshot stale observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	fixture := newCommittedRemoteCompactionFixture(t, gate, &session.LockedContract{
@@ -633,6 +643,7 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 }
 
 func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAndFork(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
@@ -780,9 +791,10 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 }
 
 func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	countErr := errors.New("workflow task comment count failure")
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
@@ -801,13 +813,13 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
 	}
-	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.Config{
-		RunID:              runID,
-		Contract:           workflowruntime.CompletionContract{RunID: runID},
+	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID:            scopeID,
+		Contract:           workflowruntime.CompletionContract{},
 		CompletionMode:     workflowruntime.CompletionModeTool,
 		Controller:         &externallyCompletedWorkflowController{},
 		TaskCommentCounter: failingWorkflowTaskCommentCounter{err: countErr},
-		Instructions:       workflowruntime.TaskInstructions{TaskID: "task-1"},
+		Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task-1", "node-1", nil)},
 	}, Config{Model: "gpt-5"})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -853,6 +865,7 @@ func (c failingWorkflowTaskCommentCounter) CountTaskComments(context.Context, wo
 }
 
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
+	t.Parallel()
 	replacementErr := errors.New("history replacement observer failure")
 	usageErr := errors.New("compacted usage observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
@@ -913,16 +926,17 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 }
 
 func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
+	t.Parallel()
 	resetErr := errors.New("workflow protocol budget reset failure")
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowBudgetResetFailureController{err: resetErr}
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
 		Model: "gpt-5",
-		WorkflowRun: &workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     controller,
 		},
@@ -978,7 +992,7 @@ type workflowBudgetResetFailureController struct {
 	err error
 }
 
-func (c *workflowBudgetResetFailureController) ResetWorkflowProtocolViolationBudget(
+func (c *workflowBudgetResetFailureController) ResetProtocolViolationBudget(
 	context.Context,
 	workflowruntime.ViolationResetRequest,
 ) error {

@@ -11,25 +11,23 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"core/server/llm"
 	"core/server/workflow"
-	"core/server/workflowattention"
-	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 const (
-	CompleteNodeToolName         = "complete_node"
-	structuredOutputName         = "workflow_completion"
-	attentionFinalizationTimeout = 5 * time.Second
+	CompleteNodeToolName = "complete_node"
+	structuredOutputName = "workflow_completion"
 )
 
 // ErrStructuredOutputUnsupported is returned when structured-output completion
 // is requested but the provider lacks responses-API support.
 var ErrStructuredOutputUnsupported = errors.New("workflow structured output completion requires provider responses API support")
+var ErrShellCompletionUnavailable = errors.New("workflow shell-command completion requires exec_command")
 
 type CompletionMode string
 
@@ -48,10 +46,7 @@ type CompletionModeSelection struct {
 }
 
 type CompletionContract struct {
-	RunID              workflow.RunID
-	ExpectedGeneration int64
-	RequireGeneration  bool
-	Transitions        []CompletionTransition
+	Transitions []CompletionTransition
 }
 
 type CompletionTransition struct {
@@ -61,8 +56,10 @@ type CompletionTransition struct {
 	Parameters  []workflow.Parameter
 }
 
-type Config struct {
-	RunID                        workflow.RunID
+// CurrentNodeExecutionConfig is the live, process-local control contract for
+// one admitted Current Node.
+type CurrentNodeExecutionConfig struct {
+	ScopeID                      runtimeids.ExecutionScopeID
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
 	MaxInvalidCompletionAttempts int
@@ -72,25 +69,50 @@ type Config struct {
 	Instructions                 TaskInstructions
 }
 
+// PromptContract is the workflow prompt surface used to assemble a model
+// request. It intentionally excludes live execution control, which belongs
+// only to CurrentNodeExecutionConfig.
+type PromptContract struct {
+	Identity               string
+	CompletionMode         CompletionMode
+	UseAutomaticToolChoice bool
+	Instructions           TaskInstructions
+	Transitions            []CompletionTransition
+	TaskCommentCount       int64
+}
+
 type TaskCommentCounter interface {
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 }
 
 type TaskInstructions struct {
-	TaskID          string
+	CurrentNode     workflow.CurrentNodeReference
 	TaskShortID     string
 	TaskTitle       string
 	TaskBody        string
 	WorkflowID      string
 	WorkflowShortID string
 	WorkflowName    string
-	NodeID          string
 	NodeKey         string
 	NodeDisplayName string
 	ContextMode     string
 	SourceSessionID string
 	Transitions     []TransitionInstruction
 	NodePrompt      string
+}
+
+// CurrentNodePromptIdentity gives one stable prompt SourcePath to the full
+// natural Current Node reference. A branch-scoped Current Node must never
+// share its prompt identity with a serial node or another fan-out branch.
+func CurrentNodePromptIdentity(reference workflow.CurrentNodeReference) string {
+	if err := reference.Validate(); err != nil {
+		panic(fmt.Sprintf("current-node prompt identity requires a valid current node reference: %v", err))
+	}
+	identity := "workflow-current-node/" + string(reference.TaskID) + "/" + string(reference.NodeID)
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		return identity + "/branch/" + string(branchKey)
+	}
+	return identity
 }
 
 type TransitionInstruction struct {
@@ -100,12 +122,10 @@ type TransitionInstruction struct {
 }
 
 type CompletionRequest struct {
-	RunID              workflow.RunID
-	ExpectedGeneration int64
-	RequireGeneration  bool
-	TransitionID       string
-	OutputValues       map[string]string
-	Commentary         string
+	ScopeID      runtimeids.ExecutionScopeID
+	TransitionID string
+	OutputValues map[string]string
+	Commentary   string
 }
 
 type CompletionResult struct {
@@ -114,9 +134,7 @@ type CompletionResult struct {
 }
 
 type CompletionObservationRequest struct {
-	RunID              workflow.RunID
-	ExpectedGeneration int64
-	RequireGeneration  bool
+	ScopeID runtimeids.ExecutionScopeID
 }
 
 type CompletionObservationResult struct {
@@ -135,164 +153,21 @@ type ViolationResult struct {
 }
 
 type Controller interface {
-	CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error)
-	RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error)
-	ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error
-	ObserveWorkflowRunCompletion(ctx context.Context, req CompletionObservationRequest) (CompletionObservationResult, error)
+	CompleteCurrentNode(context.Context, CompletionRequest) (CompletionResult, error)
+	RecordProtocolViolation(context.Context, ViolationRequest) (ViolationResult, error)
+	ResetProtocolViolationBudget(context.Context, ViolationResetRequest) error
+	ObserveCurrentNodeCompletion(context.Context, CompletionObservationRequest) (CompletionObservationResult, error)
 }
 
 type ViolationRequest struct {
-	RunID              workflow.RunID
-	Kind               ViolationKind
-	MaxCount           int
-	Detail             string
-	ExpectedGeneration int64
-	RequireGeneration  bool
+	ScopeID  runtimeids.ExecutionScopeID
+	Kind     ViolationKind
+	MaxCount int
+	Detail   string
 }
 
 type ViolationResetRequest struct {
-	RunID              workflow.RunID
-	ExpectedGeneration int64
-	RequireGeneration  bool
-}
-
-type StoreController struct {
-	Store interface {
-		CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error)
-		RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
-		ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
-		GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
-	}
-	AttentionFinalizer interface {
-		FinalizeTransition(context.Context, workflowattention.TransitionResult)
-	}
-	AutomaticStarts *workflowexecution.AutomaticStartRegistration
-	MutationPermit  *workflowexecution.MutationPermit
-}
-
-type interruptedRunAttentionFinalizer interface {
-	PublishPendingInterruptedRun(context.Context, workflow.RunID)
-}
-
-func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
-	return workflowexecution.RunMutation(ctx, c.MutationPermit, func(ctx context.Context) (CompletionResult, error) {
-		return c.completeWorkflowRun(ctx, req)
-	})
-}
-
-func (c StoreController) completeWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
-	if c.Store == nil {
-		return CompletionResult{}, errors.New("workflow completion store is required")
-	}
-	completed, err := c.Store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
-		RunID:              req.RunID,
-		TransitionID:       req.TransitionID,
-		OutputValues:       req.OutputValues,
-		Commentary:         req.Commentary,
-		Actor:              "agent",
-		ExpectedGeneration: req.ExpectedGeneration,
-		RequireGeneration:  req.RequireGeneration,
-	})
-	if err != nil {
-		return CompletionResult{}, normalizeStoreCompletionError(err)
-	}
-	result := completed.Result
-	if c.AttentionFinalizer != nil {
-		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
-		defer cancel()
-		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-			TransitionID:                      result.TransitionID,
-			State:                             result.State,
-			ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
-			ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
-		})
-		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
-			for _, runID := range result.InterruptedRunIDs {
-				if runID == "" {
-					continue
-				}
-				runFinalizeCtx, runCancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
-				finalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
-				runCancel()
-			}
-		}
-	}
-	sourceRunID := req.RunID
-	transitionID := result.TransitionID
-	if c.AutomaticStarts == nil {
-		return CompletionResult{}, errors.New("automatic workflow start registration is required")
-	}
-	if err := c.AutomaticStarts.Register(workflowexecution.AutomaticStartRegistrationRequest{
-		Producer:     workflowexecution.AutomaticStartProducerRuntimeCompletion,
-		SourceRunID:  &sourceRunID,
-		TransitionID: &transitionID,
-		RunIDs:       result.RunIDs,
-	}); err != nil {
-		return CompletionResult{}, err
-	}
-	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
-}
-
-func (c StoreController) ObserveWorkflowRunCompletion(ctx context.Context, req CompletionObservationRequest) (CompletionObservationResult, error) {
-	if c.Store == nil {
-		return CompletionObservationResult{}, errors.New("workflow completion store is required")
-	}
-	run, err := c.Store.GetRun(ctx, req.RunID)
-	if err != nil {
-		return CompletionObservationResult{}, err
-	}
-	if req.RequireGeneration && run.Generation != req.ExpectedGeneration {
-		return CompletionObservationResult{}, nil
-	}
-	return CompletionObservationResult{Completed: run.CompletedAt != nil}, nil
-}
-
-func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {
-	return workflowexecution.RunMutation(ctx, c.MutationPermit, func(ctx context.Context) (ViolationResult, error) {
-		return c.recordWorkflowProtocolViolation(ctx, req)
-	})
-}
-
-func (c StoreController) recordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {
-	if c.Store == nil {
-		return ViolationResult{}, errors.New("workflow completion store is required")
-	}
-	result, err := c.Store.RecordProtocolViolation(ctx, workflowstore.RecordProtocolViolationRequest{
-		RunID:              req.RunID,
-		Kind:               workflowstore.ProtocolViolationKind(req.Kind),
-		MaxCount:           req.MaxCount,
-		Detail:             req.Detail,
-		ExpectedGeneration: req.ExpectedGeneration,
-		RequireGeneration:  req.RequireGeneration,
-	})
-	if err != nil {
-		return ViolationResult{}, err
-	}
-	if result.Interrupted {
-		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
-			finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
-			defer cancel()
-			finalizer.PublishPendingInterruptedRun(finalizeCtx, req.RunID)
-		}
-	}
-	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil
-}
-
-func (c StoreController) ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
-	return c.MutationPermit.Run(ctx, func(ctx context.Context) error {
-		return c.resetWorkflowProtocolViolationBudget(ctx, req)
-	})
-}
-
-func (c StoreController) resetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
-	if c.Store == nil {
-		return errors.New("workflow completion store is required")
-	}
-	return c.Store.ResetProtocolViolationBudget(ctx, workflowstore.ResetProtocolViolationBudgetRequest{
-		RunID:              req.RunID,
-		ExpectedGeneration: req.ExpectedGeneration,
-		RequireGeneration:  req.RequireGeneration,
-	})
+	ScopeID runtimeids.ExecutionScopeID
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {
@@ -305,6 +180,9 @@ func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, er
 		}
 		return CompletionModeStructuredOutput, nil
 	case config.WorkflowCompletionModeShellCommand:
+		if !selection.ShellAvailable {
+			return "", ErrShellCompletionUnavailable
+		}
 		return CompletionModeShellCommand, nil
 	case config.WorkflowCompletionModeUnstructured:
 		return CompletionModeUnstructuredOutput, nil
@@ -509,7 +387,7 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 				continue
 			}
 			if !knownParameters[field] {
-				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by this workflow run"})
+				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"})
 				continue
 			}
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -659,13 +537,13 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 	case "transition_id_required":
 		return ValidationIssue{Code: "transition_required", Field: "transition", Message: "transition is required when multiple transitions are available"}
 	case "invalid_transition_id":
-		return ValidationIssue{Code: "invalid_transition", Field: "transition", Message: "transition is not available in the run-start snapshot"}
+		return ValidationIssue{Code: "invalid_transition", Field: "transition", Message: "transition is not available in the advertised completion contract"}
 	case "no_outgoing_transition":
-		return ValidationIssue{Code: code, Field: "transition", Message: "no outgoing transition is available in the run-start snapshot"}
+		return ValidationIssue{Code: code, Field: "transition", Message: "no outgoing transition is available in the advertised completion contract"}
 	case "required_output_missing":
 		return ValidationIssue{Code: "required_parameter_missing", Field: field, Message: "parameter is required by the selected transition"}
 	case "unknown_output_field":
-		return ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by this workflow run"}
+		return ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"}
 	case "output_field_required":
 		return ValidationIssue{Code: "parameter_required", Field: field, Message: "parameter name is required"}
 	case "output_too_large":
@@ -679,7 +557,7 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 
 func selectedTransition(value string, provided bool, transitions []CompletionTransition) (CompletionTransition, bool, []ValidationIssue) {
 	if len(transitions) == 0 {
-		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this workflow run"}}
+		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this Current Node execution"}}
 	}
 	transitionID := strings.TrimSpace(value)
 	if transitionID == "" {
@@ -697,7 +575,7 @@ func selectedTransition(value string, provided bool, transitions []CompletionTra
 			return transition, true, nil
 		}
 	}
-	return CompletionTransition{}, false, []ValidationIssue{{Code: "invalid_transition", Field: "transition", Message: "transition is not declared by this workflow run"}}
+	return CompletionTransition{}, false, []ValidationIssue{{Code: "invalid_transition", Field: "transition", Message: "transition is not declared by the advertised completion contract"}}
 }
 
 func normalizedTransitions(transitions []CompletionTransition) []CompletionTransition {

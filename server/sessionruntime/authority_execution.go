@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"core/server/runtime"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -28,11 +28,32 @@ type ExecutionResult struct {
 	DroppedRuntimeEvents uint64
 }
 
+type executionPhase uint8
+
+const (
+	executionPhaseQueued executionPhase = iota + 1
+	executionPhaseRunning
+	executionPhaseFinalizing
+)
+
 type ExecutionPromptSnapshot struct {
 	Scope     ExecutionScope
 	Request   tools.AskQuestionRequest
 	CreatedAt time.Time
 }
+
+// WorkflowPromptResolution is the exact volatile prompt scope selected for a
+// Task-owned question answer. It is valid only while the Authority retains the
+// matching execution and pending prompt.
+type WorkflowPromptResolution struct {
+	ScopeID     runtimeids.ExecutionScopeID
+	SessionID   runtimeids.SessionID
+	CurrentNode workflow.CurrentNodeReference
+}
+
+// ErrWorkflowPromptAmbiguous means more than one exact live workflow scope has
+// the requested pending prompt. The caller must not choose one arbitrarily.
+var ErrWorkflowPromptAmbiguous = errors.New("workflow prompt is ambiguous")
 
 type ExecutionPromptFeed interface {
 	PromptPending(runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID, tools.AskQuestionRequest, time.Time)
@@ -54,9 +75,9 @@ type execution struct {
 	stopErr  error
 	prompts  executionPromptStore
 
+	phase executionPhase
+
 	closeResource bool
-	activated     atomic.Bool
-	finalizing    atomic.Bool
 }
 
 type executionHandle struct {
@@ -146,7 +167,6 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.retire()
 
 	authority := e.authority
-	workflowRef, hasWorkflow := e.scope.Workflow()
 	executionErr := errors.Join(runErr, drainErr)
 	var closeErr error
 	if e.resource != nil {
@@ -173,14 +193,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.runErr = errors.Join(executionErr, cleanupErr, closeErr)
 	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
 	e.resultMu.Unlock()
-	if hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(workflowRef)
+	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
+		authority.executionFinalized.ExecutionFinalized(e.scope)
 	}
 	close(e.done)
-}
-
-func (e *execution) beginFinalization() {
-	e.finalizing.Store(true)
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
@@ -198,15 +214,48 @@ func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error)
 
 func (e *execution) retire() {
 	authority := e.authority
-	workflowRef, hasWorkflow := e.scope.Workflow()
 	authority.mu.Lock()
 	if authority.byScope[e.scope.ID()] == e {
 		delete(authority.byScope, e.scope.ID())
 	}
-	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
-		delete(authority.byWorkflow, workflowRef)
-	}
+	e.retireWorkflowLocked()
 	authority.mu.Unlock()
+}
+
+// beginWorkflowFinalization removes a terminal Script from workflow liveness
+// indexes while retaining its Exact Execution Scope for its completion
+// finalizer. A Script becomes terminal when its process exits or Start fails.
+// Its finalizer can still prove Current Node ownership, but no longer
+// authorizes Interrupt or appears in queued/running read models.
+func (e *execution) beginWorkflowFinalization() {
+	e.authority.mu.Lock()
+	if e.authority.byScope[e.scope.ID()] != e {
+		e.authority.mu.Unlock()
+		return
+	}
+	if e.phase != executionPhaseQueued && e.phase != executionPhaseRunning {
+		e.authority.mu.Unlock()
+		panic(fmt.Sprintf(
+			"workflow execution scope %s began finalization from phase %d",
+			e.scope.ID(),
+			e.phase,
+		))
+	}
+	e.phase = executionPhaseFinalizing
+	e.retireWorkflowLocked()
+	e.authority.mu.Unlock()
+}
+
+func (e *execution) retireWorkflowLocked() {
+	workflowRef, hasWorkflow := e.scope.Workflow()
+	if !hasWorkflow {
+		return
+	}
+	workflowKey, err := workflowExecutionKeyFor(workflowRef)
+	if err != nil {
+		panic(fmt.Sprintf("retire workflow execution scope %s: %v", e.scope.ID(), err))
+	}
+	e.authority.removeWorkflowExecutionLocked(workflowRef, workflowKey, e)
 }
 
 func (e *execution) cleanup() error {
@@ -375,6 +424,13 @@ func (s *executionPromptStore) hasPending() bool {
 	return len(s.pending) != 0
 }
 
+func (s *executionPromptStore) hasPendingID(requestID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, exists := s.pending[requestID]
+	return exists
+}
+
 func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {
 	if s.feed == nil {
 		return
@@ -417,6 +473,76 @@ func (a *Authority) SubmitPromptResponse(sessionID runtimeids.SessionID, resp to
 	execution := a.sessionExecution(sessionID)
 	if execution == nil {
 		return fmt.Errorf("session %s has no active execution", sessionID)
+	}
+	return execution.prompts.Submit(resp, err)
+}
+
+// ResolvePendingWorkflowPrompt selects one exact live Agent scope by Task and
+// prompt ID. It deliberately reads only Authority-owned volatile execution
+// state; persisted Run history is not part of prompt ownership.
+func (a *Authority) ResolvePendingWorkflowPrompt(taskID workflow.TaskID, askID string) (WorkflowPromptResolution, error) {
+	if a == nil {
+		return WorkflowPromptResolution{}, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return WorkflowPromptResolution{}, errors.New("workflow task id is required")
+	}
+	askID = strings.TrimSpace(askID)
+	if askID == "" {
+		return WorkflowPromptResolution{}, errors.New("prompt request id is required")
+	}
+
+	a.mu.Lock()
+	executions := make([]*execution, 0, len(a.byScope))
+	for _, candidate := range a.byScope {
+		executions = append(executions, candidate)
+	}
+	a.mu.Unlock()
+
+	var resolved *WorkflowPromptResolution
+	for _, candidate := range executions {
+		if candidate.scope.Kind() != ExecutionScopeAgent {
+			continue
+		}
+		workflowRef, isWorkflow := candidate.scope.Workflow()
+		if !isWorkflow || workflowRef.CurrentNode.TaskID != taskID || !candidate.prompts.hasPendingID(askID) {
+			continue
+		}
+		resource, isAgent := candidate.scope.Resource()
+		if !isAgent {
+			panic(fmt.Sprintf("workflow agent scope %s has no session resource", candidate.scope.ID()))
+		}
+		next := WorkflowPromptResolution{
+			ScopeID:     candidate.scope.ID(),
+			SessionID:   resource.SessionID(),
+			CurrentNode: workflowRef.CurrentNode,
+		}
+		if resolved != nil {
+			return WorkflowPromptResolution{}, ErrWorkflowPromptAmbiguous
+		}
+		resolved = &next
+	}
+	if resolved == nil {
+		return WorkflowPromptResolution{}, serverapi.ErrPromptNotFound
+	}
+	return *resolved, nil
+}
+
+// SubmitPromptResponseForScope delivers an answer only to its previously
+// resolved exact scope. A scope retirement between resolve and submit is a
+// stale prompt, never a reason to redirect by Session.
+func (a *Authority) SubmitPromptResponseForScope(scopeID runtimeids.ExecutionScopeID, resp tools.AskQuestionResponse, err error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if scopeID.IsZero() {
+		return errors.New("execution scope id is required")
+	}
+	a.mu.Lock()
+	execution := a.byScope[scopeID]
+	a.mu.Unlock()
+	if execution == nil || execution.scope.Kind() != ExecutionScopeAgent {
+		return serverapi.ErrPromptNotFound
 	}
 	return execution.prompts.Submit(resp, err)
 }

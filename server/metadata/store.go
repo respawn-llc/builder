@@ -68,9 +68,22 @@ type Store struct {
 	queries         *sqlitegen.Queries
 }
 
+type sessionMetadataDocument struct {
+	WorkspaceRoot                   string                             `json:"workspace_root"`
+	WorkspaceContainer              string                             `json:"workspace_container"`
+	InputDraftRecoveryBuffers       []session.InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers"`
+	ConversationEstablished         bool                               `json:"conversation_established"`
+	PromptCacheLineageGeneration    int                                `json:"prompt_cache_lineage_generation"`
+	HeadlessActive                  bool                               `json:"headless_active"`
+	CompactionSoonReminderIssued    bool                               `json:"compaction_soon_reminder_issued"`
+	GeneratedRecoveredWarningIssued bool                               `json:"generated_recovered_warning_issued"`
+	PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
+	WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
+	Goal                            *session.GoalState                 `json:"goal"`
+}
+
 var (
 	ErrInvalidProjectKey                     = errors.New("invalid project key")
-	ErrProjectDeletePreparationInvalidated   = errors.New("project delete preparation was invalidated")
 	ErrWorkspaceUnlinkPreparationInvalidated = errors.New("workspace unlink preparation was invalidated")
 	ErrProjectKeyAlreadyInUse                = errors.New("project key already in use")
 
@@ -163,6 +176,14 @@ func (s *Store) DB() *sql.DB {
 		return nil
 	}
 	return s.db
+}
+
+func (s *Store) ListProjectTaskIDs(ctx context.Context, projectID string) ([]string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	return s.queries.ListProjectTaskIDs(ctx, projectID)
 }
 
 func (s *Store) Queries() *sqlitegen.Queries {
@@ -491,126 +512,7 @@ func (s *Store) DeleteSessionRecordByID(ctx context.Context, sessionID string) e
 	return nil
 }
 
-type ProjectSessionArtifact struct {
-	SessionID       string
-	ArtifactRelpath string
-}
-
-type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
 type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
-
-type sessionIDSet []string
-
-func newSessionIDSet(ids []string) sessionIDSet {
-	set := append(sessionIDSet(nil), ids...)
-	slices.Sort(set)
-	return set
-}
-
-func (ids sessionIDSet) Equal(other sessionIDSet) bool {
-	return slices.Equal(ids, other)
-}
-
-func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
-	blockers := []serverapi.ProjectDeleteBlocker{}
-	add := func(code string, message string, count int64) {
-		if count > 0 {
-			blockers = append(blockers, serverapi.ProjectDeleteBlocker{Code: code, Message: message, Count: int(count)})
-		}
-	}
-	add("non_terminal_tasks", "Project has active or non-terminal tasks.", counts.NonTerminalTasks)
-	add("active_runs", "Project has active workflow runs.", counts.ActiveRuns)
-	add("runnable_runs", "Project has runnable workflow runs.", counts.RunnableRuns)
-	return blockers
-}
-
-func (s *Store) DeleteProject(ctx context.Context, projectID string, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
-	return s.DeleteProjectWithPreflightBlockers(ctx, projectID, nil, deleteArtifact)
-}
-
-func (s *Store) DeleteProjectWithPreflightBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
-	return s.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, nil, deleteArtifact)
-}
-
-func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, runtimeBlocker ProjectDeleteRuntimeBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
-	if s == nil || s.db == nil || s.queries == nil {
-		return nil, errors.New("metadata store is required")
-	}
-	if deleteArtifact == nil {
-		return nil, errors.New("session artifact delete callback is required")
-	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	counts, err := s.queries.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("count project delete blockers: %w", err)
-	}
-	blockers := append([]serverapi.ProjectDeleteBlocker{}, preflightBlockers...)
-	blockers = append(blockers, projectDeleteBlockersFromCounts(counts)...)
-	if len(blockers) > 0 {
-		return blockers, nil
-	}
-	preparedSessionIDs, err := s.queries.ListProjectSessionIDs(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("list project sessions for runtime blockers: %w", err)
-	}
-	releaseRuntimeBlocker := func() {}
-	if runtimeBlocker != nil {
-		runtimeBlockers, release, err := runtimeBlocker(ctx, preparedSessionIDs)
-		if release != nil {
-			releaseRuntimeBlocker = release
-			defer releaseRuntimeBlocker()
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(runtimeBlockers) > 0 {
-			return runtimeBlockers, nil
-		}
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin project delete tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	locked, err := q.AcquireProjectDeleteWriteLock(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("lock project delete: %w", err)
-	}
-	if locked == 0 {
-		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
-	}
-	commitSessionIDs, err := q.ListProjectSessionIDs(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("list project sessions for commit: %w", err)
-	}
-	counts, err = q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("count project delete blockers: %w", err)
-	}
-	blockers = projectDeleteBlockersFromCounts(counts)
-	if len(blockers) > 0 {
-		return blockers, nil
-	}
-	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
-		return nil, ErrProjectDeletePreparationInvalidated
-	}
-	if err := q.DeleteProjectTasks(ctx, trimmedProjectID); err != nil {
-		return nil, fmt.Errorf("delete project tasks: %w", err)
-	}
-	rows, err := q.DeleteProject(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("delete project: %w", err)
-	}
-	if rows == 0 {
-		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit project delete tx: %w", err)
-	}
-	_ = deleteArtifact(ProjectSessionArtifact{ArtifactRelpath: filepath.ToSlash(filepath.Join("projects", trimmedProjectID, "sessions"))}, true)
-	return nil, nil
-}
 
 func (s *Store) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
 	if s == nil || s.queries == nil {
@@ -924,7 +826,7 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
-	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
+	if !SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
 		return nil, ErrWorkspaceUnlinkPreparationInvalidated
 	}
 	rows, err := q.DeleteWorkspaceBindingByID(ctx, sqlitegen.DeleteWorkspaceBindingByIDParams{ProjectID: trimmedProjectID, WorkspaceID: trimmedWorkspaceID})
@@ -975,11 +877,11 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("count non-terminal workspace tasks: %w", err)
 	}
 	addCountBlocker("non_terminal_tasks", "Active or non-terminal tasks still depend on this workspace.", nonTerminalTasks)
-	activeRuns, err := q.CountActiveTaskRunsByWorkspace(ctx, workspaceID)
+	executableCurrentNodes, err := q.CountExecutableCurrentNodesByWorkspace(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("count active workspace runs: %w", err)
+		return nil, fmt.Errorf("count executable workspace current nodes: %w", err)
 	}
-	addCountBlocker("active_runs", "Active runs still depend on this workspace.", activeRuns)
+	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
 	ownedWorktrees, err := q.CountManagedOwnedWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count managed owned worktrees: %w", err)
@@ -2027,6 +1929,29 @@ func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, p
 	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
 }
 
+// SessionHasWorkflowTask reports whether direct Session ownership links the
+// Session to a retained workflow Task.
+func (s *Store) SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return false, errors.New("session id is required")
+	}
+	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("list session workflow task ids: %w", err)
+	}
+	if len(taskIDs) == 0 {
+		return false, nil
+	}
+	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
+		return false, fmt.Errorf("session %q has invalid workflow task ownership", id)
+	}
+	return true, nil
+}
+
 func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID string) (sqlitegen.GetSessionExecutionTargetByIDRow, error) {
 	if s == nil || s.queries == nil {
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, errors.New("metadata store is required")
@@ -2201,19 +2126,18 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 			return err
 		}
 	}
-	metadataJSON, err := marshalJSON(map[string]any{
-		"workspace_root":                     workspaceRoot,
-		"workspace_container":                workspaceContainer,
-		"input_draft_recovery_buffers":       snapshot.Meta.InputDraftRecoveryBuffers,
-		"conversation_established":           snapshot.Meta.ConversationEstablished,
-		"prompt_cache_lineage_generation":    snapshot.Meta.PromptCacheLineageGeneration,
-		"headless_active":                    snapshot.Meta.HeadlessActive,
-		"compaction_soon_reminder_issued":    snapshot.Meta.CompactionSoonReminderIssued,
-		"generated_recovered_warning_issued": snapshot.Meta.GeneratedRecoveredWarningIssued,
-		"pending_model_recovery":             snapshot.Meta.PendingModelRecovery,
-		"worktree_reminder":                  persistedWorktreeReminder,
-		"goal":                               snapshot.Meta.Goal,
-		"workflow_session":                   snapshot.Meta.WorkflowSession,
+	metadataJSON, err := marshalJSON(sessionMetadataDocument{
+		WorkspaceRoot:                   workspaceRoot,
+		WorkspaceContainer:              workspaceContainer,
+		InputDraftRecoveryBuffers:       snapshot.Meta.InputDraftRecoveryBuffers,
+		ConversationEstablished:         snapshot.Meta.ConversationEstablished,
+		PromptCacheLineageGeneration:    snapshot.Meta.PromptCacheLineageGeneration,
+		HeadlessActive:                  snapshot.Meta.HeadlessActive,
+		CompactionSoonReminderIssued:    snapshot.Meta.CompactionSoonReminderIssued,
+		GeneratedRecoveredWarningIssued: snapshot.Meta.GeneratedRecoveredWarningIssued,
+		PendingModelRecovery:            snapshot.Meta.PendingModelRecovery,
+		WorktreeReminder:                persistedWorktreeReminder,
+		Goal:                            snapshot.Meta.Goal,
 	})
 	if err != nil {
 		return err
@@ -2342,20 +2266,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	if err != nil {
 		return session.Meta{}, err
 	}
-	metadataPayload := struct {
-		WorkspaceRoot                   string                             `json:"workspace_root"`
-		WorkspaceContainer              string                             `json:"workspace_container"`
-		InputDraftRecoveryBuffers       []session.InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers"`
-		ConversationEstablished         bool                               `json:"conversation_established"`
-		PromptCacheLineageGeneration    int                                `json:"prompt_cache_lineage_generation"`
-		HeadlessActive                  bool                               `json:"headless_active"`
-		CompactionSoonReminderIssued    bool                               `json:"compaction_soon_reminder_issued"`
-		GeneratedRecoveredWarningIssued bool                               `json:"generated_recovered_warning_issued"`
-		PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
-		WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
-		Goal                            *session.GoalState                 `json:"goal"`
-		WorkflowSession                 *session.WorkflowSessionState      `json:"workflow_session"`
-	}{}
+	metadataPayload := sessionMetadataDocument{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
 	}
@@ -2423,7 +2334,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
-		WorkflowSession:                 metadataPayload.WorkflowSession,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil

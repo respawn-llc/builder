@@ -18,6 +18,7 @@ import (
 )
 
 func TestForkedSessionAfterTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
@@ -180,6 +181,7 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 }
 
 func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
@@ -240,6 +242,7 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 }
 
 func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -269,6 +272,7 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 }
 
 func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{

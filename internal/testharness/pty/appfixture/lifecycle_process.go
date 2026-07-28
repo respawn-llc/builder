@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"core/shared/lifecyclecontract"
@@ -55,6 +56,10 @@ type LifecycleServerProcessConfig struct {
 	ScriptPath      string `json:"script_path"`
 	ReadyPath       string `json:"ready_path"`
 	HookRecordPath  string `json:"hook_record_path"`
+}
+
+type LifecycleServerProcessReady struct {
+	PID int `json:"pid"`
 }
 
 func (config LifecycleProcessConfig) Validate() error {
@@ -175,6 +180,25 @@ func ReadLifecycleServerProcessConfig(path string) (LifecycleServerProcessConfig
 	return config, nil
 }
 
+func WriteLifecycleServerProcessReady(path string, ready LifecycleServerProcessReady) error {
+	return writeLifecycleProcessConfig(path, ready, ready.Validate)
+}
+
+func ReadLifecycleServerProcessReady(path string) (LifecycleServerProcessReady, error) {
+	var ready LifecycleServerProcessReady
+	if err := readLifecycleProcessConfig(path, &ready, func() error { return ready.Validate() }); err != nil {
+		return LifecycleServerProcessReady{}, err
+	}
+	return ready, nil
+}
+
+func (ready LifecycleServerProcessReady) Validate() error {
+	if ready.PID <= 0 {
+		return errors.New("lifecycle server PTY fixture readiness PID must be positive")
+	}
+	return nil
+}
+
 func writeLifecycleProcessConfig[T any](path string, config T, validate func() error) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("lifecycle PTY fixture process config path is required")
@@ -186,8 +210,29 @@ func writeLifecycleProcessConfig[T any](path string, config T, validate func() e
 	if err != nil {
 		return fmt.Errorf("marshal lifecycle PTY fixture process config: %w", err)
 	}
-	if err := os.WriteFile(path, encoded, 0o600); err != nil {
-		return fmt.Errorf("write lifecycle PTY fixture process config: %w", err)
+	if err := writeLifecycleFixtureDocument(path, encoded); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeLifecycleFixtureDocument(path string, encoded []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create lifecycle PTY fixture document: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+
+	if _, err := temporary.Write(encoded); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write lifecycle PTY fixture document: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close lifecycle PTY fixture document: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("publish lifecycle PTY fixture document: %w", err)
 	}
 	return nil
 }

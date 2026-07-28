@@ -494,7 +494,6 @@ func TestEventLogV1HistoryReplacementRecordRoundTrip(t *testing.T) {
 	record, err := NewEventRecord(4, nil, HistoryReplacementRecord{
 		Engine:                            "local",
 		Mode:                              CompactionModeAuto,
-		WorkflowRunID:                     stringPointer("workflow-run-1"),
 		CompactionNumber:                  intPointer(3),
 		CommittedEntryStart:               intPointer(12),
 		PendingHandoffFutureMessage:       stringPointer("continue with the cache-safe history"),

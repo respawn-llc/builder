@@ -17,6 +17,7 @@ import (
 )
 
 func TestBuildReviewerTranscriptMessagesSummarizesViewImagePayloads(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
 		{
 			Role: llm.RoleAssistant,
@@ -50,6 +51,7 @@ func TestBuildReviewerTranscriptMessagesSummarizesViewImagePayloads(t *testing.T
 }
 
 func TestReviewerSuggestions_ReusesStableMetaForPromptCachePrefix(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
 	reviewerClient := &fakeClient{
@@ -82,6 +84,7 @@ func TestReviewerSuggestions_ReusesStableMetaForPromptCachePrefix(t *testing.T) 
 }
 
 func TestBuildReviewerRequestUsesReviewerModelCapabilities(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
@@ -103,6 +106,7 @@ func TestBuildReviewerRequestUsesReviewerModelCapabilities(t *testing.T) {
 }
 
 func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
+	t.Parallel()
 	seedContent := "review raw \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -162,6 +166,7 @@ func TestReviewerRebuildRetainsGenerationSkillsWithoutMutatingMainTranscript(t *
 }
 
 func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
 	reviewerClient := &fakeClient{

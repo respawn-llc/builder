@@ -345,7 +345,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
 		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -404,44 +404,6 @@ func writeWorkflowExecutionTargetError(stderr io.Writer, err error) bool {
 		return true
 	}
 	return false
-}
-
-func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task cancel", stderr, taskCancelUsage)
-	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	reason := fs.String("reason", "", "reason recorded with the cancellation")
-	positionals, flagArgs := takeLeadingPositionals(args, 1)
-	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
-		return exitCode
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 1 {
-		fmt.Fprintln(stderr, "task cancel requires <short-id-or-task-id>")
-		return 2
-	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
-		return 1
-	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		if err := remote.CancelWorkflowTask(ctx, serverapi.WorkflowTaskCancelRequest{TaskID: taskID, Reason: *reason}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "canceled task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "Canceled task %s.\n", taskDisplayID(detail))
-		return 0
-	})
 }
 
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -520,41 +482,77 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	})
 }
 
-func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskApproveUsage)
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" task interrupt", stderr, taskInterruptUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	sessionID := fs.String("session", "", "live Agent session ID to interrupt; otherwise interrupts the whole task")
+	reason := fs.String("reason", "", "operator-visible reason for the interruption")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
 	}
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 {
-		fmt.Fprintln(stderr, "task approve requires <transition-id>")
+		fmt.Fprintln(stderr, "task interrupt requires <short-id-or-task-id>")
+		return 2
+	}
+	if flagWasProvided(fs, "session") && strings.TrimSpace(*sessionID) == "" {
+		fmt.Fprintln(stderr, "--session requires a non-blank session ID")
 		return 2
 	}
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+		defer cancel()
+		if _, err := remote.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{
+			TaskID:    taskID,
+			SessionID: strings.TrimSpace(*sessionID),
+			Reason:    *reason,
+		}); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+		if err != nil {
+			fmt.Fprintf(stderr, "interrupted task %s but failed to load task detail for output: %v\n", taskID, err)
+			return 1
+		}
+		writeTaskLifecycleResult(stdout, "Interrupted", detail)
+		return 0
+	})
+}
+
+func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskApproveUsage)
+	positionals, flagArgs := takeLeadingPositionals(args, 1)
+	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
+		return exitCode
+	}
+	positionals = append(positionals, fs.Args()...)
+	if len(positionals) != 1 {
+		fmt.Fprintln(stderr, "task approve requires <approval-id>")
 		return 2
 	}
+	if denyAgentHumanOnlyTaskAction(stderr) {
+		return 1
+	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
-			return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
-		})
+		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+		defer cancel()
+		resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{ApprovalID: positionals[0]})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
-				fmt.Fprintln(stderr, err)
-			}
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if err := resp.Validate(); err != nil {
 			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
 			return 1
 		}
 		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
@@ -563,15 +561,15 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 			return 1
 		}
 		if strings.TrimSpace(applied.TaskID) == "" {
-			fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", applied.TransitionID)
+			fmt.Fprintf(stderr, "approved workflow change %s but response did not include task id for output\n", positionals[0])
 			return 1
 		}
 		detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
 		if err != nil {
-			fmt.Fprintf(stderr, "approved transition %s but failed to load task detail for output: %v\n", applied.TransitionID, err)
+			fmt.Fprintf(stderr, "approved workflow change %s but failed to load task detail for output: %v\n", positionals[0], err)
 			return 1
 		}
-		writeTaskTransitionResult(stdout, "Approved transition of", detail, applied.TransitionID, applied.RunIDs)
+		writeTaskLifecycleResult(stdout, "Approved", detail)
 		return 0
 	})
 }
@@ -607,7 +605,14 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
-			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary, ExecutionTarget: executionTarget})
+			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+				TaskID:           taskID,
+				TargetNodeID:     positionals[1],
+				OutputValues:     outputs.values,
+				Commentary:       *commentary,
+				SetupOperationID: setupOperationID,
+				ExecutionTarget:  executionTarget,
+			})
 		})
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) {
@@ -622,8 +627,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
 			return 1
 		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
-		if err != nil {
+		if _, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -632,7 +636,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
 			return 1
 		}
-		writeTaskTransitionResult(stdout, "Moved task", detail, applied.TransitionID, applied.RunIDs)
+		writeTaskLifecycleResult(stdout, "Moved", detail)
 		return 0
 	})
 }
@@ -741,13 +745,9 @@ func (f *stringMapFlag) Set(raw string) error {
 	return nil
 }
 
-func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, runID string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
+func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
-	}
-	trimmedRunID := strings.TrimSpace(runID)
-	if trimmedRunID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("run id is required")
 	}
 	if interval <= 0 {
 		interval = taskStartSessionPollInterval
@@ -758,23 +758,18 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 		detail, err := getWorkflowTaskByID(pollCtx, remote, taskID)
 		if err != nil {
 			if pollCtx.Err() != nil {
-				return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but session id was not assigned within %s", taskID, trimmedRunID, timeout)
+				return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskID, timeout)
 			}
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but failed to load task detail while waiting for session id: %w", taskID, trimmedRunID, err)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but failed to load task detail while waiting for session id: %w", taskID, err)
 		}
-		for _, script := range detail.CurrentScripts {
-			if script.RunID == trimmedRunID {
-				return detail, nil
-			}
-		}
-		if len(detail.CurrentSessionIDs) > 0 {
+		if len(detail.CurrentScripts) > 0 || len(detail.LiveSessionIDs) > 0 {
 			return detail, nil
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-pollCtx.Done():
 			timer.Stop()
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but session id was not assigned within %s", taskDisplayID(detail), trimmedRunID, timeout)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskDisplayID(detail), timeout)
 		case <-timer.C:
 		}
 	}

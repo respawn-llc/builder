@@ -12,6 +12,7 @@ import (
 )
 
 func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: capturingTool{name: toolspec.ToolEdit}}), Config{
@@ -56,6 +57,7 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 }
 
 func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: capturingTool{name: toolspec.ToolEdit}}), Config{Model: "claude", EnabledTools: []toolspec.ID{toolspec.ToolEdit}})
 

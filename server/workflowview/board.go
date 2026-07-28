@@ -26,9 +26,10 @@ type Board struct {
 	roleResolver workflow.RoleResolver
 	projector    *TaskProjector
 	authority    *sessionruntime.Authority
+	quiescence   TaskQuiescenceSource
 }
 
-func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, projector *TaskProjector, authority *sessionruntime.Authority) (*Board, error) {
+func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource) (*Board, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -44,6 +45,9 @@ func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, 
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
+	if quiescence == nil {
+		return nil, errors.New("task quiescence source is required")
+	}
 	return &Board{
 		metadata:     metadataStore,
 		queries:      metadataStore.Queries(),
@@ -51,6 +55,7 @@ func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, 
 		roleResolver: roleResolver,
 		projector:    projector,
 		authority:    authority,
+		quiescence:   quiescence,
 	}, nil
 }
 
@@ -88,10 +93,9 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 		}, nil
 	}
 	snapshot := definitions[selected.WorkflowID]
-	definition := snapshot.api
-	groups := boardGroups(definition)
+	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
-	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selected.WorkflowID, canceledBoardTerminalNodeID(definition), labelFilter); err != nil {
+	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selected.WorkflowID, labelFilter); err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
 	return serverapi.WorkflowBoard{
@@ -132,7 +136,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	definition := snapshot.api
-	if _, ok := workflowNodeByID(definition)[nodeID]; !ok {
+	if _, ok := workflowNodesByID(definition)[nodeID]; !ok {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("node_id is invalid for workflow")
 	}
 	pageSize := req.PageSize
@@ -150,18 +154,17 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		cursorTaskID = sql.NullString{String: cursor.anchor.taskID, Valid: true}
 	}
 	rows, err := b.queries.ListBoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-		ProjectID:              projectID,
-		WorkflowID:             workflowID,
-		CursorDirection:        string(cursor.direction),
-		CursorUpdatedAtUnixMs:  cursorUpdatedAtUnixMs,
-		CursorTaskID:           cursorTaskID,
-		NodeID:                 sql.NullString{String: nodeID, Valid: true},
-		CanceledTerminalNodeID: nullableWorkflowViewString(canceledBoardTerminalNodeID(definition)),
-		LabelFilterKind:        labelFilterArgs.kind,
-		LabelFilterMode:        labelFilterArgs.mode,
-		LabelIdsJson:           labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:   labelFilterArgs.excludedLabelIDsJSON,
-		LimitRows:              int64(pageSize + 1),
+		ProjectID:             projectID,
+		WorkflowID:            workflowID,
+		CursorDirection:       string(cursor.direction),
+		CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+		CursorTaskID:          cursorTaskID,
+		NodeID:                nodeID,
+		LabelFilterKind:       labelFilterArgs.kind,
+		LabelFilterMode:       labelFilterArgs.mode,
+		LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+		LimitRows:             int64(pageSize + 1),
 	})
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
@@ -175,7 +178,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		slices.Reverse(tasks)
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	placementsByTaskID, err := b.placementsByTask(ctx, tasks)
+	currentNodesByTaskID, err := b.currentNodesByTask(ctx, tasks)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -184,11 +187,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	runActionsByTaskID, err := b.runActionsByTask(ctx, taskIDs)
+	liveExecutionsByTaskID, err := b.liveExecutionsByTask(ctx, projectID, workflowID, taskIDs)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	liveExecutionsByTaskID, err := b.liveExecutionsByTask(ctx, taskIDs)
+	quiescenceByTaskID, err := b.quiescence.CurrentTaskQuiescence(workflowTaskIDs(taskIDs))
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -198,22 +201,17 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
 	for _, task := range tasks {
-		status := taskDetailStatusFact(statusesByTaskID[task.ID], liveExecutionsByTaskID[task.ID])
-		runActions := runActionsByTaskID[task.ID]
-		runActions.HasRunning = false
-		runActions.HasWaitingQuestion = false
-		for _, execution := range liveExecutionsByTaskID[task.ID] {
-			if execution.WaitingQuestion {
-				runActions.HasWaitingQuestion = true
-			} else {
-				runActions.HasRunning = true
-			}
+		canDelete, exists := quiescenceByTaskID[workflow.TaskID(task.ID)]
+		if !exists {
+			return serverapi.WorkflowBoardNodeCardsListResponse{}, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", task.ID)
 		}
+		status := taskDetailStatusFact(statusesByTaskID[task.ID], liveExecutionsByTaskID[task.ID])
 		card, _ := b.card(
 			task,
 			status,
-			placementsByTaskID[task.ID],
-			runActions,
+			currentNodesByTaskID[task.ID],
+			liveExecutionsByTaskID[task.ID],
+			canDelete,
 			labelIDsByTask[task.ID],
 			snapshot,
 			sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary),
@@ -235,90 +233,47 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
+func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID string, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
 	if len(taskIDs) == 0 {
 		return map[string][]sessionruntime.TaskExecution{}, nil
 	}
-	domainTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
-	for _, taskID := range taskIDs {
-		domainTaskIDs = append(domainTaskIDs, workflow.TaskID(taskID))
-	}
-	snapshots, err := b.authority.CurrentTaskExecutionSnapshots(domainTaskIDs)
+	snapshots, err := b.authority.CurrentScopedTaskExecutionSnapshots(
+		projectID, workflow.WorkflowID(workflowID), workflowTaskIDs(taskIDs),
+	)
 	if err != nil {
 		return nil, err
-	}
-	rows, err := b.queries.ListWorkflowTaskCurrentRunFactsByTasks(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	rowsByTaskID := make(map[string][]sqlitegen.ListWorkflowTaskCurrentRunFactsRow, len(taskIDs))
-	for _, row := range rows {
-		rowsByTaskID[row.TaskID] = append(rowsByTaskID[row.TaskID], sqlitegen.ListWorkflowTaskCurrentRunFactsRow{
-			ID:            row.ID,
-			RunGeneration: row.RunGeneration,
-			WaitingAskID:  row.WaitingAskID,
-		})
 	}
 	currentByTaskID := make(map[string][]sessionruntime.TaskExecution, len(taskIDs))
 	for _, taskID := range taskIDs {
-		current, err := currentTaskExecutions(taskID, rowsByTaskID[taskID], snapshots[workflow.TaskID(taskID)].Executions)
-		if err != nil {
-			return nil, err
-		}
-		currentByTaskID[taskID] = current
+		currentByTaskID[taskID] = currentTaskExecutions(snapshots[workflow.TaskID(taskID)].Executions)
 	}
 	return currentByTaskID, nil
 }
 
-func (b *Board) placementsByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]sqlitegen.TaskNodePlacementRecord, error) {
+func (b *Board) currentNodesByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]workflow.CurrentNode, error) {
 	taskIDs := taskIDs(tasks)
 	if len(taskIDs) == 0 {
-		return map[string][]sqlitegen.TaskNodePlacementRecord{}, nil
+		return map[string][]workflow.CurrentNode{}, nil
 	}
-	placements, err := b.queries.ListTaskNodePlacementsByTasks(ctx, taskIDs)
+	currentNodes, err := b.definitions.CurrentNodesByTask(ctx, workflowTaskIDs(taskIDs))
 	if err != nil {
 		return nil, err
 	}
-	byTaskID := make(map[string][]sqlitegen.TaskNodePlacementRecord, len(tasks))
-	for _, placement := range placements {
-		byTaskID[placement.TaskID] = append(byTaskID[placement.TaskID], placement)
-	}
-	pendingApprovalPlacements, err := loadPendingApprovalSourcePlacementsByTask(ctx, b.queries, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	for taskID, taskPlacements := range pendingApprovalPlacements {
-		byTaskID[taskID] = append(byTaskID[taskID], taskPlacements...)
+	byTaskID := make(map[string][]workflow.CurrentNode, len(tasks))
+	for _, taskID := range taskIDs {
+		byTaskID[taskID] = currentNodes[workflow.TaskID(taskID)]
 	}
 	return byTaskID, nil
 }
 
-func (b *Board) runActionsByTask(ctx context.Context, taskIDs []string) (map[string]taskRunActionFacts, error) {
-	if len(taskIDs) == 0 {
-		return map[string]taskRunActionFacts{}, nil
-	}
-	rows, err := b.queries.ListWorkflowTaskRunActionFactsByTasks(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	byTaskID := make(map[string]taskRunActionFacts, len(taskIDs))
-	for _, row := range rows {
-		byTaskID[row.TaskID] = taskRunActionFacts{
-			HasRunning:         row.HasRunning != 0,
-			HasInterrupted:     row.HasInterrupted != 0,
-			HasWaitingQuestion: row.HasWaitingQuestion != 0,
-		}
-	}
-	return byTaskID, nil
-}
-
-func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runActions taskRunActionFacts, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
+func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
 	facts := b.projector.ProjectTaskFacts(TaskFactsInput{
-		Task:       task,
-		Status:     status,
-		Placements: placements,
-		RunActions: runActions,
-		Definition: definition,
+		Task:           task,
+		Status:         status,
+		CurrentNodes:   currentNodes,
+		LiveExecutions: liveExecutions,
+		Definition:     definition,
+		CanDelete:      canDelete,
 	})
 	return serverapi.WorkflowBoardTaskCard{
 		TaskID:          task.ID,
@@ -339,6 +294,14 @@ func taskIDs(tasks []sqlitegen.TaskRecord) []string {
 	ids := make([]string, 0, len(tasks))
 	for _, task := range tasks {
 		ids = append(ids, task.ID)
+	}
+	return ids
+}
+
+func workflowTaskIDs(taskIDs []string) []workflow.TaskID {
+	ids := make([]workflow.TaskID, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		ids = append(ids, workflow.TaskID(taskID))
 	}
 	return ids
 }
@@ -364,8 +327,6 @@ func boardNodeTaskRecords(rows []sqlitegen.ListBoardNodeTasksRow) []sqlitegen.Ta
 			ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
 			ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
 			ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-			CanceledAtUnixMs:            row.CanceledAtUnixMs,
-			CancellationReason:          row.CancellationReason,
 			CreatedAtUnixMs:             row.CreatedAtUnixMs,
 			UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
 			MetadataJson:                row.MetadataJson,
@@ -561,19 +522,18 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 	return definitions, picker, nil
 }
 
-func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID *string, labelFilter workflowTaskLabelFilterFacts) error {
+func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, labelFilter workflowTaskLabelFilterFacts) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
 		return err
 	}
 	rows, err := b.queries.ListBoardColumnTaskCounts(ctx, sqlitegen.ListBoardColumnTaskCountsParams{
-		ProjectID:              projectID,
-		WorkflowID:             workflowID,
-		CanceledTerminalNodeID: nullableWorkflowViewString(canceledTerminalNodeID),
-		LabelFilterKind:        labelFilterArgs.kind,
-		LabelFilterMode:        labelFilterArgs.mode,
-		LabelIdsJson:           labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:   labelFilterArgs.excludedLabelIDsJSON,
+		ProjectID:            projectID,
+		WorkflowID:           workflowID,
+		LabelFilterKind:      labelFilterArgs.kind,
+		LabelFilterMode:      labelFilterArgs.mode,
+		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
 	})
 	if err != nil {
 		return err
@@ -583,8 +543,8 @@ func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.W
 		indexByNodeID[column.Node.NodeID] = index
 	}
 	for _, row := range rows {
-		nodeID := strings.TrimSpace(row.NodeID.String)
-		if !row.NodeID.Valid || nodeID == "" {
+		nodeID := strings.TrimSpace(row.NodeID)
+		if nodeID == "" {
 			continue
 		}
 		if index, ok := indexByNodeID[nodeID]; ok {
@@ -691,11 +651,4 @@ func boardColumns(snapshot definitionSnapshot) []serverapi.WorkflowBoardColumn {
 
 func boardVisibleNodeKind(kind string) bool {
 	return workflow.NodeKind(kind) != workflow.NodeKindJoin
-}
-
-func nullableWorkflowViewString(value *string) sql.NullString {
-	if value == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *value, Valid: true}
 }

@@ -12,6 +12,7 @@ import (
 )
 
 func TestPromptHistoryRecordsAndListsByInsertionSequence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
@@ -55,6 +56,7 @@ func TestPromptHistoryRecordsAndListsByInsertionSequence(t *testing.T) {
 }
 
 func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
@@ -103,6 +105,7 @@ func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testin
 }
 
 func TestPromptHistoryConflictRequiresEquivalentPayload(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
@@ -131,6 +134,7 @@ func TestPromptHistoryConflictRequiresEquivalentPayload(t *testing.T) {
 }
 
 func TestQueuedPromptHistoryRecordsPlainPromptRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID

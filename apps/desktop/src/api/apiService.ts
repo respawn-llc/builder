@@ -141,12 +141,7 @@ export interface ApiService {
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;
   interruptTask(taskID: string, sessionID?: string): Promise<void>;
   resumeTask(taskID: string): Promise<void>;
-  approveTransition(
-    taskTransitionID: string,
-    setupOperationID?: SetupOperationID,
-    executionTarget?: WorkflowExecutionTargetSelection,
-  ): Promise<TaskApproveResponse>;
-  cancelTask(taskID: string): Promise<void>;
+  approveApproval(approvalID: string): Promise<TaskApproveResponse>;
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;
   listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage>;

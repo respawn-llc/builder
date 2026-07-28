@@ -32,8 +32,6 @@ CREATE TABLE tasks (
 	execution_target_resolved_ref TEXT,
 	execution_target_commit_oid TEXT,
 	execution_target_provenance TEXT,
-	canceled_at_unix_ms INTEGER,
-	cancellation_reason TEXT,
 	created_at_unix_ms INTEGER NOT NULL,
 	updated_at_unix_ms INTEGER NOT NULL,
 	metadata_json TEXT NOT NULL
@@ -41,19 +39,9 @@ CREATE TABLE tasks (
 CREATE INDEX tasks_project_workflow_updated_idx
 	ON tasks(project_id, workflow_id, updated_at_unix_ms DESC, id DESC);
 CREATE VIEW task_records AS SELECT * FROM tasks;
-CREATE TABLE task_node_placements (
+CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
-	node_id TEXT,
-	state TEXT NOT NULL
-);
-CREATE TABLE workflow_nodes (
-	id TEXT PRIMARY KEY,
-	kind TEXT NOT NULL
-);
-CREATE TABLE task_transition_records (
-	task_id TEXT NOT NULL,
-	source_node_id TEXT,
-	state TEXT NOT NULL
+	node_id TEXT NOT NULL
 );
 CREATE TABLE task_label_assignments (
 	task_id TEXT NOT NULL,

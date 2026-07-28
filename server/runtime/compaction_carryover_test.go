@@ -8,6 +8,7 @@ import (
 )
 
 func TestHandoffFutureAgentMessageProducesTypedDeveloperCarryover(t *testing.T) {
+	t.Parallel()
 	message, ok := handoffFutureAgentMessage(" resume with tests ")
 	if !ok {
 		t.Fatal("expected non-empty handoff future message")
@@ -30,6 +31,7 @@ func TestHandoffFutureAgentMessageProducesTypedDeveloperCarryover(t *testing.T) 
 }
 
 func TestHandoffFutureAgentMessageOmitsBlankCarryover(t *testing.T) {
+	t.Parallel()
 	if _, ok := handoffFutureAgentMessage(" \n\t "); ok {
 		t.Fatal("blank future-agent carryover must not produce a message")
 	}

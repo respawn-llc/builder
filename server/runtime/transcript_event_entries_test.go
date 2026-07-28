@@ -12,6 +12,7 @@ import (
 )
 
 func TestTranscriptEntriesFromEventBuildsToolCallFallbackWithoutPresentation(t *testing.T) {
+	t.Parallel()
 	entries := TranscriptEntriesFromEvent(Event{
 		Kind: EventToolCallStarted,
 		ToolCall: &llm.ToolCall{
@@ -39,6 +40,7 @@ func TestTranscriptEntriesFromEventBuildsToolCallFallbackWithoutPresentation(t *
 }
 
 func TestNormalizeToolCallForTranscriptRepairsMalformedPresentation(t *testing.T) {
+	t.Parallel()
 	normalized := normalizeToolCallForTranscript(llm.ToolCall{
 		ID:           "call-1",
 		Name:         string(toolspec.ToolExecCommand),
@@ -58,6 +60,7 @@ func TestNormalizeToolCallForTranscriptRepairsMalformedPresentation(t *testing.T
 }
 
 func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryAndTriggerHandoffTools(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name   string
 		result tools.Result
@@ -109,6 +112,7 @@ func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryA
 }
 
 func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
+	t.Parallel()
 	msg := llm.Message{
 		Role:        llm.RoleTool,
 		MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput),
@@ -131,6 +135,7 @@ func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
 }
 
 func TestTranscriptEntriesFromEventOmitsPrePersistCompactionStatusRows(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name string
 		evt  Event

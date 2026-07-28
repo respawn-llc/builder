@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
@@ -298,40 +296,13 @@ func runLifecycleHookServerFixtureProcess(
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, server.Close()) }()
-	ready, err := json.Marshal(struct {
-		PID int `json:"pid"`
-	}{PID: os.Getpid()})
-	if err != nil {
-		return fmt.Errorf("marshal lifecycle server fixture readiness: %w", err)
-	}
-	if err := publishLifecycleServerFixtureReadiness(processConfig.ReadyPath, ready); err != nil {
+	if err := appfixture.WriteLifecycleServerProcessReady(
+		processConfig.ReadyPath,
+		appfixture.LifecycleServerProcessReady{PID: os.Getpid()},
+	); err != nil {
 		return fmt.Errorf("publish lifecycle server fixture readiness: %w", err)
 	}
 	select {}
-}
-
-func publishLifecycleServerFixtureReadiness(path string, contents []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".lifecycle-server-ready-*")
-	if err != nil {
-		return fmt.Errorf("create readiness staging file: %w", err)
-	}
-	stagedPath := file.Name()
-	defer func() { _ = os.Remove(stagedPath) }()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("set readiness staging mode: %w", err)
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write readiness staging file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close readiness staging file: %w", err)
-	}
-	if err := os.Rename(stagedPath, path); err != nil {
-		return fmt.Errorf("publish readiness staging file: %w", err)
-	}
-	return nil
 }
 
 func lifecyclePTYLaunchIntent(

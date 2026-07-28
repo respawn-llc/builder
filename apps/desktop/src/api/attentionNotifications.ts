@@ -1,4 +1,5 @@
-export type AttentionNotificationKind = "question" | "approval" | "interrupted_run";
+export type AttentionNotificationKind =
+  "question" | "approval" | "workflow_approval" | "interrupted_current_node";
 
 export type AttentionNotificationSource = "live" | "snapshot";
 
@@ -7,25 +8,10 @@ export type AttentionNotificationID = Readonly<{
   uuid: string;
 }>;
 
-export type AttentionNotificationQuestionFocus = Readonly<{
-  kind: "question";
-  askIDs: readonly string[];
-}>;
-
-export type AttentionNotificationApprovalFocus = Readonly<{
-  kind: "approval";
-  taskTransitionID: string;
-}>;
-
-export type AttentionNotificationInterruptedRunFocus = Readonly<{
-  kind: "interrupted_run";
-  runID: string;
-}>;
-
 export type AttentionNotificationTaskDetailFocus =
-  | AttentionNotificationQuestionFocus
-  | AttentionNotificationApprovalFocus
-  | AttentionNotificationInterruptedRunFocus;
+  | Readonly<{ kind: "question"; askIDs: readonly string[] }>
+  | Readonly<{ kind: "approval"; approvalID: string }>
+  | Readonly<{ kind: "interrupted_current_node" }>;
 
 export type AttentionNotificationWorkflowTaskTarget = Readonly<{
   kind: "workflow_task";
@@ -35,17 +21,13 @@ export type AttentionNotificationWorkflowTaskTarget = Readonly<{
   taskShortID?: string | undefined;
   taskTitle?: string | undefined;
   sessionID?: string | undefined;
-  runID?: string | undefined;
+  currentNodeID?: string | undefined;
+  currentNodeBranchKey?: string | undefined;
   focus: AttentionNotificationTaskDetailFocus;
 }>;
 
-export type AttentionNotificationSessionPromptTarget = Readonly<{
-  kind: "session_prompt";
-  sessionID: string;
-}>;
-
 export type AttentionNotificationTarget =
-  AttentionNotificationWorkflowTaskTarget | AttentionNotificationSessionPromptTarget;
+  AttentionNotificationWorkflowTaskTarget | Readonly<{ kind: "session_prompt"; sessionID: string }>;
 
 export type AttentionNotificationQuestionState = Readonly<{
   preparedAskIDs: readonly string[];
@@ -58,12 +40,15 @@ export type AttentionNotificationQuestionState = Readonly<{
 }>;
 
 export type AttentionNotificationApprovalState = Readonly<{
-  taskTransitionID?: string | undefined;
+  message: string;
+}>;
+
+export type AttentionNotificationWorkflowApprovalState = Readonly<{
+  approvalID: string;
   message?: string | undefined;
 }>;
 
-export type AttentionNotificationInterruptedRunState = Readonly<{
-  runID: string;
+export type AttentionNotificationInterruptedCurrentNodeState = Readonly<{
   message?: string | undefined;
   reason?: string | undefined;
   detailJSON?: string | undefined;
@@ -76,41 +61,29 @@ export type AttentionNotification = Readonly<{
   revision: number;
   question: AttentionNotificationQuestionState | null;
   approval: AttentionNotificationApprovalState | null;
-  interruptedRun: AttentionNotificationInterruptedRunState | null;
+  workflowApproval: AttentionNotificationWorkflowApprovalState | null;
+  interruptedCurrentNode: AttentionNotificationInterruptedCurrentNodeState | null;
   target: AttentionNotificationTarget;
 }>;
 
-export type AttentionNotificationPendingEvent = Readonly<{
-  type: "pending";
-  sequence: number;
-  source: AttentionNotificationSource;
-  pending: AttentionNotification;
-}>;
-
-export type AttentionNotificationResolvedEvent = Readonly<{
-  type: "resolved";
-  sequence: number;
-  source: AttentionNotificationSource;
-  id: AttentionNotificationID;
-  kind: AttentionNotificationKind;
-  occurredAt: string;
-}>;
-
-export type AttentionNotificationSnapshotCompleteEvent = Readonly<{
-  type: "snapshot_complete";
-  sequence: number;
-  source: "snapshot";
-  sessionID: string;
-}>;
-
 export type AttentionNotificationEvent =
-  | AttentionNotificationPendingEvent
-  | AttentionNotificationResolvedEvent
-  | AttentionNotificationSnapshotCompleteEvent;
+  | Readonly<{
+      type: "pending";
+      sequence: number;
+      source: AttentionNotificationSource;
+      pending: AttentionNotification;
+    }>
+  | Readonly<{
+      type: "resolved";
+      sequence: number;
+      source: AttentionNotificationSource;
+      id: AttentionNotificationID;
+      kind: AttentionNotificationKind;
+      occurredAt: string;
+    }>
+  | Readonly<{ type: "snapshot_complete"; sequence: number; source: "snapshot"; sessionID: string }>;
 
-export type AttentionNotificationEventParams = Readonly<{
-  event: AttentionNotificationEvent;
-}>;
+export type AttentionNotificationEventParams = Readonly<{ event: AttentionNotificationEvent }>;
 
 export type AttentionNotificationEventHandler = Readonly<{
   onOpen?(): void;

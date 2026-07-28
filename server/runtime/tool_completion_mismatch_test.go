@@ -16,6 +16,7 @@ import (
 )
 
 func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
@@ -55,6 +56,7 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 }
 
 func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
@@ -74,6 +76,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testin
 }
 
 func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var emitted []Event
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -113,6 +116,7 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 }
 
 func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverError(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("mismatch observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))

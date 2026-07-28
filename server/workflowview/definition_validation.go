@@ -2,10 +2,11 @@ package workflowview
 
 import (
 	"core/server/workflow"
+	"core/server/workflowscript"
 )
 
 func definitionExecutionValidation(def workflow.Definition, roleResolver workflow.RoleResolver) *workflow.ValidationResult {
-	result := workflow.EvaluateDefinition(
+	result := workflowscript.EvaluateDefinition(
 		def,
 		[]workflow.ValidationContext{workflow.ValidationContextExecution},
 		roleResolver,

@@ -351,7 +351,7 @@ const TaskCard = memo(function TaskCard({
     },
     [instanceColumnID, instanceTaskID, registerMotionCard],
   );
-  const canDrag = !actionsDisabled && card.statusKind !== "canceled";
+  const canDrag = !actionsDisabled;
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
   const availableActions = taskCardActionAvailability(card);
   const labelItems = useMemo(
@@ -480,7 +480,7 @@ const TaskCard = memo(function TaskCard({
       <ContextMenuContent>
         <ContextMenuItem
           className="text-[var(--color-error)]"
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || !card.actions.canDelete}
           onSelect={() => {
             onDeleteTask(card.id);
           }}

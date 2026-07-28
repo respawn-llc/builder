@@ -17,12 +17,14 @@ import (
 )
 
 func TestCompactionInstructionsInputRejectsPresentBlankValue(t *testing.T) {
+	t.Parallel()
 	if _, err := newCompactionInstructionsInput(" \t "); err == nil {
 		t.Fatal("present blank compaction instructions succeeded")
 	}
 }
 
 func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *testing.T) {
+	t.Parallel()
 	seedContent := "seed \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, tools.NewRegistry(tools.HandlerRegistration{
@@ -81,6 +83,7 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 }
 
 func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarning(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		inputTokenCountFn: func(req llm.Request) int {
@@ -203,6 +206,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 }
 
 func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
@@ -261,6 +265,7 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 }
 
 func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		compactionErrors: []error{

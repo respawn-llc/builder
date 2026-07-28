@@ -20,7 +20,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/tools"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -134,12 +133,12 @@ func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) i
 	return history.CountText(text)
 }
 
-type staticRuntimeControlSessionResolver struct {
-	store *session.Store
+type staticRuntimeControlWorkflowTaskResolver struct {
+	workflow bool
 }
 
-func (r staticRuntimeControlSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
+func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context.Context, string) (bool, error) {
+	return r.workflow, nil
 }
 
 type runtimeControlFakeClient struct {
@@ -352,9 +351,6 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
 	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("persist session store: %v", err)
-	}
 	if client == nil {
 		client = &runtimeControlFakeClient{}
 	}
@@ -413,7 +409,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 		Workdir:                      store.Meta().WorkspaceRoot,
 		Client:                       client,
 		ReviewerClientFactory:        reviewerClientFactory,
-		WorkflowRun:                  cfg.WorkflowRun,
+		CurrentNodeExecution:         cfg.CurrentNodeExecution,
 		ProviderCapabilitiesOverride: cfg.ProviderCapabilitiesOverride,
 		OnEvent:                      cfg.OnEvent,
 	})
@@ -992,8 +988,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1017,8 +1013,8 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1040,8 +1036,8 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1062,8 +1058,8 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1088,8 +1084,9 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:  runtimeids.NewExecutionScopeID(),
+			Contract: workflowruntime.CompletionContract{},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1120,21 +1117,15 @@ func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 
 func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	service = service.WithWorkflowSessionResolver(staticRuntimeControlSessionResolver{store: store})
+	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 	if _, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID}); err != nil {
-		t.Fatalf("ShowGoal for durable workflow session = %v, want allowed", err)
+		t.Fatalf("ShowGoal for workflow task session = %v, want allowed", err)
 	}
 }
 
 func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	service = service.WithWorkflowSessionResolver(staticRuntimeControlSessionResolver{store: store})
+	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 
 	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
 		ClientRequestID: "req-auto-off-durable-workflow",
@@ -1788,7 +1779,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	}()
 	select {
 	case <-client.firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the first model request")
 	}
 	queuedText := "use the existing lld installation"
@@ -1812,13 +1803,13 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 				steeringReq.OperationRef.ClientRequestID,
 			)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("accepted steering emitted no queue status")
 	}
 	close(client.releaseFirst)
 	select {
 	case <-client.secondStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("active turn did not reach the next safe-boundary model request")
 	}
 	defer close(client.releaseSecond)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	for _, message := range []llm.Message{
 		{Role: llm.RoleUser, Content: textutil.Value("before")},
@@ -84,6 +85,7 @@ func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
 }
 
 func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
+	t.Parallel()
 	const replacementStepID = "22222222-2222-4222-8222-222222222222"
 	message := llm.Message{
 		Role: llm.RoleAssistant,
@@ -121,6 +123,7 @@ func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
 }
 
 func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
+	t.Parallel()
 	const conflictingStepID = "22222222-2222-4222-8222-222222222222"
 	message := llm.Message{
 		Role: llm.RoleAssistant,
@@ -216,6 +219,7 @@ func assertHistoryReplacementTail(t *testing.T, items []llm.ResponseItem) {
 }
 
 func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	calls := []llm.ToolCall{
 		{ID: "call-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
@@ -281,6 +285,7 @@ func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
 }
 
 func TestHistoryReplacementPrunesPriorToolWorkingState(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	calls := []llm.ToolCall{
 		{ID: "pruned-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},

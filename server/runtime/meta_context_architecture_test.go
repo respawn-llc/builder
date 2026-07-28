@@ -11,6 +11,7 @@ import (
 )
 
 func TestRequestEntryPointsUseUnifiedMetaContextPreparation(t *testing.T) {
+	t.Parallel()
 	targets := map[string]map[string]bool{"background.go": {"runQueuedNotices": true}, "compaction.go": {"compactContext": true}, "engine.go": {"SubmitUserMessage": true, "SubmitWorkflowTurn": true}, "engine_queue_submission.go": {"SubmitQueuedUserMessages": true}, "goal.go": {"runGoalTurn": true}}
 	for fileName, functionNames := range targets {
 		filePath := filepath.Join(".", fileName)
@@ -42,25 +43,30 @@ func TestRequestEntryPointsUseUnifiedMetaContextPreparation(t *testing.T) {
 	}
 }
 func TestRuntimeMetaContextRenderersStayInsideBuilder(t *testing.T) {
+	t.Parallel()
 	bannedCalls := map[string]bool{"headlessModeMetaMessage": true, "headlessModeExitMetaMessage": true, "activeGoalContinuationMetaMessage": true, "workflowModeMetaMessage": true, "worktreeModeMetaMessage": true, "worktreeModeExitMetaMessage": true}
 	assertNoBannedRuntimeCalls(t, map[string]bool{"meta_context.go": true}, bannedCalls)
 }
 func TestProductionRuntimeOutputMutationsUseSteeringBoundary(t *testing.T) {
+	t.Parallel()
 	allowedFiles := map[string]bool{"chat_store.go": true, "engine_message_ops.go": true, "engine_state.go": true, "output_steering.go": true, "transcript_projector.go": true, "transcript_runtime_state.go": true, "transcript_scan.go": true}
 	bannedCalls := map[string]bool{"appendAssistantMessage": true, "appendMessage": true, "appendMessageWithoutConversationUpdate": true, "appendPersistedDiagnosticEntry": true, "appendPersistedLocalEntry": true, "appendPersistedLocalEntryRecord": true, "appendPersistedLocalEntryWithCondensedText": true, "appendReasoningEntries": true, "appendUserMessage": true, "appendUserMessageWithoutConversationUpdate": true, "emit": true, "emitCommittedMessageTranscriptAdvanced": true, "emitCommittedTranscriptAdvanced": true, "emitConversationUpdated": true, "persistToolCompletion": true}
 	assertNoBannedRuntimeCalls(t, allowedFiles, bannedCalls)
 }
 func TestRawOutputMutationPrimitivesStayInsideSteeringBoundary(t *testing.T) {
+	t.Parallel()
 	allowedFiles := map[string]bool{"engine_message_ops.go": true, "engine_state.go": true, "output_steering.go": true}
 	bannedCalls := map[string]bool{"appendMessageRaw": true, "appendPersistedLocalEntryRecordRaw": true, "emitRaw": true, "persistToolCompletionRaw": true}
 	assertNoBannedRuntimeCalls(t, allowedFiles, bannedCalls)
 }
 func TestTranscriptProjectionMutationsStayInsideOutputBoundary(t *testing.T) {
+	t.Parallel()
 	allowedFiles := map[string]bool{"compaction_persistence.go": true, "engine_message_ops.go": true, "engine_state.go": true, "message_lifecycle.go": true, "output_steering.go": true, "transcript_projector.go": true, "transcript_runtime_state.go": true}
 	bannedCalls := map[string]bool{"AppendMessage": true, "AppendLocalEntryRecord": true, "AppendCommittedEntryWithCondensedText": true, "AppendCommittedEntryWithVisibility": true, "AppendStreamingDelta": true, "ClearStreamingAssistantState": true, "RecordAssistantStreamFinalization": true, "RecordStoredToolCompletion": true, "ReplaceHistoryAtCommittedEntryStart": true, "RestoreToolCompletionPayload": true}
 	assertNoBannedRuntimeCalls(t, allowedFiles, bannedCalls)
 }
 func TestCommittedHistoryReplacementStoreAPIStaysInsideReplacementBoundary(t *testing.T) {
+	t.Parallel()
 	assertNoBannedRuntimeCalls(t, map[string]bool{"compaction_persistence.go": true}, map[string]bool{"AppendEventWithCommitStatus": true})
 }
 func assertNoBannedRuntimeCalls(t *testing.T, allowedFiles map[string]bool, bannedCalls map[string]bool) {

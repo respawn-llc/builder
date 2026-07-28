@@ -10,11 +10,10 @@ import type {
   ProjectBinding,
   TaskActions,
   TaskComment,
-  TaskRun,
+  TaskCurrentNode,
+  TaskScriptCurrentNode,
   TaskStatus,
   TaskStatusKind,
-  TaskTransition,
-  TransitionEdge,
   WorkflowOutputField,
   WorkflowParameter,
   WorkflowPickerItem,
@@ -26,7 +25,7 @@ import type {
 import type {
   ApprovalAttentionItem,
   AttentionItem,
-  InterruptedRunAttentionItem,
+  InterruptedCurrentNodeAttentionItem,
   QuestionAttentionItem,
 } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
@@ -42,10 +41,6 @@ const nullableNonBlankString = z
   .string()
   .trim()
   .min(1)
-  .nullish()
-  .transform((value) => value ?? null);
-const nullableNumber = z
-  .number()
   .nullish()
   .transform((value) => value ?? null);
 const nullablePositiveInteger = z
@@ -231,7 +226,6 @@ export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
 export const taskStatusSchema: z.ZodType<TaskStatus> = z
   .object({
     kind: z.enum([
-      "canceled",
       "done",
       "waiting_question",
       "waiting_approval",
@@ -243,7 +237,6 @@ export const taskStatusSchema: z.ZodType<TaskStatus> = z
     ]),
     native_state: z.string(),
     node_ids: stringList,
-    run_ids: stringList,
     attention_types: stringList,
   })
   .strict()
@@ -251,7 +244,6 @@ export const taskStatusSchema: z.ZodType<TaskStatus> = z
     kind: value.kind satisfies TaskStatusKind,
     nativeState: value.native_state,
     nodeIDs: value.node_ids,
-    runIDs: value.run_ids,
     attentionTypes: value.attention_types,
   }));
 
@@ -260,14 +252,14 @@ export const taskActionsSchema: z.ZodType<TaskActions> = z
     can_start: z.boolean(),
     can_interrupt: z.boolean(),
     can_resume: z.boolean(),
-    can_cancel: z.boolean(),
+    can_delete: z.boolean(),
     manual_move_target_node_ids: stringList,
   })
   .transform((value) => ({
     canStart: value.can_start,
     canInterrupt: value.can_interrupt,
     canResume: value.can_resume,
-    canCancel: value.can_cancel,
+    canDelete: value.can_delete,
     manualMoveTargetNodeIDs: value.manual_move_target_node_ids,
   }));
 
@@ -405,13 +397,39 @@ const approvalSnapshotSchema = z
     version: value.workflow_revision_seen,
   }));
 
+export const currentNodeSchema: z.ZodType<TaskCurrentNode> = z
+  .object({
+    node_id: nonBlankString,
+    transition_branch_key: nullableNonBlankString,
+    session_id: nullableNonBlankString,
+  })
+  .strict()
+  .transform((value) => ({
+    nodeID: value.node_id,
+    transitionBranchKey: value.transition_branch_key,
+    sessionID: value.session_id,
+  }));
+
+export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
+  .object({
+    node_id: nonBlankString,
+    transition_branch_key: nullableNonBlankString,
+    session_id: z.null(),
+  })
+  .strict()
+  .transform((value) => ({
+    nodeID: value.node_id,
+    transitionBranchKey: value.transition_branch_key,
+    sessionID: value.session_id,
+  }));
+
 export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnion("kind", [
   attentionItemBaseWireSchema
     .extend({
       kind: z.literal("question"),
-      run_id: nonBlankString,
+      current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
-      ask_id: nonBlankString,
+      question_id: nonBlankString,
       suggestions: stringList,
       recommended_option_index: nullablePositiveInteger,
       question: questionPromptSchema.nullish(),
@@ -420,9 +438,9 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
     .transform((value): QuestionAttentionItem => ({
       ...adaptAttentionItemBase(value),
       kind: value.kind,
-      runID: value.run_id,
+      currentNode: value.current_node,
       sessionID: value.session_id,
-      askID: value.ask_id,
+      questionID: value.question_id,
       suggestions: value.suggestions,
       recommendedOptionIndex: value.recommended_option_index,
       question: value.question ?? null,
@@ -430,28 +448,28 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
   attentionItemBaseWireSchema
     .extend({
       kind: z.literal("approval"),
-      task_transition_id: nonBlankString,
+      approval_id: nonBlankString,
       approval_snapshot: approvalSnapshotSchema,
     })
     .strict()
     .transform((value): ApprovalAttentionItem => ({
       ...adaptAttentionItemBase(value),
       kind: value.kind,
-      taskTransitionID: value.task_transition_id,
+      approvalID: value.approval_id,
       approvalSnapshot: value.approval_snapshot,
     })),
   attentionItemBaseWireSchema
     .extend({
-      kind: z.literal("interrupted_run"),
-      run_id: nonBlankString,
+      kind: z.literal("interrupted_current_node"),
+      current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
       detail_json: nullableNonBlankString,
     })
     .strict()
-    .transform((value): InterruptedRunAttentionItem => ({
+    .transform((value): InterruptedCurrentNodeAttentionItem => ({
       ...adaptAttentionItemBase(value),
       kind: value.kind,
-      runID: value.run_id,
+      currentNode: value.current_node,
       sessionID: value.session_id,
       detailJSON: value.detail_json,
     })),
@@ -475,99 +493,4 @@ export const commentSchema: z.ZodType<TaskComment> = z
     authorID: value.author_id ?? null,
     createdAt: value.created_at_unix_ms,
     updatedAt: value.updated_at_unix_ms,
-  }));
-
-export const runSchema: z.ZodType<TaskRun> = z
-  .object({
-    id: z.string(),
-    task_id: z.string(),
-    placement_id: z.string(),
-    node_id: z.string(),
-    node_kind: emptyString,
-    script_path: emptyString,
-    session_id: emptyString,
-    session_name: emptyString,
-    role: emptyString,
-    status: z.string(),
-    generation: z.number(),
-    waiting_ask_id: nullableString,
-    started_at_unix_ms: nullableNumber,
-    completed_at_unix_ms: nullableNumber,
-    interrupted_at_unix_ms: nullableNumber,
-    interruption_reason: nullableString,
-    interruption_detail_json: emptyString,
-  })
-  .transform((value) => ({
-    id: value.id,
-    taskID: value.task_id,
-    placementID: value.placement_id,
-    nodeID: value.node_id,
-    nodeKind: value.node_kind,
-    scriptPath: value.script_path,
-    sessionID: value.session_id,
-    sessionName: value.session_name,
-    role: value.role,
-    status: value.status,
-    generation: value.generation,
-    waitingAskID: value.waiting_ask_id,
-    startedAt: value.started_at_unix_ms,
-    completedAt: value.completed_at_unix_ms,
-    interruptedAt: value.interrupted_at_unix_ms,
-    interruptionReason: value.interruption_reason,
-    interruptionDetail: value.interruption_detail_json,
-  }));
-
-export const transitionEdgeSchema: z.ZodType<TransitionEdge> = z
-  .object({
-    id: z.string(),
-    edge_key: z.string(),
-    target_node_display_name: emptyString,
-    state: z.string(),
-    requires_approval: z.boolean(),
-    output_requirements: z
-      .array(z.object({ field_name: z.string() }))
-      .nullish()
-      .transform((value) => value ?? []),
-  })
-  .transform((value) => ({
-    id: value.id,
-    edgeKey: value.edge_key,
-    targetNodeName: value.target_node_display_name,
-    state: value.state,
-    requiresApproval: value.requires_approval,
-    outputRequirements: value.output_requirements.map((item) => item.field_name),
-  }));
-
-export const transitionSchema: z.ZodType<TaskTransition> = z
-  .object({
-    id: z.string(),
-    transition_id: z.string(),
-    transition_display_name: emptyString,
-    source_node_display_name: emptyString,
-    state: z.string(),
-    commentary: emptyString,
-    output_values: z
-      .record(z.string(), z.string())
-      .nullish()
-      .transform((value) => value ?? {}),
-    edges: z
-      .array(transitionEdgeSchema)
-      .nullish()
-      .transform((value) => value ?? []),
-    workflow_revision_seen: z.number().optional().default(0),
-    created_at_unix_ms: z.number(),
-    applied_at_unix_ms: nullableNumber,
-  })
-  .transform((value) => ({
-    id: value.id,
-    transitionID: value.transition_id,
-    transitionName: value.transition_display_name,
-    sourceNodeName: value.source_node_display_name,
-    state: value.state,
-    commentary: value.commentary,
-    outputValues: value.output_values,
-    edges: value.edges,
-    version: value.workflow_revision_seen,
-    createdAt: value.created_at_unix_ms,
-    appliedAt: value.applied_at_unix_ms,
   }));

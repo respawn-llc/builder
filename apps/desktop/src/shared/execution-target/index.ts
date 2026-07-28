@@ -1,6 +1,5 @@
 export { ExecutionTargetContinuationDialog } from "./ExecutionTargetContinuationDialog";
 export {
-  approveExecutionTargetAction,
   executeExecutionTargetAction,
   moveExecutionTargetAction,
   startExecutionTargetAction,

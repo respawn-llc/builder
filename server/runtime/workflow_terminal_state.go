@@ -16,14 +16,12 @@ const (
 
 type WorkflowTerminalState struct {
 	Completed   bool
-	RunID       string
 	Generation  int64
 	Source      WorkflowCompletionSource
 	CompletedAt time.Time
 }
 
 type WorkflowSessionState struct {
-	RunID      string
 	TaskID     string
 	WorkflowID string
 }
@@ -32,26 +30,13 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	if e == nil {
 		return WorkflowSessionState{}
 	}
-	if e.workflowRunActive() {
+	if e.currentNodeExecutionActive() {
 		return WorkflowSessionState{
-			RunID:      strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
-			TaskID:     strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID),
-			WorkflowID: strings.TrimSpace(e.cfg.WorkflowRun.Instructions.WorkflowID),
+			TaskID:     string(e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID),
+			WorkflowID: strings.TrimSpace(e.cfg.CurrentNodeExecution.Instructions.WorkflowID),
 		}
 	}
-	if e.store == nil {
-		return WorkflowSessionState{}
-	}
-	meta := e.store.Meta()
-	workflowSession := meta.WorkflowSession
-	if workflowSession == nil {
-		return WorkflowSessionState{}
-	}
-	return WorkflowSessionState{
-		RunID:      strings.TrimSpace(workflowSession.RunID),
-		TaskID:     strings.TrimSpace(workflowSession.TaskID),
-		WorkflowID: strings.TrimSpace(workflowSession.WorkflowID),
-	}
+	return WorkflowSessionState{}
 }
 
 func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
@@ -77,7 +62,7 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 }
 
 func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
-	if e == nil || !e.workflowRunActive() {
+	if e == nil || !e.currentNodeExecutionActive() {
 		return
 	}
 	transitioned := e.recordWorkflowTerminalState(source)
@@ -94,8 +79,6 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bo
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
-		Generation:  e.cfg.WorkflowRun.Contract.ExpectedGeneration,
 		Source:      source,
 		CompletedAt: time.Now(),
 	}

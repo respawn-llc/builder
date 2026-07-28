@@ -17,9 +17,22 @@ type PromptPriorParameterReference struct {
 	Placeholder   string
 }
 
+type PromptInputReference struct {
+	Name        string
+	Placeholder string
+}
+
+type PromptPriorNodeReference struct {
+	NodeKey     ModelKey
+	OutputName  string
+	Placeholder string
+}
+
 type PromptTemplateReferences struct {
 	Params      []PromptParameterReference
 	PriorParams []PromptPriorParameterReference
+	Inputs      []PromptInputReference
+	PriorNodes  []PromptPriorNodeReference
 	Invalid     []PromptReferenceIssue
 }
 
@@ -157,9 +170,21 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 	placeholder := "." + strings.Join(ident, ".")
 	switch ident[0] {
 	case "Inputs":
-		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs prompt references are not supported; use .Params.<parameter_key>"})
+		if len(ident) != 2 {
+			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs references must use .Inputs.<input_name>"})
+			return
+		}
+		refs.Inputs = append(refs.Inputs, PromptInputReference{Name: ident[1], Placeholder: placeholder})
 	case "Nodes":
-		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Nodes prompt references are not supported; use .Params.<transition_key>.<parameter_key>"})
+		if len(ident) != 3 {
+			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Nodes references must use .Nodes.<node_key>.<output_name>"})
+			return
+		}
+		refs.PriorNodes = append(refs.PriorNodes, PromptPriorNodeReference{
+			NodeKey:     ModelKey(ident[1]),
+			OutputName:  ident[2],
+			Placeholder: placeholder,
+		})
 	case "Params":
 		switch len(ident) {
 		case 2:

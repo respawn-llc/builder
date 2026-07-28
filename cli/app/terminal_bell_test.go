@@ -86,7 +86,7 @@ func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	hooks := newUnfocusedBellHooks(unfocused)
 	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "question"))
 	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "approval"))
-	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"))
+	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedCurrentNode, "interrupted"))
 	if unfocused.notifications != 2 || unfocused.bells != 0 {
 		t.Fatalf("unfocused events = notifications %d, bells %d", unfocused.notifications, unfocused.bells)
 	}
@@ -539,6 +539,8 @@ func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKin
 	notification := clientui.AttentionNotification{ID: attentionNotificationID(kind, id), Kind: kind}
 	if kind == clientui.AttentionNotificationKindApproval {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: body}
+	} else if kind == clientui.AttentionNotificationKindInterruptedCurrentNode {
+		notification.InterruptedCurrentNode = &clientui.AttentionNotificationInterruptedCurrentNodeState{Message: body}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
 			PreparedAskIDs:          []string{id},

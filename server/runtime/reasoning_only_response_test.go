@@ -13,6 +13,7 @@ import (
 )
 
 func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	completionTool := &externalCompletionTool{controller: controller}
@@ -46,7 +47,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
@@ -76,6 +77,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 }
 
 func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	completionTool := &externalCompletionTool{controller: controller}
@@ -103,7 +105,7 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
