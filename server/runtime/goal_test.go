@@ -22,7 +22,6 @@ import (
 )
 
 func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 1)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -63,7 +62,6 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 }
 
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
@@ -126,7 +124,6 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 }
 
 func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -152,7 +149,6 @@ func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
 }
 
 func TestQueuedAgentShellGoalSetRejectsPendingActiveGoal(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -175,7 +171,6 @@ func TestQueuedAgentShellGoalSetRejectsPendingActiveGoal(t *testing.T) {
 }
 
 func TestAgentShellGoalSetForEndedStepIsRejected(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -191,7 +186,6 @@ func TestAgentShellGoalSetForEndedStepIsRejected(t *testing.T) {
 }
 
 func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -217,7 +211,6 @@ func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
 }
 
 func TestQueuedActiveGoalResumeRestartsSuspendedGoalLoop(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -247,7 +240,6 @@ func TestQueuedActiveGoalResumeRestartsSuspendedGoalLoop(t *testing.T) {
 }
 
 func TestGoalMutationDuringClosingActiveStepReturnsBusy(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -270,7 +262,6 @@ func TestGoalMutationDuringClosingActiveStepReturnsBusy(t *testing.T) {
 }
 
 func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 10)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -312,7 +303,6 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 }
 
 func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 4)
 	var eventsMu sync.Mutex
@@ -420,7 +410,6 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 }
 
 func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolExecCommand}})
@@ -436,7 +425,6 @@ func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T
 }
 
 func TestWorkflowActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
@@ -453,7 +441,6 @@ func TestWorkflowActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *t
 }
 
 func TestActiveGoalAllowsModelTurnWithAskQuestionEnabled(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -468,7 +455,6 @@ func TestActiveGoalAllowsModelTurnWithAskQuestionEnabled(t *testing.T) {
 }
 
 func TestActiveGoalAllowsModelTurnWithQuestionsDisabledWhenAskQuestionToolVisible(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -484,7 +470,6 @@ func TestActiveGoalAllowsModelTurnWithQuestionsDisabledWhenAskQuestionToolVisibl
 }
 
 func TestGoalResumeRequiresAskQuestionToolVisibilityAtEngineBoundary(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
@@ -505,7 +490,6 @@ func TestGoalResumeRequiresAskQuestionToolVisibilityAtEngineBoundary(t *testing.
 }
 
 func TestGoalResumeAllowsQuestionsDisabledWhenAskQuestionToolVisible(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
@@ -527,7 +511,6 @@ func TestGoalResumeAllowsQuestionsDisabledWhenAskQuestionToolVisible(t *testing.
 }
 
 func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("done")}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -556,7 +539,6 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 }
 
 func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{
 		finalTextResponse("NO_OP"),
@@ -605,7 +587,6 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 }
 
 func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
-	t.Parallel()
 	msg := llm.Message{
 		Role:           llm.RoleDeveloper,
 		MessageType:    textutil.Value(llm.MessageTypeGoal),
@@ -631,73 +612,64 @@ func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 		t.Fatalf("goal condensed text = %q, want compact", entry.CondensedText)
 	}
 }
-func TestSurfaceRunErrorPersistsOperatorFeedback(t *testing.T) {
-	t.Parallel()
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-
-	runErr := errors.New("provider down")
-	engine.surfaceRunError(runErr)
-
-	snapshot := engine.ChatSnapshot()
-	found := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == runErr.Error() {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected surfaced run error entry, got %+v", snapshot.Entries)
-	}
-	if snapshot.StreamingError == "" {
-		t.Fatal("expected streaming error banner to be set")
-	}
-}
-
-func TestSurfaceRunErrorIgnoresBenignTerminations(t *testing.T) {
-	t.Parallel()
+func TestSurfaceRunError(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
-	for _, benign := range []error{nil, context.Canceled, ErrAgentBusy, errGoalLoopInactive, ErrEngineClosed} {
-		engine.surfaceRunError(benign)
-	}
-
-	snapshot := engine.ChatSnapshot()
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
-			t.Fatalf("benign termination surfaced an error entry: %+v", entry)
+	t.Run("ignores benign terminations", func(t *testing.T) {
+		for _, benign := range []error{nil, context.Canceled, ErrAgentBusy, errGoalLoopInactive, ErrEngineClosed} {
+			engine.surfaceRunError(benign)
 		}
-	}
-	if snapshot.StreamingError != "" {
-		t.Fatalf("benign termination set a streaming error banner: %q", snapshot.StreamingError)
-	}
-}
 
-func TestSurfaceRunErrorPrefersUserFacingMessageForStall(t *testing.T) {
-	t.Parallel()
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-
-	engine.surfaceRunError(fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled))
-
-	snapshot := engine.ChatSnapshot()
-	want := llm.UserFacingError(llm.ErrModelStreamStalled)
-	if want == "" {
-		t.Fatal("expected stall sentinel to have a user-facing message")
-	}
-	found := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == want {
-			found = true
+		snapshot := engine.ChatSnapshot()
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				t.Fatalf("benign termination surfaced an error entry: %+v", entry)
+			}
 		}
-	}
-	if !found {
+		if snapshot.StreamingError != "" {
+			t.Fatalf("benign termination set a streaming error banner: %q", snapshot.StreamingError)
+		}
+	})
+
+	t.Run("persists operator feedback", func(t *testing.T) {
+		if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+
+		runErr := errors.New("provider down")
+		engine.surfaceRunError(runErr)
+
+		snapshot := engine.ChatSnapshot()
+		found := false
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == runErr.Error() {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected surfaced run error entry, got %+v", snapshot.Entries)
+		}
+		if snapshot.StreamingError == "" {
+			t.Fatal("expected streaming error banner to be set")
+		}
+	})
+
+	t.Run("prefers user-facing message for stall", func(t *testing.T) {
+		engine.surfaceRunError(fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled))
+
+		snapshot := engine.ChatSnapshot()
+		want := llm.UserFacingError(llm.ErrModelStreamStalled)
+		if want == "" {
+			t.Fatal("expected stall sentinel to have a user-facing message")
+		}
+		for _, entry := range snapshot.Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && entry.Text == want {
+				return
+			}
+		}
 		t.Fatalf("expected user-facing stall message entry, got %+v", snapshot.Entries)
-	}
+	})
 }
 
 func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
@@ -747,7 +719,6 @@ func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
 }
 
 func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -790,7 +761,6 @@ func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
 }
 
 func TestGoalLoopInterruptSuspendsUntilResumeRestarts(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -830,7 +800,6 @@ func TestGoalLoopInterruptSuspendsUntilResumeRestarts(t *testing.T) {
 }
 
 func TestInterruptIdleActiveGoalDoesNotSuspendGoalLoop(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, newScriptedGoalLoopClient(), tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
@@ -848,7 +817,6 @@ func TestSuspendedGoalAutoResumesAfterSuccessfulUserTurnOnly(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	defer func() { _ = engine.Close() }()
 	client.beforeReturn = func(call int) {
 		if call == 2 {
 			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
@@ -881,7 +849,6 @@ func TestSuspendedGoalAutoResumesAfterSuccessfulUserTurnOnly(t *testing.T) {
 }
 
 func TestSuspendedGoalStaysSuspendedAfterInterruptedUserTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -909,7 +876,6 @@ func TestSuspendedGoalStaysSuspendedAfterInterruptedUserTurn(t *testing.T) {
 }
 
 func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	client.ignoreCancelUntilRelease = true
@@ -948,7 +914,6 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 }
 
 func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	client.ignoreCancelUntilRelease = true
@@ -1024,7 +989,6 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 }
 
 func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -1065,7 +1029,6 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 }
 
 func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -1107,7 +1070,6 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 }
 
 func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
@@ -1130,7 +1092,6 @@ func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 }
 
 func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
-	t.Parallel()
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
@@ -1239,7 +1200,7 @@ func (c *scriptedGoalLoopClient) waitStarted(t *testing.T, call int) {
 	c.mu.Unlock()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for goal loop call %d to start", call)
 	}
 }

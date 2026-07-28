@@ -15,12 +15,14 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/registry"
 	"core/server/runtimewire"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 const currentNodeRunnerWait = 5 * time.Second
@@ -30,6 +32,7 @@ type currentNodeRunnerFixture struct {
 	metadata    *metadata.Store
 	store       *workflowstore.Store
 	authority   *sessionruntime.Authority
+	runtimes    *registry.RuntimeRegistry
 	controller  *workflowexecution.CurrentNodeController
 	starter     *Starter
 	projectID   string
@@ -88,6 +91,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 			steps...,
 		),
 	}
+	fixture.runtimes = registry.NewRuntimeRegistry()
 	var controller *workflowexecution.CurrentNodeController
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
@@ -95,6 +99,8 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			controller.ExecutionFinalized(scope)
 		}),
+		PromptFeed:        fixture.runtimes,
+		ResourceLifecycle: fixture.runtimes,
 	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {
@@ -191,6 +197,40 @@ func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workf
 	}
 	t.Fatalf("Current Nodes = %s did not reach expected state", encoded)
 	return nil
+}
+
+func (f *currentNodeRunnerFixture) waitForControllerCurrentNode(t *testing.T, reference workflow.CurrentNodeReference) {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for time.Now().Before(deadline) {
+		snapshot := f.controller.Snapshot()
+		for _, gate := range snapshot.Gates {
+			if gate.CurrentNode.Equal(reference) {
+				return
+			}
+		}
+		for _, live := range snapshot.LiveScopes {
+			if live.CurrentNode.Equal(reference) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Current Node %v never reached controller admission or live state", reference)
+}
+
+func (f *currentNodeRunnerFixture) waitForPath(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect path %q: %v", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("path %q was not created", path)
 }
 
 func (f *currentNodeRunnerFixture) runtimeRequests() []runtimewire.RuntimeClientRequest {
@@ -293,6 +333,113 @@ func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX shell scripts")
+	}
+	sourceResponseStarted := make(chan struct{})
+	sourceResponseRelease := make(chan struct{})
+	successorResponseStarted := make(chan struct{})
+	successorResponseRelease := make(chan struct{})
+	var releaseSource sync.Once
+	var releaseSuccessor sync.Once
+	t.Cleanup(func() {
+		releaseSource.Do(func() { close(sourceResponseRelease) })
+		releaseSuccessor.Do(func() { close(successorResponseRelease) })
+	})
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceResponseStarted)
+				select {
+				case <-sourceResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"next","commentary":"source done"}`).Response,
+		},
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(successorResponseStarted)
+				select {
+				case <-successorResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"commentary":"successor done"}`).Response,
+		},
+	)
+	continuedWorkflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeContinueSession)
+	continuedTask := f.createTask(t, continuedWorkflowID)
+	source := f.startTask(t, continuedTask)
+	select {
+	case <-sourceResponseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("source Current Node did not start")
+	}
+	sourceNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
+	})
+	sessionID := *sourceNodes[0].SessionID
+	transcript, err := f.runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: sessionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("subscribe source transcript: %v", err)
+	}
+	t.Cleanup(func() { _ = transcript.Close() })
+
+	releaseSource.Do(func() { close(sourceResponseRelease) })
+	successorNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.Equal(source)
+	})
+	successor := successorNodes[0].Reference
+	f.waitForControllerCurrentNode(t, successor)
+	select {
+	case <-successorResponseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("continued Session successor did not reach its model turn")
+	}
+
+	sourceScriptPath := filepath.Join(f.workspace, "source-script.sh")
+	laterScriptPath := filepath.Join(f.workspace, "later-automatic-script.sh")
+	laterScriptMarker := filepath.Join(f.workspace, "later-automatic-script.started")
+	if err := os.WriteFile(
+		sourceScriptPath,
+		[]byte("#!/bin/sh\nprintf '%s' '{\"transition\":\"next\",\"commentary\":\"source script done\"}'\n"),
+		0o755,
+	); err != nil {
+		t.Fatalf("write source script: %v", err)
+	}
+	if err := os.WriteFile(
+		laterScriptPath,
+		[]byte("#!/bin/sh\n: > "+workflowRunnerShellQuote(laterScriptMarker)+"\nprintf '%s' '{\"commentary\":\"later script done\"}'\n"),
+		0o755,
+	); err != nil {
+		t.Fatalf("write later automatic script: %v", err)
+	}
+	scriptWorkflowID := createCurrentNodeScriptChainWorkflow(t, f.store, sourceScriptPath, laterScriptPath)
+	scriptTask := f.createTask(t, scriptWorkflowID)
+	scriptSource := f.startTask(t, scriptTask)
+	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.Equal(scriptSource)
+	})
+
+	releaseSuccessor.Do(func() { close(successorResponseRelease) })
+	f.waitForPath(t, laterScriptMarker)
+	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
+	})
+	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
+	})
+}
+
 func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture is a POSIX shell script")
@@ -336,8 +483,46 @@ func createCurrentNodeScriptWorkflow(t *testing.T, store *workflowstore.Store, s
 
 func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, mode workflow.ContextMode) workflow.WorkflowID {
 	t.Helper()
+	return createCurrentNodeTwoStepWorkflow(
+		t,
+		store,
+		"Current Node continuation",
+		mode,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "First."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Second."},
+	)
+}
+
+func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) workflow.WorkflowID {
+	t.Helper()
+	return createCurrentNodeTwoStepWorkflow(
+		t,
+		store,
+		"Current Node automatic script chain",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindScript, scriptPath: sourcePath},
+		currentNodeWorkflowStep{kind: workflow.NodeKindScript, scriptPath: successorPath},
+	)
+}
+
+type currentNodeWorkflowStep struct {
+	kind       workflow.NodeKind
+	role       string
+	scriptPath string
+	prompt     string
+}
+
+func createCurrentNodeTwoStepWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+	name string,
+	mode workflow.ContextMode,
+	first currentNodeWorkflowStep,
+	second currentNodeWorkflowStep,
+) workflow.WorkflowID {
+	t.Helper()
 	ctx := context.Background()
-	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node continuation"})
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name})
 	if err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
@@ -357,8 +542,14 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 	firstID := workflow.NodeID("node-first-" + string(created.ID))
 	secondID := workflow.NodeID("node-second-" + string(created.ID))
 	for _, node := range []workflowstore.NodeRecord{
-		{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder", PromptTemplate: "First."},
-		{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder", PromptTemplate: "Second."},
+		{
+			ID: firstID, WorkflowID: created.ID, Key: "first", Kind: first.kind, DisplayName: "First",
+			SubagentRole: first.role, ScriptPath: first.scriptPath, PromptTemplate: first.prompt,
+		},
+		{
+			ID: secondID, WorkflowID: created.ID, Key: "second", Kind: second.kind, DisplayName: "Second",
+			SubagentRole: second.role, ScriptPath: second.scriptPath, PromptTemplate: second.prompt,
+		},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
 			t.Fatalf("add node: %v", err)
@@ -377,8 +568,16 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 		}
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
-		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
-		{ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID, ContextMode: mode, PromptTemplate: "Second."},
+		{
+			ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID,
+			ContextMode: workflow.ContextModeNewSession, PromptTemplate: first.prompt,
+		},
+		{
+			ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
+			ContextMode: mode, PromptTemplate: second.prompt,
+		},
 		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {

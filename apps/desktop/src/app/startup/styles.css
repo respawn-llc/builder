@@ -291,6 +291,16 @@
     --motion-morph-stage-delay: 0ms;
     --motion-morph-stage: 0ms ease-in-out;
   }
+
+  .label-filter-condition-indicator {
+    transition: none;
+  }
+}
+
+.label-filter-condition-indicator {
+  transition:
+    opacity var(--motion-fast),
+    transform var(--motion-fast);
 }
 
 @keyframes surface-reveal {

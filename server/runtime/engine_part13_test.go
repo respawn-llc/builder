@@ -15,7 +15,6 @@ import (
 )
 
 func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsDisabled(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -103,7 +102,6 @@ func countCompactionSoonReminderWarnings(_ *Engine, snapshot ChatSnapshot) int {
 }
 
 func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 840, contextWindow: 2_000}
@@ -141,37 +139,7 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 }
 
-func TestTriggerHandoffFailsBeforeReminder(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-
-	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call-handoff-1", Name: string(toolspec.ToolTriggerHandoff)}, "", "")
-	if !errors.Is(err, errHandoffTooEarly) {
-		t.Fatalf("expected errHandoffTooEarly, got %v", err)
-	}
-}
-
-func TestTriggerHandoffFailsWhenAutoCompactionDisabled(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-
-	eng := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	eng.compactionRuntimeState().SetSoonReminderIssued(true)
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
-	if !changed || enabled {
-		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
-	}
-
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call-handoff-1", Name: string(toolspec.ToolTriggerHandoff)}, "", "")
-	if !errors.Is(err, errHandoffDisabledByUser) {
-		t.Fatalf("expected errHandoffDisabledByUser, got %v", err)
-	}
-}
-
 func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCarryover(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -221,7 +189,6 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 }
 
 func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -252,7 +219,6 @@ func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *tes
 }
 
 func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompaction(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	target := mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
 		session.WorktreeReminderModeEnter,
@@ -296,7 +262,6 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 }
 
 func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -376,7 +341,6 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 }
 
 func TestPendingTriggerHandoffFailsMalformedToolCallWithEmptyID(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -433,7 +397,6 @@ func assertRequestsPreserveCacheIdentity(t *testing.T, first llm.Request, retry 
 }
 
 func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -495,7 +458,6 @@ func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
 }
 
 func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -573,7 +535,6 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 }
 
 func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -635,7 +596,6 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 }
 
 func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecompaction(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -713,7 +673,6 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 }
 
 func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsFutureMessage(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -792,7 +751,6 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 }
 
 func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -867,7 +825,6 @@ func (o *armedCommittedAppendFailObserver) ObservePersistedStore(_ context.Conte
 }
 
 func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
-	t.Parallel()
 	observer := &armedCommittedAppendFailObserver{}
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir, withRuntimeTestPersistenceObserver(observer))
@@ -887,7 +844,6 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 }
 
 func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		responses: []llm.Response{

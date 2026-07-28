@@ -1,6 +1,6 @@
 # KENT-334 requirement/evidence matrix
 
-Updated: 2026-07-26. Current Task body and
+Updated: 2026-07-28. Current Task body and
 `.kent/plans/KENT-334-takeover-audit.md` are authoritative. Manual QA and
 deployment are excluded. Rust is frozen.
 
@@ -20,7 +20,7 @@ implementation or final evidence is still incomplete.
 | [x] | Preserve Activity as server-paginated Comments plus retained Session creation. | Activity clause | `server/workflowview/activity.go`, Desktop typed union | Ordering, equal-time, cursor pagination, and typed-variant coverage pass |
 | [x] | Update Project Home canonical activity and make Current Node mutations touch Task activity. | Project Home clause | Task mutations call `touchTaskUpdatedAt` | Canonical ordering/pagination and Current Node mutation-to-order integration tests pass |
 | [x] | Add structural architecture guards without exclusions or allowlists. | Guardrails clause | Go AST/composition, effective-schema/query, typed Session metadata, and parsed embedded-Script guards | Focused guard matrix and full server target pass |
-| [x] | Keep handwritten non-test production code net-negative against `3c7d45a62`. | Task delivery boundary | Final ledger: 206 files, +10,908 / -13,520 | Net `-2,612`; production-patch SHA-256 `ef10dd89a4d1d9f99a5495068f105f72397124236bdc324879ec7a4f800743f2` |
+| [x] | Keep handwritten non-test production code net-negative against the integrated delivery base. | Task delivery boundary | Before the mandatory main merge, the historical-base snapshot was net `-523`. After merging current `origin/main`, the KENT-owned PR delta is 191 files, +12,233 / -14,053. | Net `-1,820`; production-patch SHA-256 `a5a06a3d2a66cae6f513146158a01f2ffdbb0ddafc7cce590d8099092d757ff0`. |
 | [x] | Bump active Go/Desktop protocol once and update active fixtures. | Contracts and clients clause | `shared/protocol/version.json` = 72 | Previous-generation rejection, current handshake round trip, Desktop transport tests |
 | [x] | Run final scoped non-Rust tests, CI checks, and builds. | Delivery boundary | `scripts/test.sh` defaults to the proven stable maximum of eight Go packages | Server/Desktop tests and builds, dependency policy, frontend lint, vet, formatting, docs build/smoke all pass |
 
@@ -122,11 +122,9 @@ pnpm --dir docs build
 pnpm --dir docs smoke:built
 ```
 
-The clean full server/desktop command produced no assertion failure but reached
-the unchanged 180-second cap after Runtime passed, with only Transport,
-Workflow Store, and Worktree unfinished. Those packages passed together in
-the focused command above. On 2026-07-27 the User explicitly deferred the
-single-invocation cap (“ignore the cap for now”); it is not recorded as a pass,
-and `--no-wall-clock-cap` was not used.
+After the main integration and test-sharder merge, the exact clean-cache
+server/Desktop command passed in 134.724 seconds under the unchanged
+180-second cap. The Desktop suite passed 35 files / 173 tests.
+`--no-wall-clock-cap` was not used.
 
 Manual QA and deployment are excluded by the takeover goal.

@@ -1390,7 +1390,7 @@ SELECT
 FROM effective_current_nodes
 JOIN label_filter_args
 WHERE (
-{{taskLabelFilter "    " "effective_current_nodes.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json"}}
+{{taskLabelFilter "    " "effective_current_nodes.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
 )
 GROUP BY node_id
 ORDER BY node_id ASC;
@@ -1615,7 +1615,7 @@ selected_rows AS (
           )
       )
       AND (
-{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json"}}
+{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
       )
 ),
 matching_workflows AS (
@@ -1759,7 +1759,7 @@ WITH board_node_tasks AS (
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
-{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)"}}
+{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
       )
       AND (
           EXISTS (

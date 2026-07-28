@@ -207,7 +207,16 @@ func mustCreateNamedTestSessionAt(t *testing.T, root string, workspaceContainerN
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
+	initializeTestEventLog(t, store)
 	return store
+}
+
+func initializeTestEventLog(t *testing.T, store *session.Store) {
+	t.Helper()
+	sessiontest.WriteEventLogHeaderFixture(t, store, session.EventLogHeader{
+		Contract: session.EventLogContract,
+		Version:  session.EventLogVersionV1,
+	})
 }
 
 func mustOpenTestSession(t *testing.T, dir string) *session.Store {

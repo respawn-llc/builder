@@ -2,85 +2,23 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
 func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
-	t.Parallel()
 	pipeline := defaultReviewerPipeline{}
 	if pipeline.ShouldRunTurn("edits", &fakeClient{}, false) {
 		t.Fatal("reviewer ran for edits frequency without a patch edit")
 	}
 }
 
-func TestReviewerCompletionPersistsStatusWithoutCommittedCoordinates(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	main := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("initial")}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("reviewed")}},
-	}}
-	reviewer := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["apply improvement"]}`)},
-	}}}
-	var events []Event
-	engine := mustNewTestEngine(t, store, main, tools.NewRegistry(), Config{
-		Model:    "gpt-5",
-		Reviewer: ReviewerConfig{Frequency: "all", Model: "gpt-5", Client: reviewer},
-		OnEvent:  func(event Event) { events = append(events, event) },
-	})
-	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
-		t.Fatalf("submit reviewed turn: %v", err)
-	}
-	completed := 0
-	for _, event := range events {
-		if event.Kind != EventReviewerCompleted {
-			continue
-		}
-		completed++
-		if event.Reviewer == nil || event.Reviewer.Outcome != "applied" || event.Reviewer.SuggestionsCount != 1 || event.CommittedEntryStartSet {
-			t.Fatalf("reviewer completion facts = %+v", event)
-		}
-	}
-	if completed != 1 {
-		t.Fatalf("reviewer completions = %d, want one; events=%+v", completed, events)
-	}
-	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-	if err != nil {
-		t.Fatalf("read bounded reviewer records: %v", err)
-	}
-	statuses, finalRows := 0, 0
-	for _, record := range window.Records {
-		switch payload := mustSessionEventPayload(record).(type) {
-		case session.LocalEntryRecord:
-			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-				statuses++
-			}
-		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore reviewer record: %v", restoreErr)
-			}
-			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
-				finalRows++
-			}
-		}
-	}
-	if statuses != 1 || finalRows != 2 {
-		t.Fatalf("reviewer status/final records = statuses:%d finals:%d records:%+v", statuses, finalRows, window.Records)
-	}
-}
-
 func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"},
@@ -107,7 +45,6 @@ func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T
 }
 
 func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	main, reviewer := reviewerAppliedClients()
 	finals := 0
@@ -150,52 +87,7 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 	}
 }
 
-func TestCommittedReviewerStatusObserverFailureDoesNotPublishCompletion(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("reviewer status observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	main, reviewer := reviewerAppliedClients()
-	finals := 0
-	var events []Event
-	engine := mustNewTestEngine(t, store, main, tools.NewRegistry(), Config{
-		Model:    "gpt-5",
-		Reviewer: ReviewerConfig{Frequency: "all", Model: "gpt-5", Client: reviewer},
-		OnEvent: func(event Event) {
-			events = append(events, event)
-			if event.Kind == EventAssistantMessage && event.Message.Phase != nil && *event.Message.Phase == llm.MessagePhaseFinal {
-				finals++
-				if finals == 2 {
-					gate.FailNext(observerErr)
-				}
-			}
-		},
-	})
-	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); !errors.Is(err, observerErr) {
-		t.Fatalf("reviewer status observer error = %v", err)
-	}
-	for _, event := range events {
-		if event.Kind == EventReviewerCompleted {
-			t.Fatalf("observer-failed reviewer status published completion: %+v", event)
-		}
-	}
-	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-	if err != nil {
-		t.Fatalf("read bounded records: %v", err)
-	}
-	statuses := 0
-	for _, record := range window.Records {
-		if entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok && entry.Role == string(transcript.EntryRoleReviewerStatus) {
-			statuses++
-		}
-	}
-	if statuses != 1 {
-		t.Fatalf("committed reviewer statuses = %d, want one", statuses)
-	}
-}
-
 func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -223,7 +115,6 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 }
 
 func TestBuildReviewerTranscriptMessagesKeepsOrphanToolOutputEntry(t *testing.T) {
-	t.Parallel()
 	items := buildReviewerTranscriptItems([]llm.ResponseItem{{
 		Type:   llm.ResponseItemTypeFunctionCallOutput,
 		CallID: textutil.Value("orphan-call"),

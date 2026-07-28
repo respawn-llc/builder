@@ -25,6 +25,28 @@ excluded from this calculation.
   focused verification. The remaining non-Rust tests, CI checks, docs
   verification, and builds are recorded in `KENT-334-cutover-checklist.md`.
 
+## Main integration inventory — 2026-07-28
+
+`origin/main` advanced by 33 commits and was merged at `35cf25ea3`. Those
+upstream commits add handwritten production code independently of KENT-334, so
+the final PR-owned inventory is measured against the merged `origin/main`:
+
+- snapshot at `2026-07-28T16:19:21+0200`;
+- 191 included handwritten production files;
+- `+12233 / -14053`, net `-1820`;
+- production-patch SHA-256
+  `a5a06a3d2a66cae6f513146158a01f2ffdbb0ddafc7cce590d8099092d757ff0`.
+
+The KENT-owned net-negative gate passes. For attribution clarity, current
+`origin/main` contributes net `+2492` handwritten production lines relative to
+the historical `3c7d45a62` base. Combining that upstream delta with KENT-334's
+net `-1820` yields the historical-base aggregate net `+672`; that aggregate is
+not KENT-334-owned growth.
+
+For post-main-integration recomputation, run the inventory command below with
+`base=origin/main`. The historical `3c7d45a62` command remains below as the
+pre-integration record.
+
 ```sh
 set -eu -o pipefail
 base=3c7d45a62

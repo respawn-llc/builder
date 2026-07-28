@@ -14,7 +14,7 @@ Updated: 2026-07-27
 - [x] Project truthful queued status from Exact Execution Scope phase.
 - [x] Replace normal pending-Approval absence errors with an existence query.
 - [x] Correct the approved stale Resume spec wording.
-- [ ] Run full non-Rust verification and continue all three code-review sessions
+- [x] Run full non-Rust verification and continue all three code-review sessions
       until every reviewer reports GREEN.
 
 ## Round-three checkpoint — 2026-07-27
@@ -524,6 +524,24 @@ Final pre-commit demolition ledger from integrated base `3c7d45a62`:
 - production patch SHA-256
   `457f7bdaf247f0f94ff93d5ac0c6126de111c9d12f7fc17bb4c3f03948ac185c`.
 
-## Remaining work
+## Main integration completion — 2026-07-28
 
-1. Commit this remediation separately without amending `d7875e632`.
+- Merged `origin/main` at `35cf25ea3` into the branch without restoring the
+  deleted Workflow Run/Placement scheduler.
+- Ported the independent Session-store retirement fix and added
+  `TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript`.
+  Reverting the lock-order fix reproduces the admission-gate deadlock; the
+  corrected regression passes ten consecutive runs.
+- Corrected `TestGoalAuthorityLiveSetUsesRuntimeCommand` to count only typed
+  Goal feedback and Goal status events, excluding unrelated Runtime-open
+  activity. It passes twenty consecutive runs.
+- Exact clean-cache gate:
+  `go clean -testcache && ./scripts/test.sh server desktop` — **PASS** in
+  134.724 seconds under the ordinary 180-second cap. No bypass was used.
+- Server/Desktop build, dependency policy, frontend lint, vet, Desktop tests,
+  docs test/build/smoke, formatting, diff checks, and frozen-Rust checks pass.
+- All three original reviewer sessions report **GREEN** against the latest
+  staged worktree:
+  - architecture/correctness `45134d2a-e206-4f36-8d05-e5474c13b591`;
+  - concurrency/lifecycle `d243af7f-058e-4e8b-978d-b30d7f08ffa9`;
+  - migration/API/read models `5b45b4dc-1714-42a1-b238-1b54bb1e1570`.

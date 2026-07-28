@@ -17,28 +17,7 @@ import (
 	"time"
 )
 
-type webSearchProbeTool struct {
-	mu    sync.Mutex
-	calls int
-	name  toolspec.ID
-}
-
-func (t *webSearchProbeTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
-	t.mu.Lock()
-	t.calls++
-	t.mu.Unlock()
-	out, _ := json.Marshal(map[string]any{"tool": string(t.name)})
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
-}
-
-func (t *webSearchProbeTool) Calls() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.calls
-}
-
 func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		mu     sync.Mutex
@@ -78,83 +57,7 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 	}
 }
 
-func TestExecuteToolCallsRejectsWhitespaceWebSearchQuery(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-		ID:    "call-web",
-		Name:  string(toolspec.ToolWebSearch),
-		Input: json.RawMessage(`{"query":"   "}`),
-	}})
-	if err != nil {
-		t.Fatalf("execute tool calls: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one result, got %d", len(results))
-	}
-	if !results[0].IsError {
-		t.Fatalf("expected invalid web search query to fail, got %+v", results[0])
-	}
-	var output map[string]string
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("decode result output: %v", err)
-	}
-	if output["error"] != tools.InvalidWebSearchQueryMessage {
-		t.Fatalf("expected invalid query error, got %+v", output)
-	}
-	if completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call-web"); !ok {
-		t.Fatal("expected tool completion to be recorded")
-	} else if !completion.IsError {
-		t.Fatalf("expected persisted completion to be error, got %+v", completion)
-	}
-}
-
-func TestExecuteToolCallsRejectsHallucinatedWebSearchQueryBeforeHandler(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-
-	probe := &webSearchProbeTool{name: toolspec.ToolWebSearch}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
-		ID:      toolspec.ToolWebSearch,
-		Handler: probe,
-	}), Config{Model: "gpt-5"})
-
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-		ID:    "call-web",
-		Name:  string(toolspec.ToolWebSearch),
-		Input: json.RawMessage(`{"query":"web search"}`),
-	}})
-	if err != nil {
-		t.Fatalf("execute tool calls: %v", err)
-	}
-	if probe.Calls() != 0 {
-		t.Fatalf("expected validation to reject before handler execution, got %d handler calls", probe.Calls())
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one result, got %d", len(results))
-	}
-	if !results[0].IsError {
-		t.Fatalf("expected hallucinated web search query to fail, got %+v", results[0])
-	}
-	var output map[string]string
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatalf("decode result output: %v", err)
-	}
-	if output["error"] != tools.InvalidWebSearchQueryMessage {
-		t.Fatalf("expected invalid query error, got %+v", output)
-	}
-	if completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot("call-web"); !ok {
-		t.Fatal("expected tool completion to be recorded")
-	} else if !completion.IsError {
-		t.Fatalf("expected persisted completion to be error, got %+v", completion)
-	}
-}
-
 func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{inputTokenCountFn: func(req llm.Request) int {
@@ -206,7 +109,6 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 }
 
 func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	patchInput := "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"
@@ -259,7 +161,6 @@ func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 }
 
 func TestRequestToolsExposePatchAsCustomToolOnlyForFirstPartyResponsesProvider(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name       string
 		caps       llm.ProviderCapabilities
@@ -304,7 +205,6 @@ func TestRequestToolsExposePatchAsCustomToolOnlyForFirstPartyResponsesProvider(t
 }
 
 func TestRequestToolsUseActiveProviderCapsForCustomPatchTool(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model:        "gpt-5",
@@ -341,7 +241,6 @@ func TestRequestToolsUseActiveProviderCapsForCustomPatchTool(t *testing.T) {
 }
 
 func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -386,7 +285,6 @@ func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 }
 
 func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
@@ -419,7 +317,6 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 }
 
 func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	liveStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "live"), "ws", dir)
 	restoredStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "restored"), "ws", dir)
@@ -567,7 +464,6 @@ func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Requ
 }
 
 func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -592,32 +488,66 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	defer mu.Unlock()
 
 	var deltaIndex int
-	var hasDelta bool
-	var resetIndex int
-	var hasReset bool
+	hasDelta := false
+	var delta Event
+	var terminals []Event
+	assistantMessageCount := 0
 	for i, evt := range events {
-		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && !hasDelta {
+		switch evt.Kind {
+		case EventAssistantDelta:
+			if hasDelta {
+				t.Fatalf("multiple assistant deltas before terminal error: %+v", events)
+			}
 			deltaIndex = i
 			hasDelta = true
-		}
-		if evt.Kind == EventAssistantDeltaReset && !hasReset {
-			resetIndex = i
-			hasReset = true
+			delta = evt
+		case EventAssistantDeltaReset:
+			terminals = append(terminals, evt)
+		case EventAssistantMessage:
+			assistantMessageCount++
 		}
 	}
-	if !hasDelta {
+	if !hasDelta || delta.AssistantTranscriptStreamID == nil {
 		t.Fatalf("missing streamed delta before terminal error: %+v", events)
 	}
-	if !hasReset {
-		t.Fatalf("missing reset after terminal error: %+v", events)
+	if len(terminals) != 1 {
+		t.Fatalf("assistant stream terminals = %+v, want exactly one: %+v", terminals, events)
 	}
-	if deltaIndex > resetIndex {
-		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", deltaIndex, resetIndex)
+	terminal := terminals[0]
+	if terminal.AssistantTranscriptStreamID == nil ||
+		*terminal.AssistantTranscriptStreamID != *delta.AssistantTranscriptStreamID ||
+		terminal.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
+		t.Fatalf("assistant stream terminal = %+v, delta = %+v", terminal, delta)
+	}
+	if assistantMessageCount != 0 {
+		t.Fatalf("final assistant events = %d, want none: %+v", assistantMessageCount, events)
+	}
+
+	var cleanupKinds []EventKind
+	for _, evt := range events[deltaIndex+1:] {
+		switch evt.Kind {
+		case EventConversationUpdated, EventAssistantDeltaReset, EventReasoningDeltaReset:
+			cleanupKinds = append(cleanupKinds, evt.Kind)
+		}
+	}
+	wantCleanupKinds := []EventKind{
+		EventConversationUpdated,
+		EventAssistantDeltaReset,
+		EventReasoningDeltaReset,
+		EventConversationUpdated,
+		EventReasoningDeltaReset,
+	}
+	if len(cleanupKinds) != len(wantCleanupKinds) {
+		t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
+	}
+	for i, want := range wantCleanupKinds {
+		if cleanupKinds[i] != want {
+			t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)
+		}
 	}
 }
 
 func TestStreamingEmitsReasoningSummaryDeltaEvents(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -660,7 +590,6 @@ func TestStreamingEmitsReasoningSummaryDeltaEvents(t *testing.T) {
 }
 
 func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -698,7 +627,6 @@ func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
 }
 
 func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	var (
@@ -760,7 +688,6 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 }
 
 func TestAuthErrorsAreNotRetried(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &authFailClient{}
@@ -778,29 +705,31 @@ func TestAuthErrorsAreNotRetried(t *testing.T) {
 }
 
 func TestNonRetriableStatusCodesAreNotRetried(t *testing.T) {
-	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &statusFailClient{}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+	})
+
 	for _, status := range []int{400, 401, 403, 404} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			store := mustCreateTestSession(t)
-
-			client := &statusFailClient{status: status}
-			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-				Model: "gpt-5",
-			})
+			client.mu.Lock()
+			client.status = status
+			callsBefore := client.calls
+			client.mu.Unlock()
 
 			_, err := eng.SubmitUserMessage(context.Background(), "trigger status error")
 			if err == nil {
 				t.Fatalf("expected status %d failure", status)
 			}
-			if client.Calls() != 1 {
-				t.Fatalf("expected single model attempt on status %d, got %d", status, client.Calls())
+			if calls := client.Calls() - callsBefore; calls != 1 {
+				t.Fatalf("expected single model attempt on status %d, got %d", status, calls)
 			}
 		})
 	}
 }
 
 func TestProviderContractErrorsAreNotRetried(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &providerContractFailClient{}

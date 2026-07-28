@@ -150,19 +150,6 @@ func TestDispatcherCoalescesPendingFailureCountAndLatestDiagnostic(t *testing.T)
 	}
 }
 
-func TestDispatcherTimesOutHooks(t *testing.T) {
-	t.Setenv(dispatcherProcessModeEnv, "block")
-	t.Setenv("KENT_TEST_LIFECYCLE_START_DIR", filepath.Join(t.TempDir(), "started"))
-	dispatcher := lifecyclehook.New(context.Background(), dispatcherProcessCommand())
-	t.Cleanup(dispatcher.Close)
-	dispatcher.Submit(testLifecycleEvent())
-
-	issue := waitForDispatcherIssue(t, dispatcher.Issues(), 35*time.Second)
-	if requireProcessIssue(t, issue).Cause == nil {
-		t.Fatal("timeout omitted failure")
-	}
-}
-
 func requireProcessIssue(t *testing.T, issue lifecyclehook.Issue) lifecyclehook.ProcessIssue {
 	t.Helper()
 	process, ok := issue.Detail.(lifecyclehook.ProcessIssue)

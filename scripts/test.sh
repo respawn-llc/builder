@@ -96,6 +96,22 @@ if [ "${#go_test_args[@]}" -gt 0 ]; then
     server_test_args=("${go_test_args[@]}")
 fi
 
+server_test_requires_runtime_admission=0
+for server_test_arg in "${server_test_args[@]}"; do
+    if [[ "$server_test_arg" == -* ]] || ! command -v go >/dev/null 2>&1; then
+        continue
+    fi
+    while IFS= read -r resolved_import_path; do
+        if [ "$resolved_import_path" = "core/server/runtime" ]; then
+            server_test_requires_runtime_admission=1
+            break
+        fi
+    done < <(go list -f '{{.ImportPath}}' "$server_test_arg" 2>/dev/null || true)
+    if [ "$server_test_requires_runtime_admission" = "1" ]; then
+        break
+    fi
+done
+
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
@@ -145,7 +161,21 @@ if [ "$go_test_package_parallelism" -le 0 ]; then
     printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
     exit 2
 fi
-server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
+server_test_uses_sharder=0
+if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+    server_test_uses_sharder=1
+    server_test_command=(
+        go run ./tools/testshard
+        --workers "$go_test_package_parallelism"
+    )
+else
+    server_test_command=(
+        go test -json
+        -count=1
+        -p "$go_test_package_parallelism"
+        "${server_test_args[@]}"
+    )
+fi
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
     '' | *[!0-9]*)
@@ -169,7 +199,19 @@ if [ "$disable_wall_clock_cap" != "1" ]; then
     fi
 fi
 
+pty_fixture_build_dir=""
 test_pid=""
+cleanup() {
+    if [ -n "$pty_fixture_build_dir" ]; then
+        unlink "$pty_fixture_build_dir/kent-pty-fixture.test" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/kent" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/ansi-writer" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/phase-input-writer" 2>/dev/null || true
+        unlink "$pty_fixture_build_dir/phase-writer" 2>/dev/null || true
+        rmdir "$pty_fixture_build_dir" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
 
 terminate_test_process_group() {
     if [ -z "${test_pid:-}" ] || ! kill -0 "$test_pid" 2>/dev/null; then
@@ -217,7 +259,7 @@ require_command() {
 check_dependencies() {
     if target_selected server; then
         require_command go "run server tests"
-        if [ "$disable_wall_clock_cap" != "1" ]; then
+        if [ "$disable_wall_clock_cap" != "1" ] || [ "$server_test_requires_runtime_admission" = "1" ]; then
             require_command python3 "enforce the server test-runtime timeout"
         fi
     fi
@@ -314,9 +356,32 @@ run_desktop_tests() {
 }
 
 run_server_tests() {
+    local pty_fixture_binary=""
+    if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
+        pty_fixture_build_dir="$(mktemp -d -t kent-pty-fixture.XXXXXX)"
+        pty_fixture_binary="$pty_fixture_build_dir/kent-pty-fixture.test"
+        go test -c -o "$pty_fixture_binary" core/cli/app
+        ./scripts/build.sh server --output "$pty_fixture_build_dir/kent"
+        go build -o "$pty_fixture_build_dir/ansi-writer" core/internal/testharness/pty/testdata/cmd/ansi-writer
+        go build -o "$pty_fixture_build_dir/phase-input-writer" core/internal/testharness/pty/testdata/cmd/phase-input-writer
+        go build -o "$pty_fixture_build_dir/phase-writer" core/internal/testharness/pty/testdata/cmd/phase-writer
+        export KENT_PTY_FIXTURE_BINARY="$pty_fixture_binary"
+        export KENT_PTY_KENT_BINARY="$pty_fixture_build_dir/kent"
+        export KENT_PTY_ANSI_WRITER_BINARY="$pty_fixture_build_dir/ansi-writer"
+        export KENT_PTY_PHASE_INPUT_WRITER_BINARY="$pty_fixture_build_dir/phase-input-writer"
+        export KENT_PTY_PHASE_WRITER_BINARY="$pty_fixture_build_dir/phase-writer"
+    fi
+
+    # The sharder acquires one admission for its complete job graph when it
+    # plans core/server/runtime. Wrapping it here would recurse through its
+    # script-integration test, which invokes this script.
+    if [ "$server_test_requires_runtime_admission" = "1" ] && [ "$server_test_uses_sharder" != "1" ]; then
+        server_test_command=(python3 "$repo_root/scripts/runtime-test-lock.py" "${server_test_command[@]}")
+    fi
+
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        go test "${server_go_test_args[@]}"
+        "${server_test_command[@]}"
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
@@ -326,7 +391,7 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$timeout_seconds" "${server_go_test_args[@]}" <<'PY' &
+    python3 - "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
 import json
 import os
 import selectors
@@ -336,13 +401,15 @@ import sys
 import time
 
 runtime_limit_seconds = float(sys.argv[1])
-test_args = sys.argv[2:]
+test_command = sys.argv[2:]
+test_env = os.environ.copy()
 process = subprocess.Popen(
-    ["go", "test", "-json", *test_args],
+    test_command,
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
     bufsize=0,
     start_new_session=True,
+    env=test_env,
 )
 
 def terminate_test_process():

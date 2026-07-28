@@ -13,7 +13,6 @@ import (
 )
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
@@ -23,7 +22,6 @@ func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 }
 
 func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("fast final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -55,7 +53,6 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 }
 
 func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.pauseQueuedUserAutoDrain()
@@ -101,7 +98,6 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.liveRun.beginStep(&RunSnapshot{
@@ -122,7 +118,6 @@ func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	stepCtxSeen := make(chan context.Context, 1)
@@ -160,7 +155,6 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	startedAt := time.Now().UTC()
@@ -222,73 +216,62 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	}
 }
 
-func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
-	t.Parallel()
+func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
+	for _, test := range []struct {
+		name        string
+		options     exclusiveStepOptions
+		wantActive  bool
+		waitMessage string
+	}{
+		{
+			name:        "emit run state",
+			options:     exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+			wantActive:  true,
+			waitMessage: "live run step",
+		},
+		{
+			name:        "maintenance",
+			options:     exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance},
+			wantActive:  false,
+			waitMessage: "maintenance step",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- lifecycle.Run(context.Background(), test.options, func(context.Context, string) error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatalf("timed out waiting for %s", test.waitMessage)
+			}
+			if active := eng.HasActiveLiveRunGroup(); active != test.wantActive {
+				t.Fatalf("active live-run group = %t, want %t", active, test.wantActive)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("%s: %v", test.waitMessage, err)
+			}
+			if eng.HasActiveLiveRunGroup() {
+				t.Fatal("live-run group stayed active after idle completion")
+			}
 		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live run step")
-	}
-	if !eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=true step did not open active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("live run step: %v", err)
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("live-run group stayed active after idle completion")
-	}
-}
-
-func TestMaintenanceStepDoesNotOpenActiveLiveRunGroup(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for maintenance step")
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=false step opened active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("maintenance step: %v", err)
 	}
 }
 
 func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	called := false
@@ -309,7 +292,6 @@ func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T)
 }
 
 func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.pauseQueuedUserAutoDrain()
@@ -373,7 +355,6 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 }
 
 func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -411,7 +392,6 @@ func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
 }
 
 func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutation(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := newBlockingThenQueuedClient()
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -502,7 +482,6 @@ func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutat
 }
 
 func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	modelEntered := make(chan struct{})
 	releaseModel := make(chan struct{})
@@ -544,7 +523,6 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 }
 
 func TestWaitForActiveRunResultReturnsNoFinalAnswerForShellRun(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -583,7 +561,6 @@ func TestWaitForActiveRunResultReturnsNoFinalAnswerForShellRun(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -624,7 +601,6 @@ func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunFailsAcceptedSteeringWhileStepRuns(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -670,7 +646,6 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringWhileStepRuns(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunFailsAcceptedSteeringInTaggedQueueGap(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	client := newBlockingThenQueuedClient()
@@ -728,7 +703,6 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringInTaggedQueueGap(t *testing.T
 }
 
 func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatus(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -792,7 +766,6 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 }
 
 func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -829,7 +802,6 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 }
 
 func TestTryInterruptActiveRunIdleNoops(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
@@ -877,7 +849,6 @@ func liveRunTestRequestID(t *testing.T) runtimeids.RuntimeClientRequestID {
 }
 
 func TestCapturedActiveRunResultCompletesLateTaggedQueuedDrain(t *testing.T) {
-	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("initial work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}},

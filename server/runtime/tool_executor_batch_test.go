@@ -114,76 +114,93 @@ func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *
 func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		input json.RawMessage
+		name   string
+		callID string
+		input  json.RawMessage
 	}{
-		{name: "whitespace query", input: json.RawMessage(`{"query":"   "}`)},
-		{name: "hallucinated query", input: json.RawMessage(`{"query":"web search"}`)},
+		{name: "whitespace query", callID: "web-search-whitespace", input: json.RawMessage(`{"query":"   "}`)},
+		{name: "hallucinated query", callID: "web-search-hallucinated", input: json.RawMessage(`{"query":"web search"}`)},
 	}
+	probe := &webSearchExecutionProbe{}
+	var completionMu sync.Mutex
+	var completionEvents []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolWebSearch,
+			Handler: probe,
+		}),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if event.Kind != EventToolCallCompleted || event.ToolResult == nil {
+					return
+				}
+				result := *event.ToolResult
+				completionMu.Lock()
+				completionEvents = append(completionEvents, Event{
+					Kind:                       event.Kind,
+					CommittedTranscriptChanged: event.CommittedTranscriptChanged,
+					ToolResult:                 &result,
+				})
+				completionMu.Unlock()
+			},
+		},
+	)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			probe := &webSearchExecutionProbe{}
-			var completionMu sync.Mutex
-			var completionEvents []Event
-			engine := mustNewTestEngine(
-				t,
-				mustCreateTestSession(t),
-				&fakeClient{},
-				tools.NewRegistry(tools.HandlerRegistration{
-					ID:      toolspec.ToolWebSearch,
-					Handler: probe,
-				}),
-				Config{
-					Model: "gpt-5",
-					OnEvent: func(event Event) {
-						if event.Kind != EventToolCallCompleted || event.ToolResult == nil {
-							return
-						}
-						result := *event.ToolResult
-						completionMu.Lock()
-						completionEvents = append(completionEvents, Event{
-							Kind:                       event.Kind,
-							CommittedTranscriptChanged: event.CommittedTranscriptChanged,
-							ToolResult:                 &result,
-						})
-						completionMu.Unlock()
-					},
-				},
-			)
+			handlerCallsBefore := probe.calls.Load()
+			completionMu.Lock()
+			completionsBefore := len(completionEvents)
+			completionMu.Unlock()
 
 			results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-				ID:    "web-search-call",
+				ID:    test.callID,
 				Name:  string(toolspec.ToolWebSearch),
 				Input: test.input,
 			}})
 			if err != nil {
 				t.Fatalf("execute invalid web search tool call: %v", err)
 			}
-			if got := probe.calls.Load(); got != 0 {
-				t.Fatalf("invalid web search reached handler %d times", got)
+			if got := probe.calls.Load(); got != handlerCallsBefore {
+				t.Fatalf("invalid web search reached handler: calls = %d, want %d", got, handlerCallsBefore)
 			}
 			if len(results) != 1 {
 				t.Fatalf("invalid web search results = %+v, want one", results)
 			}
-			if result := results[0]; result.CallID != "web-search-call" ||
+			if result := results[0]; result.CallID != test.callID ||
 				result.Name != toolspec.ToolWebSearch ||
 				!result.IsError {
 				t.Fatalf("invalid web search result = %+v", result)
 			}
+			var output map[string]string
+			if err := json.Unmarshal(results[0].Output, &output); err != nil {
+				t.Fatalf("decode invalid web search output: %v", err)
+			}
+			if got := output["error"]; got != tools.InvalidWebSearchQueryMessage {
+				t.Fatalf("invalid web search error = %q, want %q", got, tools.InvalidWebSearchQueryMessage)
+			}
+			completion, found := engine.transcriptRuntimeState().ToolCompletionSnapshot(test.callID)
+			if !found || !completion.IsError {
+				t.Fatalf("invalid web search runtime completion = %+v, found=%t", completion, found)
+			}
 
 			completionMu.Lock()
 			defer completionMu.Unlock()
-			if len(completionEvents) != 1 {
-				t.Fatalf("persisted invalid web search completions = %+v, want one", completionEvents)
+			newCompletions := completionEvents[completionsBefore:]
+			if len(newCompletions) != 1 {
+				t.Fatalf("persisted invalid web search completions = %+v, want one new completion", newCompletions)
 			}
-			completion := completionEvents[0]
-			if !completion.CommittedTranscriptChanged ||
-				completion.ToolResult == nil ||
-				completion.ToolResult.CallID != "web-search-call" ||
-				completion.ToolResult.Name != toolspec.ToolWebSearch ||
-				!completion.ToolResult.IsError {
-				t.Fatalf("persisted invalid web search completion = %+v", completion)
+			completionEvent := newCompletions[0]
+			if !completionEvent.CommittedTranscriptChanged ||
+				completionEvent.ToolResult == nil ||
+				completionEvent.ToolResult.CallID != test.callID ||
+				completionEvent.ToolResult.Name != toolspec.ToolWebSearch ||
+				!completionEvent.ToolResult.IsError {
+				t.Fatalf("persisted invalid web search completion = %+v", completionEvent)
 			}
 		})
 	}

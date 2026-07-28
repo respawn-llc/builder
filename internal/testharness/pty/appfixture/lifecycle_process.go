@@ -11,8 +11,12 @@ import (
 	"core/shared/lifecyclecontract"
 )
 
-const LifecycleProcessConfigEnvName = "KENT_LIFECYCLE_PTY_FIXTURE_CONFIG"
-const LifecycleServerProcessConfigEnvName = "KENT_LIFECYCLE_SERVER_PTY_FIXTURE_CONFIG"
+const (
+	LifecycleProcessConfigEnvName       = "KENT_LIFECYCLE_PTY_FIXTURE_CONFIG"
+	LifecycleProcessTestRunArgument     = "-test.run=^TestLifecycleHookPTYFixtureProcess$"
+	LifecycleServerProcessConfigEnvName = "KENT_LIFECYCLE_SERVER_PTY_FIXTURE_CONFIG"
+	LifecycleServerTestRunArgument      = "-test.run=^TestLifecycleHookServerFixtureProcess$"
+)
 
 type LifecycleServerMode string
 

@@ -18,6 +18,30 @@ import (
 	"core/internal/testharness/recordstore"
 )
 
+// WriteEventLogHeaderFixture replaces a test session's event artifact with a
+// self-describing header fixture.
+func WriteEventLogHeaderFixture(
+	t testing.TB,
+	store *session.Store,
+	header session.EventLogHeader,
+) {
+	t.Helper()
+	if store == nil {
+		t.Fatal("session store is required")
+	}
+	encoded, err := json.Marshal(header)
+	if err != nil {
+		t.Fatalf("marshal event log header fixture: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(store.Dir(), "events.jsonl"),
+		append(encoded, '\n'),
+		0o600,
+	); err != nil {
+		t.Fatalf("write event log header fixture: %v", err)
+	}
+}
+
 // WriteUnsupportedEventLogVersion replaces a test session's event artifact
 // with a newer self-describing header.
 func WriteUnsupportedEventLogVersion(
@@ -26,9 +50,6 @@ func WriteUnsupportedEventLogVersion(
 	version int,
 ) {
 	t.Helper()
-	if store == nil {
-		t.Fatal("session store is required")
-	}
 	if version <= session.EventLogVersionV1 {
 		t.Fatalf(
 			"unsupported event log fixture version = %d, want > %d",
@@ -36,20 +57,10 @@ func WriteUnsupportedEventLogVersion(
 			session.EventLogVersionV1,
 		)
 	}
-	header, err := json.Marshal(session.EventLogHeader{
+	WriteEventLogHeaderFixture(t, store, session.EventLogHeader{
 		Contract: session.EventLogContract,
 		Version:  version,
 	})
-	if err != nil {
-		t.Fatalf("marshal unsupported event log header: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(store.Dir(), "events.jsonl"),
-		append(header, '\n'),
-		0o600,
-	); err != nil {
-		t.Fatalf("write unsupported event log: %v", err)
-	}
 }
 
 type Persistence struct {

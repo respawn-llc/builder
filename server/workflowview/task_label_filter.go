@@ -13,9 +13,10 @@ import (
 )
 
 type workflowTaskLabelFilterFacts struct {
-	Kind     serverapi.WorkflowTaskLabelFilterKind       `json:"kind"`
-	Mode     *serverapi.WorkflowTaskNamedLabelFilterMode `json:"mode,omitempty"`
-	LabelIDs []string                                    `json:"label_ids"`
+	Kind             serverapi.WorkflowTaskLabelFilterKind       `json:"kind"`
+	Mode             *serverapi.WorkflowTaskNamedLabelFilterMode `json:"mode,omitempty"`
+	LabelIDs         []string                                    `json:"label_ids"`
+	ExcludedLabelIDs []string                                    `json:"excluded_label_ids"`
 }
 
 type workflowProjectLabelByIDReader interface {
@@ -23,9 +24,10 @@ type workflowProjectLabelByIDReader interface {
 }
 
 type workflowTaskLabelFilterQueryArgs struct {
-	kind         string
-	mode         sql.NullString
-	labelIDsJSON string
+	kind                 string
+	mode                 sql.NullString
+	labelIDsJSON         string
+	excludedLabelIDsJSON string
 }
 
 func (f workflowTaskLabelFilterFacts) queryArgs() (workflowTaskLabelFilterQueryArgs, error) {
@@ -33,29 +35,35 @@ func (f workflowTaskLabelFilterFacts) queryArgs() (workflowTaskLabelFilterQueryA
 	if err != nil {
 		return workflowTaskLabelFilterQueryArgs{}, err
 	}
+	excludedLabelIDsJSON, err := json.Marshal(f.ExcludedLabelIDs)
+	if err != nil {
+		return workflowTaskLabelFilterQueryArgs{}, err
+	}
 	return workflowTaskLabelFilterQueryArgs{
-		kind:         string(f.Kind),
-		mode:         nullableWorkflowTaskLabelFilterMode(f.Mode),
-		labelIDsJSON: string(labelIDsJSON),
+		kind:                 string(f.Kind),
+		mode:                 nullableWorkflowTaskLabelFilterMode(f.Mode),
+		labelIDsJSON:         string(labelIDsJSON),
+		excludedLabelIDsJSON: string(excludedLabelIDsJSON),
 	}, nil
 }
 
 func (f workflowTaskLabelFilterFacts) validCanonical() bool {
-	if f.LabelIDs == nil {
+	if f.LabelIDs == nil || f.ExcludedLabelIDs == nil {
 		return false
 	}
 	switch f.Kind {
 	case serverapi.WorkflowTaskLabelFilterKindNone, serverapi.WorkflowTaskLabelFilterKindUnlabeled:
-		return f.Mode == nil && len(f.LabelIDs) == 0
+		return f.Mode == nil && len(f.LabelIDs) == 0 && len(f.ExcludedLabelIDs) == 0
 	case serverapi.WorkflowTaskLabelFilterKindNamed:
-		if f.Mode == nil || !sort.StringsAreSorted(f.LabelIDs) {
+		if f.Mode == nil || !sort.StringsAreSorted(f.LabelIDs) || !sort.StringsAreSorted(f.ExcludedLabelIDs) {
 			return false
 		}
 		return (serverapi.WorkflowTaskLabelFilter{
 			Kind: f.Kind,
 			Named: &serverapi.WorkflowTaskNamedLabelFilter{
-				Mode:     *f.Mode,
-				LabelIDs: f.LabelIDs,
+				Mode:             *f.Mode,
+				LabelIDs:         f.LabelIDs,
+				ExcludedLabelIDs: f.ExcludedLabelIDs,
 			},
 		}).Validate() == nil
 	default:
@@ -66,7 +74,8 @@ func (f workflowTaskLabelFilterFacts) validCanonical() bool {
 func (f workflowTaskLabelFilterFacts) equal(other workflowTaskLabelFilterFacts) bool {
 	return f.Kind == other.Kind &&
 		workflowTaskLabelFilterModesEqual(f.Mode, other.Mode) &&
-		slices.Equal(f.LabelIDs, other.LabelIDs)
+		slices.Equal(f.LabelIDs, other.LabelIDs) &&
+		slices.Equal(f.ExcludedLabelIDs, other.ExcludedLabelIDs)
 }
 
 func resolveWorkflowTaskLabelFilter(
@@ -77,16 +86,22 @@ func resolveWorkflowTaskLabelFilter(
 ) (workflowTaskLabelFilterFacts, error) {
 	switch filter.Kind {
 	case serverapi.WorkflowTaskLabelFilterKindNone:
-		return workflowTaskLabelFilterFacts{Kind: filter.Kind, LabelIDs: []string{}}, nil
+		return workflowTaskLabelFilterFacts{Kind: filter.Kind, LabelIDs: []string{}, ExcludedLabelIDs: []string{}}, nil
 	case serverapi.WorkflowTaskLabelFilterKindUnlabeled:
-		return workflowTaskLabelFilterFacts{Kind: filter.Kind, LabelIDs: []string{}}, nil
+		return workflowTaskLabelFilterFacts{Kind: filter.Kind, LabelIDs: []string{}, ExcludedLabelIDs: []string{}}, nil
 	case serverapi.WorkflowTaskLabelFilterKindNamed:
 		if filter.Named == nil {
 			return workflowTaskLabelFilterFacts{}, errors.New("named task label filter requires named facts")
 		}
-		labelIDs := append([]string(nil), filter.Named.LabelIDs...)
+		labelIDs := append([]string{}, filter.Named.LabelIDs...)
+		excludedLabelIDs := append([]string{}, filter.Named.ExcludedLabelIDs...)
 		sort.Strings(labelIDs)
-		rows, err := queries.ListProjectLabelsByIDs(ctx, labelIDs)
+		sort.Strings(excludedLabelIDs)
+		allLabelIDs := make([]string, 0, len(labelIDs)+len(excludedLabelIDs))
+		allLabelIDs = append(allLabelIDs, labelIDs...)
+		allLabelIDs = append(allLabelIDs, excludedLabelIDs...)
+		sort.Strings(allLabelIDs)
+		rows, err := queries.ListProjectLabelsByIDs(ctx, allLabelIDs)
 		if err != nil {
 			return workflowTaskLabelFilterFacts{}, err
 		}
@@ -94,7 +109,7 @@ func resolveWorkflowTaskLabelFilter(
 		for _, row := range rows {
 			projectByLabelID[row.ID] = row.ProjectID
 		}
-		for _, labelID := range labelIDs {
+		for _, labelID := range allLabelIDs {
 			labelProjectID, exists := projectByLabelID[labelID]
 			if !exists {
 				projectIDValue := projectID
@@ -117,9 +132,10 @@ func resolveWorkflowTaskLabelFilter(
 		}
 		mode := filter.Named.Mode
 		return workflowTaskLabelFilterFacts{
-			Kind:     filter.Kind,
-			Mode:     &mode,
-			LabelIDs: labelIDs,
+			Kind:             filter.Kind,
+			Mode:             &mode,
+			LabelIDs:         labelIDs,
+			ExcludedLabelIDs: excludedLabelIDs,
 		}, nil
 	default:
 		return workflowTaskLabelFilterFacts{}, errors.New("task label filter kind is invalid")

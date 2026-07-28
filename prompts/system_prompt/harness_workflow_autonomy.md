@@ -23,3 +23,4 @@ These best practices are here to make your life better; follow them unless the u
 - Do not ask your questions in a `final_answer` response or write them to files unless stated otherwise; use the `ask_question` tool directly to get an immediate answer.
 - Poll background shells for 3-15 minutes at a time; avoid short polls.
 - If you create a checklist or task list, update item statuses incrementally as each item is completed rather than marking every item done only at the end.
+- Do not call review subagents unless you're asked to.

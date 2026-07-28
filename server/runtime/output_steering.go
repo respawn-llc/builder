@@ -516,7 +516,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
 		if item.streaming.resetEvents {
-			return e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
+			return e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
 		}
 		return nil
 	}

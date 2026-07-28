@@ -1394,12 +1394,24 @@ WHERE (
     OR (
         label_filter_args.label_filter_kind = 'named'
         AND label_filter_args.label_filter_mode = 'any'
-        AND EXISTS (
-            SELECT 1
-            FROM json_each(label_filter_args.label_ids_json) selected_label
-            JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-              ON assignment.label_id = selected_label.value
-            WHERE assignment.task_id = effective_current_nodes.task_id
+        AND (
+            EXISTS (
+                SELECT 1
+                FROM json_each(label_filter_args.label_ids_json) selected_label
+                JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                  ON assignment.label_id = selected_label.value
+                WHERE assignment.task_id = effective_current_nodes.task_id
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    WHERE assignment.label_id = excluded_label.value
+                      AND assignment.task_id = effective_current_nodes.task_id
+                )
+            )
         )
     )
     OR (
@@ -1414,6 +1426,13 @@ WHERE (
                 WHERE assignment.label_id = selected_label.value
                   AND assignment.task_id = effective_current_nodes.task_id
             )
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+            JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+              ON assignment.label_id = excluded_label.value
+            WHERE assignment.task_id = effective_current_nodes.task_id
         )
     )
     OR (
@@ -1652,12 +1671,24 @@ selected_rows AS (
           OR (
               args.label_filter_kind = 'named'
               AND args.label_filter_mode = 'any'
-              AND EXISTS (
-                  SELECT 1
-                  FROM json_each(args.label_ids_json) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = t.id
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM json_each(args.label_ids_json) selected_label
+                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                        ON assignment.label_id = selected_label.value
+                      WHERE assignment.task_id = t.id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                      WHERE NOT EXISTS (
+                          SELECT 1
+                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                          WHERE assignment.label_id = excluded_label.value
+                            AND assignment.task_id = t.id
+                      )
+                  )
               )
           )
           OR (
@@ -1672,6 +1703,13 @@ selected_rows AS (
                       WHERE assignment.label_id = selected_label.value
                         AND assignment.task_id = t.id
                   )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = excluded_label.value
+                  WHERE assignment.task_id = t.id
               )
           )
           OR (
@@ -1829,12 +1867,24 @@ WITH board_node_tasks AS (
           OR (
               sqlc.arg(label_filter_kind) = 'named'
               AND sqlc.narg(label_filter_mode) = 'any'
-              AND EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = t.id
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                        ON assignment.label_id = selected_label.value
+                      WHERE assignment.task_id = t.id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                      WHERE NOT EXISTS (
+                          SELECT 1
+                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                          WHERE assignment.label_id = excluded_label.value
+                            AND assignment.task_id = t.id
+                      )
+                  )
               )
           )
           OR (
@@ -1849,6 +1899,13 @@ WITH board_node_tasks AS (
                       WHERE assignment.label_id = selected_label.value
                         AND assignment.task_id = t.id
                   )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = excluded_label.value
+                  WHERE assignment.task_id = t.id
               )
           )
           OR (

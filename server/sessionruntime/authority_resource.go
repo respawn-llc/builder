@@ -275,7 +275,10 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 	return callback(ctx, engine)
 }
 
-func (r *agentResource) withStore(ctx context.Context, callback func(context.Context, *session.Store) error) (err error) {
+// withStoreUnderAdmission runs while the caller owns the Session admission
+// gate. Resource retirement must be attempted only after that gate is
+// released, because retirement acquires the same gate.
+func (r *agentResource) withStoreUnderAdmission(ctx context.Context, callback func(context.Context, *session.Store) error) error {
 	r.mu.Lock()
 	if r.rejectsNewUseLocked() || r.store == nil {
 		r.mu.Unlock()
@@ -286,12 +289,12 @@ func (r *agentResource) withStore(ctx context.Context, callback func(context.Con
 	r.signalLocked()
 	r.mu.Unlock()
 	defer func() {
-		err = errors.Join(err, r.releaseCallback())
+		r.releaseCallbackCount()
 	}()
 	return callback(ctx, store)
 }
 
-func (r *agentResource) releaseCallback() error {
+func (r *agentResource) releaseCallbackCount() {
 	r.mu.Lock()
 	if r.callbacks <= 0 {
 		panic(fmt.Sprintf("agent resource %s generation %d callback underflow", r.ref.SessionID(), r.ref.Generation()))
@@ -299,6 +302,10 @@ func (r *agentResource) releaseCallback() error {
 	r.callbacks--
 	r.signalLocked()
 	r.mu.Unlock()
+}
+
+func (r *agentResource) releaseCallback() error {
+	r.releaseCallbackCount()
 	return r.authority.closeRetiringResource(context.Background(), r)
 }
 

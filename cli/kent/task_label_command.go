@@ -348,25 +348,105 @@ func loadWorkflowProjectLabelCatalog(ctx context.Context, remote workflowCommand
 }
 
 func resolveWorkflowProjectLabelSelectors(snapshot workflowProjectLabelCatalogSnapshot, rawSelectors []string) ([]string, error) {
-	resolvedIDs := make([]string, 0, len(rawSelectors))
+	resolvedGroups, err := resolveWorkflowProjectLabelSelectorGroups(snapshot, [][]string{rawSelectors})
+	if err != nil {
+		return nil, err
+	}
+	return resolvedGroups[0].IDs, nil
+}
+
+func resolveWorkflowProjectLabelFilter(
+	snapshot workflowProjectLabelCatalogSnapshot,
+	mode serverapi.WorkflowTaskNamedLabelFilterMode,
+	includedSelectors []string,
+	excludedSelectors []string,
+) (serverapi.WorkflowTaskLabelFilter, error) {
+	resolvedGroups, err := resolveWorkflowProjectLabelSelectorGroups(snapshot, [][]string{includedSelectors, excludedSelectors})
+	if err != nil {
+		return serverapi.WorkflowTaskLabelFilter{}, err
+	}
+	if conflictID := sharedWorkflowProjectLabelSelectorGroups(resolvedGroups[0], resolvedGroups[1]); conflictID != nil {
+		return serverapi.WorkflowTaskLabelFilter{}, conflictingWorkflowProjectLabelSelectorsError{
+			Included: resolvedGroups[0].SelectorsByID[*conflictID],
+			Excluded: resolvedGroups[1].SelectorsByID[*conflictID],
+		}
+	}
+	filter := serverapi.WorkflowTaskLabelFilter{
+		Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+		Named: &serverapi.WorkflowTaskNamedLabelFilter{
+			Mode:             mode,
+			LabelIDs:         resolvedGroups[0].IDs,
+			ExcludedLabelIDs: resolvedGroups[1].IDs,
+		},
+	}
+	if err := filter.Validate(); err != nil {
+		return serverapi.WorkflowTaskLabelFilter{}, err
+	}
+	return filter, nil
+}
+
+type resolvedWorkflowProjectLabelSelectorGroup struct {
+	IDs           []string
+	SelectorsByID map[string]string
+}
+
+func resolveWorkflowProjectLabelSelectorGroups(
+	snapshot workflowProjectLabelCatalogSnapshot,
+	rawSelectorGroups [][]string,
+) ([]resolvedWorkflowProjectLabelSelectorGroup, error) {
+	resolvedGroups := make([]resolvedWorkflowProjectLabelSelectorGroup, len(rawSelectorGroups))
 	unresolved := make([]string, 0)
-	seenIDs := make(map[string]struct{}, len(rawSelectors))
-	for _, raw := range rawSelectors {
-		record, found := resolveWorkflowProjectLabelSelector(snapshot, raw)
-		if !found {
-			unresolved = append(unresolved, raw)
-			continue
+	for groupIndex, rawSelectors := range rawSelectorGroups {
+		resolvedIDs := make([]string, 0, len(rawSelectors))
+		seenIDs := make(map[string]struct{}, len(rawSelectors))
+		selectorsByID := make(map[string]string, len(rawSelectors))
+		for _, raw := range rawSelectors {
+			record, found := resolveWorkflowProjectLabelSelector(snapshot, raw)
+			if !found {
+				unresolved = append(unresolved, raw)
+				continue
+			}
+			if _, exists := seenIDs[record.ID]; exists {
+				continue
+			}
+			seenIDs[record.ID] = struct{}{}
+			resolvedIDs = append(resolvedIDs, record.ID)
+			selectorsByID[record.ID] = raw
 		}
-		if _, exists := seenIDs[record.ID]; exists {
-			continue
+		resolvedGroups[groupIndex] = resolvedWorkflowProjectLabelSelectorGroup{
+			IDs:           resolvedIDs,
+			SelectorsByID: selectorsByID,
 		}
-		seenIDs[record.ID] = struct{}{}
-		resolvedIDs = append(resolvedIDs, record.ID)
 	}
 	if len(unresolved) > 0 {
 		return nil, unresolvedWorkflowProjectLabelSelectorsError{Selectors: unresolved}
 	}
-	return resolvedIDs, nil
+	return resolvedGroups, nil
+}
+
+func sharedWorkflowProjectLabelSelectorGroups(
+	included resolvedWorkflowProjectLabelSelectorGroup,
+	excluded resolvedWorkflowProjectLabelSelectorGroup,
+) *string {
+	for _, labelID := range included.IDs {
+		if _, exists := excluded.SelectorsByID[labelID]; exists {
+			return &labelID
+		}
+	}
+	return nil
+}
+
+type conflictingWorkflowProjectLabelSelectorsError struct {
+	Included string
+	Excluded string
+}
+
+func (err conflictingWorkflowProjectLabelSelectorsError) Error() string {
+	return fmt.Sprintf(
+		"--label %s conflicts with --not-label %s because both select the same Label",
+		strconv.Quote(err.Included),
+		strconv.Quote(err.Excluded),
+	)
 }
 
 func workflowProjectLabelNames(snapshot workflowProjectLabelCatalogSnapshot, ids []string) ([]string, error) {

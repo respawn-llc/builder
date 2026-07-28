@@ -19,26 +19,6 @@ func appendSegmentTestMessage(t *testing.T, store *session.Store, role llm.Role,
 	}
 }
 
-func appendSegmentTestMessages(t *testing.T, store *session.Store, role llm.Role, contents []string) {
-	t.Helper()
-	payloads := make([]session.EventRecordPayload, 0, len(contents))
-	for _, content := range contents {
-		message, err := sessionMessageRecordFromLLM(llm.Message{Role: role, Content: textutil.Value(content)})
-		if err != nil {
-			t.Fatalf("adapt message %q: %v", content, err)
-		}
-		payloads = append(payloads, message)
-	}
-	stepID := "step"
-	events, receipt, err := mustMaterializeTestEventLog(t, store).AppendRecordsAtomic(&stepID, payloads)
-	if err != nil {
-		t.Fatalf("append messages: %v", err)
-	}
-	if !receipt.Committed || len(events) != len(contents) {
-		t.Fatalf("append messages receipt=%+v events=%d, want committed %d events", receipt, len(events), len(contents))
-	}
-}
-
 func mustEngineSegmentPage(t *testing.T, eng *Engine, cursor int64) TranscriptSegmentPage {
 	t.Helper()
 	page, err := eng.TranscriptSegmentPage(cursor)
@@ -86,7 +66,6 @@ func containsText(texts []string, want string) bool {
 }
 
 func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -127,7 +106,6 @@ func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 }
 
 func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -168,7 +146,6 @@ func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T)
 }
 
 func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -186,7 +163,6 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 }
 
 func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -198,11 +174,21 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 	}
 
 	const activeEntryCount = 650
-	activeEntries := make([]string, activeEntryCount)
+	activeMessages := make([]session.EventRecordPayload, 0, activeEntryCount)
 	for index := 0; index < activeEntryCount; index++ {
-		activeEntries[index] = fmt.Sprintf("active-%03d", index)
+		message, err := sessionMessageRecordFromLLM(llm.Message{
+			Role:    llm.RoleUser,
+			Content: textutil.Value(fmt.Sprintf("active-%03d", index)),
+		})
+		if err != nil {
+			t.Fatalf("build active message %d: %v", index, err)
+		}
+		activeMessages = append(activeMessages, message)
 	}
-	appendSegmentTestMessages(t, store, llm.RoleUser, activeEntries)
+	stepID := "step"
+	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecordsAtomic(&stepID, activeMessages); err != nil {
+		t.Fatalf("append active segment: %v", err)
+	}
 
 	page := mustEngineNewestSegmentPage(t, eng)
 	if !page.HasMoreAbove {
@@ -219,7 +205,6 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 }
 
 func TestEngineTranscriptNewestSegmentPageProjectsHistoryReplacementRows(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 

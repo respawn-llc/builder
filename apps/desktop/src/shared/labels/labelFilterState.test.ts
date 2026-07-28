@@ -1,70 +1,110 @@
-import { createLabelFilterState, reduceLabelFilterState } from "./labelFilterState";
+import {
+  createLabelFilterState,
+  reconcileLabelFilterState,
+  reduceLabelFilterState,
+} from "./labelFilterState";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 
 describe("label filter state", () => {
-  it("starts unrestricted and selects the first named label in OR mode", () => {
+  it("cycles a named condition from neutral to included to excluded to neutral", () => {
     const initial = createLabelFilterState();
 
     expect(initial).toEqual({
       filter: { kind: "none" },
       namedMode: "any",
     });
-    expect(reduceLabelFilterState(initial, { type: "named.toggle", labelID: priorityID })).toEqual({
-      filter: { kind: "named", mode: "any", labelIDs: [priorityID] },
+    const included = reduceLabelFilterState(initial, { type: "named.cycle", labelID: priorityID });
+    expect(included).toEqual({
+      filter: {
+        kind: "named",
+        mode: "any",
+        labelIDs: [priorityID],
+        excludedLabelIDs: [],
+      },
       namedMode: "any",
     });
+    const excluded = reduceLabelFilterState(included, { type: "named.cycle", labelID: priorityID });
+    expect(excluded).toEqual({
+      filter: {
+        kind: "named",
+        mode: "any",
+        labelIDs: [],
+        excludedLabelIDs: [priorityID],
+      },
+      namedMode: "any",
+    });
+    expect(reduceLabelFilterState(excluded, { type: "named.cycle", labelID: priorityID })).toEqual(
+      createLabelFilterState(),
+    );
   });
 
-  it("keeps named label identity sorted while toggling selections", () => {
-    const priority = reduceLabelFilterState(createLabelFilterState(), {
-      type: "named.toggle",
+  it("keeps both named partitions sorted and disjoint", () => {
+    const priorityIncluded = reduceLabelFilterState(createLabelFilterState(), {
+      type: "named.cycle",
       labelID: priorityID,
     });
-    const both = reduceLabelFilterState(priority, {
-      type: "named.toggle",
+    const bothIncluded = reduceLabelFilterState(priorityIncluded, {
+      type: "named.cycle",
+      labelID: urgentID,
+    });
+    const priorityExcluded = reduceLabelFilterState(bothIncluded, {
+      type: "named.cycle",
+      labelID: priorityID,
+    });
+    const bothExcluded = reduceLabelFilterState(priorityExcluded, {
+      type: "named.cycle",
       labelID: urgentID,
     });
 
-    expect(both.filter).toEqual({
+    expect(bothIncluded.filter).toEqual({
       kind: "named",
       mode: "any",
       labelIDs: [urgentID, priorityID],
+      excludedLabelIDs: [],
     });
-    expect(reduceLabelFilterState(both, { type: "named.toggle", labelID: urgentID }).filter).toEqual({
+    expect(priorityExcluded.filter).toEqual({
       kind: "named",
       mode: "any",
-      labelIDs: [priorityID],
+      labelIDs: [urgentID],
+      excludedLabelIDs: [priorityID],
+    });
+    expect(bothExcluded.filter).toEqual({
+      kind: "named",
+      mode: "any",
+      labelIDs: [],
+      excludedLabelIDs: [urgentID, priorityID],
     });
   });
 
   it("switches named filters between OR and AND", () => {
     const selected = reduceLabelFilterState(createLabelFilterState(), {
-      type: "named.toggle",
+      type: "named.cycle",
       labelID: priorityID,
     });
 
     expect(reduceLabelFilterState(selected, { type: "named.mode", mode: "all" })).toEqual({
-      filter: { kind: "named", mode: "all", labelIDs: [priorityID] },
+      filter: { kind: "named", mode: "all", labelIDs: [priorityID], excludedLabelIDs: [] },
       namedMode: "all",
     });
   });
 
   it("makes unlabeled exclusive and restores the remembered named mode", () => {
-    const selected = reduceLabelFilterState(createLabelFilterState(), {
-      type: "named.toggle",
+    const included = reduceLabelFilterState(createLabelFilterState(), {
+      type: "named.cycle",
       labelID: priorityID,
     });
-    const all = reduceLabelFilterState(selected, { type: "named.mode", mode: "all" });
+    const excluded = reduceLabelFilterState(included, { type: "named.cycle", labelID: priorityID });
+    const all = reduceLabelFilterState(excluded, { type: "named.mode", mode: "all" });
     const unlabeled = reduceLabelFilterState(all, { type: "unlabeled.toggle" });
 
     expect(unlabeled).toEqual({
       filter: { kind: "unlabeled" },
       namedMode: "all",
     });
-    expect(reduceLabelFilterState(unlabeled, { type: "named.toggle", labelID: urgentID })).toEqual({
-      filter: { kind: "named", mode: "all", labelIDs: [urgentID] },
+    expect(reduceLabelFilterState(unlabeled, { type: "named.cycle", labelID: urgentID })).toEqual({
+      filter: { kind: "named", mode: "all", labelIDs: [urgentID], excludedLabelIDs: [] },
       namedMode: "all",
     });
     expect(reduceLabelFilterState(unlabeled, { type: "unlabeled.toggle" })).toEqual({
@@ -75,7 +115,7 @@ describe("label filter state", () => {
 
   it("clears every filter and restores OR mode", () => {
     const selected = reduceLabelFilterState(createLabelFilterState(), {
-      type: "named.toggle",
+      type: "named.cycle",
       labelID: priorityID,
     });
     const all = reduceLabelFilterState(selected, { type: "named.mode", mode: "all" });
@@ -86,19 +126,28 @@ describe("label filter state", () => {
     });
   });
 
-  it("prunes deleted named labels without changing an unlabeled filter", () => {
-    const first = reduceLabelFilterState(createLabelFilterState(), {
-      type: "named.toggle",
-      labelID: priorityID,
-    });
-    const both = reduceLabelFilterState(first, {
-      type: "named.toggle",
-      labelID: urgentID,
-    });
+  it("prunes and reconciles both named partitions without changing an unlabeled filter", () => {
+    const named = {
+      filter: {
+        kind: "named" as const,
+        mode: "all" as const,
+        labelIDs: [priorityID],
+        excludedLabelIDs: [urgentID],
+      },
+      namedMode: "all" as const,
+    };
 
-    expect(reduceLabelFilterState(both, { type: "label.deleted", labelID: urgentID })).toEqual({
-      filter: { kind: "named", mode: "any", labelIDs: [priorityID] },
-      namedMode: "any",
+    expect(reduceLabelFilterState(named, { type: "label.deleted", labelID: urgentID })).toEqual({
+      filter: { kind: "named", mode: "all", labelIDs: [priorityID], excludedLabelIDs: [] },
+      namedMode: "all",
+    });
+    expect(reduceLabelFilterState(named, { type: "label.deleted", labelID: priorityID })).toEqual({
+      filter: { kind: "named", mode: "all", labelIDs: [], excludedLabelIDs: [urgentID] },
+      namedMode: "all",
+    });
+    expect(reconcileLabelFilterState(named, [urgentID])).toEqual({
+      filter: { kind: "named", mode: "all", labelIDs: [], excludedLabelIDs: [urgentID] },
+      namedMode: "all",
     });
     expect(
       reduceLabelFilterState(

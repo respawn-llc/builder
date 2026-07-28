@@ -12,6 +12,7 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
+	"core/internal/testharness/pty/appfixture"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -39,82 +40,49 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		completionDrain           *time.Duration
 	}{
 		{
-			name: "visibility_o_real_app_path",
+			name: "hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
 			script: map[string]any{
 				"seed_transcript": []map[string]any{
 					{"kind": "message", "role": "user", "text": "PTY_SEED_O_USER"},
-				},
-				"final": "VISIBILITY_O_MODEL",
-			},
-			expectedAppends:    []string{"❯ visibility_o_real_app_path", "❮ VISIBILITY_O_MODEL"},
-			expectedAnyAppends: []string{"❯ PTY_SEED_O_USER"},
-		},
-		{
-			name: "hydrated_legacy_final_assistant_full_answer",
-			script: map[string]any{
-				"seed_transcript": []map[string]any{
 					{
 						"kind":           "message",
 						"role":           "assistant",
 						"text":           "PTY_HYDRATED_FIRST\nPTY_HYDRATED_SECOND\nPTY_HYDRATED_THIRD",
 						"condensed_text": "PTY_HYDRATED_COMPACT",
 					},
-				},
-				"final": "hydration fixture complete",
-			},
-			expectedAppends: []string{
-				"❯ hydrated_legacy_final_assistant_full_answer",
-				"❮ hydration fixture complete",
-			},
-			expectedAnyAppends: []string{
-				"❮ PTY_HYDRATED_FIRST PTY_HYDRATED_SECOND PTY_HYDRATED_THIRD",
-			},
-			forbiddenAnyAppends: []string{"❮ PTY_HYDRATED_COMPACT"},
-		},
-		{
-			name: "visibility_oc_tool_real_app_path",
-			script: map[string]any{
-				"seed_transcript": []map[string]any{
 					{"kind": "local_entry", "visibility": "OC", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
+					{"kind": "message", "role": "developer", "message_type": "environment", "text": "PTY_SEED_D_DETAIL_ONLY", "condensed_text": "PTY_SEED_D_COMPACT"},
+					{"kind": "local_entry", "visibility": "X", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
 				},
 				"steps": []map[string]any{
 					{
-						"commentary": "calling shell tool",
 						"tool_calls": []map[string]any{
 							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'VISIBILITY_OC_TOOL\\n'"}},
 						},
 					},
 					{
 						"expected_tool_results": []map[string]any{{"CallID": "call_1", "Name": "exec_command"}},
-						"final":                 "tool path complete",
+						"final":                 "visibility projection tool path complete",
 					},
 				},
 			},
-			expectedAppends:     []string{"❮ tool path complete"},
-			expectedAnyAppends:  []string{"ℹ PTY_SEED_OC_COMPACT"},
-			forbiddenAnyAppends: []string{"ℹ PTY_SEED_OC_FULL_DETAIL_TEXT"},
-		},
-		{
-			name: "visibility_d_detail_only_real_app_path",
-			script: map[string]any{
-				"seed_transcript": []map[string]any{
-					{"kind": "message", "role": "developer", "message_type": "environment", "text": "PTY_SEED_D_DETAIL_ONLY", "condensed_text": "PTY_SEED_D_COMPACT"},
-				},
-				"final": "detail-only fixture completed",
+			expectedAppends: []string{
+				"❯ hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
+				"❮ visibility projection tool path complete",
 			},
-			expectedAppends:     []string{"❯ visibility_d_detail_only_real_app_path", "❮ detail-only fixture completed"},
-			forbiddenAnyAppends: []string{"ℹ PTY_SEED_D_DETAIL_ONLY", "ℹ PTY_SEED_D_COMPACT"},
-		},
-		{
-			name: "visibility_x_hidden_real_app_path",
-			script: map[string]any{
-				"seed_transcript": []map[string]any{
-					{"kind": "local_entry", "visibility": "X", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
-				},
-				"final": "hidden fixture completed",
+			expectedAnyAppends: []string{
+				"❯ PTY_SEED_O_USER",
+				"❮ PTY_HYDRATED_FIRST PTY_HYDRATED_SECOND PTY_HYDRATED_THIRD",
+				"ℹ PTY_SEED_OC_COMPACT",
 			},
-			expectedAppends:     []string{"❯ visibility_x_hidden_real_app_path", "❮ hidden fixture completed"},
-			forbiddenAnyAppends: []string{"ℹ PTY_SEED_X_HIDDEN", "ℹ PTY_SEED_X_COMPACT"},
+			forbiddenAnyAppends: []string{
+				"❮ PTY_HYDRATED_COMPACT",
+				"ℹ PTY_SEED_OC_FULL_DETAIL_TEXT",
+				"ℹ PTY_SEED_D_DETAIL_ONLY",
+				"ℹ PTY_SEED_D_COMPACT",
+				"ℹ PTY_SEED_X_HIDDEN",
+				"ℹ PTY_SEED_X_COMPACT",
+			},
 		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",
@@ -217,7 +185,13 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					},
 				},
 			},
-			inputs:              []pty.InputEvent{{After: 1500 * time.Millisecond, Bytes: []byte("\r")}},
+			frameInputs: []pty.FrameInputSequence{{
+				Phase: pty.PhaseToolStarted,
+				Inputs: []pty.FrameInput{{
+					Readiness: pty.ReadinessRendererFrame,
+					Bytes:     []byte("\r"),
+				}},
+			}},
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			forbiddenAnyAppends: []string{"? PTY_LIVE_QUESTION", "? tool call"},
 		},
@@ -266,7 +240,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 							{
 								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
 								"name":  "exec_command",
-								"input": map[string]any{"cmd": "sleep 5; echo $((42424241+1))"},
+								"input": map[string]any{"cmd": "sleep 3; echo $((42424241+1))"},
 							},
 						},
 					},
@@ -291,7 +265,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				},
 			}},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
-			expectedScreenRows: []string{"$ sleep 5; echo $((42424241+1))"},
+			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
 		},
 		{
 			name: "live_failed_tools_retain_input",
@@ -520,6 +494,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:                bin,
+		Args:                []string{appfixture.ProcessTestRunArgument},
 		Env:                 append([]string(nil), env...),
 		Dimensions:          pty.MustDimensions(24, 80),
 		PhaseInputs:         phaseInputs,

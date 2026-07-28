@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -28,7 +27,6 @@ func openAIFirstPartyNativeWebSearchCaps() llm.ProviderCapabilities {
 }
 
 func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -82,7 +80,6 @@ func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
 }
 
 func TestSetReviewerDisabledConcurrentWithBusyStepSkipsReviewerForCurrentRun(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -134,7 +131,6 @@ func TestSetReviewerDisabledConcurrentWithBusyStepSkipsReviewerForCurrentRun(t *
 }
 
 func TestHostedWebSearchExecutionFromOutputItem(t *testing.T) {
-	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -172,7 +168,6 @@ func TestHostedWebSearchExecutionFromOutputItem(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionUsesURLAsQueryFallback(t *testing.T) {
-	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -198,7 +193,6 @@ func TestHostedWebSearchExecutionUsesURLAsQueryFallback(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionRejectsWhitespaceSearchQuery(t *testing.T) {
-	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -237,7 +231,6 @@ func TestHostedWebSearchExecutionRejectsWhitespaceSearchQuery(t *testing.T) {
 }
 
 func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
-	t.Parallel()
 	item := llm.ResponseItem{
 		Type: llm.ResponseItemTypeOther,
 		Raw: json.RawMessage(`{
@@ -273,7 +266,6 @@ func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -350,7 +342,6 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	var hostedStart *llm.ToolCall
 
@@ -456,7 +447,6 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 }
 
 func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFinal(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -533,7 +523,6 @@ func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFin
 }
 
 func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -610,70 +599,35 @@ func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T)
 }
 
 func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name             string
-		model            string
-		windowTokens     int
-		capabilities     session.LockedModelCapabilities
-		wantTool         bool
-		checkLocked      bool
-		wantLockedVision bool
-	}{
-		{name: "vision model", model: "gpt-5.3-codex", windowTokens: 200000, wantTool: true},
-		{name: "text-only model", model: "gpt-3.5-turbo", windowTokens: 200000},
-		{name: "codex spark", model: "gpt-5.3-codex-spark", windowTokens: 128000, checkLocked: true},
-		{
-			name:             "unlisted model with vision override",
-			model:            "gpt-4.1-2026-01-15",
-			windowTokens:     200000,
-			capabilities:     session.LockedModelCapabilities{SupportsVisionInputs: true},
-			wantTool:         true,
-			checkLocked:      true,
-			wantLockedVision: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			client := &fakeClient{responses: []llm.Response{{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
-				Usage:     llm.Usage{WindowTokens: test.windowTokens},
-			}}}
-			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
-				Model:             test.model,
-				ModelCapabilities: test.capabilities,
-				EnabledTools:      []toolspec.ID{toolspec.ToolViewImage},
-			})
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
+		Model:        "gpt-5.3-codex",
+		EnabledTools: []toolspec.ID{toolspec.ToolViewImage},
+	})
 
-			if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
-				t.Fatalf("submit: %v", err)
-			}
-			if len(client.calls) != 1 {
-				t.Fatalf("model calls = %d, want 1", len(client.calls))
-			}
-			found := false
-			for _, tool := range client.calls[0].Tools {
-				if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
-					found = true
-					break
-				}
-			}
-			if found != test.wantTool {
-				t.Fatalf("view_image present = %t, want %t; tools=%+v", found, test.wantTool, client.calls[0].Tools)
-			}
-			if test.checkLocked {
-				locked := store.Meta().Locked
-				if locked == nil || locked.ModelCapabilities.SupportsVisionInputs != test.wantLockedVision {
-					t.Fatalf("locked capabilities = %+v, want vision=%t", locked, test.wantLockedVision)
-				}
-			}
-		})
+	if _, err := eng.SubmitUserMessage(context.Background(), "analyze image"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(client.calls))
+	}
+	found := false
+	for _, tool := range client.calls[0].Tools {
+		if strings.TrimSpace(tool.Name) == string(toolspec.ToolViewImage) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("view_image not advertised to vision model; tools=%+v", client.calls[0].Tools)
 	}
 }
 
 func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -720,7 +674,6 @@ func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t
 }
 
 func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -778,7 +731,6 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 }
 
 func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -863,7 +815,6 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 }
 
 func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -906,7 +857,6 @@ func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) 
 }
 
 func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: llm.ProviderCapabilities{

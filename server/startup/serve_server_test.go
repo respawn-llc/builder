@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -72,35 +71,8 @@ var noopOnboarding = OnboardingHandler(func(_ context.Context, req OnboardingReq
 	return reloaded, nil
 })
 
-var serveTestPortReservations = struct {
-	sync.Mutex
-	listeners map[string]net.Listener
-}{listeners: map[string]net.Listener{}}
-
-func reserveServeTestPort(t *testing.T, listener net.Listener) {
-	t.Helper()
-	addr := listener.Addr().String()
-	serveTestPortReservations.Lock()
-	if existing := serveTestPortReservations.listeners[addr]; existing != nil {
-		_ = existing.Close()
-	}
-	serveTestPortReservations.listeners[addr] = listener
-	serveTestPortReservations.Unlock()
-	t.Cleanup(func() { releaseServeTestPort(addr) })
-}
-
-func releaseServeTestPort(addr string) {
-	serveTestPortReservations.Lock()
-	listener := serveTestPortReservations.listeners[addr]
-	delete(serveTestPortReservations.listeners, addr)
-	serveTestPortReservations.Unlock()
-	if listener != nil {
-		_ = listener.Close()
-	}
-}
-
 func releaseServeTestPortForConfig(cfg config.App) {
-	releaseServeTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
+	testsetup.ReleaseLoopbackPort(cfg.Settings.ServerHost, cfg.Settings.ServerPort)
 }
 
 func registerServeWorkspace(t *testing.T, workspace string) {
@@ -167,14 +139,9 @@ func waitForServeResponse(t *testing.T, httpClient *http.Client, url string) *ht
 
 func configureServeTestServerPort(t *testing.T) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve server port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	reserveServeTestPort(t, listener)
+	reservation := testsetup.ReserveLoopbackPort(t)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
 }
 
 func TestStartServeServerMatchesEmbeddedStartup(t *testing.T) {

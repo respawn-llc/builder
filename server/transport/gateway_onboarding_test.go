@@ -92,6 +92,11 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 }
 
 func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T) {
+	authReadyCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = authReadyCore.Close() })
+	authBlockedCore, _ := newGatewayTestCore(t, true, false)
+	t.Cleanup(func() { _ = authBlockedCore.Close() })
+
 	tests := []struct {
 		name       string
 		authReady  bool
@@ -111,8 +116,10 @@ func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
-			defer func() { _ = appCore.Close() }()
+			appCore := authBlockedCore
+			if tt.authReady {
+				appCore = authReadyCore
+			}
 			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)

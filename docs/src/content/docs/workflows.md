@@ -288,9 +288,9 @@ A project owns a shared catalog of up to 100 reusable labels across its linked w
 
 Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
 
-Board label filters run on the server. OR, the default, matches any selected label; AND requires every selected label; No labels matches tasks without assignments. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
+On the board, a named Label row cycles neutral → included → excluded. An included condition requires the Label; an excluded condition requires its absence. `--label-match any` matches when any included or excluded condition is true, while `all` requires every condition. `No labels` remains a binary filter for tasks without assignments and is mutually exclusive with named conditions. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
 
-The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. Label selectors are repeatable literal values: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `kent task list --label` defaults to any-match; use `--label-match all` for every selected label or `--unlabeled` for tasks without assignments. `--unlabeled` cannot be combined with label selectors or an explicit match mode.
+The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
 

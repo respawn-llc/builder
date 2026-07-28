@@ -257,6 +257,9 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	if got := decodeStringToolOutput(t, background); !strings.Contains(got, "\x1b[31mearly\x1b[0m") {
 		t.Fatalf("raw background transition output = %q, want original ANSI", got)
 	}
+	if background.PresentationDelta == nil || !background.PresentationDelta.MovedToBackground {
+		t.Fatalf("raw background result did not report a background transition: %+v", background)
+	}
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
 		t.Fatalf("raw background process count = %d, want 1", len(snapshots))
