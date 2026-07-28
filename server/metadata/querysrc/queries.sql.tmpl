@@ -227,6 +227,11 @@ SET
 WHERE id = sqlc.arg(id)
 RETURNING version;
 
+-- name: AcquireWorkflowGraphSaveWriteLock :execrows
+UPDATE workflows
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = sqlc.arg(id);
+
 -- name: GetWorkflow :one
 SELECT
     id,

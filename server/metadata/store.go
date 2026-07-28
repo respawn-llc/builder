@@ -69,8 +69,10 @@ type Store struct {
 }
 
 var (
-	ErrInvalidProjectKey      = errors.New("invalid project key")
-	ErrProjectKeyAlreadyInUse = errors.New("project key already in use")
+	ErrInvalidProjectKey                     = errors.New("invalid project key")
+	ErrProjectDeletePreparationInvalidated   = errors.New("project delete preparation was invalidated")
+	ErrWorkspaceUnlinkPreparationInvalidated = errors.New("workspace unlink preparation was invalidated")
+	ErrProjectKeyAlreadyInUse                = errors.New("project key already in use")
 
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
 	// is already bound to a workspace. Callers match it via errors.Is.
@@ -497,6 +499,18 @@ type ProjectSessionArtifact struct {
 type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
 type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
 
+type sessionIDSet []string
+
+func newSessionIDSet(ids []string) sessionIDSet {
+	set := append(sessionIDSet(nil), ids...)
+	slices.Sort(set)
+	return set
+}
+
+func (ids sessionIDSet) Equal(other sessionIDSet) bool {
+	return slices.Equal(ids, other)
+}
+
 func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
 	blockers := []serverapi.ProjectDeleteBlocker{}
 	add := func(code string, message string, count int64) {
@@ -525,37 +539,8 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 	if deleteArtifact == nil {
 		return nil, errors.New("session artifact delete callback is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin project delete tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	trimmedProjectID := strings.TrimSpace(projectID)
-	q := s.queries.WithTx(tx)
-	locked, err := q.AcquireProjectDeleteWriteLock(ctx, trimmedProjectID)
-	if err != nil {
-		return nil, fmt.Errorf("lock project delete: %w", err)
-	}
-	if locked == 0 {
-		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
-	}
-	releaseRuntimeBlocker := func() {}
-	if runtimeBlocker != nil {
-		sessionIDs, err := q.ListProjectSessionIDs(ctx, trimmedProjectID)
-		if err != nil {
-			return nil, fmt.Errorf("list project sessions for runtime blockers: %w", err)
-		}
-		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
-		if release != nil {
-			releaseRuntimeBlocker = release
-			defer releaseRuntimeBlocker()
-		}
-		if err != nil {
-			return nil, err
-		}
-		preflightBlockers = append(append([]serverapi.ProjectDeleteBlocker{}, preflightBlockers...), runtimeBlockers...)
-	}
-	counts, err := q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
+	counts, err := s.queries.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("count project delete blockers: %w", err)
 	}
@@ -564,14 +549,51 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
-	artifacts, err := q.ListProjectSessionArtifacts(ctx, trimmedProjectID)
+	preparedSessionIDs, err := s.queries.ListProjectSessionIDs(ctx, trimmedProjectID)
 	if err != nil {
-		return nil, fmt.Errorf("list project session artifacts: %w", err)
+		return nil, fmt.Errorf("list project sessions for runtime blockers: %w", err)
 	}
-	for _, artifact := range artifacts {
-		if err := deleteArtifact(ProjectSessionArtifact{SessionID: artifact.ID, ArtifactRelpath: artifact.ArtifactRelpath}, false); err != nil {
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		runtimeBlockers, release, err := runtimeBlocker(ctx, preparedSessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
 			return nil, err
 		}
+		if len(runtimeBlockers) > 0 {
+			return runtimeBlockers, nil
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin project delete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	locked, err := q.AcquireProjectDeleteWriteLock(ctx, trimmedProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("lock project delete: %w", err)
+	}
+	if locked == 0 {
+		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+	}
+	commitSessionIDs, err := q.ListProjectSessionIDs(ctx, trimmedProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("list project sessions for commit: %w", err)
+	}
+	counts, err = q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("count project delete blockers: %w", err)
+	}
+	blockers = projectDeleteBlockersFromCounts(counts)
+	if len(blockers) > 0 {
+		return blockers, nil
+	}
+	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
+		return nil, ErrProjectDeletePreparationInvalidated
 	}
 	if err := q.DeleteProjectTasks(ctx, trimmedProjectID); err != nil {
 		return nil, fmt.Errorf("delete project tasks: %w", err)
@@ -847,6 +869,24 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
+	preparedSessionIDs, err := s.queries.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
+	}
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		runtimeBlockers, release, err := runtimeBlocker(ctx, preparedSessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(runtimeBlockers) > 0 {
+			return runtimeBlockers, nil
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin workspace unlink tx: %w", err)
@@ -873,29 +913,19 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
 		return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
 	}
-	releaseRuntimeBlocker := func() {}
-	if runtimeBlocker != nil {
-		sessionIDs, err := q.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
-		if err != nil {
-			return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
-		}
-		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
-		if release != nil {
-			releaseRuntimeBlocker = release
-			defer releaseRuntimeBlocker()
-		}
-		if err != nil {
-			return nil, err
-		}
-		preflightBlockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), runtimeBlockers...)
+	commitSessionIDs, err := q.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list workspace sessions for commit: %w", err)
 	}
 	blockers, err = workspaceUnlinkBlockersWithQueries(ctx, q, trimmedProjectID, workspace)
 	if err != nil {
 		return nil, err
 	}
-	blockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), blockers...)
 	if len(blockers) > 0 {
 		return blockers, nil
+	}
+	if !newSessionIDSet(preparedSessionIDs).Equal(newSessionIDSet(commitSessionIDs)) {
+		return nil, ErrWorkspaceUnlinkPreparationInvalidated
 	}
 	rows, err := q.DeleteWorkspaceBindingByID(ctx, sqlitegen.DeleteWorkspaceBindingByIDParams{ProjectID: trimmedProjectID, WorkspaceID: trimmedWorkspaceID})
 	if err != nil {
@@ -964,8 +994,55 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 }
 
 func (s *Store) RebindWorkspace(ctx context.Context, oldWorkspaceRoot string, newWorkspaceRoot string) (Binding, error) {
+	prepared, err := s.PrepareWorkspaceRebind(ctx, oldWorkspaceRoot)
+	if err != nil {
+		return Binding{}, err
+	}
+	return s.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		oldWorkspaceRoot,
+		newWorkspaceRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
+}
+
+func (s *Store) PrepareWorkspaceRebind(ctx context.Context, oldWorkspaceRoot string) (Binding, error) {
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
+	}
+	oldCanonicalRoot, err := canonicalFilesystemPath(oldWorkspaceRoot)
+	if err != nil {
+		return Binding{}, err
+	}
+	rows, err := s.queries.ListWorkspaceBindingsByCanonicalRoot(ctx, oldCanonicalRoot)
+	if err != nil {
+		return Binding{}, err
+	}
+	binding, err := bindingFromCanonicalRootRows(oldCanonicalRoot, rows)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Binding{}, serverapi.ErrWorkspaceNotRegistered
+	}
+	return binding, err
+}
+
+func (s *Store) RebindWorkspaceWithExpectedBinding(
+	ctx context.Context,
+	oldWorkspaceRoot string,
+	newWorkspaceRoot string,
+	expectedProjectID string,
+	expectedWorkspaceID string,
+) (Binding, error) {
+	if s == nil || s.queries == nil {
+		return Binding{}, errors.New("metadata store is required")
+	}
+	trimmedExpectedProjectID := strings.TrimSpace(expectedProjectID)
+	trimmedExpectedWorkspaceID := strings.TrimSpace(expectedWorkspaceID)
+	if trimmedExpectedProjectID == "" {
+		return Binding{}, errors.New("expected project id is required")
+	}
+	if trimmedExpectedWorkspaceID == "" {
+		return Binding{}, errors.New("expected workspace id is required")
 	}
 	oldCanonicalRoot, err := canonicalFilesystemPath(oldWorkspaceRoot)
 	if err != nil {
@@ -992,6 +1069,15 @@ func (s *Store) RebindWorkspace(ctx context.Context, oldWorkspaceRoot string, ne
 			return Binding{}, serverapi.ErrWorkspaceNotRegistered
 		}
 		return Binding{}, fmt.Errorf("get old workspace binding: %w", err)
+	}
+	if oldWorkspace.ProjectID != trimmedExpectedProjectID || oldWorkspace.ID != trimmedExpectedWorkspaceID {
+		return Binding{}, fmt.Errorf(
+			"workspace rebind preparation was invalidated: expected_project_id=%q expected_workspace_id=%q current_project_id=%q current_workspace_id=%q",
+			trimmedExpectedProjectID,
+			trimmedExpectedWorkspaceID,
+			oldWorkspace.ProjectID,
+			oldWorkspace.ID,
+		)
 	}
 	if newCanonicalRoot == oldWorkspace.CanonicalRootPath {
 		if err := tx.Commit(); err != nil {
