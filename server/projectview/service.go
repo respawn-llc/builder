@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
+	"core/server/requestmemo"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -24,7 +24,8 @@ import (
 type Service struct {
 	metadata          *metadata.Store
 	projectID         string
-	authority         *sessionruntime.Authority
+	runtimeGuard      runtimeSessionGuard
+	projectMutations  *requestmemo.MutationLaneRegistry[string]
 	mutationPermit    *workflowexecution.MutationPermit
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
@@ -32,22 +33,64 @@ type Service struct {
 	workflowStore *workflowstore.Store
 }
 
+// runtimeSessionGuard is an internal composition collaborator. Production
+// composition always installs the authority adapter via WithRuntimeAuthority.
+type runtimeSessionGuard interface {
+	CountBlockingRuntimeActivity(context.Context, []string) (int, error)
+	BlockSessionStarts(context.Context, []string) (func(), error)
+}
+
+type authorityRuntimeSessionGuard struct {
+	authority *sessionruntime.Authority
+}
+
+func (g authorityRuntimeSessionGuard) CountBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
+	if g.authority == nil {
+		return 0, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		active, err := g.authority.HasBlockingRuntimeActivity(ctx, id.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
+	if g.authority == nil {
+		return func() {}, nil
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := g.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
+}
+
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
 // resolves outside its project sessions root. Callers and tests match this with
 // errors.Is rather than comparing rendered message text.
 var ErrSessionArtifactEscapesRoot = errors.New("session artifact path escapes project sessions root")
-
-var projectDeleteLocks = keyedProjectDeleteLocks{locks: map[string]*projectDeleteLock{}}
-
-type keyedProjectDeleteLocks struct {
-	mu    sync.Mutex
-	locks map[string]*projectDeleteLock
-}
-
-type projectDeleteLock struct {
-	mu   sync.Mutex
-	refs int
-}
 
 const (
 	defaultProjectHomePageSize = 50
@@ -60,14 +103,22 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 	if metadataStore == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	return &Service{metadata: metadataStore, projectID: strings.TrimSpace(projectID)}, nil
+	return &Service{
+		metadata:         metadataStore,
+		projectID:        strings.TrimSpace(projectID),
+		projectMutations: requestmemo.NewMutationLaneRegistry[string](),
+	}, nil
 }
 
 func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
 	if s == nil {
 		return nil
 	}
-	s.authority = authority
+	if authority == nil {
+		s.runtimeGuard = nil
+	} else {
+		s.runtimeGuard = authorityRuntimeSessionGuard{authority: authority}
+	}
 	return s
 }
 
@@ -262,6 +313,11 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectUpdateResponse{}, err
+	}
+	defer lease.Release()
 	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
@@ -314,6 +370,11 @@ func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.Project
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
 	}
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+	}
+	defer lease.Release()
 	if err := s.metadata.SetProjectDefaultWorkspace(ctx, req.ProjectID, req.WorkspaceID); err != nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
 	}
@@ -334,41 +395,28 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
-	sessionIDs, err := s.metadata.ListWorkspaceSessionIDs(ctx, req.WorkspaceID)
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
-	preflightBlockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if len(preflightBlockers) == 0 {
+	defer lease.Release()
+	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+		blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil || len(blockers) > 0 {
+			return blockers, nil, err
+		}
 		release, err := s.blockSessionStarts(ctx, sessionIDs)
 		if err != nil {
-			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+			return nil, nil, err
 		}
-		defer release()
-		preflightBlockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+		blockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
-			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+			release()
+			return nil, nil, err
 		}
+		return blockers, release, nil
 	}
-	var runtimeBlocker metadata.WorkspaceUnlinkRuntimeBlocker
-	if len(preflightBlockers) == 0 {
-		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
-			release, err := s.blockSessionStarts(ctx, sessionIDs)
-			if err != nil {
-				return nil, nil, err
-			}
-			blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-			if err != nil {
-				release()
-				return nil, nil, err
-			}
-			return blockers, release, nil
-		}
-	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, preflightBlockers, runtimeBlocker)
+	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, nil, runtimeBlocker)
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
@@ -402,18 +450,25 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	unlock := lockProjectDelete(projectID)
-	defer unlock()
+	lease, err := s.acquireProjectMutationLease(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	defer lease.Release()
 	if s.mutationPermit == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
 	}
 
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil || len(blockers) > 0 {
+			return blockers, nil, err
+		}
 		release, err := s.blockSessionStarts(ctx, sessionIDs)
 		if err != nil {
 			return nil, nil, err
 		}
-		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
+		blockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
 			release()
 			return nil, nil, err
@@ -443,7 +498,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		})
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
-	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		var runErr error
 		blockers, runErr = deleteProject(ctx)
 		return runErr
@@ -458,22 +513,10 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return func() {}, nil
 	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil || len(ids) == 0 {
-		return func() {}, err
-	}
-	release, err := s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
-		}
-	}, nil
+	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -501,51 +544,10 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return 0, nil
 	}
-	if err := context.Cause(ctx); err != nil {
-		return 0, err
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, sessionID := range ids {
-		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID.String())
-		if err != nil {
-			return 0, err
-		}
-		if active {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func lockProjectDelete(projectID string) func() {
-	// Artifact paths are persisted under projects/<projectID>/sessions and are DB-unique.
-	// A per-project lock serializes retries for the same tree without blocking disjoint projects.
-	projectDeleteLocks.mu.Lock()
-	lock := projectDeleteLocks.locks[projectID]
-	if lock == nil {
-		lock = &projectDeleteLock{}
-		projectDeleteLocks.locks[projectID] = lock
-	}
-	lock.refs++
-	projectDeleteLocks.mu.Unlock()
-
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
-		projectDeleteLocks.mu.Lock()
-		lock.refs--
-		if lock.refs == 0 {
-			delete(projectDeleteLocks.locks, projectID)
-		}
-		projectDeleteLocks.mu.Unlock()
-	}
+	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
 }
 
 type projectSessionDeleteArtifacts struct {
@@ -850,6 +852,11 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
 	}
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	defer lease.Release()
 	binding, err := s.metadata.AttachWorkspaceToProject(ctx, req.ProjectID, req.WorkspaceRoot)
 	if err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
@@ -864,7 +871,25 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 	if s == nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
 	}
-	binding, err := s.metadata.RebindWorkspace(ctx, req.OldWorkspaceRoot, req.NewWorkspaceRoot)
+	prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	if err := s.requireProjectID(prepared.ProjectID); err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	lease, err := s.acquireProjectMutationLease(ctx, prepared.ProjectID)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	defer lease.Release()
+	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		req.OldWorkspaceRoot,
+		req.NewWorkspaceRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
 	if err != nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, err
 	}
@@ -903,6 +928,17 @@ func (s *Service) requireProjectID(projectID string) error {
 		return fmt.Errorf("project %q not available", strings.TrimSpace(projectID))
 	}
 	return nil
+}
+
+func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*requestmemo.MutationLaneLease[string], error) {
+	if s == nil || s.projectMutations == nil {
+		return nil, errors.New("project mutation lanes are required")
+	}
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return nil, errors.New("project mutation requires a project id")
+	}
+	return s.projectMutations.Acquire(ctx, trimmedProjectID)
 }
 
 func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {

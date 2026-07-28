@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"core/shared/serverapi"
 )
 
 func TestDeleteProjectValidatesEveryArtifactBeforeStaging(t *testing.T) {
@@ -32,6 +35,144 @@ func TestDeleteProjectValidatesEveryArtifactBeforeStaging(t *testing.T) {
 		t.Fatalf("session ids after rejected delete = %v, want both artifacts retained", sessionIDs)
 	}
 	assertProjectExists(t, ctx, store, binding.ProjectID)
+}
+
+func TestDeleteProjectAuthoritativeCurrentNodeBlockerWinsPreparationInvalidation(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	artifacts := &projectDeleteArtifactsFake{}
+
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID: binding.ProjectID,
+		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+			createTestSession(t, ctx, store, binding, cfg)
+			createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			startTask(t, ctx, store, task.ID)
+			return nil, func() {}, nil
+		},
+		Artifacts: artifacts,
+	})
+
+	if err != nil {
+		t.Fatalf("DeleteProject error = %v, want Current Node blocker", err)
+	}
+	if errors.Is(err, ErrProjectDeletePreparationInvalidated) {
+		t.Fatalf("DeleteProject error = %v, authoritative blocker must win preparation invalidation", err)
+	}
+	if len(blockers) != 1 || blockers[0].Code != "non_terminal_tasks" {
+		t.Fatalf("DeleteProject blockers = %+v, want Current Node non-terminal task blocker", blockers)
+	}
+	if artifacts.stageCalls != 1 || artifacts.restoreCalls != 1 || artifacts.staged {
+		t.Fatalf("artifact lifecycle after authoritative blocker = %+v, want stage then restore", artifacts)
+	}
+	assertProjectExists(t, ctx, store, binding.ProjectID)
+}
+
+func TestDeleteProjectRecoversStagedArtifactsBeforeReturningPreflightBlocker(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	artifacts := &projectDeleteArtifactsFake{staged: true}
+
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID: binding.ProjectID,
+		Artifacts: artifacts,
+	})
+
+	if err != nil {
+		t.Fatalf("DeleteProject error = %v, want Current Node blocker", err)
+	}
+	if len(blockers) != 1 || blockers[0].Code != "non_terminal_tasks" {
+		t.Fatalf("DeleteProject blockers = %+v, want Current Node non-terminal task blocker", blockers)
+	}
+	if artifacts.presentRecoveryCalls != 1 || artifacts.staged {
+		t.Fatalf("artifact lifecycle after preflight blocker = %+v, want staged artifacts restored", artifacts)
+	}
+	if artifacts.stageCalls != 0 {
+		t.Fatalf("artifact stage calls = %d, want no new staging for blocked delete", artifacts.stageCalls)
+	}
+}
+
+func TestDeleteProjectRestoresStagedArtifactsWhenPreparedSessionSetChanges(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	artifacts := &projectDeleteArtifactsFake{}
+
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID: binding.ProjectID,
+		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+			createTestSession(t, ctx, store, binding, cfg)
+			return nil, func() {}, nil
+		},
+		Artifacts: artifacts,
+	})
+
+	if !errors.Is(err, ErrProjectDeletePreparationInvalidated) {
+		t.Fatalf("DeleteProject error = %v, want %v", err, ErrProjectDeletePreparationInvalidated)
+	}
+	if artifacts.stageCalls != 1 || artifacts.restoreCalls != 1 || artifacts.staged {
+		t.Fatalf("artifact lifecycle after session-set invalidation = %+v, want stage then restore", artifacts)
+	}
+	assertProjectExists(t, ctx, store, binding.ProjectID)
+}
+
+func TestDeleteProjectRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	artifacts := &projectDeleteArtifactsFake{}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+			ProjectID: binding.ProjectID,
+			RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+				close(started)
+				<-release
+				return nil, func() {}, nil
+			},
+			Artifacts: artifacts,
+		})
+		deleted <- err
+	}()
+	<-started
+
+	assertUnrelatedMetadataWriteCompletes(t, store)
+	close(release)
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+}
+
+func TestDeleteProjectArtifactPreparationAndStagingDoNotHoldWriteTransaction(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	recoverStarted := make(chan struct{})
+	releaseRecover := make(chan struct{})
+	stageStarted := make(chan struct{})
+	releaseStage := make(chan struct{})
+	artifacts := &projectDeleteArtifactsFake{
+		recoverStarted: recoverStarted,
+		releaseRecover: releaseRecover,
+		stageStarted:   stageStarted,
+		releaseStage:   releaseStage,
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+			ProjectID: binding.ProjectID,
+			Artifacts: artifacts,
+		})
+		deleted <- err
+	}()
+	<-recoverStarted
+
+	assertUnrelatedMetadataWriteCompletes(t, store)
+	close(releaseRecover)
+	<-stageStarted
+	assertUnrelatedMetadataWriteCompletes(t, store)
+	close(releaseStage)
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
 }
 
 func TestDeleteProjectRestoresStagedArtifactsWhenDatabaseDeletionFails(t *testing.T) {
@@ -161,19 +302,35 @@ func (projectDeleteArtifactsNoop) Finalize() error {
 }
 
 type projectDeleteArtifactsFake struct {
-	validateErrAt       int
-	validateErr         error
-	restoreErr          error
-	finalizeErr         error
-	validateCalls       int
-	stageCalls          int
-	restoreCalls        int
-	finalizeCalls       int
-	absentRecoveryCalls int
-	staged              bool
+	validateErrAt        int
+	validateErr          error
+	restoreErr           error
+	finalizeErr          error
+	validateCalls        int
+	stageCalls           int
+	restoreCalls         int
+	finalizeCalls        int
+	presentRecoveryCalls int
+	absentRecoveryCalls  int
+	staged               bool
+	recoverStarted       chan struct{}
+	releaseRecover       <-chan struct{}
+	stageStarted         chan struct{}
+	releaseStage         <-chan struct{}
 }
 
 func (a *projectDeleteArtifactsFake) Recover(state ProjectDeleteArtifactRecovery) (bool, error) {
+	if state == ProjectDeleteArtifactRecoveryProjectPresent {
+		a.presentRecoveryCalls++
+		if a.recoverStarted != nil {
+			close(a.recoverStarted)
+			<-a.releaseRecover
+		}
+		if a.staged {
+			a.staged = false
+			return true, nil
+		}
+	}
 	if state == ProjectDeleteArtifactRecoveryProjectAbsent {
 		a.absentRecoveryCalls++
 		if a.staged {
@@ -194,6 +351,10 @@ func (a *projectDeleteArtifactsFake) Validate(ProjectSessionArtifact) error {
 
 func (a *projectDeleteArtifactsFake) Stage() error {
 	a.stageCalls++
+	if a.stageStarted != nil {
+		close(a.stageStarted)
+		<-a.releaseStage
+	}
 	a.staged = true
 	return nil
 }
@@ -235,5 +396,23 @@ func assertProjectAbsent(t *testing.T, ctx context.Context, store *Store, projec
 	}
 	if count != 0 {
 		t.Fatalf("project count = %d, want 0", count)
+	}
+}
+
+func assertUnrelatedMetadataWriteCompletes(t *testing.T, store *Store) {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.metadata.RegisterWorkspaceBinding(context.Background(), workspaceRoot)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unrelated metadata write: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("unrelated metadata write remained blocked during project deletion preparation")
 	}
 }

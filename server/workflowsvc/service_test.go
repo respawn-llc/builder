@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"core/server/worktree"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -1751,6 +1753,327 @@ func TestServiceWorkflowGraphSaveAllowsEmptyPromptButTaskStartRejects(t *testing
 	}
 }
 
+func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScript(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	source, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow source: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(source.Definition)
+	scriptID := "node-script-" + workflowID
+	scriptTransitionID := "group-agent-script-" + workflowID
+	scriptDoneTransitionID := "group-script-done-" + workflowID
+	doneID := workflowServiceNodeIDByKind(t, source.Definition, "terminal")
+	agentID := workflowServiceNodeIDByKey(t, source.Definition, "agent")
+	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+		ID:          scriptID,
+		Key:         "script",
+		Kind:        "script",
+		DisplayName: "Script",
+	})
+	graph.TransitionGroups = append(graph.TransitionGroups,
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptTransitionID, SourceNodeID: agentID, TransitionID: "script", DisplayName: "Script"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptDoneTransitionID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"},
+	)
+	graph.Edges = append(graph.Edges,
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID, TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-script-done-" + workflowID, TransitionGroupID: scriptDoneTransitionID, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"},
+	)
+	savedScript, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph script fixture: %v", err)
+	}
+	if !savedScript.Saved || savedScript.Definition == nil {
+		t.Fatalf("script fixture save = %+v, want saved definition", savedScript)
+	}
+	agent := workflowServiceNodeByID(t, *savedScript.Definition, agentID)
+	if _, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
+		WorkflowID:     workflowID,
+		NodeID:         agent.ID,
+		Key:            agent.Key,
+		Kind:           agent.Kind,
+		DisplayName:    agent.DisplayName,
+		SubagentRole:   "unavailable-assignee",
+		PromptTemplate: agent.PromptTemplate,
+	}); err != nil {
+		t.Fatalf("UpdateWorkflowNode unavailable assignee: %v", err)
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow invalid current: %v", err)
+	}
+	invalidGraph := workflowGraphDraftFromDefinition(current.Definition)
+
+	savedDraft, err := service.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{WorkflowID: workflowID, Mode: serverapi.WorkflowValidationModeDraft})
+	if err != nil {
+		t.Fatalf("ValidateWorkflow saved draft: %v", err)
+	}
+	savedExecution, err := service.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{WorkflowID: workflowID, Mode: serverapi.WorkflowValidationModeExecution})
+	if err != nil {
+		t.Fatalf("ValidateWorkflow saved execution: %v", err)
+	}
+	draft, err := service.ValidateWorkflowGraphDraft(ctx, serverapi.WorkflowGraphValidateDraftRequest{
+		WorkflowID: workflowID,
+		Graph:      invalidGraph,
+		Modes:      []serverapi.WorkflowValidationMode{serverapi.WorkflowValidationModeDraft, serverapi.WorkflowValidationModeExecution},
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowGraphDraft: %v", err)
+	}
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           invalidGraph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           invalidGraph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph no-op invalid definition: %v", err)
+	}
+	if !saved.Saved || saved.CurrentVersion != current.Definition.Workflow.Version {
+		t.Fatalf("invalid-definition no-op save = %+v, want stable saved response", saved)
+	}
+
+	for mode, expected := range map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{
+		serverapi.WorkflowValidationModeDraft:     savedDraft,
+		serverapi.WorkflowValidationModeExecution: savedExecution,
+	} {
+		if !reflect.DeepEqual(draft.Results[mode], expected) ||
+			!reflect.DeepEqual(preview.ValidationResults[mode], expected) ||
+			!reflect.DeepEqual(saved.ValidationResults[mode], expected) {
+			t.Fatalf("%s validation parity: draft=%+v preview=%+v save=%+v saved=%+v", mode, draft.Results[mode], preview.ValidationResults[mode], saved.ValidationResults[mode], expected)
+		}
+	}
+	if !workflowValidationHasCode(savedDraft.Errors, string(workflow.CodeAgentRoleMissing)) ||
+		workflowValidationHasCode(savedDraft.Errors, workflowscript.CodeMissingPath) ||
+		!workflowValidationHasCode(savedExecution.Errors, string(workflow.CodeAgentRoleMissing)) ||
+		!workflowValidationHasCode(savedExecution.Errors, workflowscript.CodeMissingPath) {
+		t.Fatalf("saved validation = draft=%+v execution=%+v, want unavailable assignee in both and missing script path only in execution", savedDraft, savedExecution)
+	}
+}
+
+func TestWorkflowGraphStoreSaveSerializesSameWorkflowWithoutBlockingDifferentWorkflow(t *testing.T) {
+	resolver := &blockingWorkflowGraphRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
+	service, _, _ := newWorkflowServiceTestServiceWithRoleResolver(t, resolver)
+	ctx := context.Background()
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	otherWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	other, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: otherWorkflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow other: %v", err)
+	}
+	resolver.Arm()
+	firstRequest := serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "First"),
+	}
+	type saveResult struct {
+		result workflowstore.WorkflowGraphSaveResult
+		err    error
+	}
+	firstDone := make(chan saveResult, 1)
+	go func() {
+		result, err := service.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(
+			firstRequest.WorkflowID,
+			firstRequest.ExpectedVersion,
+			firstRequest.Metadata,
+			firstRequest.Graph,
+			firstRequest.Confirmation,
+		))
+		firstDone <- saveResult{result: result, err: err}
+	}()
+	<-resolver.started
+
+	sameDone := make(chan saveResult, 1)
+	go func() {
+		request := serverapi.WorkflowGraphSaveRequest{
+			WorkflowID:      workflowID,
+			ExpectedVersion: current.Definition.Workflow.Version,
+			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "Second"),
+		}
+		result, err := service.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(
+			request.WorkflowID,
+			request.ExpectedVersion,
+			request.Metadata,
+			request.Graph,
+			request.Confirmation,
+		))
+		sameDone <- saveResult{result: result, err: err}
+	}()
+	differentDone := make(chan saveResult, 1)
+	go func() {
+		request := serverapi.WorkflowGraphSaveRequest{
+			WorkflowID:      otherWorkflowID,
+			ExpectedVersion: other.Definition.Workflow.Version,
+			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(other.Definition), "node-agent-"+otherWorkflowID, "Independent"),
+		}
+		result, err := service.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(
+			request.WorkflowID,
+			request.ExpectedVersion,
+			request.Metadata,
+			request.Graph,
+			request.Confirmation,
+		))
+		differentDone <- saveResult{result: result, err: err}
+	}()
+	different := <-differentDone
+	if different.err != nil || !different.result.Saved {
+		t.Fatalf("different workflow save = result=%+v error=%v, want independent completion", different.result, different.err)
+	}
+	select {
+	case outcome := <-sameDone:
+		t.Fatalf("same-workflow save completed while first was preparing: %+v", outcome)
+	default:
+	}
+	close(resolver.release)
+	first := <-firstDone
+	if first.err != nil || !first.result.Saved {
+		t.Fatalf("first workflow save = result=%+v error=%v", first.result, first.err)
+	}
+	second := <-sameDone
+	versionChanged := false
+	for _, blocker := range second.result.Blockers {
+		versionChanged = versionChanged || blocker.Code == "version_changed"
+	}
+	if second.err != nil || second.result.Saved || !versionChanged {
+		t.Fatalf("serialized same-workflow save = result=%+v error=%v, want stale version after first commit", second.result, second.err)
+	}
+}
+
+func TestServiceWorkflowGraphSaveReturnsExactCommittedResponseWhenNextSaveWinsRace(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	publisher := &blockingWorkflowGraphEventPublisher{started: make(chan struct{}), release: make(chan struct{})}
+	service.store.SetWorkflowEventPublisher(publisher)
+	firstGraph := renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "First response")
+	type saveResult struct {
+		response serverapi.WorkflowGraphSaveResponse
+		err      error
+	}
+	firstDone := make(chan saveResult, 1)
+	go func() {
+		response, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+			WorkflowID:      workflowID,
+			ExpectedVersion: current.Definition.Workflow.Version,
+			Graph:           firstGraph,
+		})
+		firstDone <- saveResult{response: response, err: err}
+	}()
+	<-publisher.started
+
+	secondGraph := renameWorkflowGraphDraftNode(firstGraph, "node-agent-"+workflowID, "Second response")
+	second, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version + 1,
+		Graph:           secondGraph,
+	})
+	if err != nil {
+		t.Fatalf("second SaveWorkflowGraph: %v", err)
+	}
+	if !second.Saved || second.Definition == nil || second.CurrentVersion != current.Definition.Workflow.Version+2 ||
+		workflowServiceNodeByID(t, *second.Definition, "node-agent-"+workflowID).DisplayName != "Second response" {
+		t.Fatalf("second save = %+v, want exact second committed definition", second)
+	}
+	close(publisher.release)
+	first := <-firstDone
+	if first.err != nil || !first.response.Saved || first.response.Definition == nil ||
+		first.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
+		workflowServiceNodeByID(t, *first.response.Definition, "node-agent-"+workflowID).DisplayName != "First response" {
+		t.Fatalf("first delayed response = %+v error=%v, want exact first committed definition", first.response, first.err)
+	}
+}
+
+type blockingWorkflowGraphRoleResolver struct {
+	started     chan struct{}
+	release     chan struct{}
+	mu          sync.Mutex
+	armed       bool
+	startedOnce bool
+}
+
+func (r *blockingWorkflowGraphRoleResolver) Arm() {
+	r.mu.Lock()
+	r.armed = true
+	r.mu.Unlock()
+}
+
+func (r *blockingWorkflowGraphRoleResolver) RoleExists(string) bool {
+	r.mu.Lock()
+	shouldBlock := r.armed && !r.startedOnce
+	if shouldBlock {
+		r.startedOnce = true
+	}
+	r.mu.Unlock()
+	if shouldBlock {
+		close(r.started)
+		<-r.release
+	}
+	return true
+}
+
+func (r *blockingWorkflowGraphRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
+	return true
+}
+
+type blockingWorkflowGraphEventPublisher struct {
+	started     chan struct{}
+	release     chan struct{}
+	mu          sync.Mutex
+	startedOnce bool
+}
+
+func (p *blockingWorkflowGraphEventPublisher) PublishWorkflowEvent(context.Context, workflowstore.WorkflowEventRecord) error {
+	p.mu.Lock()
+	shouldBlock := !p.startedOnce
+	if shouldBlock {
+		p.startedOnce = true
+	}
+	p.mu.Unlock()
+	if shouldBlock {
+		close(p.started)
+		<-p.release
+	}
+	return nil
+}
+
+func workflowValidationHasCode(errors []serverapi.WorkflowValidationError, code string) bool {
+	for _, validationErr := range errors {
+		if validationErr.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowGraphSaveResponseHasBlocker(response serverapi.WorkflowGraphSaveResponse, code string) bool {
+	for _, blocker := range response.Blockers {
+		if blocker.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func newWorkflowServiceTestService(t *testing.T) (*Service, metadata.Binding) {
 	t.Helper()
 	service, binding, _ := newWorkflowServiceTestServiceWithMetadata(t)
@@ -1802,6 +2125,10 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 }
 
 func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata.Binding, *metadata.Store) {
+	return newWorkflowServiceTestServiceWithRoleResolver(t, testsetup.QuestionsEnabled("coder"))
+}
+
+func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workflow.RoleResolver) (*Service, metadata.Binding, *metadata.Store) {
 	t.Helper()
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
@@ -1819,7 +2146,6 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "WOR"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	resolver := testsetup.QuestionsEnabled("coder")
 	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(resolver))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)

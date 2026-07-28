@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,6 +203,69 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
 	}
+}
+
+func TestServiceDeleteProjectRuntimeGuardChecksBeforeAndAfterBlockingSessionStarts(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "guarded-delete")
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 1}}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.runtimeGuard = guard
+	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("delete response = %+v, want post-block active_sessions blocker", deleted)
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
+}
+
+func TestProjectMutationsSerializeOnlyEqualProjectIDs(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, first := newProjectViewMetadataStore(t)
+	second, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding second project: %v", err)
+	}
+	created := createProjectViewSession(t, store, cfg, first.ProjectID, cfg.WorkspaceRoot, "serialized")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 0}, blockStarted: started, releaseBlock: release}
+	svc := newProjectViewMetadataService(t, store, "")
+	svc.runtimeGuard = guard
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: first.ProjectID})
+		deleteDone <- err
+	}()
+	<-started
+	sameDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: first.ProjectID, DisplayName: "same"})
+		sameDone <- err
+	}()
+	otherDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: second.ProjectID, DisplayName: "other"})
+		otherDone <- err
+	}()
+	if err := <-otherDone; err != nil {
+		t.Fatalf("unrelated project update: %v", err)
+	}
+	select {
+	case err := <-sameDone:
+		t.Fatalf("same-project update completed while delete was paused: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if err := <-sameDone; err == nil {
+		t.Fatal("same-project update succeeded after project deletion")
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
 }
 
 func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
@@ -576,6 +641,23 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	}
 }
 
+func TestMetadataServiceUnlinkWorkspaceRuntimeGuardChecksBeforeAndAfterBlockingSessionStarts(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "guarded-unlink")
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 1}}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.runtimeGuard = guard
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{ProjectID: binding.ProjectID, WorkspaceID: attached.WorkspaceID})
+	if err != nil {
+		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
+	}
+	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("unlink response = %+v, want post-block active_sessions blocker", unlinked)
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
+}
+
 func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	attachProjectViewWorkspace(t, store, binding.ProjectID)
@@ -861,6 +943,43 @@ type projectViewTestLLMClient struct{}
 
 func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
+}
+
+type projectViewRuntimeGuard struct {
+	activityCounts []int
+	calls          []string
+	released       bool
+	blockStarted   chan struct{}
+	releaseBlock   <-chan struct{}
+}
+
+func (g *projectViewRuntimeGuard) CountBlockingRuntimeActivity(_ context.Context, sessionIDs []string) (int, error) {
+	g.calls = append(g.calls, "check:"+strings.Join(sessionIDs, ","))
+	if len(g.activityCounts) == 0 {
+		return 0, errors.New("unexpected runtime activity check")
+	}
+	count := g.activityCounts[0]
+	g.activityCounts = g.activityCounts[1:]
+	return count, nil
+}
+
+func (g *projectViewRuntimeGuard) BlockSessionStarts(_ context.Context, sessionIDs []string) (func(), error) {
+	g.calls = append(g.calls, "block:"+strings.Join(sessionIDs, ","))
+	if g.blockStarted != nil {
+		close(g.blockStarted)
+	}
+	if g.releaseBlock != nil {
+		<-g.releaseBlock
+	}
+	return func() { g.released = true }, nil
+}
+
+func (g *projectViewRuntimeGuard) assertCalls(t testing.TB, sessionID string) {
+	t.Helper()
+	want := []string{"check:" + sessionID, "block:" + sessionID, "check:" + sessionID}
+	if !slices.Equal(g.calls, want) || !g.released || len(g.activityCounts) != 0 {
+		t.Fatalf("runtime guard state = calls=%v released=%t remaining=%v", g.calls, g.released, g.activityCounts)
+	}
 }
 
 func newProjectViewActiveRuntimeAuthority(t testing.TB, store *metadata.Store, cfg config.App, sessionStore *session.Store) *sessionruntime.Authority {

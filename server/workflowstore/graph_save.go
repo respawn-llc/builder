@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
+	"core/server/workflowscript"
 )
 
 type WorkflowGraphSaveRequest struct {
@@ -60,28 +61,51 @@ type WorkflowGraphSaveResult struct {
 	EditPolicyImpact     WorkflowGraphEditPolicyImpact
 	Blockers             []WorkflowGraphSaveBlocker
 	ValidationErrors     []workflow.ValidationError
+	Definition           workflow.Definition
+	Record               WorkflowRecord
+	ValidationResults    map[workflow.ValidationContext]workflow.ValidationResult
 }
 
 type WorkflowGraphSavePlan struct {
-	WorkflowID       workflow.WorkflowID
-	Version          int64
-	Prepared         preparedWorkflowGraphSave
-	Metadata         *WorkflowGraphSaveMetadata
-	GraphChanged     bool
-	MetadataChanged  bool
-	Removed          removedWorkflowGraphRows
-	Impact           WorkflowGraphSaveImpact
-	EditPolicy       WorkflowGraphEditPolicyResult
-	Blockers         []WorkflowGraphSaveBlocker
-	ValidationErrors []workflow.ValidationError
+	WorkflowID        workflow.WorkflowID
+	Version           int64
+	Prepared          preparedWorkflowGraphSave
+	Metadata          *WorkflowGraphSaveMetadata
+	GraphChanged      bool
+	MetadataChanged   bool
+	Structural        workflowGraphSaveStructuralDescriptor
+	Removed           removedWorkflowGraphRows
+	Impact            WorkflowGraphSaveImpact
+	EditPolicy        WorkflowGraphEditPolicyResult
+	Blockers          []WorkflowGraphSaveBlocker
+	ValidationErrors  []workflow.ValidationError
+	Definition        workflow.Definition
+	Record            WorkflowRecord
+	ValidationResults map[workflow.ValidationContext]workflow.ValidationResult
 }
 
 func (s *Store) PreviewWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
-	plan, err := s.planWorkflowGraphSave(ctx, s.queries, req)
+	plan, err := s.prepareWorkflowGraphSave(ctx, req)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
 	return plan.workflowGraphSaveResult(false), nil
+}
+
+func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return WorkflowGraphSavePlan{}, fmt.Errorf("begin workflow graph save preparation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	plan, err := s.planWorkflowGraphSave(ctx, s.queries.WithTx(tx), req)
+	if err != nil {
+		return WorkflowGraphSavePlan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkflowGraphSavePlan{}, fmt.Errorf("commit workflow graph save preparation: %w", err)
+	}
+	return plan, nil
 }
 
 func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
@@ -121,6 +145,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		return WorkflowGraphSavePlan{}, err
 	}
 	graphChanged := !workflowGraphSavePreparedEqual(currentGraph, prepared)
+	structural := describeWorkflowGraphSave(currentGraph, prepared)
 	plan := WorkflowGraphSavePlan{
 		WorkflowID:      workflowID,
 		Version:         current.Version,
@@ -128,39 +153,73 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		Metadata:        metadata,
 		GraphChanged:    graphChanged,
 		MetadataChanged: metadataChanged,
+		Structural:      structural,
+		Definition:      def,
 	}
-	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: s.roleResolver})
+	_, record, err := workflowDefinitionFromQueries(ctx, q, workflowID)
+	if err != nil {
+		return WorkflowGraphSavePlan{}, err
+	}
+	plan.Record = record
+	var evaluation workflowGraphSaveDynamicImpact
+	if (graphChanged || metadataChanged) && current.Version == req.ExpectedVersion {
+		evaluation, err = evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, structural)
+		if err != nil {
+			return WorkflowGraphSavePlan{}, err
+		}
+		plan.Removed = structural.Removed
+		plan.Impact = evaluation.Impact
+		plan.EditPolicy = evaluation.EditPolicy
+	}
+	plan.ValidationResults = workflowscript.EvaluateDefinition(def, []workflow.ValidationContext{
+		workflow.ValidationContextDraft,
+		workflow.ValidationContextExecution,
+	}, s.roleResolver, nil)
+	validation := plan.ValidationResults[workflow.ValidationContextDraft]
 	plan.ValidationErrors = validation.Errors
 	if !graphChanged && !metadataChanged {
 		return plan, nil
 	}
 	if current.Version != req.ExpectedVersion {
-		plan.Blockers = []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: current.Version}}
+		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan, nil
 	}
 	blockingValidationErrors := validation.BlockingErrors()
 	plan.ValidationErrors = validation.Errors
-	impact, removed, err := workflowGraphSaveImpact(ctx, q, workflowID, prepared)
-	if err != nil {
-		return WorkflowGraphSavePlan{}, err
-	}
-	editPolicy, err := workflowGraphEditPolicy(ctx, q, workflowID, prepared)
-	if err != nil {
-		return WorkflowGraphSavePlan{}, err
-	}
-	blockers := workflowGraphSaveBlockers(req, impact)
-	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(editPolicy.Blockers)...)
+	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
+	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
 	if len(blockingValidationErrors) > 0 {
 		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "validation_failed", Message: "Workflow graph has blocking validation errors.", Count: int64(len(blockingValidationErrors))})
 	}
-	plan.Removed = removed
-	plan.Impact = impact
-	plan.EditPolicy = editPolicy
 	plan.Blockers = blockers
 	return plan, nil
 }
 
 func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
+	workflowID := workflow.WorkflowID(strings.TrimSpace(string(req.WorkflowID)))
+	if workflowID == "" {
+		return WorkflowGraphSaveResult{}, errors.New("workflow id is required")
+	}
+	if s.graphSaves == nil {
+		return WorkflowGraphSaveResult{}, errors.New("workflow graph save lanes are required")
+	}
+	lease, err := s.graphSaves.Acquire(ctx, workflowID)
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	defer lease.Release()
+
+	plan, err := s.prepareWorkflowGraphSave(ctx, req)
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	if len(plan.Blockers) > 0 {
+		return plan.workflowGraphSaveResult(false), nil
+	}
+	if !plan.GraphChanged && !plan.MetadataChanged {
+		return plan.workflowGraphSaveResult(true), nil
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
@@ -170,13 +229,36 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		return WorkflowGraphSaveResult{}, err
 	}
 	q := s.queries.WithTx(tx)
-	plan, err := s.planWorkflowGraphSave(ctx, q, req)
+	locked, err := q.AcquireWorkflowGraphSaveWriteLock(ctx, string(workflowID))
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
-	if len(plan.Blockers) > 0 {
+	if locked != 1 {
+		return WorkflowGraphSaveResult{}, sql.ErrNoRows
+	}
+	current, err := q.GetWorkflow(ctx, string(workflowID))
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	if current.Version != plan.Version {
+		plan.Version = current.Version
+		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan.workflowGraphSaveResult(false), nil
 	}
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, plan.Structural)
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
+	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
+	if len(blockers) > 0 {
+		plan.Removed = plan.Structural.Removed
+		plan.Impact = evaluation.Impact
+		plan.EditPolicy = evaluation.EditPolicy
+		plan.Blockers = blockers
+		return plan.workflowGraphSaveResult(false), nil
+	}
+
 	version := plan.Version
 	if plan.GraphChanged {
 		if err := applyWorkflowGraphSave(ctx, q, plan.WorkflowID, plan.Prepared, plan.Removed); err != nil {
@@ -231,6 +313,15 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 	}
 	result := plan.workflowGraphSaveResult(true)
 	result.Version = version
+	record := plan.Record
+	record.Version = version
+	if plan.MetadataChanged && plan.Metadata != nil {
+		record.Name = plan.Metadata.Name
+		record.Description = plan.Metadata.Description
+		record.ExecutionTargetPolicy = *plan.Metadata.ExecutionTargetPolicy
+	}
+	result.Record = record
+	result.Definition = plan.Definition
 	return result, nil
 }
 
@@ -245,6 +336,9 @@ func (p WorkflowGraphSavePlan) workflowGraphSaveResult(saved bool) WorkflowGraph
 		EditPolicyImpact:     p.EditPolicy.Impact,
 		Blockers:             p.Blockers,
 		ValidationErrors:     p.ValidationErrors,
+		Definition:           p.Definition,
+		Record:               p.Record,
+		ValidationResults:    p.ValidationResults,
 	}
 }
 
@@ -260,6 +354,14 @@ type removedWorkflowGraphRows struct {
 	nodes            []workflow.NodeID
 	transitionGroups []workflow.TransitionGroupID
 	edges            []workflow.EdgeID
+}
+
+// workflowGraphSaveStructuralDescriptor is derived from one immutable graph
+// snapshot. Dynamic Task and Current Node references are intentionally absent:
+// they are evaluated again immediately before a save commits.
+type workflowGraphSaveStructuralDescriptor struct {
+	Removed    removedWorkflowGraphRows
+	EditPolicy workflowGraphEditPolicyStructuralDescriptor
 }
 
 func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription string, currentPolicy workflow.ExecutionTargetPolicy, metadata *WorkflowGraphSaveMetadata) (*WorkflowGraphSaveMetadata, bool, error) {
@@ -393,77 +495,39 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 	return prepared, def, nil
 }
 
-func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, prepared preparedWorkflowGraphSave) (WorkflowGraphSaveImpact, removedWorkflowGraphRows, error) {
-	currentGroups, err := q.ListWorkflowNodeGroups(ctx, string(workflowID))
-	if err != nil {
-		return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-	}
-	currentNodes, err := q.ListWorkflowNodes(ctx, string(workflowID))
-	if err != nil {
-		return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-	}
-	currentTransitionGroups, err := q.ListWorkflowTransitionGroups(ctx, string(workflowID))
-	if err != nil {
-		return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-	}
-	currentEdges, err := q.ListWorkflowEdges(ctx, string(workflowID))
-	if err != nil {
-		return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-	}
+func describeWorkflowGraphSave(current preparedWorkflowGraphSave, next preparedWorkflowGraphSave) workflowGraphSaveStructuralDescriptor {
 	removed := removedWorkflowGraphRows{}
-	nextGroups := workflowGraphNodeGroupIDs(prepared.nodeGroups)
-	for _, group := range currentGroups {
+	nextGroups := workflowGraphNodeGroupIDs(next.nodeGroups)
+	for _, group := range current.nodeGroups {
 		if !nextGroups[group.ID] {
 			removed.nodeGroups = append(removed.nodeGroups, group.ID)
 		}
 	}
-	nextNodes := workflowGraphNodeIDs(prepared.nodes)
-	for _, node := range currentNodes {
-		id := workflow.NodeID(node.ID)
+	nextNodes := workflowGraphNodeIDs(next.nodes)
+	for _, node := range current.nodes {
+		id := node.ID
 		if !nextNodes[id] {
 			removed.nodes = append(removed.nodes, id)
 		}
 	}
-	nextTransitionGroups := workflowGraphTransitionGroupIDs(prepared.transitionGroups)
-	for _, group := range currentTransitionGroups {
-		id := workflow.TransitionGroupID(group.ID)
+	nextTransitionGroups := workflowGraphTransitionGroupIDs(next.transitionGroups)
+	for _, group := range current.transitionGroups {
+		id := group.ID
 		if !nextTransitionGroups[id] {
 			removed.transitionGroups = append(removed.transitionGroups, id)
 		}
 	}
-	nextEdges := workflowGraphEdgeIDs(prepared.edges)
-	for _, edge := range currentEdges {
-		id := workflow.EdgeID(edge.ID)
+	nextEdges := workflowGraphEdgeIDs(next.edges)
+	for _, edge := range current.edges {
+		id := edge.ID
 		if !nextEdges[id] {
 			removed.edges = append(removed.edges, id)
 		}
 	}
-
-	impact := WorkflowGraphSaveImpact{
-		RemovedNodeCount:            int64(len(removed.nodes)),
-		RemovedTransitionGroupCount: int64(len(removed.transitionGroups)),
-		RemovedEdgeCount:            int64(len(removed.edges)),
+	return workflowGraphSaveStructuralDescriptor{
+		Removed:    removed,
+		EditPolicy: describeWorkflowGraphEditPolicy(current, next),
 	}
-	for _, nodeID := range removed.nodes {
-		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
-		if err != nil {
-			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-		}
-		impact.NodeTaskReferenceCount += count
-		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
-		if err != nil {
-			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-		}
-		impact.CurrentNodeTaskReferenceCount += currentCount
-	}
-	for _, edgeID := range removed.edges {
-		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
-		if err != nil {
-			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
-		}
-		impact.EdgeTaskReferenceCount += count
-	}
-	return impact, removed, nil
 }
 
 func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) []WorkflowGraphSaveBlocker {
@@ -482,6 +546,10 @@ func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGrap
 		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "impact_changed", Message: "Workflow graph save impact changed. Refresh the preview before saving.", Count: 1})
 	}
 	return blockers
+}
+
+func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveBlocker {
+	return []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: version}}
 }
 
 func workflowGraphSaveConfirmationMatches(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) bool {

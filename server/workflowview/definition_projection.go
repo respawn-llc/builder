@@ -72,11 +72,12 @@ func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID string) 
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
-	api, nodeKinds := projectDefinition(domain, record)
+	api, nodeKinds := ProjectDefinition(domain, record)
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 
-func projectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
+// ProjectDefinition is the canonical pure domain-to-API workflow projection.
+func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
 	api := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{
 			ID:                    string(record.ID),

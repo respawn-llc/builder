@@ -731,7 +731,7 @@ func TestTaskCreateCommitsLabelsAtomically(t *testing.T) {
 	}
 }
 
-func TestTaskCreateInvalidLabelsRollBackTaskPlacementAndAssignments(t *testing.T) {
+func TestTaskCreateInvalidLabelsRollBackCurrentNodeAndAssignments(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	own, err := store.CreateProjectLabel(ctx, binding.ProjectID, "own")

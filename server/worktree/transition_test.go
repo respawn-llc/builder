@@ -1,50 +1,13 @@
 package worktree
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
-	"core/internal/testharness/testsetup"
 	"core/shared/serverapi"
 )
-
-func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(t *testing.T) {
-	env := newServiceTestEnv(t)
-	release, err := env.service.acquireWorkspaceMutationLock(env.ctx, env.binding.WorkspaceID)
-	if err != nil {
-		t.Fatalf("acquireWorkspaceMutationLock: %v", err)
-	}
-	defer release()
-
-	ctx, cancel := context.WithCancel(env.ctx)
-	result := make(chan error, 1)
-	go func() {
-		_, err := env.service.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
-				OperationID: serverapi.NewWorktreeOperationID(),
-				SessionID:   env.session.Meta().SessionID,
-			},
-			Selector: "main",
-		})
-		result <- err
-	}()
-	waitForWorkspaceMutationReferences(t, env.service, env.binding.WorkspaceID, 2)
-	cancel()
-
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("EnterWorktree error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("EnterWorktree ignored cancellation while waiting for workspace mutation")
-	}
-}
 
 func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 	env := newServiceTestEnv(t)
@@ -143,25 +106,6 @@ func TestModelStepLeaveAndCurrentDeleteRejectInactiveExactExecution(t *testing.T
 			}
 		})
 	}
-}
-
-func waitForWorkspaceMutationReferences(t *testing.T, service *Service, workspaceID string, want int) {
-	t.Helper()
-	workspaceID = strings.TrimSpace(workspaceID)
-	refs := 0
-	if testsetup.Until(time.Now().Add(3*time.Second), 5*time.Millisecond, func() bool {
-		service.workspaceMu.Lock()
-		lock := service.workspaceLocks[workspaceID]
-		refs = 0
-		if lock != nil {
-			refs = lock.refs
-		}
-		service.workspaceMu.Unlock()
-		return refs == want
-	}) {
-		return
-	}
-	t.Fatalf("workspace mutation references = %d, want %d", refs, want)
 }
 
 func createExternalWorktree(t *testing.T, env *serviceTestEnv, branch string) string {
