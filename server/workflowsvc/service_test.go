@@ -275,6 +275,98 @@ func TestServiceSearchWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	}
 }
 
+func TestServiceSearchWorkflowTasksUsesIndexedSourcesAndReflectsMutations(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	otherBinding, err := metadataStore.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding second Project: %v", err)
+	}
+	if err := metadataStore.SetProjectKey(ctx, otherBinding.ProjectID, "OTH"); err != nil {
+		t.Fatalf("SetProjectKey second Project: %v", err)
+	}
+	linkDefaultWorkflowServiceProject(t, ctx, service, otherBinding.ProjectID, workflowID)
+	first := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "First Task",
+		Body:      "needle body",
+	})
+	createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: otherBinding.ProjectID,
+		Title:     "Other Task",
+		Body:      "needle other Project",
+	})
+	comment, err := service.AddWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentAddRequest{
+		TaskID:   first.Task.ID,
+		Body:     "needle Comment",
+		Author:   "user",
+		AuthorID: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("AddWorkflowTaskComment: %v", err)
+	}
+
+	literalRequest := serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeLiteral,
+		Query:           "needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		ProjectIDs:      []string{binding.ProjectID},
+		StatusKinds:     []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
+		PageSize:        serverapi.TaskSearchDefaultPageSize,
+	}
+	literal, err := service.SearchWorkflowTasks(ctx, literalRequest)
+	if err != nil {
+		t.Fatalf("SearchWorkflowTasks literal: %v", err)
+	}
+	if len(literal.Groups) != 1 ||
+		literal.Groups[0].TaskID != first.Task.ID ||
+		literal.Groups[0].TotalHitCount != 2 ||
+		len(literal.Groups[0].Hits) != 2 ||
+		literal.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody ||
+		literal.Groups[0].Hits[1].Source.Kind != serverapi.TaskSearchSourceKindComment ||
+		literal.Groups[0].Hits[1].Source.CommentID == nil ||
+		*literal.Groups[0].Hits[1].Source.CommentID != comment.Comment.ID {
+		t.Fatalf("literal indexed search response = %+v", literal)
+	}
+
+	raw, err := service.SearchWorkflowTasks(ctx, serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeFTS5,
+		Query:           "comment:needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		ProjectIDs:      []string{binding.ProjectID},
+		PageSize:        serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("SearchWorkflowTasks raw Comment: %v", err)
+	}
+	if len(raw.Groups) != 1 ||
+		raw.Groups[0].TaskID != first.Task.ID ||
+		len(raw.Groups[0].Hits) != 1 ||
+		raw.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindComment ||
+		raw.Groups[0].Hits[0].FTS5 == nil {
+		t.Fatalf("raw indexed search response = %+v", raw)
+	}
+
+	replacement := "replacement body"
+	if _, err := service.UpdateWorkflowTask(ctx, serverapi.WorkflowTaskUpdateRequest{
+		TaskID: first.Task.ID,
+		Body:   &replacement,
+	}); err != nil {
+		t.Fatalf("UpdateWorkflowTask: %v", err)
+	}
+	literalRequest.IncludeComments = false
+	afterUpdate, err := service.SearchWorkflowTasks(ctx, literalRequest)
+	if err != nil {
+		t.Fatalf("SearchWorkflowTasks after Task update: %v", err)
+	}
+	if len(afterUpdate.Groups) != 0 {
+		t.Fatalf("literal search after Task update = %+v, want no scoped matches", afterUpdate)
+	}
+}
+
 func TestServiceCreatesAndUpdatesTaskSourceWorkspaceBeforeStart(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)

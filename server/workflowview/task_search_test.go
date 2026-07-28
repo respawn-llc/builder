@@ -2,15 +2,26 @@ package workflowview
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/metadata"
+	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
+
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestNewTaskSearchRequiresCanonicalReadDependencies(t *testing.T) {
@@ -650,6 +661,79 @@ func TestTaskSearchChecksSchemaBeforeClassifyingRawExpressions(t *testing.T) {
 	}
 }
 
+func TestTaskSearchKeepsSQLiteLockContentionOperational(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("link workflow: %v", err)
+	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "needle title",
+		Body:      "needle body",
+	}); err != nil {
+		t.Fatalf("create Task: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(ctx, "PRAGMA journal_mode = DELETE"); err != nil {
+		t.Fatalf("switch isolated fixture to rollback journaling: %v", err)
+	}
+	metadataStore.DB().SetMaxOpenConns(1)
+	metadataStore.DB().SetMaxIdleConns(1)
+	searchConnection, err := metadataStore.DB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire search database connection: %v", err)
+	}
+	if _, err := searchConnection.ExecContext(ctx, "PRAGMA busy_timeout = 1"); err != nil {
+		_ = searchConnection.Close()
+		t.Fatalf("set search connection busy timeout: %v", err)
+	}
+	if err := searchConnection.Close(); err != nil {
+		t.Fatalf("release configured search database connection: %v", err)
+	}
+
+	databasePath := filepath.Join(metadataStore.PersistenceRoot(), "db", "main.sqlite3")
+	lockURL := url.URL{Scheme: "file", Path: databasePath}
+	lockURL.RawQuery = "_pragma=busy_timeout(1)"
+	lockDB, err := sql.Open("sqlite", lockURL.String())
+	if err != nil {
+		t.Fatalf("open lock database connection: %v", err)
+	}
+	t.Cleanup(func() { _ = lockDB.Close() })
+	lockConnection, err := lockDB.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire lock database connection: %v", err)
+	}
+	t.Cleanup(func() { _ = lockConnection.Close() })
+	if _, err := lockConnection.ExecContext(ctx, "PRAGMA locking_mode = EXCLUSIVE"); err != nil {
+		t.Fatalf("set exclusive locking mode: %v", err)
+	}
+	if _, err := lockConnection.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		t.Fatalf("acquire exclusive SQLite lock: %v", err)
+	}
+	t.Cleanup(func() { _, _ = lockConnection.ExecContext(context.Background(), "ROLLBACK") })
+
+	busyCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	t.Cleanup(cancel)
+	_, err = search.Search(busyCtx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    `"`,
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	var searchErr *serverapi.TaskSearchError
+	if err == nil || errors.As(err, &searchErr) {
+		t.Fatalf("SQLite lock contention error = %T %v, want an operational error instead of malformed FTS5", err, err)
+	}
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
+		t.Fatalf("SQLite lock contention error = %T %v, want SQLITE_BUSY", err, err)
+	}
+}
+
 func TestTaskSearchCursorCanonicalizesEmptyFiltersAndRejectsNonFiniteRank(t *testing.T) {
 	request := serverapi.TaskSearchRequest{
 		Mode:     serverapi.TaskSearchModeLiteral,
@@ -690,6 +774,302 @@ func TestTaskSearchCursorCanonicalizesEmptyFiltersAndRejectsNonFiniteRank(t *tes
 		if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonInvalidCursor {
 			t.Fatalf("rank bits %x error = %v, want invalid cursor", rankBits, err)
 		}
+	}
+}
+
+func TestTaskSearchCursorPinsEveryRequestFilterAndPreservesExactRankBits(t *testing.T) {
+	base := serverapi.TaskSearchRequest{
+		Mode:            serverapi.TaskSearchModeLiteral,
+		Query:           "needle",
+		Context:         serverapi.TaskSearchDefaultContext,
+		IncludeComments: true,
+		ProjectIDs:      []string{"project-a", "project-b"},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindActive,
+			serverapi.WorkflowTaskStatusKindDone,
+		},
+		PageSize: 1,
+	}
+	fingerprint, err := taskSearchRequestFingerprint(base)
+	if err != nil {
+		t.Fatalf("taskSearchRequestFingerprint: %v", err)
+	}
+	token := taskSearchPageToken{
+		Version:     taskSearchPageTokenVersion,
+		Fingerprint: fingerprint,
+		Ordinal:     7,
+		RankBits:    math.Float64bits(-1.2345678901234567),
+		TaskID:      "task-7",
+	}
+	raw, err := encodeTaskSearchPageToken(token)
+	if err != nil {
+		t.Fatalf("encodeTaskSearchPageToken: %v", err)
+	}
+	decoded, hasCursor, err := parseTaskSearchPageToken(&raw, fingerprint)
+	if err != nil {
+		t.Fatalf("parseTaskSearchPageToken: %v", err)
+	}
+	if !hasCursor || decoded.Ordinal != token.Ordinal || decoded.TaskID != token.TaskID || decoded.RankBits != token.RankBits {
+		t.Fatalf("round-tripped cursor = %+v (has=%t), want %+v", decoded, hasCursor, token)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*serverapi.TaskSearchRequest)
+	}{
+		{
+			name: "mode",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.Mode = serverapi.TaskSearchModeFTS5
+				request.CaseSensitive = false
+			},
+		},
+		{
+			name: "query",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.Query = "other"
+			},
+		},
+		{
+			name: "context",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.Context++
+			},
+		},
+		{
+			name: "case mode",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.CaseSensitive = true
+			},
+		},
+		{
+			name: "Comment inclusion",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.IncludeComments = false
+			},
+		},
+		{
+			name: "Project scope",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.ProjectIDs = []string{"project-a"}
+			},
+		},
+		{
+			name: "status scope",
+			mutate: func(request *serverapi.TaskSearchRequest) {
+				request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			request.ProjectIDs = append([]string{}, base.ProjectIDs...)
+			request.StatusKinds = append([]serverapi.WorkflowTaskStatusKind{}, base.StatusKinds...)
+			test.mutate(&request)
+			changedFingerprint, err := taskSearchRequestFingerprint(request)
+			if err != nil {
+				t.Fatalf("taskSearchRequestFingerprint: %v", err)
+			}
+			if changedFingerprint == fingerprint {
+				t.Fatalf("%s did not change task-search cursor fingerprint", test.name)
+			}
+			_, _, err = parseTaskSearchPageToken(&raw, changedFingerprint)
+			var searchErr *serverapi.TaskSearchError
+			if !errors.As(err, &searchErr) || searchErr.Reason != serverapi.TaskSearchErrorReasonInvalidCursor {
+				t.Fatalf("cursor with changed %s error = %v, want invalid cursor", test.name, err)
+			}
+		})
+	}
+}
+
+func TestTaskSearchStaysAvailableAtRealScriptLifecycleBarriers(t *testing.T) {
+	t.Run("durable completion wins while a live script is still cleaning up", func(t *testing.T) {
+		shellPath, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skipf("sh is unavailable: %v", err)
+		}
+		ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+		_, task, started, claimed := newClaimedTaskStatusTestFixture(t, ctx, workflowStore, binding.ProjectID)
+		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+		t.Cleanup(func() {
+			if closeErr := authority.Close(context.Background()); closeErr != nil {
+				t.Errorf("close authority: %v", closeErr)
+			}
+		})
+		search := newTaskSearchWithRealLifecycleSources(t, metadataStore, authority, task.ID, started, claimed)
+
+		releasePath := filepath.Join(t.TempDir(), "release-script")
+		finalizeEntered := make(chan struct{})
+		releaseFinalizer := make(chan struct{})
+		handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+			Workflow: &sessionruntime.WorkflowExecutionRef{
+				TaskID:     task.ID,
+				RunID:      started.RunID,
+				Generation: claimed.Generation,
+			},
+			Command: sessionruntime.ScriptCommand{
+				Path: shellPath,
+				Args: []string{"-c", `while [ ! -f "$1" ]; do sleep 0.01; done`, "sh", releasePath},
+			},
+			Finalize: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.ScriptResult, error) error {
+				close(finalizeEntered)
+				<-releaseFinalizer
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartScriptExecution: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.WriteFile(releasePath, []byte("release"), 0o600)
+			select {
+			case <-releaseFinalizer:
+			default:
+				close(releaseFinalizer)
+			}
+			_ = handle.Close(context.Background())
+		})
+
+		if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
+			t.Fatalf("CompleteRun while script remains live: %v", err)
+		}
+		requireTaskSearchLifecycleStatus(t, ctx, search, task.ID, serverapi.WorkflowTaskStatusKindDone)
+
+		if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+			t.Fatalf("release script: %v", err)
+		}
+		select {
+		case <-finalizeEntered:
+		case <-t.Context().Done():
+			t.Fatalf("wait for live script finalizer: %v", t.Context().Err())
+		}
+		requireTaskSearchLifecycleStatus(t, ctx, search, task.ID, serverapi.WorkflowTaskStatusKindDone)
+
+		close(releaseFinalizer)
+		if _, err := handle.Wait(context.Background()); err != nil {
+			t.Fatalf("wait for completed script: %v", err)
+		}
+	})
+
+	t.Run("retired script stays active until its durable finalizer commits", func(t *testing.T) {
+		truePath, err := exec.LookPath("true")
+		if err != nil {
+			t.Skipf("true is unavailable: %v", err)
+		}
+		ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+		_, task, started, claimed := newClaimedTaskStatusTestFixture(t, ctx, workflowStore, binding.ProjectID)
+		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+		t.Cleanup(func() {
+			if closeErr := authority.Close(context.Background()); closeErr != nil {
+				t.Errorf("close authority: %v", closeErr)
+			}
+		})
+		search := newTaskSearchWithRealLifecycleSources(t, metadataStore, authority, task.ID, started, claimed)
+
+		finalizeEntered := make(chan struct{})
+		releaseFinalizer := make(chan struct{})
+		handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+			Workflow: &sessionruntime.WorkflowExecutionRef{
+				TaskID:     task.ID,
+				RunID:      started.RunID,
+				Generation: claimed.Generation,
+			},
+			Command: sessionruntime.ScriptCommand{Path: truePath},
+			Finalize: func(finalizeCtx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.ScriptResult, _ error) error {
+				close(finalizeEntered)
+				<-releaseFinalizer
+				_, completionErr := workflowStore.CompleteRun(finalizeCtx, workflowstore.CompleteRunRequest{
+					RunID:        started.RunID,
+					TransitionID: "done",
+					Actor:        "script",
+				})
+				return completionErr
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartScriptExecution: %v", err)
+		}
+		t.Cleanup(func() {
+			select {
+			case <-releaseFinalizer:
+			default:
+				close(releaseFinalizer)
+			}
+			_ = handle.Close(context.Background())
+		})
+		select {
+		case <-finalizeEntered:
+		case <-t.Context().Done():
+			t.Fatalf("wait for retired script finalizer: %v", t.Context().Err())
+		}
+		requireTaskSearchLifecycleStatus(t, ctx, search, task.ID, serverapi.WorkflowTaskStatusKindActive)
+
+		close(releaseFinalizer)
+		if _, err := handle.Wait(context.Background()); err != nil {
+			t.Fatalf("wait for finalized script: %v", err)
+		}
+		requireTaskSearchLifecycleStatus(t, ctx, search, task.ID, serverapi.WorkflowTaskStatusKindDone)
+	})
+}
+
+func newTaskSearchWithRealLifecycleSources(
+	t *testing.T,
+	metadataStore *metadata.Store,
+	authority *sessionruntime.Authority,
+	taskID workflow.TaskID,
+	started workflowstore.StartTaskResult,
+	claimed workflowstore.RunnableRunRecord,
+) *TaskSearch {
+	t.Helper()
+	snapshots, err := newTaskStatusSnapshotCoordinator(
+		metadataStore.DB(),
+		metadataStore.Queries(),
+		workflowexecution.NewMutationPermit(),
+		authority,
+		staticSchedulerObservations{snapshot: workflowexecution.SchedulerActiveRunSnapshot{
+			Revision: 1,
+			ActiveRuns: []workflowexecution.SchedulerActiveRunObservation{{
+				RunID:       started.RunID,
+				TaskID:      taskID,
+				PlacementID: claimed.PlacementID,
+				NodeID:      claimed.NodeID,
+				Generation:  claimed.Generation,
+				Phase:       workflowexecution.SchedulerActiveRunPhaseRunning,
+			}},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("newTaskStatusSnapshotCoordinator: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, NewTaskProjector(), snapshots)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	return search
+}
+
+func requireTaskSearchLifecycleStatus(
+	t *testing.T,
+	ctx context.Context,
+	search *TaskSearch,
+	taskID workflow.TaskID,
+	want serverapi.WorkflowTaskStatusKind,
+) {
+	t.Helper()
+	response, err := search.Search(ctx, serverapi.TaskSearchRequest{
+		Mode:        serverapi.TaskSearchModeLiteral,
+		Query:       "Body",
+		Context:     serverapi.TaskSearchDefaultContext,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{want},
+		PageSize:    serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("Search at lifecycle barrier: %v", err)
+	}
+	if len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != string(taskID) ||
+		response.Groups[0].Status.Kind != want {
+		t.Fatalf("search at lifecycle barrier = %+v, want task %q status %q", response, taskID, want)
 	}
 }
 
