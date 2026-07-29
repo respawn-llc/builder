@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"slices"
@@ -58,18 +59,44 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 	}
 }
 
-func TestTaskSearchMigrationBackfillsLegacyDataThroughCurrentNodeCutover(t *testing.T) {
-	legacy, root := openVersion59TaskSearchFixture(t)
-	if err := legacy.Close(); err != nil {
-		t.Fatalf("close version 59 metadata database: %v", err)
-	}
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open migrated store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) {
+	for _, checkpoint := range []int64{59, 60, 61, 62} {
+		t.Run(fmt.Sprintf("version_%d", checkpoint), func(t *testing.T) {
+			legacy, root := openVersion59TaskSearchFixture(t)
+			if checkpoint > 59 {
+				provider, err := newMetadataMigrationProvider(legacy)
+				if err != nil {
+					t.Fatalf("create migration provider: %v", err)
+				}
+				if _, err := provider.UpTo(t.Context(), checkpoint); err != nil {
+					t.Fatalf("advance to migration %d: %v", checkpoint, err)
+				}
+			}
+			if err := legacy.Close(); err != nil {
+				t.Fatalf("close version %d metadata database: %v", checkpoint, err)
+			}
 
-	assertTaskSearchInvariants(t, store.db)
+			store, err := Open(root)
+			if err != nil {
+				t.Fatalf("Open from version %d: %v", checkpoint, err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			assertTaskSearchSchemaObjects(t, store.db)
+			assertTaskSearchIndexCatalog(t, store.db, []string{
+				"task_search_documents_comment_unique",
+				"task_search_documents_task_body_unique",
+				"task_search_documents_task_title_unique",
+			})
+			assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
+			assertTaskSearchInvariants(t, store.db)
+			assertTaskSearchLegacySourcesSearchable(t, store.db)
+		})
+	}
+}
+
+func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
+	t.Helper()
 	for _, search := range []struct {
 		query      string
 		sourceKind string
@@ -80,11 +107,11 @@ func TestTaskSearchMigrationBackfillsLegacyDataThroughCurrentNodeCutover(t *test
 		{query: "comment one vulture", sourceKind: "comment", wantID: "comment-legacy-search-one"},
 		{query: "comment two urchin", sourceKind: "comment", wantID: "comment-legacy-search-two"},
 	} {
-		assertTaskSearchSourceSearchable(t, store.db, search.query, search.sourceKind, search.wantID)
+		assertTaskSearchSourceSearchable(t, db, search.query, search.sourceKind, search.wantID)
 	}
 }
 
-func TestTaskSearchMigrationIsOneAtomicPostCurrentNodeStep(t *testing.T) {
+func TestTaskSearchMigration61IsAtomic(t *testing.T) {
 	legacy, _ := openVersion59TaskSearchFixture(t)
 	t.Cleanup(func() { _ = legacy.Close() })
 	provider, err := goose.NewProvider(

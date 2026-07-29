@@ -270,7 +270,6 @@ func TestTaskSearchResponseRoundTripsRawGroupedJSON(t *testing.T) {
 func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 	for _, reason := range []TaskSearchErrorReason{
 		TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonMalformedFTS5,
 		TaskSearchErrorReasonInvalidCursor,
 	} {
 		source := TaskSearchError{Reason: reason}
@@ -297,7 +296,6 @@ func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 func TestTaskSearchErrorRPCRoundTripsEveryTypedReason(t *testing.T) {
 	for _, reason := range []TaskSearchErrorReason{
 		TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonMalformedFTS5,
 		TaskSearchErrorReasonInvalidCursor,
 	} {
 		source := &TaskSearchError{Reason: reason}

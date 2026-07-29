@@ -1221,7 +1221,7 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesTaskSearchError(t *testing.T) {
-	source := &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonMalformedFTS5}
+	source := &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonNormalizedTooShort}
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskSearch,
 		Message: source.Error(),

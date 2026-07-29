@@ -187,9 +187,9 @@ func TestTaskSearchMapsTypedSearchFailuresToSpecifiedExitClasses(t *testing.T) {
 			exitCode: 2,
 		},
 		{
-			name:     "malformed FTS5 is a query validation failure",
-			err:      &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonMalformedFTS5},
-			exitCode: 2,
+			name:     "raw FTS5 SQLite failure remains operational",
+			err:      errors.New("task search FTS5 query could not be evaluated"),
+			exitCode: 1,
 		},
 		{
 			name:     "invalid cursor remains operational",

@@ -146,9 +146,6 @@ func writeTaskSearchError(stderr io.Writer, err error) int {
 		case serverapi.TaskSearchErrorReasonNormalizedTooShort:
 			fmt.Fprintln(stderr, "task search query is too short after normalization")
 			return 2
-		case serverapi.TaskSearchErrorReasonMalformedFTS5:
-			fmt.Fprintln(stderr, "task search FTS5 expression is malformed")
-			return 2
 		case serverapi.TaskSearchErrorReasonInvalidCursor:
 			fmt.Fprintln(stderr, "task search page token is invalid")
 			return 1

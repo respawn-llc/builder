@@ -91,18 +91,21 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	}()
 	queries := s.queries.WithTx(tx)
 	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
+		if req.Mode == serverapi.TaskSearchModeFTS5 {
+			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
+		}
 		return serverapi.TaskSearchResponse{}, err
 	}
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
 		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
-			if taskSearchSQLiteMalformedExpression(validationErr) {
-				return serverapi.TaskSearchResponse{}, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonMalformedFTS5}
-			}
-			return serverapi.TaskSearchResponse{}, validationErr
+			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
 	rows, err := s.queryPage(ctx, queries, liveSnapshots, req, cursor, hasCursor)
 	if err != nil {
+		if req.Mode == serverapi.TaskSearchModeFTS5 {
+			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
+		}
 		return serverapi.TaskSearchResponse{}, err
 	}
 	hasNext := len(rows) > req.PageSize
@@ -338,9 +341,12 @@ func taskSearchSQLiteString(value interface{}, field string) (string, error) {
 	return text, nil
 }
 
-func taskSearchSQLiteMalformedExpression(err error) bool {
+func taskSearchFTS5OperationalError(err error) error {
 	var sqliteErr *sqlitedriver.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_ERROR
+	if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_ERROR {
+		return errors.New("task search FTS5 query could not be evaluated")
+	}
+	return err
 }
 
 func taskSearchRequestFingerprint(req serverapi.TaskSearchRequest) (string, error) {

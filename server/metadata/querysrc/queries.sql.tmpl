@@ -3540,69 +3540,6 @@ fts_virtual_table_contract_failures AS (
             FROM expected_fts_columns
        )
 ),
-canonical_sources AS (
-    SELECT 'title' AS source_kind, id AS source_id, title AS source_text
-    FROM tasks
-    UNION ALL
-    SELECT 'body' AS source_kind, id AS source_id, body AS source_text
-    FROM tasks
-    UNION ALL
-    SELECT 'comment' AS source_kind, id AS source_id, body AS source_text
-    FROM task_comments
-),
-mapped_sources AS (
-    SELECT
-        document.document_id,
-        document.source_kind,
-        COALESCE(document.task_id, document.comment_id) AS source_id,
-        content.title,
-        content.body,
-        content.comment
-    FROM task_search_documents document
-    JOIN task_search_content content
-      ON content.document_id = document.document_id
-),
-mapping_contract AS (
-    SELECT source_kind, source_id, source_text
-    FROM canonical_sources
-    EXCEPT
-    SELECT
-        source_kind,
-        source_id,
-        CASE source_kind
-            WHEN 'title' THEN title
-            WHEN 'body' THEN body
-            WHEN 'comment' THEN comment
-        END AS source_text
-    FROM mapped_sources
-),
-reverse_mapping_contract AS (
-    SELECT
-        source_kind,
-        source_id,
-        CASE source_kind
-            WHEN 'title' THEN title
-            WHEN 'body' THEN body
-            WHEN 'comment' THEN comment
-        END AS source_text
-    FROM mapped_sources
-    EXCEPT
-    SELECT source_kind, source_id, source_text
-    FROM canonical_sources
-),
-fts_contract AS (
-    SELECT document.document_id
-    FROM task_search_documents document
-    LEFT JOIN task_search_fts
-      ON task_search_fts.rowid = document.document_id
-    WHERE task_search_fts.rowid IS NULL
-),
-functional_contract_failures AS (
-    SELECT 'canonical_mapping_content_fts' AS failure
-    WHERE EXISTS (SELECT 1 FROM mapping_contract)
-       OR EXISTS (SELECT 1 FROM reverse_mapping_contract)
-       OR EXISTS (SELECT 1 FROM fts_contract)
-),
 fts_match_probe AS (
     SELECT COUNT(*) AS match_count
     FROM task_search_fts
@@ -3621,8 +3558,6 @@ UNION ALL
 SELECT failure FROM mapping_index_contract_failures
 UNION ALL
 SELECT failure FROM fts_virtual_table_contract_failures
-UNION ALL
-SELECT failure FROM functional_contract_failures
 UNION ALL
 SELECT failure FROM fts_match_contract_failures
 ORDER BY failure ASC;

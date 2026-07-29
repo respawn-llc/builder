@@ -314,7 +314,6 @@ func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 }
 
 func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEvent(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 

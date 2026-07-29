@@ -231,7 +231,6 @@ type TaskSearchErrorReason string
 
 const (
 	TaskSearchErrorReasonNormalizedTooShort TaskSearchErrorReason = "normalized_too_short"
-	TaskSearchErrorReasonMalformedFTS5      TaskSearchErrorReason = "malformed_fts5"
 	TaskSearchErrorReasonInvalidCursor      TaskSearchErrorReason = "invalid_cursor"
 )
 
@@ -249,7 +248,6 @@ func (e *TaskSearchError) Error() string {
 func (e TaskSearchError) Validate() error {
 	switch e.Reason {
 	case TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonMalformedFTS5,
 		TaskSearchErrorReasonInvalidCursor:
 		return nil
 	default:

@@ -2,8 +2,8 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"os/exec"
 	"strings"
@@ -132,52 +132,48 @@ func TestTaskSearchReflectsTaskAndCommentMutationsImmediately(t *testing.T) {
 	assertTaskSearchEmpty(t, fixture.ctx, search, request)
 }
 
-func TestTaskSearchLiteralMaterializationRetainsOneSQLiteReadSnapshot(t *testing.T) {
+func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *testing.T) {
 	fixture, search := newTaskSearchFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Snapshot", "before needle after")
 	request := taskSearchRequest("needle")
-	liveSnapshots, err := fixture.authority.CurrentWorkflowTaskExecutionSnapshots()
-	if err != nil {
-		t.Fatalf("CurrentWorkflowTaskExecutionSnapshots: %v", err)
-	}
-	tx, err := fixture.metadata.DB().BeginTx(fixture.ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		t.Fatalf("begin task-search read transaction: %v", err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	queries := fixture.metadata.Queries().WithTx(tx)
-	rows, err := search.queryPage(fixture.ctx, queries, liveSnapshots, request, taskSearchPageToken{}, false)
-	if err != nil {
-		t.Fatalf("queryPage: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("ranked rows = %+v, want one body hit", rows)
-	}
-
-	updated := make(chan error, 1)
+	started := make(chan struct{})
+	mutationsDone := make(chan error, 1)
 	go func() {
-		_, updateErr := fixture.metadata.DB().ExecContext(
-			fixture.ctx,
-			`UPDATE tasks SET body = 'replacement' WHERE id = ?`,
-			task.ID,
-		)
-		updated <- updateErr
-	}()
-	select {
-	case updateErr := <-updated:
-		if updateErr != nil {
-			t.Fatalf("concurrent Task body update: %v", updateErr)
+		close(started)
+		for index := range 128 {
+			body := "replacement"
+			if index%2 == 0 {
+				body = "before needle after"
+			}
+			if _, err := fixture.store.UpdateTask(fixture.ctx, workflowstore.UpdateTaskRequest{
+				TaskID: task.ID,
+				Body:   &body,
+			}); err != nil {
+				mutationsDone <- err
+				return
+			}
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("concurrent Task body update did not complete")
+		mutationsDone <- nil
+	}()
+	<-started
+	for index := range 128 {
+		response, err := search.Search(fixture.ctx, request)
+		if err != nil {
+			t.Fatalf("Search during canonical mutation %d: %v", index, err)
+		}
+		if len(response.Groups) == 0 {
+			continue
+		}
+		if len(response.Groups) != 1 ||
+			response.Groups[0].TaskID != string(task.ID) ||
+			len(response.Groups[0].Hits) != 1 ||
+			response.Groups[0].Hits[0].Literal == nil ||
+			response.Groups[0].Hits[0].Literal.Match != "needle" {
+			t.Fatalf("Search during canonical mutation %d = %+v, want a complete pre-mutation hit or no match", index, response)
+		}
 	}
-
-	groups, err := search.materializeGroups(fixture.ctx, queries, request, rows)
-	if err != nil {
-		t.Fatalf("materializeGroups from read snapshot: %v", err)
-	}
-	if len(groups) != 1 || len(groups[0].Hits) != 1 || groups[0].Hits[0].Literal == nil || groups[0].Hits[0].Literal.Match != "needle" {
-		t.Fatalf("snapshot materialization = %+v, want pre-mutation literal hit", groups)
+	if err := <-mutationsDone; err != nil {
+		t.Fatalf("canonical mutation: %v", err)
 	}
 }
 
@@ -328,8 +324,23 @@ func TestTaskSearchRawSchemaFailuresRemainOperational(t *testing.T) {
 	}
 }
 
-func TestTaskSearchRawSchemaContractRejectsNoOpTriggerAfterCanonicalMutation(t *testing.T) {
+func TestTaskSearchRawFTS5SQLiteErrorsRemainOperational(t *testing.T) {
 	fixture, search := newTaskSearchFixture(t, false)
+	_, err := search.Search(fixture.ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    `"`,
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	var searchErr *serverapi.TaskSearchError
+	if err == nil || errors.As(err, &searchErr) {
+		t.Fatalf("raw FTS5 SQLite error = %T %v, want a generic operational error", err, err)
+	}
+}
+
+func TestTaskSearchSearchDoesNotPreflightEntirePersistenceCorpus(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	healthy := createTaskSearchTask(t, fixture, "Healthy", "healthy needle")
 	if _, err := fixture.metadata.DB().Exec(`DROP TRIGGER task_search_task_insert`); err != nil {
 		t.Fatalf("drop Task insert trigger: %v", err)
 	}
@@ -341,17 +352,15 @@ BEGIN
 END`); err != nil {
 		t.Fatalf("create no-op Task insert trigger: %v", err)
 	}
-	createTaskSearchTask(t, fixture, "No-op trigger", "needle")
-
-	_, err := search.Search(fixture.ctx, serverapi.TaskSearchRequest{
-		Mode:     serverapi.TaskSearchModeFTS5,
-		Query:    `"`,
-		Context:  serverapi.TaskSearchDefaultContext,
-		PageSize: serverapi.TaskSearchDefaultPageSize,
-	})
-	var searchErr *serverapi.TaskSearchError
-	if err == nil || errors.As(err, &searchErr) {
-		t.Fatalf("no-op trigger schema failure error = %T %v", err, err)
+	for index := range 64 {
+		createTaskSearchTask(t, fixture, fmt.Sprintf("Drift %d", index), "unrelated")
+	}
+	response, err := search.Search(fixture.ctx, taskSearchRequest("healthy needle"))
+	if err != nil {
+		t.Fatalf("Search across persistence drift: %v", err)
+	}
+	if len(response.Groups) != 1 || response.Groups[0].TaskID != string(healthy.ID) {
+		t.Fatalf("Search across persistence drift = %+v, want the valid indexed Task", response)
 	}
 }
 
