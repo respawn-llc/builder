@@ -1,5 +1,6 @@
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
+import { ContractError } from "./errors";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
@@ -254,5 +255,29 @@ describe("ApiClient workflow labels", () => {
         },
       },
     ]);
+  });
+
+  it("rejects a zero task-list continuation offset", async () => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.list",
+          result: {
+            scope: { project_id: "project-1" },
+            matching_workflow_cardinality: "none",
+            next_offset: 0,
+            generated_at_unix_ms: 7,
+            tasks: [],
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        labelFilter: { kind: "none" },
+      }),
+    ).rejects.toBeInstanceOf(ContractError);
   });
 });

@@ -6456,8 +6456,21 @@ SELECT
     page.attention_types_json,
     page.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count
-FROM (SELECT 1) summary
+FROM args
+CROSS JOIN (SELECT 1) summary
 LEFT JOIN page_rows page ON TRUE
+ORDER BY
+    CASE WHEN args.sort_1_desc = 0 THEN page.sort_1_value END ASC,
+    CASE WHEN args.sort_1_desc != 0 THEN page.sort_1_value END DESC,
+    CASE WHEN args.sort_2_desc = 0 THEN page.sort_2_value END ASC,
+    CASE WHEN args.sort_2_desc != 0 THEN page.sort_2_value END DESC,
+    CASE WHEN args.sort_3_desc = 0 THEN page.sort_3_value END ASC,
+    CASE WHEN args.sort_3_desc != 0 THEN page.sort_3_value END DESC,
+    CASE WHEN args.sort_4_desc = 0 THEN page.sort_4_value END ASC,
+    CASE WHEN args.sort_4_desc != 0 THEN page.sort_4_value END DESC,
+    CASE WHEN args.sort_5_desc = 0 THEN page.sort_5_value END ASC,
+    CASE WHEN args.sort_5_desc != 0 THEN page.sort_5_value END DESC,
+    page.id ASC
 `
 
 type ListWorkflowTaskListRowsParams struct {

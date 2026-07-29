@@ -43,15 +43,15 @@ func (r *taskCommentListCommandRemote) Close() error {
 }
 
 func TestTaskCommentListUsesOffsetWindowsAndRoutesContinuationToStderr(t *testing.T) {
-	nextOffset := 2
+	nextOffset := 1
 	remote := &taskCommentListCommandRemote{
 		responses: map[int]serverapi.WorkflowTaskCommentListResponse{
 			0: {
 				Comments:   []serverapi.WorkflowTaskComment{{ID: "comment-1", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "first", CreatedAtUnixMs: 1}},
 				NextOffset: &nextOffset,
 			},
-			2: {
-				Comments: []serverapi.WorkflowTaskComment{{ID: "comment-3", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "continued", CreatedAtUnixMs: 3}},
+			1: {
+				Comments: []serverapi.WorkflowTaskComment{{ID: "comment-2", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "continued", CreatedAtUnixMs: 2}},
 			},
 			3: {},
 		},
@@ -67,7 +67,7 @@ func TestTaskCommentListUsesOffsetWindowsAndRoutesContinuationToStderr(t *testin
 		wantStderr bool
 	}{
 		{name: "first page", args: []string{"list", taskCommentListCommandTestTaskID, "--offset", "0", "--limit", "2"}, wantOffset: 0, wantLimit: 2, wantStdout: true, wantStderr: true},
-		{name: "continued page", args: []string{"list", taskCommentListCommandTestTaskID, "--offset", "2", "--limit", "2"}, wantOffset: 2, wantLimit: 2, wantStdout: true},
+		{name: "continued page", args: []string{"list", taskCommentListCommandTestTaskID, "--offset", "1", "--limit", "2"}, wantOffset: 1, wantLimit: 2, wantStdout: true},
 		{name: "beyond end", args: []string{"list", taskCommentListCommandTestTaskID, "--offset", "3", "--limit", "2"}, wantOffset: 3, wantLimit: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -276,17 +276,14 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			return 1
 		}
 		if *jsonOut {
-			if exitCode := writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, ProjectID: response.ProjectID, NextOffset: response.NextOffset}); exitCode != 0 {
-				return exitCode
+			return writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, ProjectID: response.ProjectID, NextOffset: response.NextOffset})
+		}
+		for _, workflow := range workflows {
+			if response.ProjectID != nil {
+				fmt.Fprintf(stdout, "%s: %s (v%d; %s; target %s)\n", workflow.ID, workflow.Name, workflow.Version, workflowProjectLinkState(workflow.ProjectLink), workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
+				continue
 			}
-		} else {
-			for _, workflow := range workflows {
-				if response.ProjectID != nil {
-					fmt.Fprintf(stdout, "%s: %s (v%d; %s; target %s)\n", workflow.ID, workflow.Name, workflow.Version, workflowProjectLinkState(workflow.ProjectLink), workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
-					continue
-				}
-				fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
-			}
+			fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
 		}
 		if response.NextOffset != nil {
 			fmt.Fprintf(stderr, "Next offset: `%d`\n", *response.NextOffset)

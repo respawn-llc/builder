@@ -374,3 +374,35 @@ func TestTaskListRetryCommandRetainsBothSelectorPolarities(t *testing.T) {
 		t.Fatalf("retry args = %v, want %v", args, want)
 	}
 }
+
+func TestTaskListScopeRecoveryRestartsAtBeginning(t *testing.T) {
+	recovery, err := taskWorkflowRecoveryForFailure(
+		taskWorkflowRecoveryFailure{
+			kind:      taskWorkflowRecoveryWorkflowRequiredColumns,
+			projectID: taskListCommandTestProjectID,
+		},
+		taskWorkflowRecoveryContext{
+			projectRef:        "project-ref",
+			resolvedProjectID: taskListCommandTestProjectID,
+			list: &taskListCommandContext{
+				ProjectRef: "project-ref",
+				Offset:     50,
+				Limit:      100,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("task workflow recovery: %v", err)
+	}
+	if len(recovery.Commands) != 2 {
+		t.Fatalf("recovery commands = %+v", recovery.Commands)
+	}
+	want := []string{
+		config.Command, "task", "list", "--project", "project-ref",
+		"--workflow", "<uuid>",
+		"--limit", "100",
+	}
+	if !slices.Equal(recovery.Commands[1].Args, want) {
+		t.Fatalf("scope recovery args = %v, want %v", recovery.Commands[1].Args, want)
+	}
+}

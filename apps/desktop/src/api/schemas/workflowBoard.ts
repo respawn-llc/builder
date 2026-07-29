@@ -63,7 +63,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
       })
       .strict(),
     matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
-    next_offset: z.number().int().nonnegative().nullable().optional(),
+    next_offset: z.number().int().positive().nullable().optional(),
     generated_at_unix_ms: z.number(),
     tasks: z.array(
       z
@@ -508,7 +508,7 @@ export const commentAddResponseSchema = z.object({ comment: commentSchema });
 export const commentPageSchema: z.ZodType<CommentPage> = z
   .object({
     comments: z.array(commentSchema).nullish().transform(emptyArray),
-    next_offset: z.number().int().nonnegative().nullable().optional(),
+    next_offset: z.number().int().positive().nullable().optional(),
   })
   .transform((value) => ({
     comments: value.comments,

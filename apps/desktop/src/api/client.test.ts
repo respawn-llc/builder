@@ -245,6 +245,20 @@ describe("ApiClient", () => {
     });
   });
 
+  it("rejects zero continuation offsets before feature code receives a page", async () => {
+    const workflowClient = new ApiClient(
+      new FakeRpcTransport([{ method: "workflow.list", result: { workflows: [], next_offset: 0 } }]),
+    );
+    const commentClient = new ApiClient(
+      new FakeRpcTransport([
+        { method: "workflow.task.comment.list", result: { comments: [], next_offset: 0 } },
+      ]),
+    );
+
+    await expect(workflowClient.listWorkflows()).rejects.toBeInstanceOf(ContractError);
+    await expect(commentClient.listTaskComments("task-1", 0)).rejects.toBeInstanceOf(ContractError);
+  });
+
   it("uses project edit workspace pagination and mutation RPC contracts", async () => {
     const transport = new FakeRpcTransport([
       {

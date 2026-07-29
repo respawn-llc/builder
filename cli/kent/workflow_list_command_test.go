@@ -34,7 +34,7 @@ func (r *workflowListCommandRemote) Close() error {
 }
 
 func TestWorkflowListUsesNumericOffsetsAndWritesStructuredContinuation(t *testing.T) {
-	nextOffset := 2
+	nextOffset := 1
 	remote := &workflowListCommandRemote{
 		response: serverapi.WorkflowListResponse{
 			Workflows: []serverapi.WorkflowRecord{{
@@ -65,8 +65,8 @@ func TestWorkflowListUsesNumericOffsetsAndWritesStructuredContinuation(t *testin
 	if output.NextOffset == nil || *output.NextOffset != nextOffset {
 		t.Fatalf("JSON output = %+v", output)
 	}
-	if stderr.Len() == 0 {
-		t.Fatal("continuation was not written to stderr")
+	if stderr.Len() != 0 {
+		t.Fatalf("JSON output wrote a human continuation to stderr: %q", stderr.String())
 	}
 }
 
