@@ -259,11 +259,22 @@ func NewRuntimeWiringWithBackground(
 		},
 		StepLifecycle:         opts.StepLifecycle,
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
-		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) bool {
+		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) runtime.BackgroundOwnerPollFinalization {
 			if background == nil {
-				return false
+				return runtime.BackgroundOwnerPollFinalization{}
 			}
-			return background.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+			finalization := background.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+			result := runtime.BackgroundOwnerPollFinalization{Finalized: finalization.Finalized}
+			if finalization.Diagnostic != nil {
+				diagnostic := runtime.NewBackgroundRoutingDiagnosticDetail(
+					finalization.Diagnostic.ProcessID,
+					finalization.Diagnostic.Activity,
+					finalization.Diagnostic.Attempt,
+					finalization.Diagnostic.Detail,
+				)
+				result.Diagnostic = &diagnostic
+			}
+			return result
 		},
 		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
 			if background == nil {

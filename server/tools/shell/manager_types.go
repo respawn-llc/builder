@@ -321,6 +321,14 @@ const (
 	TerminalHandoffAlreadyFinalizedByOwnerPoll
 )
 
+// TerminalOwnerPollFinalization is the Manager-owned result of one durably
+// committed owner poll. Diagnostic ownership moves by value with this result
+// so final acceptance never silently discards a prior delivery failure.
+type TerminalOwnerPollFinalization struct {
+	Finalized  bool
+	Diagnostic *TerminalDeliveryDiagnostic
+}
+
 type terminalDisposition interface {
 	terminalFacts() terminalFacts
 	terminalDisposition()
@@ -595,11 +603,11 @@ func (p *processEntry) acknowledgeTerminalHandoff(activityID uuid.UUID) Terminal
 	}
 }
 
-func (p *processEntry) finalizeOwnerPoll(callerSessionID string) bool {
+func (p *processEntry) finalizeOwnerPoll(callerSessionID string) TerminalOwnerPollFinalization {
 	p.interactMu.Lock()
 	defer p.interactMu.Unlock()
 	if p.ownerSessionID != callerSessionID {
-		return false
+		return TerminalOwnerPollFinalization{}
 	}
 	switch current := p.terminal.(type) {
 	case pendingTerminalDisposition:
@@ -610,9 +618,15 @@ func (p *processEntry) finalizeOwnerPoll(callerSessionID string) bool {
 	case queuedTerminalDisposition:
 		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
 	default:
-		return false
+		return TerminalOwnerPollFinalization{}
 	}
-	return true
+	result := TerminalOwnerPollFinalization{Finalized: true}
+	if p.deliveryDiagnostic != nil {
+		diagnostic := *p.deliveryDiagnostic
+		p.deliveryDiagnostic = nil
+		result.Diagnostic = &diagnostic
+	}
+	return result
 }
 
 func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) bool {

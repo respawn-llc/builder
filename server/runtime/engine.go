@@ -134,9 +134,9 @@ type Config struct {
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
 	// BackgroundOwnerPollFinalizer runs only after a terminal write_stdin
-	// completion has a durable receipt. It returns true only when this Engine's
-	// Session owns and won the completion disposition.
-	BackgroundOwnerPollFinalizer func(callerSessionID string, processID string) bool
+	// completion has a durable receipt. It transfers an owner-relative
+	// finalization and any Manager-owned diagnostic to this Engine.
+	BackgroundOwnerPollFinalizer func(callerSessionID string, processID string) BackgroundOwnerPollFinalization
 	// BackgroundAutomaticFinalizer records durable automatic acceptance for one
 	// admitted terminal notice after that notice's steering receipt commits.
 	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) bool

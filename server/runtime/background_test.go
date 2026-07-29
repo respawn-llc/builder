@@ -187,9 +187,9 @@ func TestBackgroundDeliveryRetirementTracksReservedAndDiagnosticOnlyWork(t *test
 	)
 	notice.diagnostic = &diagnostic
 
-	shouldSchedule := false
-	scheduler.admitNotice(notice, false, &shouldSchedule)
-	if shouldSchedule {
+	var scheduled backgroundLifecycleTask
+	scheduler.admitNotice(notice, false, &scheduled)
+	if scheduled != nil {
 		t.Fatal("unscheduled admission unexpectedly requested a lifecycle task")
 	}
 	pending := scheduler.RetirementSnapshot()
@@ -248,8 +248,8 @@ func TestBackgroundDeliveryRetryRequiresAnExternalPermit(t *testing.T) {
 			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
 		),
 	)
-	shouldSchedule := false
-	scheduler.admitNotice(notice, false, &shouldSchedule)
+	var scheduled backgroundLifecycleTask
+	scheduler.admitNotice(notice, false, &scheduled)
 	reserved := scheduler.DrainPendingNotices()
 	if len(reserved) != 1 {
 		t.Fatalf("reserved notices = %+v, want one", reserved)
@@ -283,8 +283,8 @@ func TestBackgroundDeliveryWithdrawalClassifiesReservedReceipt(t *testing.T) {
 			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
 		),
 	)
-	shouldSchedule := false
-	scheduler.admitNotice(notice, false, &shouldSchedule)
+	var scheduled backgroundLifecycleTask
+	scheduler.admitNotice(notice, false, &scheduled)
 	reserved := scheduler.DrainPendingNotices()
 	if len(reserved) != 1 {
 		t.Fatalf("reserved notices = %+v, want one", reserved)
@@ -310,5 +310,97 @@ func TestBackgroundDeliveryWithdrawalClassifiesReservedReceipt(t *testing.T) {
 	}
 	if scheduler.RetirementSnapshot().Active {
 		t.Fatalf("withdrawn scheduler work retained runtime: %+v", scheduler.states)
+	}
+}
+
+func TestOwnerPollFinalizationInstallsTransferredDiagnostic(t *testing.T) {
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
+	activity := uuid.New()
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"1004",
+		activity,
+		backgroundDeliveryStageRouting,
+		1,
+		errors.New("route failed"),
+	)
+
+	consumption := scheduler.FinalizeOwnerPoll("1004", &diagnostic)
+	if !consumption.retainsDiagnostic || consumption.removed {
+		t.Fatalf("owner-poll diagnostic consumption = %+v", consumption)
+	}
+	if !scheduler.RetirementSnapshot().Active {
+		t.Fatal("transferred owner-poll diagnostic did not retain the runtime")
+	}
+	if len(scheduler.states) != 1 {
+		t.Fatalf("scheduler states = %+v, want one diagnostic-only obligation", scheduler.states)
+	}
+	if _, ok := scheduler.states[0].(diagnosticOnlyBackgroundNotice); !ok {
+		t.Fatalf("scheduler state = %T, want diagnostic-only", scheduler.states[0])
+	}
+}
+
+func TestWorkflowWithdrawalCancelsAndJoinsMatchingBackgroundLifecycleTask(t *testing.T) {
+	steps := &blockingBackgroundStepLifecycle{
+		started: make(chan struct{}, 1),
+		stopped: make(chan error, 1),
+	}
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	activity := uuid.New()
+	notice := newTerminalBackgroundNotice(
+		"1003",
+		activity,
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
+		),
+	)
+	var scheduled backgroundLifecycleTask
+	scheduler.admitNotice(notice, true, &scheduled)
+	if scheduled == nil {
+		t.Fatal("terminal admission did not schedule a lifecycle task")
+	}
+	scheduler.launchIfScheduled(scheduled)
+	select {
+	case <-steps.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background lifecycle task did not begin")
+	}
+
+	result := make(chan struct {
+		withdrawal BackgroundDeliveryWithdrawal
+		found      bool
+		err        error
+	}, 1)
+	go func() {
+		withdrawal, found, err := scheduler.Withdraw(context.Background(), "1003", activity)
+		result <- struct {
+			withdrawal BackgroundDeliveryWithdrawal
+			found      bool
+			err        error
+		}{withdrawal: withdrawal, found: found, err: err}
+	}()
+
+	select {
+	case err := <-steps.stopped:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("background lifecycle task stop error = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("workflow withdrawal did not cancel the lifecycle task")
+	}
+	select {
+	case outcome := <-result:
+		if outcome.err != nil || !outcome.found || !outcome.withdrawal.CompletionPending {
+			t.Fatalf("withdrawal = %+v found=%t err=%v", outcome.withdrawal, outcome.found, outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("workflow withdrawal returned before the lifecycle task joined")
+	}
+	if scheduler.RetirementSnapshot().Active {
+		t.Fatalf("joined withdrawal retained scheduler work: %+v", scheduler.states)
 	}
 }

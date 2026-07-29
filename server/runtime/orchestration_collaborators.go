@@ -44,6 +44,7 @@ type backgroundNoticeScheduler interface {
 	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) backgroundNoticeConsumption
+	FinalizeOwnerPoll(sessionID string, diagnostic *PendingBackgroundDeliveryDiagnostic) backgroundNoticeConsumption
 	ScheduleIfIdle()
 	PermitRetry() bool
 	AttachDiagnostic(PendingBackgroundDeliveryDiagnostic) bool

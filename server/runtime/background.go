@@ -81,6 +81,17 @@ func (e *Engine) DiscardProvisionalBackgroundNotice(processID string) bool {
 	return consumption.removed
 }
 
+// FinalizeBackgroundOwnerPoll atomically removes the caller Engine's
+// provisional completion and installs a Manager-transferred diagnostic as
+// diagnostic-only work. It runs only after the owner poll commits durably.
+func (e *Engine) FinalizeBackgroundOwnerPoll(
+	processID string,
+	diagnostic *PendingBackgroundDeliveryDiagnostic,
+) backgroundNoticeConsumption {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.FinalizeOwnerPoll(processID, diagnostic)
+}
+
 func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
 	e.ensureOrchestrationCollaborators()
 	e.backgroundFlow.ScheduleIfIdle()
@@ -180,36 +191,42 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
-	shouldSchedule := false
+	var scheduled backgroundLifecycleTask
 	b.admitNotice(newDeveloperBackgroundNotice(
 		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
-	), true, &shouldSchedule)
-	b.launchIfScheduled(shouldSchedule)
+	), true, &scheduled)
+	b.launchIfScheduled(scheduled)
 }
 
 func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt BackgroundShellEvent, msg llm.Message, schedule bool) {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
-	shouldSchedule := false
+	var scheduled backgroundLifecycleTask
 	b.admitNotice(newTerminalBackgroundNotice(
 		evt.ID,
 		evt.ActivityID,
 		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
-	), schedule, &shouldSchedule)
-	b.launchIfScheduled(shouldSchedule)
+	), schedule, &scheduled)
+	b.launchIfScheduled(scheduled)
 }
 
-func (b *defaultBackgroundNoticeScheduler) launchIfScheduled(shouldSchedule bool) {
-	if !shouldSchedule {
+func (b *defaultBackgroundNoticeScheduler) launchIfScheduled(task backgroundLifecycleTask) {
+	if task == nil {
 		return
 	}
-	if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-		b.clearScheduledTask()
+	if !b.engine.launchLifecycleTask(func(engineCtx context.Context) {
+		b.processQueuedNotices(engineCtx, task)
+	}) {
+		b.clearScheduledTask(task)
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNotice, schedule bool, shouldSchedule *bool) {
+func (b *defaultBackgroundNoticeScheduler) admitNotice(
+	notice queuedBackgroundNotice,
+	schedule bool,
+	scheduled *backgroundLifecycleTask,
+) {
 	b.mu.Lock()
 	b.ensureChangedLocked()
 	b.states = append(b.states, pendingBackgroundNotice{notice: notice})
@@ -219,9 +236,7 @@ func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNo
 	b.permitEarliestRetryLocked()
 	b.signalChangedLocked()
 	if schedule && b.task == nil && (b.steps == nil || !b.steps.IsBusy()) {
-		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
-		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
-		*shouldSchedule = true
+		*scheduled = b.scheduleTaskLocked()
 	}
 	b.mu.Unlock()
 }
@@ -272,6 +287,48 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(proces
 	return result
 }
 
+func (b *defaultBackgroundNoticeScheduler) FinalizeOwnerPoll(
+	processID string,
+	diagnostic *PendingBackgroundDeliveryDiagnostic,
+) backgroundNoticeConsumption {
+	processID = strings.TrimSpace(processID)
+	if processID == "" {
+		return backgroundNoticeConsumption{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ensureChangedLocked()
+	result := backgroundNoticeConsumption{}
+	next := make([]backgroundNoticeState, 0, len(b.states))
+	for _, state := range b.states {
+		notice, hasNotice := state.queuedBackgroundNotice()
+		if !hasNotice || notice.processID() != processID {
+			next = append(next, state)
+			continue
+		}
+		result.removed = true
+		if notice.diagnostic != nil {
+			if diagnostic != nil {
+				panic(fmt.Sprintf(
+					"owner poll finalization has duplicate delivery diagnostics: process_id=%q",
+					processID,
+				))
+			}
+			copy := *notice.diagnostic
+			diagnostic = &copy
+		}
+	}
+	if diagnostic != nil {
+		next = append(next, newDiagnosticOnlyBackgroundNotice(*diagnostic))
+		result.retainsDiagnostic = true
+	}
+	if result.removed || diagnostic != nil {
+		b.states = next
+		b.signalChangedLocked()
+	}
+	return result
+}
+
 func (b *defaultBackgroundNoticeScheduler) Withdraw(
 	ctx context.Context,
 	processID string,
@@ -281,6 +338,7 @@ func (b *defaultBackgroundNoticeScheduler) Withdraw(
 		ctx = context.Background()
 	}
 	identity := newBackgroundNoticeIdentity(processID, activity)
+withdrawalLoop:
 	for {
 		b.mu.Lock()
 		b.ensureChangedLocked()
@@ -294,35 +352,59 @@ func (b *defaultBackgroundNoticeScheduler) Withdraw(
 			if hasNotice && notice.identity != nil && *notice.identity == identity {
 				switch current := state.(type) {
 				case pendingBackgroundNotice:
-					b.states = append(b.states[:index], b.states[index+1:]...)
+					if b.task == nil {
+						b.states = append(b.states[:index], b.states[index+1:]...)
+						b.signalChangedLocked()
+						b.mu.Unlock()
+						return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
+					}
+					b.states[index] = newWithdrawingBackgroundNotice(current.notice, backgroundLifecycleTaskAttempt(b.task))
+					task := b.task
 					b.signalChangedLocked()
 					b.mu.Unlock()
-					return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
+					if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+						return BackgroundDeliveryWithdrawal{}, false, err
+					}
+					continue withdrawalLoop
 				case retryDeferredBackgroundNotice:
-					b.states = append(b.states[:index], b.states[index+1:]...)
+					if b.task == nil {
+						b.states = append(b.states[:index], b.states[index+1:]...)
+						b.signalChangedLocked()
+						b.mu.Unlock()
+						return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
+					}
+					b.states[index] = newWithdrawingBackgroundNotice(current.notice, backgroundLifecycleTaskAttempt(b.task))
+					task := b.task
 					b.signalChangedLocked()
 					b.mu.Unlock()
-					return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
+					if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+						return BackgroundDeliveryWithdrawal{}, false, err
+					}
+					continue withdrawalLoop
 				case reservedBackgroundNotice:
 					b.states[index] = newWithdrawingBackgroundNotice(current.notice, current.reservation)
 					b.signalChangedLocked()
-					changed := b.changed
+					task := b.task
 					b.mu.Unlock()
-					select {
-					case <-changed:
-						continue
-					case <-ctx.Done():
-						return BackgroundDeliveryWithdrawal{}, false, context.Cause(ctx)
+					if task != nil {
+						if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+							return BackgroundDeliveryWithdrawal{}, false, err
+						}
 					}
+					continue withdrawalLoop
 				case withdrawingBackgroundNotice:
-					changed := b.changed
-					b.mu.Unlock()
-					select {
-					case <-changed:
-						continue
-					case <-ctx.Done():
-						return BackgroundDeliveryWithdrawal{}, false, context.Cause(ctx)
+					task := b.task
+					if task == nil {
+						b.states = append(b.states[:index], b.states[index+1:]...)
+						b.signalChangedLocked()
+						b.mu.Unlock()
+						return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
 					}
+					b.mu.Unlock()
+					if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+						return BackgroundDeliveryWithdrawal{}, false, err
+					}
+					continue withdrawalLoop
 				default:
 					panic(fmt.Sprintf("withdraw background delivery has invalid notice state %T", state))
 				}
@@ -330,15 +412,59 @@ func (b *defaultBackgroundNoticeScheduler) Withdraw(
 			diagnosticOnly, ok := state.(diagnosticOnlyBackgroundNotice)
 			if ok && diagnosticOnly.diagnostic.processID == identity.processID &&
 				diagnosticOnly.diagnostic.activity == identity.activity {
+				if b.task != nil {
+					b.states[index] = newWithdrawingDiagnosticOnlyBackgroundNotice(
+						diagnosticOnly.diagnostic,
+						backgroundLifecycleTaskAttempt(b.task),
+					)
+					task := b.task
+					b.signalChangedLocked()
+					b.mu.Unlock()
+					if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+						return BackgroundDeliveryWithdrawal{}, false, err
+					}
+					continue withdrawalLoop
+				}
 				b.states = append(b.states[:index], b.states[index+1:]...)
 				b.signalChangedLocked()
 				b.mu.Unlock()
 				diagnostic := diagnosticOnly.diagnostic
 				return BackgroundDeliveryWithdrawal{Diagnostic: &diagnostic}, true, nil
 			}
+			withdrawingDiagnosticOnly, ok := state.(withdrawingDiagnosticOnlyBackgroundNotice)
+			if ok && withdrawingDiagnosticOnly.diagnostic.processID == identity.processID &&
+				withdrawingDiagnosticOnly.diagnostic.activity == identity.activity {
+				task := b.task
+				if task == nil {
+					b.states = append(b.states[:index], b.states[index+1:]...)
+					b.signalChangedLocked()
+					b.mu.Unlock()
+					diagnostic := withdrawingDiagnosticOnly.diagnostic
+					return BackgroundDeliveryWithdrawal{Diagnostic: &diagnostic}, true, nil
+				}
+				b.mu.Unlock()
+				if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+					return BackgroundDeliveryWithdrawal{}, false, err
+				}
+				continue withdrawalLoop
+			}
 		}
 		b.mu.Unlock()
 		return BackgroundDeliveryWithdrawal{}, false, nil
+	}
+}
+
+func cancelAndJoinBackgroundLifecycleTask(ctx context.Context, task backgroundLifecycleTask) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	control := backgroundLifecycleTaskControlFor(task)
+	control.cancel()
+	select {
+	case <-control.done:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
 	}
 }
 
@@ -355,7 +481,7 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	if b.steps != nil && b.steps.IsBusy() {
 		return
 	}
-	shouldSchedule := false
+	var scheduled backgroundLifecycleTask
 	b.mu.Lock()
 	if b.task == nil {
 		// This call comes from an idle boundary outside a completed lifecycle
@@ -363,13 +489,10 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 		b.permitEarliestRetryLocked()
 	}
 	if b.task == nil && b.hasScheduledWorkLocked() {
-		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
-		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
-		b.signalChangedLocked()
-		shouldSchedule = true
+		scheduled = b.scheduleTaskLocked()
 	}
 	b.mu.Unlock()
-	b.launchIfScheduled(shouldSchedule)
+	b.launchIfScheduled(scheduled)
 }
 
 func (b *defaultBackgroundNoticeScheduler) PermitRetry() bool {
@@ -466,12 +589,20 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 	return fmt.Sprintf("%d", out.SessionID), true
 }
 
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) {
-	attempt, started := b.beginTask()
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(
+	engineCtx context.Context,
+	task backgroundLifecycleTask,
+) {
+	running, started := b.beginTask(task)
 	if !started {
 		return
 	}
-	defer b.finishTask(attempt)
+	control := backgroundLifecycleTaskControlFor(running)
+	ctx, cancel := context.WithCancel(engineCtx)
+	stopCancellation := context.AfterFunc(control.ctx, cancel)
+	defer stopCancellation()
+	defer cancel()
+	defer b.finishTask(running)
 	_, _ = b.runQueuedNotices(ctx)
 }
 
@@ -606,9 +737,11 @@ func (b *defaultBackgroundNoticeScheduler) pendingDiagnosticsSnapshot() []Pendin
 				diagnostics = append(diagnostics, *current.notice.diagnostic)
 			}
 		case withdrawingBackgroundNotice:
-			if current.notice.diagnostic != nil {
-				diagnostics = append(diagnostics, *current.notice.diagnostic)
-			}
+			// Workflow withdrawal owns this diagnostic until the lifecycle
+			// task is canceled and joined. It must not commit post-stop.
+		case withdrawingDiagnosticOnlyBackgroundNotice:
+			// Workflow withdrawal owns this diagnostic until the lifecycle task
+			// is canceled and joined. It must not commit post-stop.
 		case diagnosticOnlyBackgroundNotice:
 			diagnostics = append(diagnostics, current.diagnostic)
 		default:
@@ -648,6 +781,10 @@ func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(proc
 		case withdrawingBackgroundNotice:
 			if current.notice.matches(processID, activity) {
 				current.notice.diagnostic = nil
+				state = current
+			}
+		case withdrawingDiagnosticOnlyBackgroundNotice:
+			if current.diagnostic.processID == processID && current.diagnostic.activity == activity {
 				state = current
 			}
 		default:
@@ -907,9 +1044,10 @@ func (b *defaultBackgroundNoticeScheduler) hasPendingDeliveryDiagnosticsLocked()
 				return true
 			}
 		case withdrawingBackgroundNotice:
-			if current.notice.diagnostic != nil {
-				return true
-			}
+			// A withdrawing Workflow obligation is intentionally not
+			// deliverable. Workflow retirement transfers it after task join.
+		case withdrawingDiagnosticOnlyBackgroundNotice:
+			// See withdrawingBackgroundNotice above.
 		default:
 			panic(fmt.Sprintf("unknown background notice state %T", state))
 		}
@@ -925,35 +1063,66 @@ func (b *defaultBackgroundNoticeScheduler) hasRetirementWorkLocked() bool {
 	return len(b.states) != 0 || b.task != nil
 }
 
-func (b *defaultBackgroundNoticeScheduler) clearScheduledTask() {
-	b.mu.Lock()
-	if _, scheduled := b.task.(scheduledBackgroundLifecycleTask); scheduled {
-		b.task = nil
-		b.signalChangedLocked()
+func (b *defaultBackgroundNoticeScheduler) scheduleTaskLocked() backgroundLifecycleTask {
+	if b.task != nil {
+		panic("schedule background lifecycle task while another task is active")
 	}
-	b.mu.Unlock()
+	b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
+	task := newScheduledBackgroundLifecycleTask(b.nextTask)
+	b.task = task
+	b.signalChangedLocked()
+	return task
 }
 
-func (b *defaultBackgroundNoticeScheduler) beginTask() (uint64, bool) {
+func (b *defaultBackgroundNoticeScheduler) clearScheduledTask(task backgroundLifecycleTask) {
+	if task == nil {
+		return
+	}
+	cleared := false
+	b.mu.Lock()
+	scheduled, ok := b.task.(scheduledBackgroundLifecycleTask)
+	if ok && sameBackgroundLifecycleTask(scheduled, task) {
+		b.task = nil
+		b.signalChangedLocked()
+		cleared = true
+	}
+	b.mu.Unlock()
+	if cleared {
+		backgroundLifecycleTaskControlFor(task).doneOnce.Do(func() {
+			close(backgroundLifecycleTaskControlFor(task).done)
+		})
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) beginTask(task backgroundLifecycleTask) (backgroundLifecycleTask, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	scheduled, ok := b.task.(scheduledBackgroundLifecycleTask)
-	if !ok {
-		return 0, false
+	if !ok || !sameBackgroundLifecycleTask(scheduled, task) {
+		return nil, false
 	}
-	attempt := backgroundLifecycleTaskAttempt(scheduled)
-	b.task = runningBackgroundLifecycleTask{attempt: attempt}
+	running := newRunningBackgroundLifecycleTask(scheduled)
+	b.task = running
 	b.signalChangedLocked()
-	return attempt, true
+	return running, true
 }
 
-func (b *defaultBackgroundNoticeScheduler) finishTask(attempt uint64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	running, ok := b.task.(runningBackgroundLifecycleTask)
-	if !ok || backgroundLifecycleTaskAttempt(running) != attempt {
+func (b *defaultBackgroundNoticeScheduler) finishTask(task backgroundLifecycleTask) {
+	if task == nil {
 		return
 	}
-	b.task = nil
-	b.signalChangedLocked()
+	finished := false
+	b.mu.Lock()
+	running, ok := b.task.(runningBackgroundLifecycleTask)
+	if ok && sameBackgroundLifecycleTask(running, task) {
+		b.task = nil
+		b.signalChangedLocked()
+		finished = true
+	}
+	b.mu.Unlock()
+	if finished {
+		backgroundLifecycleTaskControlFor(task).doneOnce.Do(func() {
+			close(backgroundLifecycleTaskControlFor(task).done)
+		})
+	}
 }

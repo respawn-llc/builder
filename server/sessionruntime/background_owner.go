@@ -202,6 +202,73 @@ func (a *Authority) replayOrdinaryBackground(ctx context.Context, sessionID runt
 	return nil
 }
 
+// commitWorkflowResumeDiagnostics persists every prior-stop diagnostic before
+// a new exact scope exists. A failed receipt leaves the ready resource
+// ownerless and returns the typed retryable Engine error to the synchronous
+// Resume admission.
+func (a *Authority) commitWorkflowResumeDiagnostics(
+	ctx context.Context,
+	resource *agentResource,
+	workflow WorkflowExecutionRef,
+) error {
+	if a.options.background == nil {
+		return nil
+	}
+	type pendingDiagnostic struct {
+		processID  string
+		activity   uuid.UUID
+		diagnostic runtime.PendingBackgroundDeliveryDiagnostic
+	}
+	a.mu.Lock()
+	pending := make([]pendingDiagnostic, 0)
+	for processID, owner := range a.backgroundOwners {
+		workflowOwner, ok := owner.(workflowBackgroundOwner)
+		if !ok || !sameWorkflowExecution(workflowOwner.workflow, workflow) || workflowOwner.diagnostic == nil {
+			continue
+		}
+		pending = append(pending, pendingDiagnostic{
+			processID:  processID,
+			activity:   workflowOwner.activityID,
+			diagnostic: *workflowOwner.diagnostic,
+		})
+	}
+	a.mu.Unlock()
+
+	for _, item := range pending {
+		var receipt session.CommitReceipt
+		err := resource.withEngine(ctx, resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+			var commitErr error
+			receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(item.diagnostic)
+			return commitErr
+		})
+		if !receipt.Committed {
+			a.backgroundLogger.Error(
+				"resume background diagnostic failed",
+				"process_id", item.processID,
+				"session_id", resource.ref.SessionID().String(),
+				"error", err,
+			)
+			return err
+		}
+		if err != nil {
+			a.backgroundLogger.Error(
+				"resume background diagnostic committed with observer error",
+				"process_id", item.processID,
+				"session_id", resource.ref.SessionID().String(),
+				"error", err,
+			)
+		}
+		a.mu.Lock()
+		current, currentOK := a.backgroundOwners[item.processID].(workflowBackgroundOwner)
+		if currentOK && current.activityID == item.activity {
+			current.diagnostic = nil
+			a.backgroundOwners[item.processID] = current
+		}
+		a.mu.Unlock()
+	}
+	return nil
+}
+
 func (a *Authority) replayWorkflowBackground(scope ExecutionScope) {
 	if a.options.background == nil {
 		return
@@ -210,13 +277,24 @@ func (a *Authority) replayWorkflowBackground(scope ExecutionScope) {
 	if !hasWorkflow {
 		panic(fmt.Sprintf("workflow background replay requires workflow scope: scope_id=%s", scope.ID()))
 	}
+	resourceRef, hasResource := scope.Resource()
+	if !hasResource {
+		panic(fmt.Sprintf("workflow background replay requires runtime resource: scope_id=%s", scope.ID()))
+	}
+
+	// Choose the new exact destination while the scope is protected. Resume
+	// diagnostics have already committed before scope admission. Replaying
+	// through Manager happens after this gate is released because its
+	// synchronous terminal handler reacquires it.
+	gate := a.gateFor(resourceRef.SessionID())
+	gate.mu.Lock()
 	a.mu.Lock()
 	execution := a.byScope[scope.ID()]
-	if execution == nil || execution.resource == nil {
+	if execution == nil || execution.phase != executionPhaseRunning || execution.resource == nil {
 		a.mu.Unlock()
+		gate.mu.Unlock()
 		return
 	}
-	resource := execution.resource
 	processIDs := make([]string, 0)
 	for processID, owner := range a.backgroundOwners {
 		workflowOwner, ok := owner.(workflowBackgroundOwner)
@@ -228,55 +306,34 @@ func (a *Authority) replayWorkflowBackground(scope ExecutionScope) {
 		}
 	}
 	a.mu.Unlock()
+
+	replay := make([]string, 0, len(processIDs))
 	for _, processID := range processIDs {
-		var diagnostic *runtime.PendingBackgroundDeliveryDiagnostic
 		a.mu.Lock()
 		owner, ok := a.backgroundOwners[processID].(workflowBackgroundOwner)
-		if ok {
-			diagnostic = owner.diagnostic
-		}
 		a.mu.Unlock()
-		if diagnostic != nil {
-			var receipt session.CommitReceipt
-			err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-				var commitErr error
-				receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(*diagnostic)
-				return commitErr
-			})
-			if !receipt.Committed {
-				a.backgroundLogger.Error(
-					"resume background diagnostic failed",
-					"process_id", processID,
-					"scope_id", scope.ID().String(),
-					"error", err,
-				)
-				continue
-			}
-			if err != nil {
-				a.backgroundLogger.Error(
-					"resume background diagnostic committed with observer error",
-					"process_id", processID,
-					"scope_id", scope.ID().String(),
-					"error", err,
-				)
-			}
-			a.mu.Lock()
-			current, currentOK := a.backgroundOwners[processID].(workflowBackgroundOwner)
-			if currentOK && current.activityID == owner.activityID {
-				current.diagnostic = nil
-				a.backgroundOwners[processID] = current
-			}
-			a.mu.Unlock()
-		}
-		a.mu.Lock()
-		owner, ok = a.backgroundOwners[processID].(workflowBackgroundOwner)
-		if !ok || owner.diagnostic != nil {
-			a.mu.Unlock()
+		if !ok {
 			continue
 		}
-		owner.delivery = admittedWorkflowDeliveryTarget{scopeID: scope.ID()}
-		a.backgroundOwners[processID] = owner
+		if owner.diagnostic != nil {
+			panic(fmt.Sprintf(
+				"workflow replay reached scope admission with an uncommitted diagnostic: process_id=%q scope_id=%s",
+				processID,
+				scope.ID(),
+			))
+		}
+		a.mu.Lock()
+		current, currentOK := a.backgroundOwners[processID].(workflowBackgroundOwner)
+		if currentOK && current.activityID == owner.activityID && current.diagnostic == nil {
+			current.delivery = admittedWorkflowDeliveryTarget{scopeID: scope.ID()}
+			a.backgroundOwners[processID] = current
+			replay = append(replay, processID)
+		}
 		a.mu.Unlock()
+	}
+	gate.mu.Unlock()
+
+	for _, processID := range replay {
 		a.options.background.ReplayPendingTerminal(processID)
 	}
 }

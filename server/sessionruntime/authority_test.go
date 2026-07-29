@@ -61,6 +61,15 @@ type backgroundContinuationLLMClient struct {
 	noticeCalls chan llm.Request
 }
 
+type workflowBackgroundDeliveryClient struct {
+	mu                 sync.Mutex
+	responses          []llm.Response
+	calls              int
+	noticeCalls        chan llm.Request
+	releaseAutomatic   <-chan struct{}
+	automaticResponded chan struct{}
+}
+
 func (c *backgroundContinuationLLMClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -83,6 +92,48 @@ func (c *backgroundContinuationLLMClient) Generate(_ context.Context, request ll
 }
 
 func (c *backgroundContinuationLLMClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func (c *workflowBackgroundDeliveryClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	hasNotice := false
+	for _, item := range request.Items {
+		if item.MessageType != nil && *item.MessageType == llm.MessageTypeBackgroundNotice {
+			hasNotice = true
+			break
+		}
+	}
+	c.mu.Lock()
+	c.calls++
+	if len(c.responses) == 0 {
+		c.mu.Unlock()
+		return llm.Response{}, errors.New("unexpected model request")
+	}
+	response := c.responses[0]
+	c.responses = c.responses[1:]
+	c.mu.Unlock()
+	if hasNotice {
+		select {
+		case c.noticeCalls <- request:
+		default:
+		}
+		if c.releaseAutomatic != nil {
+			select {
+			case <-c.releaseAutomatic:
+			case <-ctx.Done():
+				return llm.Response{}, context.Cause(ctx)
+			}
+		}
+		if c.automaticResponded != nil {
+			close(c.automaticResponded)
+		}
+	}
+	return response, nil
+}
+
+func (c *workflowBackgroundDeliveryClient) callCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.calls
@@ -1735,6 +1786,234 @@ func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *test
 	}
 	if client.callCount() != 3 {
 		t.Fatalf("model calls = %d, want initial tool turn, initial final, and one automatic continuation", client.callCount())
+	}
+}
+
+func TestWorkflowStopThenSuccessorKeepsTerminalForExplicitResume(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	releaseAutomatic := make(chan struct{})
+	automaticReturned := make(chan struct{})
+	client := &workflowBackgroundDeliveryClient{
+		responses: []llm.Response{
+			{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("workflow resume complete"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+				Usage:     llm.Usage{WindowTokens: 200000},
+			},
+		},
+		noticeCalls:        make(chan llm.Request, 2),
+		releaseAutomatic:   releaseAutomatic,
+		automaticResponded: automaticReturned,
+	}
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.MinimumExecToBgSeconds = 1
+	settings.ShellOutputMaxChars = 16_000
+	settings.Reviewer.Frequency = "off"
+	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings: settings,
+		Workdir:  fixture.config.WorkspaceRoot,
+		Client:   client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		Background:      manager,
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close authority: %v", closeErr)
+		}
+	})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "workflow-owner", &plan)
+	t.Cleanup(func() {
+		_, _ = attachment.Release(context.Background(), RuntimeReleaseClose)
+	})
+	manager.SetMinimumExecToBgTime(time.Millisecond)
+
+	workflowA := workflowExecutionRefForTest(t, workflow.TaskID("task-background"), workflow.NodeID("node-a"), nil)
+	type backgroundStartResult struct {
+		snapshot shelltool.Snapshot
+		err      error
+	}
+	startedA := make(chan backgroundStartResult, 1)
+	handleA, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowA),
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			resource, ok := scope.Resource()
+			if !ok {
+				return errors.New("workflow A scope has no runtime resource")
+			}
+			correlation, correlationErr := runtimeids.NewExecutionCorrelation(scope.ID(), resource.Generation())
+			if correlationErr != nil {
+				return correlationErr
+			}
+			start, startErr := manager.Start(ctx, shelltool.ExecRequest{
+				Command:              []string{"/bin/sh", "-c", "sleep 0.2; printf workflow-terminal"},
+				DisplayCommand:       "sleep 0.2; printf workflow-terminal",
+				OwnerSessionID:       sessionID.String(),
+				ExecutionCorrelation: &correlation,
+				Workdir:              fixture.config.WorkspaceRoot,
+				YieldTime:            time.Millisecond,
+				MaxOutputChars:       16_000,
+			})
+			if startErr != nil {
+				startedA <- backgroundStartResult{err: startErr}
+				return startErr
+			}
+			if !start.Backgrounded || !start.Running {
+				err := fmt.Errorf("workflow A command did not become background work: %+v", start)
+				startedA <- backgroundStartResult{err: err}
+				return err
+			}
+			startedA <- backgroundStartResult{snapshot: shelltool.Snapshot{
+				ID:      start.SessionID,
+				LogPath: start.OutputPath,
+			}}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start workflow A: %v", err)
+	}
+	var terminal shelltool.Snapshot
+	select {
+	case outcome := <-startedA:
+		if outcome.err != nil {
+			t.Fatalf("start workflow A background process: %v", outcome.err)
+		}
+		terminal = outcome.snapshot
+	case <-time.After(3 * time.Second):
+		if _, waitErr := handleA.Wait(context.Background()); waitErr != nil {
+			t.Fatalf("workflow A did not start its background process: %v", waitErr)
+		}
+		t.Fatal("workflow A did not start its background process")
+	}
+	if _, err := handleA.Wait(context.Background()); err != nil {
+		t.Fatalf("wait workflow A: %v", err)
+	}
+
+	workflowB := workflowExecutionRefForTest(t, workflow.TaskID("task-background"), workflow.NodeID("node-b"), nil)
+	bStarted := make(chan struct{})
+	stopB := make(chan struct{})
+	handleB, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowB),
+		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+			close(bStarted)
+			select {
+			case <-stopB:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("start workflow B: %v", err)
+	}
+	select {
+	case <-bStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("workflow B did not start")
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		output, readErr := os.ReadFile(terminal.LogPath)
+		if readErr == nil && len(output) != 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("workflow A background process did not materialize output: %v", readErr)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case request := <-client.noticeCalls:
+		t.Fatalf("stopped workflow A woke workflow B: %+v", request)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(stopB)
+	if _, err := handleB.Wait(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait workflow B: %v", err)
+	}
+
+	resumeRunnerRelease := make(chan struct{})
+	handleResume, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowA),
+		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+			select {
+			case <-resumeRunnerRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("explicitly resume workflow A: %v", err)
+	}
+	var noticeRequest llm.Request
+	select {
+	case noticeRequest = <-client.noticeCalls:
+	case <-time.After(3 * time.Second):
+		t.Fatal("explicit workflow Resume did not deliver the preserved terminal completion")
+	}
+	foundNotice := false
+	for _, item := range noticeRequest.Items {
+		if item.MessageType == nil || *item.MessageType != llm.MessageTypeBackgroundNotice {
+			continue
+		}
+		foundNotice = true
+		if item.Name == nil || *item.Name != terminal.ID {
+			t.Fatalf("background notice process id = %v, want %q", item.Name, terminal.ID)
+		}
+		if item.BackgroundExitCode == nil || *item.BackgroundExitCode != 0 {
+			t.Fatalf("background notice exit code = %v, want 0", item.BackgroundExitCode)
+		}
+	}
+	if !foundNotice {
+		t.Fatal("automatic continuation omitted the background terminal notice")
+	}
+	if output, readErr := os.ReadFile(terminal.LogPath); readErr != nil || len(output) == 0 {
+		t.Fatalf("terminal output unavailable after explicit Resume: bytes=%d error=%v", len(output), readErr)
+	}
+
+	close(releaseAutomatic)
+	select {
+	case <-automaticReturned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("automatic continuation did not complete after Resume")
+	}
+	close(resumeRunnerRelease)
+	if _, err := handleResume.Wait(context.Background()); err != nil {
+		t.Fatalf("wait resumed workflow A: %v", err)
+	}
+	select {
+	case request := <-client.noticeCalls:
+		t.Fatalf("explicit Resume delivered the terminal completion more than once: %+v", request)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if client.callCount() != 1 {
+		t.Fatalf("model calls = %d, want one resumed continuation", client.callCount())
 	}
 }
 

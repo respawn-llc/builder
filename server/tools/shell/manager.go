@@ -128,14 +128,14 @@ func (m *Manager) AcknowledgeTerminalHandoff(processID string, activityID uuid.U
 // FinalizeTerminalOwnerPoll records a durable owner-session write_stdin
 // completion. A remote session is an independent reader and cannot alter the
 // owner's terminal disposition.
-func (m *Manager) FinalizeTerminalOwnerPoll(callerSessionID string, processID string) bool {
+func (m *Manager) FinalizeTerminalOwnerPoll(callerSessionID string, processID string) TerminalOwnerPollFinalization {
 	callerSessionID = strings.TrimSpace(callerSessionID)
 	if callerSessionID == "" {
-		return false
+		return TerminalOwnerPollFinalization{}
 	}
 	entry, err := m.entry(strings.TrimSpace(processID))
 	if err != nil {
-		return false
+		return TerminalOwnerPollFinalization{}
 	}
 	return entry.finalizeOwnerPoll(callerSessionID)
 }

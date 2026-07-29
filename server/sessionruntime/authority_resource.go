@@ -674,28 +674,41 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
+	var pendingWorkflow *WorkflowExecutionRef
+	if request.Workflow != nil {
+		ref, _, admissionErr := a.workflowExecutionAdmissionLocked(request.Workflow)
+		if admissionErr != nil {
+			a.mu.Unlock()
+			return nil, admissionErr
+		}
+		pendingWorkflow = &ref
+	}
+	a.mu.Unlock()
+	if pendingWorkflow != nil {
+		if err := a.commitWorkflowResumeDiagnostics(ctx, resource, *pendingWorkflow); err != nil {
+			return nil, err
+		}
+	}
+
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return nil, ErrAuthorityClosed
+	}
 	var workflowKey workflow.CurrentNodeReferenceKey
 	var workflowRef *WorkflowExecutionRef
 	var scopeID runtimeids.ExecutionScopeID
 	var executionGeneration ExecutionGeneration
 	if request.Workflow != nil {
-		ref, leaseErr := a.validateWorkflowExecutionLeaseLocked(request.Workflow)
-		if leaseErr != nil {
+		ref, key, admissionErr := a.workflowExecutionAdmissionLocked(request.Workflow)
+		if admissionErr != nil {
 			a.mu.Unlock()
-			return nil, leaseErr
+			return nil, admissionErr
 		}
 		workflowRef = &ref
 		scopeID = request.Workflow.scopeID
 		executionGeneration = request.Workflow.executionGeneration
-		workflowKey, err = workflowExecutionKeyFor(ref)
-		if err != nil {
-			a.mu.Unlock()
-			return nil, err
-		}
-		if a.workflowExecutionLocked(ref, workflowKey) != nil {
-			a.mu.Unlock()
-			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
-		}
+		workflowKey = key
 	}
 	resource.mu.Lock()
 	if resource.current != nil {
@@ -766,10 +779,6 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
-	if workflowRef != nil {
-		a.replayWorkflowBackground(scope)
-	}
-
 	go func() {
 		if request.Workflow != nil {
 			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
@@ -777,6 +786,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 				return
 			}
 			a.beginWorkflowExecution(execution)
+			a.replayWorkflowBackground(execution.scope)
 		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,

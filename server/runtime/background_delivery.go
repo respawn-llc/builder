@@ -30,6 +30,15 @@ type PendingBackgroundDeliveryDiagnostic struct {
 	detail    string
 }
 
+// BackgroundOwnerPollFinalization is the commit-gated owner-relative result
+// returned by runtime composition after a terminal write_stdin record commits.
+// A present diagnostic has moved out of Manager and must become diagnostic-only
+// scheduler work in the caller Engine's same output mutation.
+type BackgroundOwnerPollFinalization struct {
+	Finalized  bool
+	Diagnostic *PendingBackgroundDeliveryDiagnostic
+}
+
 func newPendingBackgroundDeliveryDiagnostic(
 	processID string,
 	activity uuid.UUID,

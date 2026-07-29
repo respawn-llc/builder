@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -128,8 +130,8 @@ func newRetryDeferredBackgroundNotice(notice queuedBackgroundNotice, generation 
 // begin another automatic attempt. It remains visible until its in-flight
 // receipt is classified by the scheduler.
 type withdrawingBackgroundNotice struct {
-	notice      queuedBackgroundNotice
-	reservation uint64
+	notice  queuedBackgroundNotice
+	attempt uint64
 }
 
 func (withdrawingBackgroundNotice) backgroundNoticeState() {}
@@ -137,11 +139,11 @@ func (s withdrawingBackgroundNotice) queuedBackgroundNotice() (queuedBackgroundN
 	return s.notice, true
 }
 
-func newWithdrawingBackgroundNotice(notice queuedBackgroundNotice, reservation uint64) withdrawingBackgroundNotice {
-	if reservation == 0 {
-		panic("withdrawing background notice requires reservation")
+func newWithdrawingBackgroundNotice(notice queuedBackgroundNotice, attempt uint64) withdrawingBackgroundNotice {
+	if attempt == 0 {
+		panic("withdrawing background notice requires attempt")
 	}
-	return withdrawingBackgroundNotice{notice: notice, reservation: reservation}
+	return withdrawingBackgroundNotice{notice: notice, attempt: attempt}
 }
 
 // diagnosticOnlyBackgroundNotice preserves a user-visible delivery failure
@@ -162,6 +164,28 @@ func newDiagnosticOnlyBackgroundNotice(diagnostic PendingBackgroundDeliveryDiagn
 	return diagnosticOnlyBackgroundNotice{diagnostic: diagnostic}
 }
 
+// withdrawingDiagnosticOnlyBackgroundNotice prevents a task that was already
+// scheduled from committing a Workflow-owned diagnostic after the scope stops.
+type withdrawingDiagnosticOnlyBackgroundNotice struct {
+	diagnostic PendingBackgroundDeliveryDiagnostic
+	attempt    uint64
+}
+
+func (withdrawingDiagnosticOnlyBackgroundNotice) backgroundNoticeState() {}
+func (s withdrawingDiagnosticOnlyBackgroundNotice) queuedBackgroundNotice() (queuedBackgroundNotice, bool) {
+	return queuedBackgroundNotice{}, false
+}
+
+func newWithdrawingDiagnosticOnlyBackgroundNotice(
+	diagnostic PendingBackgroundDeliveryDiagnostic,
+	attempt uint64,
+) withdrawingDiagnosticOnlyBackgroundNotice {
+	if attempt == 0 {
+		panic("withdrawing diagnostic-only background notice requires attempt")
+	}
+	return withdrawingDiagnosticOnlyBackgroundNotice{diagnostic: diagnostic, attempt: attempt}
+}
+
 type deferredBackgroundRetryPermit struct {
 	generation uint64
 }
@@ -176,24 +200,69 @@ func newDeferredBackgroundRetryPermit(generation uint64) deferredBackgroundRetry
 type backgroundLifecycleTask interface {
 	backgroundLifecycleTask()
 	backgroundLifecycleTaskAttempt() uint64
+	backgroundLifecycleTaskControl() *backgroundLifecycleTaskControl
 }
 
 type scheduledBackgroundLifecycleTask struct {
 	attempt uint64
+	control *backgroundLifecycleTaskControl
 }
 
 func (scheduledBackgroundLifecycleTask) backgroundLifecycleTask() {}
 func (t scheduledBackgroundLifecycleTask) backgroundLifecycleTaskAttempt() uint64 {
 	return t.attempt
 }
+func (t scheduledBackgroundLifecycleTask) backgroundLifecycleTaskControl() *backgroundLifecycleTaskControl {
+	return t.control
+}
 
 type runningBackgroundLifecycleTask struct {
 	attempt uint64
+	control *backgroundLifecycleTaskControl
 }
 
 func (runningBackgroundLifecycleTask) backgroundLifecycleTask() {}
 func (t runningBackgroundLifecycleTask) backgroundLifecycleTaskAttempt() uint64 {
 	return t.attempt
+}
+func (t runningBackgroundLifecycleTask) backgroundLifecycleTaskControl() *backgroundLifecycleTaskControl {
+	return t.control
+}
+
+// backgroundLifecycleTaskControl is private scheduler ownership of one
+// lifecycle task. It lets Workflow retirement cancel and join precisely the
+// task that could otherwise start delivery after the scope stops.
+type backgroundLifecycleTaskControl struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+func newBackgroundLifecycleTaskControl() *backgroundLifecycleTaskControl {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &backgroundLifecycleTaskControl{
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+}
+
+func newScheduledBackgroundLifecycleTask(attempt uint64) scheduledBackgroundLifecycleTask {
+	if attempt == 0 {
+		panic("scheduled background lifecycle task requires attempt")
+	}
+	return scheduledBackgroundLifecycleTask{
+		attempt: attempt,
+		control: newBackgroundLifecycleTaskControl(),
+	}
+}
+
+func newRunningBackgroundLifecycleTask(task scheduledBackgroundLifecycleTask) runningBackgroundLifecycleTask {
+	if task.control == nil {
+		panic("scheduled background lifecycle task requires control")
+	}
+	return runningBackgroundLifecycleTask{attempt: task.attempt, control: task.control}
 }
 
 func nextBackgroundLifecycleAttempt(current uint64) uint64 {
@@ -213,4 +282,19 @@ func backgroundLifecycleTaskAttempt(task backgroundLifecycleTask) uint64 {
 		panic(fmt.Sprintf("background lifecycle task has invalid attempt %d", attempt))
 	}
 	return attempt
+}
+
+func backgroundLifecycleTaskControlFor(task backgroundLifecycleTask) *backgroundLifecycleTaskControl {
+	if task == nil || task.backgroundLifecycleTaskControl() == nil {
+		panic("background lifecycle task requires control")
+	}
+	return task.backgroundLifecycleTaskControl()
+}
+
+func sameBackgroundLifecycleTask(left backgroundLifecycleTask, right backgroundLifecycleTask) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return backgroundLifecycleTaskAttempt(left) == backgroundLifecycleTaskAttempt(right) &&
+		backgroundLifecycleTaskControlFor(left) == backgroundLifecycleTaskControlFor(right)
 }

@@ -123,15 +123,14 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
-		if e.cfg.BackgroundOwnerPollFinalizer != nil &&
-			e.cfg.BackgroundOwnerPollFinalizer(e.store.Meta().SessionID, backgroundSessionID) {
-			consumption := e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
-			if consumption.removed && !consumption.retainsDiagnostic &&
-				e.cfg.BackgroundCompletionSettled != nil {
-				e.cfg.BackgroundCompletionSettled(backgroundSessionID)
+		if e.cfg.BackgroundOwnerPollFinalizer != nil {
+			finalization := e.cfg.BackgroundOwnerPollFinalizer(e.store.Meta().SessionID, backgroundSessionID)
+			if !finalization.Finalized {
+				return
 			}
-			if consumption.retainsDiagnostic {
-				e.backgroundFlow.ScheduleIfIdle()
+			consumption := e.FinalizeBackgroundOwnerPoll(backgroundSessionID, finalization.Diagnostic)
+			if !consumption.retainsDiagnostic && e.cfg.BackgroundCompletionSettled != nil {
+				e.cfg.BackgroundCompletionSettled(backgroundSessionID)
 			}
 		}
 	}

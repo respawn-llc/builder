@@ -271,6 +271,9 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 }
 
 func (a *Authority) routeBackgroundedEvent(event shelltool.Event, sessionID runtimeids.SessionID, correlation *runtimeids.ExecutionCorrelation) {
+	gate := a.gateFor(sessionID)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
@@ -303,6 +306,14 @@ func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionI
 		))
 	}
 	if workflowOwner, workflow := owner.(workflowBackgroundOwner); workflow {
+		gate := a.gateFor(sessionID)
+		gate.mu.Lock()
+		defer gate.mu.Unlock()
+		owner = a.backgroundOwner(event.Snapshot.ID, event.Snapshot.ActivityID)
+		workflowOwner, workflow = owner.(workflowBackgroundOwner)
+		if !workflow {
+			return
+		}
 		deliveryScope, admitted := workflowDeliveryScope(workflowOwner)
 		if !admitted {
 			// A stopped Workflow scope returns its completion to Manager-owned
@@ -313,8 +324,9 @@ func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionI
 		a.mu.Lock()
 		execution := a.byScope[deliveryScope]
 		resource := a.resources[sessionID]
+		liveExecution := execution != nil && execution.phase == executionPhaseRunning
 		a.mu.Unlock()
-		if execution == nil || resource == nil || execution.resource != resource {
+		if !liveExecution || resource == nil || execution.resource != resource {
 			return
 		}
 		resource.mu.Lock()

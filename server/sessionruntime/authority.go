@@ -136,6 +136,29 @@ func (a *Authority) validateWorkflowExecutionLeaseLocked(lease *WorkflowExecutio
 	return lease.workflow, nil
 }
 
+// workflowExecutionAdmissionLocked validates one future scope and proves that
+// no current execution already owns its Workflow Current Node. The caller
+// must hold Authority.mu.
+func (a *Authority) workflowExecutionAdmissionLocked(
+	lease *WorkflowExecutionLease,
+) (WorkflowExecutionRef, workflow.CurrentNodeReferenceKey, error) {
+	ref, err := a.validateWorkflowExecutionLeaseLocked(lease)
+	if err != nil {
+		return WorkflowExecutionRef{}, nil, err
+	}
+	key, err := workflowExecutionKeyFor(ref)
+	if err != nil {
+		return WorkflowExecutionRef{}, nil, err
+	}
+	if a.workflowExecutionLocked(ref, key) != nil {
+		return WorkflowExecutionRef{}, nil, fmt.Errorf(
+			"workflow current node %v is already live",
+			ref.CurrentNode,
+		)
+	}
+	return ref, key, nil
+}
+
 func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHandle, bool) {
 	if a == nil {
 		return nil, false

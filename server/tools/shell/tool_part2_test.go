@@ -256,6 +256,42 @@ func TestTerminalDeliveryDiagnosticTransfersWithoutRetainingCause(t *testing.T) 
 	}
 }
 
+func TestTerminalOwnerPollFinalizationTransfersDiagnostic(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	terminal := make(chan Event, 1)
+	manager.SetEventHandler(func(event Event) {
+		if event.Type != EventCompleted && event.Type != EventKilled {
+			return
+		}
+		if !manager.RecordTerminalDeliveryFailure(event.Snapshot.ID, event.Snapshot.ActivityID, errors.New("route failed")) {
+			t.Errorf("record terminal delivery failure")
+		}
+		terminal <- event
+	})
+	start := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, "owner-session"), "owner-diagnostic", map[string]any{
+		"cmd":           "sleep 0.15; printf done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("start background process: %s", string(start.Output))
+	}
+	var event Event
+	select {
+	case event = <-terminal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal event")
+	}
+	finalization := manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID)
+	if !finalization.Finalized || finalization.Diagnostic == nil {
+		t.Fatalf("owner poll finalization = %+v, want transferred diagnostic", finalization)
+	}
+	if _, retained := manager.TakeTerminalDeliveryDiagnostic(event.Snapshot.ID, event.Snapshot.ActivityID); retained {
+		t.Fatal("owner poll left a duplicate diagnostic in Manager")
+	}
+}
+
 func uuidFromSnapshot(t *testing.T, manager *Manager, processID string) uuid.UUID {
 	t.Helper()
 	snapshot, err := manager.Snapshot(processID)
@@ -299,10 +335,10 @@ func TestTerminalOwnerPollFinalizationIsOwnerRelativeAndCommitGated(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminal handoff")
 	}
-	if manager.FinalizeTerminalOwnerPoll("remote-session", "1000") {
+	if manager.FinalizeTerminalOwnerPoll("remote-session", "1000").Finalized {
 		t.Fatal("remote poll finalized the owner's completion")
 	}
-	if !manager.FinalizeTerminalOwnerPoll("owner-session", "1000") {
+	if !manager.FinalizeTerminalOwnerPoll("owner-session", "1000").Finalized {
 		t.Fatal("committed owner poll did not finalize the pending completion")
 	}
 	if manager.ReplayPendingTerminal("1000") {
@@ -343,7 +379,7 @@ func TestAutomaticFinalizationRequiresAcknowledgedTerminalHandoff(t *testing.T) 
 	if !manager.FinalizeAutomaticTerminal(evt.Snapshot.ID, evt.Snapshot.ActivityID) {
 		t.Fatal("automatic finalizer did not settle acknowledged handoff")
 	}
-	if manager.FinalizeTerminalOwnerPoll("owner-session", evt.Snapshot.ID) {
+	if manager.FinalizeTerminalOwnerPoll("owner-session", evt.Snapshot.ID).Finalized {
 		t.Fatal("owner poll retroactively replaced automatic settlement")
 	}
 	if manager.ReplayPendingTerminal(evt.Snapshot.ID) {

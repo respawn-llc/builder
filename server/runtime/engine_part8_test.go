@@ -202,8 +202,9 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{
 		Model: "gpt-5",
-		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) bool {
-			return manager.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) BackgroundOwnerPollFinalization {
+			finalization := manager.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+			return BackgroundOwnerPollFinalization{Finalized: finalization.Finalized}
 		},
 		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
 			return manager.FinalizeAutomaticTerminal(processID, activityID)
