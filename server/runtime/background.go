@@ -445,6 +445,23 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		}
 		accepted := false
 		for index, notice := range reserved {
+			if notice.diagnostic != nil {
+				diagnosticReceipt, diagnosticErr := b.engine.CommitPendingBackgroundDeliveryDiagnostic(*notice.diagnostic)
+				if !diagnosticReceipt.Committed {
+					b.restoreUncommittedReservations(reserved[index:], diagnosticErr)
+					return diagnosticErr
+				}
+				b.clearCommittedDeliveryDiagnostic(notice.processID(), notice.activityID())
+				notice.diagnostic = nil
+				if diagnosticErr != nil {
+					slog.Error(
+						"background delivery diagnostic committed with observer error",
+						"process_id", notice.processID(),
+						"activity_id", notice.activityID().String(),
+						"error", diagnosticErr,
+					)
+				}
+			}
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
 			b.FinalizeCommittedBackgroundNotice(notice, receipt)
 			if receipt.Committed {
