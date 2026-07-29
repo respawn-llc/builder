@@ -509,8 +509,13 @@ func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)          
 func (s *recoverySchedulingObserver) DrainPendingNotices() []queuedBackgroundNotice          { return nil }
 func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) {
 }
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                    { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool { return false }
+func (s *recoverySchedulingObserver) RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice) {}
+func (s *recoverySchedulingObserver) HasPendingNotices() bool                                      { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool                   { return false }
+func (s *recoverySchedulingObserver) PermitRetry() bool                                            { return false }
+func (s *recoverySchedulingObserver) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
+	return BackgroundDeliveryRetirementSnapshot{}
+}
 
 func (s *recoverySchedulingObserver) ScheduleIfIdle() {
 	if s != nil && s.onSchedule != nil {

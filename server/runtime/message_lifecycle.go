@@ -331,11 +331,11 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 			m.background.FinalizeCommittedBackgroundNotice(notice, receipt)
 		}
 		if err != nil {
-			if scheduler, ok := m.background.(*defaultBackgroundNoticeScheduler); ok {
+			if m.background != nil {
 				if receipt.Committed {
-					scheduler.restoreRetryDeferredNoticesFront(pendingNotices[index+1:])
+					m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index+1:])
 				} else {
-					scheduler.restoreRetryDeferredNoticesFront(pendingNotices[index:])
+					m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index:])
 				}
 			}
 			return result, err

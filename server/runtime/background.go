@@ -18,22 +18,26 @@ import (
 	"github.com/google/uuid"
 )
 
+// BackgroundDeliveryRetirementSnapshot is the scheduler-owned answer to
+// whether a resource must stay alive for background delivery. Changed closes
+// whenever that answer may have changed.
+type BackgroundDeliveryRetirementSnapshot struct {
+	Active  bool
+	Changed <-chan struct{}
+}
+
 type defaultBackgroundNoticeScheduler struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
 
-	mu        sync.Mutex
-	pending   []backgroundNoticeState
-	task      backgroundLifecycleTask
-	nextTask  uint64
-	nextRetry uint64
-}
-
-type queuedBackgroundNotice struct {
-	processID  string
-	activity   uuid.UUID
-	intent     steeringIntent
-	diagnostic *PendingBackgroundDeliveryDiagnostic
+	mu              sync.Mutex
+	states          []backgroundNoticeState
+	task            backgroundLifecycleTask
+	nextTask        uint64
+	nextReservation uint64
+	nextRetry       uint64
+	retryPermit     *deferredBackgroundRetryPermit
+	changed         chan struct{}
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
@@ -50,8 +54,9 @@ func (e *Engine) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
 }
 
 // DiscardProvisionalBackgroundNotice removes only an uncommitted automatic
-// notice. It is used when a Manager owner-poll receipt supersedes a terminal
-// handoff while the Authority callback is still returning.
+// completion. A durable owner-poll receipt may call it after the Manager has
+// accepted the owner-relative disposition. Any delivery diagnostic remains as
+// diagnostic-only work and therefore continues to block retirement.
 func (e *Engine) DiscardProvisionalBackgroundNotice(processID string) bool {
 	e.ensureOrchestrationCollaborators()
 	return e.backgroundFlow.ConsumePendingBackgroundNotice(processID)
@@ -62,23 +67,28 @@ func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
 	e.backgroundFlow.ScheduleIfIdle()
 }
 
+// BackgroundDeliveryRetirementSnapshot exposes the scheduler's single source
+// of truth to Session runtime retention. It deliberately does not expose the
+// queue representation or let another package mutate scheduler state.
+func (e *Engine) BackgroundDeliveryRetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RetirementSnapshot()
+}
+
+// PermitBackgroundDeliveryRetry grants exactly one externally triggered retry
+// for the current deferred generation. Lifecycle tasks never grant permits to
+// themselves, which prevents a failed automatic delivery from spinning.
+func (e *Engine) PermitBackgroundDeliveryRetry() bool {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.PermitRetry()
+}
+
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
 	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-	if !queueNotice {
+	if !queueNotice || !evt.Type.IsTerminal() {
 		return
 	}
-	if !evt.Type.IsTerminal() {
-		return
-	}
-	b.queueBackgroundShellNotice(evt, llm.Message{
-		Role:                 llm.RoleDeveloper,
-		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
-		Name:                 textutil.OptionalTrimmedString(evt.ID),
-		BackgroundActivityID: textutil.Value(evt.ActivityID.String()),
-		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
-		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
-		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
-	}, true)
+	b.queueBackgroundShellNotice(evt, backgroundNoticeMessage(evt), true)
 }
 
 func (b *defaultBackgroundNoticeScheduler) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
@@ -86,7 +96,11 @@ func (b *defaultBackgroundNoticeScheduler) AdmitBackgroundShellUpdate(evt Backgr
 		panic(fmt.Sprintf("background admission requires terminal event: process_id=%q type=%q", evt.ID, evt.Type))
 	}
 	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-	b.queueBackgroundShellNotice(evt, llm.Message{
+	b.queueBackgroundShellNotice(evt, backgroundNoticeMessage(evt), false)
+}
+
+func backgroundNoticeMessage(evt BackgroundShellEvent) llm.Message {
+	return llm.Message{
 		Role:                 llm.RoleDeveloper,
 		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:                 textutil.OptionalTrimmedString(evt.ID),
@@ -94,7 +108,7 @@ func (b *defaultBackgroundNoticeScheduler) AdmitBackgroundShellUpdate(evt Backgr
 		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
 		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
-	}, false)
+	}
 }
 
 func formatBackgroundShellNotice(evt BackgroundShellEvent) string {
@@ -131,15 +145,10 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 		return
 	}
 	shouldSchedule := false
-	notice := queuedBackgroundNotice{
-		intent: steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
-	}
-	b.admitNotice(notice, true, &shouldSchedule)
-	if shouldSchedule {
-		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduledTask()
-		}
-	}
+	b.admitNotice(newDeveloperBackgroundNotice(
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
+	), true, &shouldSchedule)
+	b.launchIfScheduled(shouldSchedule)
 }
 
 func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt BackgroundShellEvent, msg llm.Message, schedule bool) {
@@ -147,21 +156,32 @@ func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt Backgr
 		return
 	}
 	shouldSchedule := false
-	b.admitNotice(queuedBackgroundNotice{
-		processID: strings.TrimSpace(evt.ID),
-		activity:  evt.ActivityID,
-		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
-	}, schedule, &shouldSchedule)
-	if shouldSchedule {
-		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduledTask()
-		}
+	b.admitNotice(newTerminalBackgroundNotice(
+		evt.ID,
+		evt.ActivityID,
+		steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
+	), schedule, &shouldSchedule)
+	b.launchIfScheduled(shouldSchedule)
+}
+
+func (b *defaultBackgroundNoticeScheduler) launchIfScheduled(shouldSchedule bool) {
+	if !shouldSchedule {
+		return
+	}
+	if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
+		b.clearScheduledTask()
 	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNotice, schedule bool, shouldSchedule *bool) {
 	b.mu.Lock()
-	b.pending = append(b.pending, pendingBackgroundNotice{notice: notice})
+	b.ensureChangedLocked()
+	b.states = append(b.states, pendingBackgroundNotice{notice: notice})
+	// A newly admitted notice is an external lifecycle boundary. It may carry
+	// one previously deferred completion with it, but a failed task can never
+	// schedule itself after it returns.
+	b.permitEarliestRetryLocked()
+	b.signalChangedLocked()
 	if schedule && b.task == nil && (b.steps == nil || !b.steps.IsBusy()) {
 		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
 		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
@@ -170,42 +190,48 @@ func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNo
 	b.mu.Unlock()
 }
 
+// DrainPendingNotices reserves currently deliverable notices for the existing
+// user-injection flush. The receipt is applied later by
+// FinalizeCommittedBackgroundNotice; this method never treats harvesting as
+// durable acceptance.
 func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.pending) == 0 {
-		return nil
-	}
-	pending := backgroundNoticesFromStates(b.pending)
-	b.pending = nil
-	return pending
+	reserved := b.reserveDeliverableLocked()
+	return backgroundNoticesFromStates(reserved)
 }
 
 func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return len(b.pending) > 0
+	return b.hasRetirementWorkLocked()
 }
 
-func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessionID string) bool {
-	processID := strings.TrimSpace(sessionID)
+func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(processID string) bool {
+	processID = strings.TrimSpace(processID)
 	if processID == "" {
 		return false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
+	b.ensureChangedLocked()
 	removed := false
-	filtered := b.pending[:0]
-	for _, state := range b.pending {
-		notice := state.backgroundNotice()
-		if notice.processID == processID {
-			removed = true
+	next := make([]backgroundNoticeState, 0, len(b.states))
+	for _, state := range b.states {
+		notice, hasNotice := state.queuedBackgroundNotice()
+		if !hasNotice || notice.processID() != processID {
+			next = append(next, state)
 			continue
 		}
-		filtered = append(filtered, state)
+		removed = true
+		if notice.diagnostic != nil {
+			next = append(next, newDiagnosticOnlyBackgroundNotice(*notice.diagnostic))
+		}
 	}
-	b.pending = filtered
+	if removed {
+		b.states = next
+		b.signalChangedLocked()
+	}
 	return removed
 }
 
@@ -215,16 +241,57 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 	shouldSchedule := false
 	b.mu.Lock()
-	if len(b.pending) > 0 && b.task == nil {
+	if b.task == nil {
+		// This call comes from an idle boundary outside a completed lifecycle
+		// task. It is therefore a valid external retry trigger.
+		b.permitEarliestRetryLocked()
+	}
+	if b.task == nil && b.hasDeliverableNoticeLocked() {
 		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
 		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
+		b.signalChangedLocked()
 		shouldSchedule = true
 	}
 	b.mu.Unlock()
-	if shouldSchedule {
-		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduledTask()
+	b.launchIfScheduled(shouldSchedule)
+}
+
+func (b *defaultBackgroundNoticeScheduler) PermitRetry() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.permitEarliestRetryLocked()
+}
+
+func (b *defaultBackgroundNoticeScheduler) permitEarliestRetryLocked() bool {
+	if b.retryPermit != nil {
+		return false
+	}
+	var generation uint64
+	for _, state := range b.states {
+		retry, ok := state.(retryDeferredBackgroundNotice)
+		if !ok {
+			continue
 		}
+		if generation == 0 || retry.generation < generation {
+			generation = retry.generation
+		}
+	}
+	if generation == 0 {
+		return false
+	}
+	permit := newDeferredBackgroundRetryPermit(generation)
+	b.retryPermit = &permit
+	b.signalChangedLocked()
+	return true
+}
+
+func (b *defaultBackgroundNoticeScheduler) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ensureChangedLocked()
+	return BackgroundDeliveryRetirementSnapshot{
+		Active:  b.hasRetirementWorkLocked(),
+		Changed: b.changed,
 	}
 }
 
@@ -263,41 +330,39 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 }
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
-	if len(b.pendingSnapshot()) == 0 {
+	if !b.hasDeliverableNotice() {
 		return llm.Message{}, nil
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
-		pending := b.drainPending()
-		if len(pending) == 0 {
+		reserved := b.reserveDeliverable()
+		if len(reserved) == 0 {
 			return nil
 		}
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-			b.restoreRetryDeferredFront(pending)
+			b.restoreUncommittedReservations(reserved, nil)
 			return err
 		}
-		for index, state := range pending {
-			notice := state.backgroundNotice()
+		accepted := false
+		for index, notice := range reserved {
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
 			b.FinalizeCommittedBackgroundNotice(notice, receipt)
+			if receipt.Committed {
+				accepted = true
+			}
 			if steerErr != nil {
-				if !receipt.Committed && notice.processID != "" {
+				if !receipt.Committed && notice.hasIdentity() {
 					diagnostic := newPendingBackgroundDeliveryDiagnostic(
-						notice.processID,
-						notice.activity,
+						notice.processID(),
+						notice.activityID(),
 						backgroundDeliveryStageAutomaticSteering,
 						nextBackgroundDeliveryAttempt(notice.diagnostic),
 						steerErr,
 					)
-					pending[index] = pendingBackgroundNotice{notice: queuedBackgroundNotice{
-						processID:  notice.processID,
-						activity:   notice.activity,
-						intent:     notice.intent,
-						diagnostic: &diagnostic,
-					}}
+					notice.diagnostic = &diagnostic
 					slog.Error(
 						"background completion delivery failed",
-						"process_id", notice.processID,
-						"activity_id", notice.activity.String(),
+						"process_id", notice.processID(),
+						"activity_id", notice.activityID().String(),
 						"stage", backgroundDeliveryStageAutomaticSteering,
 						"attempt", diagnostic.attempt,
 						"committed", false,
@@ -305,12 +370,15 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 					)
 				}
 				if !receipt.Committed {
-					b.restoreRetryDeferredFront(pending[index:])
+					b.restoreUncommittedReservations(append([]queuedBackgroundNotice{notice}, reserved[index+1:]...), steerErr)
 				} else {
-					b.restoreRetryDeferredFront(pending[index+1:])
+					b.restoreUncommittedReservations(reserved[index+1:], nil)
 				}
 				return steerErr
 			}
+		}
+		if !accepted {
+			return nil
 		}
 		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
 		assistant = msg
@@ -330,13 +398,10 @@ func nextBackgroundDeliveryAttempt(previous *PendingBackgroundDeliveryDiagnostic
 }
 
 func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() {
-	for _, notice := range b.pendingSnapshot() {
-		if notice.diagnostic == nil {
-			continue
-		}
-		receipt, err := b.engine.commitBackgroundDeliveryDiagnostic(*notice.diagnostic)
+	for _, diagnostic := range b.pendingDiagnosticsSnapshot() {
+		receipt, err := b.engine.commitBackgroundDeliveryDiagnostic(diagnostic)
 		if receipt.Committed {
-			b.clearCommittedDeliveryDiagnostic(notice.processID, notice.activity)
+			b.clearCommittedDeliveryDiagnostic(diagnostic.processID, diagnostic.activity)
 		}
 		if err != nil {
 			return
@@ -344,105 +409,273 @@ func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() {
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(processID string, activity uuid.UUID) {
+func (b *defaultBackgroundNoticeScheduler) pendingDiagnosticsSnapshot() []PendingBackgroundDeliveryDiagnostic {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for index, state := range b.pending {
-		notice := state.backgroundNotice()
-		if notice.processID == processID && notice.activity == activity {
-			notice.diagnostic = nil
-			switch current := state.(type) {
-			case pendingBackgroundNotice:
-				current.notice = notice
-				b.pending[index] = current
-			case retryDeferredBackgroundNotice:
-				current.notice = notice
-				b.pending[index] = current
-			default:
-				panic(fmt.Sprintf("unknown background notice state %T", state))
+	diagnostics := make([]PendingBackgroundDeliveryDiagnostic, 0)
+	for _, state := range b.states {
+		switch current := state.(type) {
+		case pendingBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
 			}
+		case reservedBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
+			}
+		case retryDeferredBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
+			}
+		case withdrawingBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
+			}
+		case diagnosticOnlyBackgroundNotice:
+			diagnostics = append(diagnostics, current.diagnostic)
+		default:
+			panic(fmt.Sprintf("unknown background notice state %T", state))
 		}
+	}
+	return diagnostics
+}
+
+func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(processID string, activity uuid.UUID) {
+	settled := make([]string, 0, 1)
+	b.mu.Lock()
+	b.ensureChangedLocked()
+	next := make([]backgroundNoticeState, 0, len(b.states))
+	for _, state := range b.states {
+		switch current := state.(type) {
+		case diagnosticOnlyBackgroundNotice:
+			if current.diagnostic.processID == processID && current.diagnostic.activity == activity {
+				settled = append(settled, processID)
+				continue
+			}
+		case pendingBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		case reservedBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		case retryDeferredBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		case withdrawingBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		default:
+			panic(fmt.Sprintf("unknown background notice state %T", state))
+		}
+		next = append(next, state)
+	}
+	b.states = next
+	b.signalChangedLocked()
+	b.mu.Unlock()
+	for _, settledProcessID := range settled {
+		b.notifyCompletionSettled(settledProcessID)
 	}
 }
 
+// FinalizeCommittedBackgroundNotice applies a durable steering receipt to its
+// exact reservation. The Manager finalizer remains the authority for terminal
+// disposition; the scheduler then either removes the notice or retains only a
+// diagnostic obligation.
 func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(notice queuedBackgroundNotice, receipt session.CommitReceipt) {
-	if !receipt.Committed || notice.processID == "" || b.engine.cfg.BackgroundAutomaticFinalizer == nil {
+	if !receipt.Committed {
 		return
 	}
-	if b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID, notice.activity) &&
-		b.engine.cfg.BackgroundCompletionSettled != nil {
-		b.engine.cfg.BackgroundCompletionSettled(notice.processID)
+	settled := false
+	if notice.hasIdentity() && b.engine.cfg.BackgroundAutomaticFinalizer != nil {
+		settled = b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID(), notice.activityID())
+	} else {
+		settled = true
 	}
+	if !settled {
+		return
+	}
+	notify := ""
+	b.mu.Lock()
+	b.ensureChangedLocked()
+	next := make([]backgroundNoticeState, 0, len(b.states))
+	for _, state := range b.states {
+		current, hasNotice := state.queuedBackgroundNotice()
+		if !hasNotice || !sameBackgroundNotice(current, notice) {
+			next = append(next, state)
+			continue
+		}
+		if current.diagnostic != nil {
+			next = append(next, newDiagnosticOnlyBackgroundNotice(*current.diagnostic))
+		} else if current.hasIdentity() {
+			notify = current.processID()
+		}
+	}
+	b.states = next
+	b.signalChangedLocked()
+	b.mu.Unlock()
+	if notify != "" {
+		b.notifyCompletionSettled(notify)
+	}
+}
+
+func sameBackgroundNotice(left queuedBackgroundNotice, right queuedBackgroundNotice) bool {
+	if left.key == uuid.Nil || right.key == uuid.Nil {
+		panic("background notice requires UUIDv4 key")
+	}
+	if left.identity == nil || right.identity == nil {
+		return left.identity == nil && right.identity == nil && left.key == right.key
+	}
+	return left.identity.processID == right.identity.processID && left.identity.activity == right.identity.activity
+}
+
+func (b *defaultBackgroundNoticeScheduler) notifyCompletionSettled(processID string) {
+	if b.engine.cfg.BackgroundCompletionSettled != nil {
+		b.engine.cfg.BackgroundCompletionSettled(processID)
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasDeliverableNotice() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hasDeliverableNoticeLocked()
+}
+
+func (b *defaultBackgroundNoticeScheduler) reserveDeliverable() []queuedBackgroundNotice {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	reserved := b.reserveDeliverableLocked()
+	return backgroundNoticesFromStates(reserved)
+}
+
+func (b *defaultBackgroundNoticeScheduler) reserveDeliverableLocked() []backgroundNoticeState {
+	b.ensureChangedLocked()
+	b.nextReservation = nextBackgroundLifecycleAttempt(b.nextReservation)
+	reservation := b.nextReservation
+	reserved := make([]backgroundNoticeState, 0)
+	next := make([]backgroundNoticeState, 0, len(b.states))
+	for _, state := range b.states {
+		switch current := state.(type) {
+		case pendingBackgroundNotice:
+			reservationState := newReservedBackgroundNotice(current.notice, reservation)
+			next = append(next, reservationState)
+			reserved = append(reserved, reservationState)
+		case retryDeferredBackgroundNotice:
+			if b.retryPermit != nil && b.retryPermit.generation == current.generation {
+				reservationState := newReservedBackgroundNotice(current.notice, reservation)
+				next = append(next, reservationState)
+				reserved = append(reserved, reservationState)
+				continue
+			}
+			next = append(next, state)
+		default:
+			next = append(next, state)
+		}
+	}
+	if len(reserved) > 0 && b.retryPermit != nil {
+		b.retryPermit = nil
+	}
+	if len(reserved) > 0 {
+		b.states = next
+		b.signalChangedLocked()
+	}
+	return reserved
+}
+
+func (b *defaultBackgroundNoticeScheduler) restoreUncommittedReservations(notices []queuedBackgroundNotice, cause error) {
+	if len(notices) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ensureChangedLocked()
+	b.nextRetry = nextBackgroundLifecycleAttempt(b.nextRetry)
+	for _, notice := range notices {
+		for index, state := range b.states {
+			reserved, ok := state.(reservedBackgroundNotice)
+			if !ok || !sameBackgroundNotice(reserved.notice, notice) {
+				continue
+			}
+			if cause != nil && notice.diagnostic != nil {
+				reserved.notice.diagnostic = notice.diagnostic
+			}
+			b.states[index] = newRetryDeferredBackgroundNotice(reserved.notice, b.nextRetry)
+			break
+		}
+	}
+	b.signalChangedLocked()
+}
+
+// restoreRetryDeferredNoticesFront is retained as the scheduler's deep
+// combined-flush recovery operation. The message lifecycle depends only on
+// the scheduler contract and never mutates the queue itself.
+func (b *defaultBackgroundNoticeScheduler) restoreRetryDeferredNoticesFront(notices []queuedBackgroundNotice) {
+	b.restoreUncommittedReservations(notices, nil)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RestoreUncommittedBackgroundNotices(notices []queuedBackgroundNotice) {
+	b.restoreUncommittedReservations(notices, nil)
 }
 
 func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return backgroundNoticesFromStates(b.pending)
-}
-
-func (b *defaultBackgroundNoticeScheduler) drainPending() []backgroundNoticeState {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.pending) == 0 {
-		return nil
-	}
-	pending := append([]backgroundNoticeState(nil), b.pending...)
-	b.pending = nil
-	return pending
-}
-
-func (b *defaultBackgroundNoticeScheduler) restoreRetryDeferredFront(notices []backgroundNoticeState) {
-	if len(notices) == 0 {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.nextRetry++
-	if b.nextRetry == 0 {
-		panic("background retry generation overflow")
-	}
-	restored := make([]backgroundNoticeState, 0, len(notices)+len(b.pending))
-	for _, state := range notices {
-		restored = append(restored, newRetryDeferredBackgroundNotice(state.backgroundNotice(), b.nextRetry))
-	}
-	restored = append(restored, b.pending...)
-	b.pending = restored
-}
-
-func (b *defaultBackgroundNoticeScheduler) restoreRetryDeferredNoticesFront(notices []queuedBackgroundNotice) {
-	if len(notices) == 0 {
-		return
-	}
-	states := make([]backgroundNoticeState, 0, len(notices))
-	for _, notice := range notices {
-		states = append(states, pendingBackgroundNotice{notice: notice})
-	}
-	b.restoreRetryDeferredFront(states)
+	return backgroundNoticesFromStates(b.states)
 }
 
 func backgroundNoticesFromStates(states []backgroundNoticeState) []queuedBackgroundNotice {
-	if len(states) == 0 {
-		return nil
-	}
 	notices := make([]queuedBackgroundNotice, 0, len(states))
 	for _, state := range states {
-		switch current := state.(type) {
-		case pendingBackgroundNotice:
-			notices = append(notices, current.notice)
-		case retryDeferredBackgroundNotice:
-			notices = append(notices, current.notice)
-		default:
-			panic(fmt.Sprintf("unknown background notice state %T", state))
+		notice, ok := state.queuedBackgroundNotice()
+		if ok {
+			notices = append(notices, notice)
 		}
 	}
 	return notices
+}
+
+func (b *defaultBackgroundNoticeScheduler) ensureChangedLocked() {
+	if b.changed == nil {
+		b.changed = make(chan struct{})
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) signalChangedLocked() {
+	b.ensureChangedLocked()
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasDeliverableNoticeLocked() bool {
+	for _, state := range b.states {
+		switch current := state.(type) {
+		case pendingBackgroundNotice:
+			return true
+		case retryDeferredBackgroundNotice:
+			if b.retryPermit != nil && b.retryPermit.generation == current.generation {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasRetirementWorkLocked() bool {
+	return len(b.states) != 0 || b.task != nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) clearScheduledTask() {
 	b.mu.Lock()
 	if _, scheduled := b.task.(scheduledBackgroundLifecycleTask); scheduled {
 		b.task = nil
+		b.signalChangedLocked()
 	}
 	b.mu.Unlock()
 }
@@ -456,6 +689,7 @@ func (b *defaultBackgroundNoticeScheduler) beginTask() (uint64, bool) {
 	}
 	attempt := backgroundLifecycleTaskAttempt(scheduled)
 	b.task = runningBackgroundLifecycleTask{attempt: attempt}
+	b.signalChangedLocked()
 	return attempt, true
 }
 
@@ -467,4 +701,5 @@ func (b *defaultBackgroundNoticeScheduler) finishTask(attempt uint64) {
 		return
 	}
 	b.task = nil
+	b.signalChangedLocked()
 }

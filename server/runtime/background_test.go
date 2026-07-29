@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 type blockingBackgroundStepLifecycle struct {
@@ -158,5 +161,110 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		case <-time.After(2 * time.Second):
 			t.Fatalf("iteration %d: close remained blocked after race", i)
 		}
+	}
+}
+
+func TestBackgroundDeliveryRetirementTracksReservedAndDiagnosticOnlyWork(t *testing.T) {
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
+	activity := uuid.New()
+	notice := newTerminalBackgroundNotice(
+		"1000",
+		activity,
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
+		),
+	)
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"1000",
+		activity,
+		backgroundDeliveryStageAutomaticSteering,
+		1,
+		errors.New("steering failed"),
+	)
+	notice.diagnostic = &diagnostic
+
+	shouldSchedule := false
+	scheduler.admitNotice(notice, false, &shouldSchedule)
+	if shouldSchedule {
+		t.Fatal("unscheduled admission unexpectedly requested a lifecycle task")
+	}
+	pending := scheduler.RetirementSnapshot()
+	if !pending.Active {
+		t.Fatal("pending background delivery did not retain its runtime")
+	}
+
+	reserved := scheduler.DrainPendingNotices()
+	if len(reserved) != 1 || !sameBackgroundNotice(reserved[0], notice) {
+		t.Fatalf("reserved notices = %+v, want terminal notice", reserved)
+	}
+	reservation := scheduler.RetirementSnapshot()
+	if !reservation.Active {
+		t.Fatal("reserved background delivery did not retain its runtime")
+	}
+	select {
+	case <-pending.Changed:
+	default:
+		t.Fatal("reservation did not publish a retirement change")
+	}
+
+	scheduler.FinalizeCommittedBackgroundNotice(notice, session.CommitReceipt{Committed: true})
+	diagnosticOnly := scheduler.RetirementSnapshot()
+	if !diagnosticOnly.Active {
+		t.Fatal("diagnostic-only delivery did not retain its runtime")
+	}
+	if len(scheduler.states) != 1 {
+		t.Fatalf("scheduler states = %+v, want one diagnostic-only state", scheduler.states)
+	}
+	if _, ok := scheduler.states[0].(diagnosticOnlyBackgroundNotice); !ok {
+		t.Fatalf("scheduler state = %T, want diagnostic-only", scheduler.states[0])
+	}
+
+	scheduler.clearCommittedDeliveryDiagnostic("1000", activity)
+	settled := scheduler.RetirementSnapshot()
+	if settled.Active {
+		t.Fatalf("settled diagnostic retained runtime: %+v", settled)
+	}
+	select {
+	case <-diagnosticOnly.Changed:
+	default:
+		t.Fatal("diagnostic settlement did not publish a retirement change")
+	}
+}
+
+func TestBackgroundDeliveryRetryRequiresAnExternalPermit(t *testing.T) {
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
+	notice := newTerminalBackgroundNotice(
+		"1001",
+		uuid.New(),
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
+		),
+	)
+	shouldSchedule := false
+	scheduler.admitNotice(notice, false, &shouldSchedule)
+	reserved := scheduler.DrainPendingNotices()
+	if len(reserved) != 1 {
+		t.Fatalf("reserved notices = %+v, want one", reserved)
+	}
+	scheduler.restoreUncommittedReservations(reserved, errors.New("persistence failed"))
+	if scheduler.hasDeliverableNotice() {
+		t.Fatal("failed delivery became self-retryable without an external permit")
+	}
+	if scheduler.PermitRetry() != true {
+		t.Fatal("external retry permit was not granted")
+	}
+	if !scheduler.hasDeliverableNotice() {
+		t.Fatal("external retry permit did not authorize deferred delivery")
+	}
+	if scheduler.PermitRetry() {
+		t.Fatal("duplicate external retry permit was accepted")
 	}
 }

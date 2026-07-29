@@ -39,9 +39,12 @@ type backgroundNoticeScheduler interface {
 	QueueDeveloperNotice(msg llm.Message)
 	DrainPendingNotices() []queuedBackgroundNotice
 	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt)
+	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()
+	PermitRetry() bool
+	RetirementSnapshot() BackgroundDeliveryRetirementSnapshot
 }
 
 type contextCompactor interface {

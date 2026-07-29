@@ -534,7 +534,12 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
-	if a.hasOrdinaryBackgroundOwner(sessionID) {
+	engine := resource.engine
+	background := runtime.BackgroundDeliveryRetirementSnapshot{}
+	if engine != nil {
+		background = engine.BackgroundDeliveryRetirementSnapshot()
+	}
+	if a.hasOrdinaryBackgroundOwner(sessionID) || background.Active {
 		if request.DropOwner {
 			resource.ownerlessDisposition = agentResourceRetireWhenIdle
 		}
@@ -576,7 +581,11 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	sessionID := resource.ref.SessionID()
-	if a.hasOrdinaryBackgroundOwner(sessionID) {
+	resource.mu.Lock()
+	engine := resource.engine
+	resource.mu.Unlock()
+	if a.hasOrdinaryBackgroundOwner(sessionID) ||
+		(engine != nil && engine.BackgroundDeliveryRetirementSnapshot().Active) {
 		return nil
 	}
 	gate := a.gateFor(sessionID)
@@ -595,6 +604,10 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
+		resource.mu.Unlock()
+		return nil
+	}
+	if resource.engine != nil && resource.engine.BackgroundDeliveryRetirementSnapshot().Active {
 		resource.mu.Unlock()
 		return nil
 	}
