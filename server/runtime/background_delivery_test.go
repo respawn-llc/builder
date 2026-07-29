@@ -108,3 +108,34 @@ func TestBackgroundDeliveryDiagnosticPersistsOnlyAfterCommit(t *testing.T) {
 		t.Fatalf("committed background delivery diagnostics = %d, want %d", after, before+1)
 	}
 }
+
+func TestPendingBackgroundDeliveryDiagnosticReturnsTypedErrorUntilCommitted(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"process-typed",
+		uuid.New(),
+		backgroundDeliveryStageAutomaticSteering,
+		1,
+		errors.New("persistence failed"),
+	)
+	blocker := mustBlockTestEventLogAppends(t, store)
+	receipt, err := engine.CommitPendingBackgroundDeliveryDiagnostic(diagnostic)
+	if receipt.Committed {
+		t.Fatalf("uncommitted receipt = %+v", receipt)
+	}
+	var deliveryErr *BackgroundDeliveryError
+	if !errors.As(err, &deliveryErr) {
+		t.Fatalf("error = %T %v, want BackgroundDeliveryError", err, err)
+	}
+	if deliveryErr.ProcessID != "process-typed" || deliveryErr.Activity != diagnostic.activity {
+		t.Fatalf("typed delivery error = %+v", deliveryErr)
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log appends: %v", err)
+	}
+	receipt, err = engine.CommitPendingBackgroundDeliveryDiagnostic(diagnostic)
+	if !receipt.Committed {
+		t.Fatalf("committed receipt = %+v error=%v", receipt, err)
+	}
+}

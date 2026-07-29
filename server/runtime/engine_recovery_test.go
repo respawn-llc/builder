@@ -14,6 +14,8 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
@@ -515,6 +517,9 @@ func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool
 func (s *recoverySchedulingObserver) PermitRetry() bool                                            { return false }
 func (s *recoverySchedulingObserver) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
 	return BackgroundDeliveryRetirementSnapshot{}
+}
+func (s *recoverySchedulingObserver) Withdraw(context.Context, string, uuid.UUID) (BackgroundDeliveryWithdrawal, bool, error) {
+	return BackgroundDeliveryWithdrawal{}, false, nil
 }
 
 func (s *recoverySchedulingObserver) ScheduleIfIdle() {

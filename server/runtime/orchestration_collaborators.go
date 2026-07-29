@@ -6,6 +6,8 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+
+	"github.com/google/uuid"
 )
 
 type exclusiveStepOptions struct {
@@ -45,6 +47,7 @@ type backgroundNoticeScheduler interface {
 	ScheduleIfIdle()
 	PermitRetry() bool
 	RetirementSnapshot() BackgroundDeliveryRetirementSnapshot
+	Withdraw(context.Context, string, uuid.UUID) (BackgroundDeliveryWithdrawal, bool, error)
 }
 
 type contextCompactor interface {

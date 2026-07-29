@@ -268,3 +268,47 @@ func TestBackgroundDeliveryRetryRequiresAnExternalPermit(t *testing.T) {
 		t.Fatal("duplicate external retry permit was accepted")
 	}
 }
+
+func TestBackgroundDeliveryWithdrawalClassifiesReservedReceipt(t *testing.T) {
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine}
+	activity := uuid.New()
+	notice := newTerminalBackgroundNotice(
+		"1002",
+		activity,
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
+		),
+	)
+	shouldSchedule := false
+	scheduler.admitNotice(notice, false, &shouldSchedule)
+	reserved := scheduler.DrainPendingNotices()
+	if len(reserved) != 1 {
+		t.Fatalf("reserved notices = %+v, want one", reserved)
+	}
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"1002",
+		activity,
+		backgroundDeliveryStageAutomaticSteering,
+		1,
+		errors.New("append failed"),
+	)
+	reserved[0].diagnostic = &diagnostic
+	reservation := scheduler.states[0].(reservedBackgroundNotice)
+	scheduler.states[0] = newWithdrawingBackgroundNotice(reservation.notice, reservation.reservation)
+	scheduler.restoreUncommittedReservations(reserved, errors.New("append failed"))
+
+	withdrawal, found, err := scheduler.Withdraw(context.Background(), "1002", activity)
+	if err != nil || !found {
+		t.Fatalf("withdrawal = %+v found=%t error=%v", withdrawal, found, err)
+	}
+	if !withdrawal.CompletionPending || withdrawal.Diagnostic == nil {
+		t.Fatalf("withdrawal = %+v, want pending completion and diagnostic", withdrawal)
+	}
+	if scheduler.RetirementSnapshot().Active {
+		t.Fatalf("withdrawn scheduler work retained runtime: %+v", scheduler.states)
+	}
+}

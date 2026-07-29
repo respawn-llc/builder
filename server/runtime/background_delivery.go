@@ -124,3 +124,22 @@ func (e *Engine) commitBackgroundDeliveryDiagnostic(diagnostic PendingBackground
 	e.SetStreamingError(text)
 	return receipt, err
 }
+
+// CommitPendingBackgroundDeliveryDiagnostic is the ordered runtime boundary
+// used when Session ownership hands a preserved delivery diagnostic to a new
+// eligible resource. It does not schedule a model continuation.
+func (e *Engine) CommitPendingBackgroundDeliveryDiagnostic(
+	diagnostic PendingBackgroundDeliveryDiagnostic,
+) (session.CommitReceipt, error) {
+	receipt, err := e.commitBackgroundDeliveryDiagnostic(diagnostic)
+	if !receipt.Committed {
+		return receipt, &BackgroundDeliveryError{
+			ProcessID: diagnostic.processID,
+			Activity:  diagnostic.activity,
+			Stage:     diagnostic.stage,
+			Attempt:   diagnostic.attempt,
+			Cause:     err,
+		}
+	}
+	return receipt, err
+}
