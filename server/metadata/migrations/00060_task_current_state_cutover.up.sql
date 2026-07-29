@@ -696,6 +696,27 @@ WHERE placement.state = 'active'
       SELECT 1
       FROM task_current_nodes current_node
       WHERE current_node.task_id = placement.task_id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_node_placements newer_placement
+      JOIN workflow_nodes newer_node ON newer_node.id = newer_placement.node_id
+      WHERE newer_placement.task_id = placement.task_id
+        AND newer_placement.state = 'active'
+        AND newer_placement.parallel_batch_transition_id IS NULL
+        AND newer_node.kind IN ('start', 'terminal')
+        AND (
+            newer_placement.updated_at_unix_ms > placement.updated_at_unix_ms
+            OR (
+                newer_placement.updated_at_unix_ms = placement.updated_at_unix_ms
+                AND newer_placement.created_at_unix_ms > placement.created_at_unix_ms
+            )
+            OR (
+                newer_placement.updated_at_unix_ms = placement.updated_at_unix_ms
+                AND newer_placement.created_at_unix_ms = placement.created_at_unix_ms
+                AND newer_placement.id > placement.id
+            )
+        )
   );
 
 INSERT INTO task_current_nodes (
