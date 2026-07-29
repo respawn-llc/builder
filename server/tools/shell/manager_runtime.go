@@ -225,8 +225,8 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 
 func (m *Manager) emitCompletionEvent(entry *processEntry, event Event) {
 	entry.interactMu.Lock()
-	defer entry.interactMu.Unlock()
 	event.NoticeSuppressed = entry.completionNoticeConsumed()
+	entry.interactMu.Unlock()
 	m.emitEvent(event)
 }
 

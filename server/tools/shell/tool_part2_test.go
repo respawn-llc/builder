@@ -77,7 +77,7 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 }
 
-func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
+func TestTerminalEventEmissionDoesNotHoldPollingInteractionLock(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
@@ -119,8 +119,8 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	}()
 	select {
 	case <-pollDone:
-		t.Fatal("poll acquired the interaction lock while terminal event delivery was in progress")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("poll remained blocked by terminal event delivery")
 	}
 	close(releaseTerminalHandler)
 	select {
@@ -130,11 +130,6 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminal event")
-	}
-	select {
-	case <-pollDone:
-	case <-time.After(time.Second):
-		t.Fatal("poll did not complete after terminal event delivery")
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
 }
