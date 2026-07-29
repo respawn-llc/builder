@@ -3,10 +3,8 @@ package workflowsvc
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -259,14 +257,18 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.WorkflowListResponse{}, err
+	}
 	var workflowID *workflow.WorkflowID
 	if req.WorkflowID != nil {
 		value := workflow.WorkflowID(*req.WorkflowID)
 		workflowID = &value
 	}
 	rows, err := s.store.ListWorkflows(ctx, workflowstore.ListWorkflowsRequest{
-		PageSize:   req.PageSize,
-		PageToken:  req.PageToken,
+		Offset:     window.Offset,
+		Limit:      window.Limit,
 		Query:      req.Query,
 		ProjectID:  req.ProjectID,
 		WorkflowID: workflowID,
@@ -278,7 +280,7 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	for _, row := range rows.Workflows {
 		out = append(out, workflowRecord(row))
 	}
-	return serverapi.WorkflowListResponse{Workflows: out, ProjectID: rows.ProjectID, NextPageToken: rows.NextPageToken}, nil
+	return serverapi.WorkflowListResponse{Workflows: out, ProjectID: rows.ProjectID, NextOffset: rows.NextOffset}, nil
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
@@ -1394,55 +1396,25 @@ func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	pageSize := req.PageSize
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	cursor, err := parseCommentPageToken(req.PageToken)
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), cursor, pageSize+1)
+	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), window.Offset, window.Limit+1)
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	nextPageToken := ""
-	if len(comments) > pageSize {
-		comments = comments[:pageSize]
-		nextPageToken = commentPageToken(comments[len(comments)-1])
+	var nextOffset *int
+	if len(comments) > window.Limit {
+		comments = comments[:window.Limit]
+		value := window.Offset + len(comments)
+		nextOffset = &value
 	}
 	out := make([]serverapi.WorkflowTaskComment, 0, len(comments))
 	for _, comment := range comments {
 		out = append(out, commentRecord(comment))
 	}
-	return serverapi.WorkflowTaskCommentListResponse{Comments: out, NextPageToken: nextPageToken}, nil
-}
-
-// parseCommentPageToken decodes a stable keyset cursor (created_at|base64(id)),
-// mirroring the task-activity page token so concurrent comment inserts/deletes
-// can't shift an in-flight infinite-scroll page.
-func parseCommentPageToken(token string) (workflowstore.CommentPageCursor, error) {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return workflowstore.CommentPageCursor{}, nil
-	}
-	timestampPart, encodedID, ok := strings.Cut(trimmed, "|")
-	if !ok {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	createdAt, err := strconv.ParseInt(timestampPart, 10, 64)
-	if err != nil || createdAt < 0 {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	decodedID, err := base64.RawURLEncoding.DecodeString(encodedID)
-	if err != nil || strings.TrimSpace(string(decodedID)) == "" {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	return workflowstore.CommentPageCursor{CreatedAtUnixMs: createdAt, ID: string(decodedID), HasValue: true}, nil
-}
-
-func commentPageToken(comment workflowstore.CommentRecord) string {
-	return strconv.FormatInt(comment.CreatedAt, 10) + "|" + base64.RawURLEncoding.EncodeToString([]byte(comment.ID))
+	return serverapi.WorkflowTaskCommentListResponse{Comments: out, NextOffset: nextOffset}, nil
 }
 
 func (s *Service) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentReplaceRequest) error {

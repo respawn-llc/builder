@@ -2,26 +2,17 @@ package workflowview
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
-)
-
-const (
-	workflowTaskListPageTokenVersion = 6
-	workflowTaskStatusModelVersion   = 3
 )
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
@@ -43,172 +34,6 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 	return false
 }
 
-type workflowTaskListPageTokenPayload struct {
-	Version                     int                                                   `json:"version"`
-	Scope                       workflowTaskListPageTokenScope                        `json:"scope"`
-	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	StatusModelVersion          int                                                   `json:"status_model_version"`
-	Fingerprint                 string                                                `json:"fingerprint"`
-	Cursor                      workflowTaskListCursor                                `json:"cursor"`
-}
-
-type workflowTaskListPageTokenScope struct {
-	ProjectID   string                                          `json:"project_id"`
-	ProjectWide *workflowTaskListProjectWidePageTokenInvariants `json:"project_wide,omitempty"`
-	Narrowed    *workflowTaskListNarrowedPageTokenInvariants    `json:"narrowed,omitempty"`
-}
-
-type workflowTaskListProjectWidePageTokenInvariants struct{}
-
-type workflowTaskListNarrowedPageTokenInvariants struct {
-	WorkflowID          string `json:"workflow_id"`
-	WorkflowVersion     int64  `json:"workflow_version"`
-	ColumnStructureHash string `json:"column_structure_hash"`
-}
-
-type workflowTaskListCursor struct {
-	TaskID            string `json:"task_id"`
-	CreatedAtUnixMs   int64  `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs   int64  `json:"updated_at_unix_ms"`
-	PrimaryStatusRank int    `json:"primary_status_rank"`
-	ColumnRank        *int   `json:"column_rank,omitempty"`
-	TitleSort         string `json:"title_sort"`
-}
-
-func parseWorkflowTaskListPageToken(raw string) (workflowTaskListPageTokenPayload, bool, error) {
-	if strings.TrimSpace(raw) == "" {
-		return workflowTaskListPageTokenPayload{}, false, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	var payload workflowTaskListPageTokenPayload
-	if err := json.Unmarshal(decoded, &payload); err != nil {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	if payload.Version != workflowTaskListPageTokenVersion ||
-		strings.TrimSpace(payload.Scope.ProjectID) == "" ||
-		strings.TrimSpace(payload.Scope.ProjectID) != payload.Scope.ProjectID ||
-		(payload.Scope.ProjectWide == nil) == (payload.Scope.Narrowed == nil) ||
-		!workflowTaskListContinuationCardinalityValid(payload.MatchingWorkflowCardinality) ||
-		payload.StatusModelVersion != workflowTaskStatusModelVersion ||
-		strings.TrimSpace(payload.Cursor.TaskID) == "" ||
-		strings.TrimSpace(payload.Fingerprint) == "" {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	if narrowed := payload.Scope.Narrowed; narrowed != nil {
-		if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(narrowed.WorkflowID, "workflow-", "workflow id"); err != nil ||
-			narrowed.WorkflowVersion < 1 ||
-			strings.TrimSpace(narrowed.ColumnStructureHash) == "" ||
-			strings.TrimSpace(narrowed.ColumnStructureHash) != narrowed.ColumnStructureHash {
-			return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-		}
-	}
-	return payload, true, nil
-}
-
-func workflowTaskListContinuationCardinalityValid(cardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality) bool {
-	return cardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne ||
-		cardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
-}
-
-func workflowTaskListPageToken(payload workflowTaskListPageTokenPayload) (string, error) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list page token: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-type workflowTaskListProjectWideFingerprintInvariants struct{}
-
-type workflowTaskListNarrowedFingerprintInvariants struct {
-	ColumnStructureHash string `json:"column_structure_hash"`
-}
-
-type workflowTaskListFingerprintScope struct {
-	ProjectWide *workflowTaskListProjectWideFingerprintInvariants `json:"project_wide,omitempty"`
-	Narrowed    *workflowTaskListNarrowedFingerprintInvariants    `json:"narrowed,omitempty"`
-}
-
-func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, labelFilter workflowTaskLabelFilterFacts, sortSelectors []serverapi.WorkflowTaskListSort, scope workflowTaskListFingerprintScope) (string, error) {
-	if (scope.ProjectWide == nil) == (scope.Narrowed == nil) {
-		return "", errors.New("task list fingerprint requires exactly one scope mode")
-	}
-	if scope.Narrowed != nil &&
-		(strings.TrimSpace(scope.Narrowed.ColumnStructureHash) == "" ||
-			strings.TrimSpace(scope.Narrowed.ColumnStructureHash) != scope.Narrowed.ColumnStructureHash) {
-		return "", errors.New("task list narrowed fingerprint requires column structure hash")
-	}
-	statusKinds := make([]string, 0, len(req.StatusKinds))
-	for _, kind := range req.StatusKinds {
-		statusKinds = append(statusKinds, string(kind))
-	}
-	attentionKinds := make([]string, 0, len(req.AttentionKinds))
-	for _, kind := range req.AttentionKinds {
-		attentionKinds = append(attentionKinds, string(kind))
-	}
-	payload := struct {
-		ColumnKeys         []string                         `json:"column_keys"`
-		StatusKinds        []string                         `json:"status_kinds"`
-		AttentionKinds     []string                         `json:"attention_kinds"`
-		LabelFilter        workflowTaskLabelFilterFacts     `json:"label_filter"`
-		Sort               []serverapi.WorkflowTaskListSort `json:"sort"`
-		Scope              workflowTaskListFingerprintScope `json:"scope"`
-		StatusModelVersion int                              `json:"status_model_version"`
-	}{
-		ColumnKeys:         dedupeSortedStrings(req.ColumnKeys),
-		StatusKinds:        dedupeSortedStrings(statusKinds),
-		AttentionKinds:     dedupeSortedStrings(attentionKinds),
-		LabelFilter:        labelFilter,
-		Sort:               sortSelectors,
-		Scope:              scope,
-		StatusModelVersion: workflowTaskStatusModelVersion,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list fingerprint: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
-}
-
-func workflowTaskListColumnStructureHash(def serverapi.WorkflowDefinition, columns []serverapi.WorkflowBoardColumn) (string, error) {
-	columnFacts := make([]string, 0, len(columns))
-	for _, column := range columns {
-		columnFacts = append(columnFacts, strings.Join([]string{column.Node.NodeID, column.Node.Key, column.Node.Kind, strconv.Itoa(column.SortOrder), strconv.FormatBool(column.IsBacklog), strconv.FormatBool(column.IsDone)}, "\x00"))
-	}
-	payload := struct {
-		Columns            []string `json:"columns"`
-		StatusModelVersion int      `json:"status_model_version"`
-	}{
-		Columns:            columnFacts,
-		StatusModelVersion: workflowTaskStatusModelVersion,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list column structure: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
-}
-
-func dedupeSortedStrings(values []string) []string {
-	if len(values) == 0 {
-		return []string{}
-	}
-	sorted := append([]string(nil), values...)
-	sort.Strings(sorted)
-	out := make([]string, 0, len(sorted))
-	for _, value := range sorted {
-		if len(out) == 0 || out[len(out)-1] != value {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
 type workflowTaskListQueryRequest struct {
 	projectID      string
 	narrowed       *workflowTaskListNarrowedQueryFacts
@@ -217,8 +42,7 @@ type workflowTaskListQueryRequest struct {
 	labelFilter    workflowTaskLabelFilterFacts
 	sortSelectors  []serverapi.WorkflowTaskListSort
 	liveSnapshots  map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	cursor         workflowTaskListCursor
-	cursorSet      bool
+	offset         int
 	limit          int
 }
 
@@ -236,9 +60,14 @@ type workflowTaskListRow struct {
 	matchingWorkflowCount int
 }
 
-func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+type workflowTaskListPageResult struct {
+	rows                  []workflowTaskListRow
+	matchingWorkflowCount int
+}
+
+func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) (workflowTaskListPageResult, error) {
 	if l == nil {
-		return nil, errors.New("task list is required")
+		return workflowTaskListPageResult{}, errors.New("task list is required")
 	}
 	workflowFilter := sql.NullString{}
 	visibleColumnsJSON := sql.NullString{}
@@ -248,12 +77,12 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		workflowFilter = sql.NullString{String: req.narrowed.workflowID, Valid: true}
 		encodedColumns, err := workflowTaskListVisibleColumnsJSON(req.narrowed.columns)
 		if err != nil {
-			return nil, err
+			return workflowTaskListPageResult{}, err
 		}
 		visibleColumnsJSON = sql.NullString{String: encodedColumns, Valid: true}
 		encodedColumnKeys, err := json.Marshal(req.narrowed.columnKeys)
 		if err != nil {
-			return nil, err
+			return workflowTaskListPageResult{}, err
 		}
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
@@ -264,7 +93,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	}
 	statusKindsJSON, err := json.Marshal(statusKinds)
 	if err != nil {
-		return nil, err
+		return workflowTaskListPageResult{}, err
 	}
 	attentionKinds := make([]string, 0, len(req.attentionKinds))
 	for _, kind := range req.attentionKinds {
@@ -272,124 +101,119 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	}
 	attentionKindsJSON, err := json.Marshal(attentionKinds)
 	if err != nil {
-		return nil, err
+		return workflowTaskListPageResult{}, err
 	}
 	labelFilterArgs, err := req.labelFilter.queryArgs()
 	if err != nil {
-		return nil, err
-	}
-	cursorColumnRank := sql.NullInt64{}
-	if req.cursor.ColumnRank != nil {
-		cursorColumnRank = sql.NullInt64{Int64: int64(*req.cursor.ColumnRank), Valid: true}
+		return workflowTaskListPageResult{}, err
 	}
 	liveStatesJSON, err := workflowTaskListLiveStatesJSON(req.liveSnapshots)
 	if err != nil {
-		return nil, err
+		return workflowTaskListPageResult{}, err
 	}
 	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
-		ProjectID:               req.projectID,
-		WorkflowID:              workflowFilter,
-		VisibleColumnsJson:      visibleColumnsJSON,
-		ColumnFilterSet:         boolInt64(columnFilterSet),
-		ColumnKeysJson:          columnKeysJSON,
-		StatusFilterSet:         boolInt64(len(req.statusKinds) > 0),
-		StatusKindsJson:         string(statusKindsJSON),
-		AttentionFilterSet:      boolInt64(len(req.attentionKinds) > 0),
-		AttentionKindsJson:      string(attentionKindsJSON),
-		LabelFilterKind:         labelFilterArgs.kind,
-		LabelFilterMode:         labelFilterArgs.mode,
-		LabelIdsJson:            labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:    labelFilterArgs.excludedLabelIDsJSON,
-		CursorSet:               boolInt64(req.cursorSet),
-		CursorCreatedAtUnixMs:   req.cursor.CreatedAtUnixMs,
-		CursorUpdatedAtUnixMs:   req.cursor.UpdatedAtUnixMs,
-		CursorPrimaryStatusRank: int64(req.cursor.PrimaryStatusRank),
-		CursorColumnRank:        cursorColumnRank,
-		CursorTitleSort:         req.cursor.TitleSort,
-		CursorTaskID:            req.cursor.TaskID,
-		Sort1Field:              string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),
-		Sort1Desc:               workflowTaskListSortDescending(req.sortSelectors, 0),
-		Sort2Field:              string(workflowTaskListSortSelector(req.sortSelectors, 1).Field),
-		Sort2Desc:               workflowTaskListSortDescending(req.sortSelectors, 1),
-		Sort3Field:              string(workflowTaskListSortSelector(req.sortSelectors, 2).Field),
-		Sort3Desc:               workflowTaskListSortDescending(req.sortSelectors, 2),
-		Sort4Field:              string(workflowTaskListSortSelector(req.sortSelectors, 3).Field),
-		Sort4Desc:               workflowTaskListSortDescending(req.sortSelectors, 3),
-		Sort5Field:              string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
-		Sort5Desc:               workflowTaskListSortDescending(req.sortSelectors, 4),
-		LiveTaskStatesJson:      liveStatesJSON,
-		LimitRows:               int64(req.limit),
+		ProjectID:            req.projectID,
+		WorkflowID:           workflowFilter,
+		VisibleColumnsJson:   visibleColumnsJSON,
+		ColumnFilterSet:      boolInt64(columnFilterSet),
+		ColumnKeysJson:       columnKeysJSON,
+		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
+		StatusKindsJson:      string(statusKindsJSON),
+		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
+		AttentionKindsJson:   string(attentionKindsJSON),
+		LabelFilterKind:      labelFilterArgs.kind,
+		LabelFilterMode:      labelFilterArgs.mode,
+		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+		OffsetRows:           int64(req.offset),
+		Sort1Field:           string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),
+		Sort1Desc:            workflowTaskListSortDescending(req.sortSelectors, 0),
+		Sort2Field:           string(workflowTaskListSortSelector(req.sortSelectors, 1).Field),
+		Sort2Desc:            workflowTaskListSortDescending(req.sortSelectors, 1),
+		Sort3Field:           string(workflowTaskListSortSelector(req.sortSelectors, 2).Field),
+		Sort3Desc:            workflowTaskListSortDescending(req.sortSelectors, 2),
+		Sort4Field:           string(workflowTaskListSortSelector(req.sortSelectors, 3).Field),
+		Sort4Desc:            workflowTaskListSortDescending(req.sortSelectors, 3),
+		Sort5Field:           string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
+		Sort5Desc:            workflowTaskListSortDescending(req.sortSelectors, 4),
+		LiveTaskStatesJson:   liveStatesJSON,
+		LimitRows:            int64(req.limit),
 	})
 	if err != nil {
-		return nil, err
+		return workflowTaskListPageResult{}, err
 	}
-	out := make([]workflowTaskListRow, 0, len(rows))
+	if len(rows) == 0 {
+		return workflowTaskListPageResult{}, errors.New("workflow task list query omitted its summary row")
+	}
+	result := workflowTaskListPageResult{
+		rows:                  make([]workflowTaskListRow, 0, len(rows)-1),
+		matchingWorkflowCount: int(rows[0].MatchingWorkflowCount),
+	}
 	for _, row := range rows {
+		if int(row.MatchingWorkflowCount) != result.matchingWorkflowCount {
+			return workflowTaskListPageResult{}, fmt.Errorf("workflow task list query returned inconsistent matching workflow counts: first=%d count=%d", result.matchingWorkflowCount, row.MatchingWorkflowCount)
+		}
+		if !row.ID.Valid {
+			continue
+		}
 		statusFact, err := l.projector.DecodeStatus(TaskStatusInput{
-			TaskID:             row.ID,
-			Kind:               row.Kind,
-			NodeIDsJSON:        row.NodeIdsJson,
-			AttentionTypesJSON: row.AttentionTypesJson,
+			TaskID:             row.ID.String,
+			Kind:               row.Kind.String,
+			NodeIDsJSON:        row.NodeIdsJson.String,
+			AttentionTypesJSON: row.AttentionTypesJson.String,
 		})
 		if err != nil {
-			return nil, err
+			return workflowTaskListPageResult{}, err
 		}
 		var columnKeys *[]string
 		if req.narrowed != nil {
 			values := []string{}
 			if row.ColumnKeysJson.Valid {
 				var err error
-				values, err = workflowTaskListColumnKeys(row.ID, row.ColumnKeysJson.String)
+				values, err = workflowTaskListColumnKeys(row.ID.String, row.ColumnKeysJson.String)
 				if err != nil {
-					return nil, err
+					return workflowTaskListPageResult{}, err
 				}
 			}
 			columnKeys = &values
 		}
 		columnRank := nullableInt(row.ColumnRank)
 		if workflowTaskListSortUsesColumn(req.sortSelectors) && columnRank == nil {
-			return nil, fmt.Errorf("workflow task list record for task %q is missing a column rank required by column sorting", row.ID)
+			return workflowTaskListPageResult{}, fmt.Errorf("workflow task list record for task %q is missing a column rank required by column sorting", row.ID.String)
 		}
 		var workflowName *string
 		if req.narrowed == nil {
-			if strings.TrimSpace(row.WorkflowName) == "" {
-				return nil, fmt.Errorf("project-wide workflow task list record for task %q is missing workflow name", row.ID)
+			if !row.WorkflowName.Valid || strings.TrimSpace(row.WorkflowName.String) == "" {
+				return workflowTaskListPageResult{}, fmt.Errorf("project-wide workflow task list record for task %q is missing workflow name", row.ID.String)
 			}
-			value := row.WorkflowName
+			value := row.WorkflowName.String
 			workflowName = &value
 		}
-		out = append(out, workflowTaskListRow{
+		result.rows = append(result.rows, workflowTaskListRow{
 			item: serverapi.WorkflowTaskListItem{
-				TaskID:          row.ID,
-				ShortID:         row.ShortID,
-				WorkflowID:      row.WorkflowID,
+				TaskID:          row.ID.String,
+				ShortID:         row.ShortID.String,
+				WorkflowID:      row.WorkflowID.String,
 				WorkflowName:    workflowName,
-				Title:           row.Title,
-				CreatedAtUnixMs: row.CreatedAtUnixMs,
-				UpdatedAtUnixMs: row.UpdatedAtUnixMs,
+				Title:           row.Title.String,
+				CreatedAtUnixMs: row.CreatedAtUnixMs.Int64,
+				UpdatedAtUnixMs: row.UpdatedAtUnixMs.Int64,
 				ColumnKeys:      columnKeys,
 				Status:          statusFact.Status,
 			},
-			titleSort:             row.TitleSort,
-			primaryStatusRank:     int(row.PrimaryStatusRank),
+			titleSort:             row.TitleSort.String,
+			primaryStatusRank:     int(row.PrimaryStatusRank.Int64),
 			columnRank:            columnRank,
 			matchingWorkflowCount: int(row.MatchingWorkflowCount),
 		})
 	}
-	return out, nil
+	return result, nil
 }
 
-func workflowTaskListMatchingWorkflowCardinality(rows []workflowTaskListRow) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {
-	if len(rows) == 0 {
-		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone, nil
-	}
-	count := rows[0].matchingWorkflowCount
-	for _, row := range rows[1:] {
-		if row.matchingWorkflowCount != count {
-			return "", fmt.Errorf("workflow task list query returned inconsistent matching workflow counts: first=%d task_id=%q count=%d", count, row.item.TaskID, row.matchingWorkflowCount)
-		}
-	}
+func workflowTaskListMatchingWorkflowCardinality(count int) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {
 	switch count {
+	case 0:
+		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone, nil
 	case 1:
 		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne, nil
 	case 2:
@@ -437,17 +261,6 @@ func workflowTaskListSortDescending(sortSelectors []serverapi.WorkflowTaskListSo
 		return 1
 	}
 	return 0
-}
-
-func workflowTaskListCursorFromRow(row workflowTaskListRow) workflowTaskListCursor {
-	return workflowTaskListCursor{
-		TaskID:            row.item.TaskID,
-		CreatedAtUnixMs:   row.item.CreatedAtUnixMs,
-		UpdatedAtUnixMs:   row.item.UpdatedAtUnixMs,
-		PrimaryStatusRank: row.primaryStatusRank,
-		ColumnRank:        row.columnRank,
-		TitleSort:         row.titleSort,
-	}
 }
 
 type workflowTaskListLiveState struct {

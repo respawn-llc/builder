@@ -39,7 +39,7 @@
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.
 - `No labels` matches Tasks with zero Label assignments and is mutually exclusive with named Label conditions. No named Label conditions means no Label restriction.
-- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and cursor behavior. A client never loads the complete board or Task list to apply filters.
+- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and pagination behavior. A client never loads the complete board or Task list to apply filters.
 
 ## Workflow Definitions
 
@@ -283,7 +283,7 @@
 - CLI `--status` filters typed Task status and `--attention` filters attention kinds across project-wide results. Created, updated, status, and title sorting are Workflow-neutral.
 - `--column` and column sorting require an explicit workflow because node keys and column positions are workflow-relative.
 - Project-wide human Task rows omit column output, and project-wide JSON Task items omit `column_keys`. Workflow-narrowed lists expose all Current Node keys in board order.
-- The first Project-wide Task-list page decides whether rows need Workflow names. The continuation token preserves that display decision. Task membership remains live, so later pages can retain a stale name-visibility decision after concurrent changes.
+- Each Project-wide Task-list request decides whether rows need Workflow names from the complete current filtered result set. Workflow-name visibility may change between offset requests when the matching set changes.
 - Human task-list rows include workflow names only when the filtered query can return tasks from multiple workflows. JSON task items always include their bare workflow UUID.
 - A project with no linked workflows, an explicitly selected workflow that is not linked to the project, and workflow-relative operations without a workflow selector return distinct typed actionable errors.
 - No-linked-workflow recovery directs the operator to create and link a workflow or list and link an existing workflow before retrying.
@@ -431,6 +431,17 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
+- Except for Task Search, every paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
+- An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
+- `--limit` defaults to `100` and accepts values from `1` through `100`.
+- Callers may change the limit between requests. An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
+- When more results exist, `next_offset` equals the request offset plus the number of results returned.
+- Human output writes ``Next offset: `<n>` `` to stderr only when more results exist. Machine-readable request contracts use `offset` and `limit`; responses use optional `next_offset`. An absent next offset is omitted or null and is never zero.
+- Affected shared API requests may omit both `offset` and `limit`. An omitted offset starts at the beginning, an explicit offset of zero is valid, and an omitted limit defaults to `100`. Supplied limits must be from `1` through `100`. The API represents omitted numeric values as absent or null rather than as zero.
+- Each request applies its offset to the current results for that request's Project, Workflow, selectors, filters, and sorting. Callers repeat those query choices when continuing. Kent does not bind an offset to a previous query.
+- If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
+- The server keeps pagination memory bounded by the requested limit. It does not retain page contents or pagination state between requests and does not persist pagination state.
+- Task Search retains its specified opaque cursor contract.
 - `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.

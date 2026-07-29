@@ -196,6 +196,79 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 	waitWorkflowProjectActions(t, sub, "task", "comment_added", "comment_updated", "comment_deleted")
 }
 
+func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	for _, body := range []string{"first", "second", "third"} {
+		if _, err := service.AddWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentAddRequest{
+			TaskID: taskID,
+			Body:   body,
+			Author: "user",
+		}); err != nil {
+			t.Fatalf("AddWorkflowTaskComment %q: %v", body, err)
+		}
+	}
+	offset := 0
+	limit := 2
+	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: &offset,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments first page: %v", err)
+	}
+	if len(first.Comments) != 2 || first.NextOffset == nil || *first.NextOffset != 2 {
+		t.Fatalf("first comment page = %+v", first)
+	}
+	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: first.NextOffset,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments continued page: %v", err)
+	}
+	if len(second.Comments) != 1 || second.NextOffset != nil {
+		t.Fatalf("continued comment page = %+v", second)
+	}
+	beyondEnd := 3
+	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: &beyondEnd,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments beyond end: %v", err)
+	}
+	if len(empty.Comments) != 0 || empty.NextOffset != nil {
+		t.Fatalf("beyond-end comment page = %+v", empty)
+	}
+	negativeOffset := -1
+	zeroLimit := 0
+	aboveLimit := serverapi.WorkflowPaginationMaxLimit + 1
+	for _, tt := range []struct {
+		name   string
+		offset *int
+		limit  *int
+		field  string
+	}{
+		{name: "negative offset", offset: &negativeOffset, limit: &limit, field: "offset"},
+		{name: "zero limit", offset: &offset, limit: &zeroLimit, field: "limit"},
+		{name: "limit above maximum", offset: &offset, limit: &aboveLimit, field: "limit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+				TaskID: taskID,
+				Offset: tt.offset,
+				Limit:  tt.limit,
+			})
+			if !isWorkflowServiceRequestFieldError(err, tt.field) {
+				t.Fatalf("ListWorkflowTaskComments error = %T %v, want %s validation", err, err, tt.field)
+			}
+		})
+	}
+}
+
 func TestServiceTaskStartValidatesCurrentGraph(t *testing.T) {
 	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -1426,19 +1499,36 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 			t.Fatalf("CreateWorkflow %q: %v", name, err)
 		}
 	}
-	page1, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 2})
+	defaultPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkflows defaults: %v", err)
+	}
+	if len(defaultPage.Workflows) != 3 || defaultPage.NextOffset != nil {
+		t.Fatalf("default page = %+v", defaultPage)
+	}
+	zeroOffset := 0
+	limit := 2
+	page1, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: &zeroOffset, Limit: &limit})
 	if err != nil {
 		t.Fatalf("ListWorkflows page1: %v", err)
 	}
-	if len(page1.Workflows) != 2 || page1.NextPageToken == "" {
+	if len(page1.Workflows) != 2 || page1.NextOffset == nil || *page1.NextOffset != 2 {
 		t.Fatalf("page1 = %+v", page1)
 	}
-	page2, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 2, PageToken: page1.NextPageToken})
+	page2, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: page1.NextOffset, Limit: &limit})
 	if err != nil {
 		t.Fatalf("ListWorkflows page2: %v", err)
 	}
-	if len(page2.Workflows) != 1 || page2.NextPageToken != "" {
+	if len(page2.Workflows) != 1 || page2.NextOffset != nil {
 		t.Fatalf("page2 = %+v", page2)
+	}
+	beyondEnd := 3
+	beyondEndPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: &beyondEnd, Limit: &limit})
+	if err != nil {
+		t.Fatalf("ListWorkflows beyond end: %v", err)
+	}
+	if len(beyondEndPage.Workflows) != 0 || beyondEndPage.NextOffset != nil {
+		t.Fatalf("beyond end page = %+v", beyondEndPage)
 	}
 	seen := map[string]bool{}
 	for _, record := range append(page1.Workflows, page2.Workflows...) {
@@ -1461,7 +1551,8 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 		t.Fatalf("created = %+v, want first default link", created)
 	}
 	projectID := binding.ProjectID
-	projectPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID, PageSize: 10})
+	projectLimit := 10
+	projectPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID, Limit: &projectLimit})
 	if err != nil {
 		t.Fatalf("project ListWorkflows: %v", err)
 	}
@@ -1472,7 +1563,7 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 		t.Fatalf("project workflow = %+v, want default project metadata", projectPage.Workflows[0])
 	}
 	exactWorkflowID := created.Workflow.ID
-	exactPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{WorkflowID: &exactWorkflowID, PageSize: 10})
+	exactPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{WorkflowID: &exactWorkflowID, Limit: &projectLimit})
 	if err != nil {
 		t.Fatalf("exact ListWorkflows: %v", err)
 	}
@@ -1486,7 +1577,7 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	}); err == nil {
 		t.Fatalf("expected invalid project create-and-link to fail")
 	}
-	filtered, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 10, Query: "Broken"})
+	filtered, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Limit: &projectLimit, Query: "Broken"})
 	if err != nil {
 		t.Fatalf("ListWorkflows filtered: %v", err)
 	}

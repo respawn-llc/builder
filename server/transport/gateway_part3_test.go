@@ -338,6 +338,7 @@ func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
 
 func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 	projectID := "project-1"
+	limit := 25
 	requests := []struct {
 		name     string
 		response protocol.Response
@@ -371,7 +372,7 @@ func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 			response: decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
 				protocol.Request{ID: "invalid-task-list-filter", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{
 					ProjectID: &projectID,
-					PageSize:  25,
+					Limit:     &limit,
 				})},
 				func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
 					t.Fatal("invalid task-list filter reached handler")
