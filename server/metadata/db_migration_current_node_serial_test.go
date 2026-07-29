@@ -185,6 +185,44 @@ WHERE task_id = 'task-terminal-current-node-migration'`).Scan(&nodeID, &scheduli
 	}
 }
 
+func TestOpenProjectsLatestActiveSerialTerminalPlacement(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 59)
+	if err != nil {
+		t.Fatalf("open version 59 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-duplicate-serial-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-duplicate-serial-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-duplicate-serial-migration", "link-1", 1, "SER-1", now, now)
+	execSeed(t, db, "older terminal placement", workflowSeedPlacementSQL, "placement-duplicate-serial-older", "task-duplicate-serial-migration", "node-done", now, now+1)
+	execSeed(t, db, "newer terminal placement", workflowSeedPlacementSQL, "placement-duplicate-serial-newer", "task-duplicate-serial-migration", "node-done", now+1, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 59 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var currentNodeCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM task_current_nodes
+WHERE task_id = 'task-duplicate-serial-migration'`).Scan(&currentNodeCount); err != nil {
+		t.Fatalf("query normalized serial current node: %v", err)
+	}
+	if currentNodeCount != 1 {
+		t.Fatalf("normalized serial current node count = %d, want singleton", currentNodeCount)
+	}
+}
+
 func TestOpenProjectsLegacyActiveAgentRunToInterruptedCurrentNode(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
