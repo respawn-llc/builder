@@ -134,9 +134,9 @@ type normalizedRune struct {
 
 func normalizeInsensitiveRune(character rune) normalizedRune {
 	index := sort.Search(len(insensitiveNormalizationMappings), func(index int) bool {
-		return insensitiveNormalizationMappings[index].from >= character
+		return insensitiveNormalizationMappings[index].source >= character
 	})
-	if index < len(insensitiveNormalizationMappings) && insensitiveNormalizationMappings[index].from == character {
+	if index < len(insensitiveNormalizationMappings) && insensitiveNormalizationMappings[index].source == character {
 		mapping := insensitiveNormalizationMappings[index]
 		if mapping.removed {
 			return normalizedRune{}

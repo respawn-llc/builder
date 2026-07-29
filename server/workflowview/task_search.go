@@ -151,6 +151,9 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	if len(required) != 0 {
 		return errors.New("task search schema is incomplete")
 	}
+	if _, err := queries.CheckTaskSearchSchemaContract(ctx); err != nil {
+		return err
+	}
 	projectIDsJSON, err := json.Marshal(taskSearchProjectIDs(req))
 	if err != nil {
 		return fmt.Errorf("encode task search project ids: %w", err)

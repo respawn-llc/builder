@@ -112,15 +112,8 @@ func TestTaskSearchProjectsKnownColumnFTS5SnippetWithoutSourcePointLoad(t *testi
 	if len(hits) != 1 || hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody || hits[0].FTS5 == nil {
 		t.Fatalf("raw task search hits = %+v", hits)
 	}
-	snippet := hits[0].FTS5.Snippet
-	if snippet == "" {
-		t.Fatal("FTS5 snippet is empty")
-	}
-	if snippet == body {
-		t.Fatalf("FTS5 snippet returned the complete source body")
-	}
-	if !strings.Contains(snippet, "…") {
-		t.Fatalf("FTS5 snippet = %q, want the contract truncation marker", snippet)
+	if snippet := hits[0].FTS5.Snippet; snippet != "eedl" {
+		t.Fatalf("FTS5 snippet = %q, want marker-free known-column fragment", snippet)
 	}
 }
 
@@ -637,27 +630,62 @@ func TestTaskSearchMapsMalformedRawExpressionAndRejectsForeignCursor(t *testing.
 }
 
 func TestTaskSearchChecksSchemaBeforeClassifyingRawExpressions(t *testing.T) {
-	ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("link workflow: %v", err)
-	}
-	if _, err := metadataStore.DB().ExecContext(ctx, "DROP TABLE task_search_fts"); err != nil {
-		t.Fatalf("remove task-search FTS schema for operational-failure test: %v", err)
-	}
-	search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
-	if err != nil {
-		t.Fatalf("NewTaskSearch: %v", err)
-	}
-	_, err = search.Search(ctx, serverapi.TaskSearchRequest{
-		Mode:     serverapi.TaskSearchModeFTS5,
-		Query:    `"`,
-		Context:  serverapi.TaskSearchDefaultContext,
-		PageSize: serverapi.TaskSearchDefaultPageSize,
-	})
-	var searchErr *serverapi.TaskSearchError
-	if err == nil || errors.As(err, &searchErr) {
-		t.Fatalf("missing schema + malformed raw expression error = %T %v, want operational schema error", err, err)
+	for _, test := range []struct {
+		name   string
+		mutate func(context.Context, *metadata.Store) error
+	}{
+		{
+			name: "missing FTS table",
+			mutate: func(ctx context.Context, metadataStore *metadata.Store) error {
+				_, err := metadataStore.DB().ExecContext(ctx, "DROP TABLE task_search_fts")
+				return err
+			},
+		},
+		{
+			name: "ordinary same-name FTS table",
+			mutate: func(ctx context.Context, metadataStore *metadata.Store) error {
+				if _, err := metadataStore.DB().ExecContext(ctx, "DROP TABLE task_search_fts"); err != nil {
+					return err
+				}
+				_, err := metadataStore.DB().ExecContext(ctx, "CREATE TABLE task_search_fts (title TEXT, body TEXT, comment TEXT)")
+				return err
+			},
+		},
+		{
+			name: "incomplete same-name content view",
+			mutate: func(ctx context.Context, metadataStore *metadata.Store) error {
+				if _, err := metadataStore.DB().ExecContext(ctx, "DROP VIEW task_search_content"); err != nil {
+					return err
+				}
+				_, err := metadataStore.DB().ExecContext(ctx, "CREATE VIEW task_search_content AS SELECT document_id, NULL AS title, NULL AS body FROM task_search_documents")
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, metadataStore, workflowStore, binding, fixture := newWorkflowViewTestContextFixture(t)
+			workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+			if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+				t.Fatalf("link workflow: %v", err)
+			}
+			if err := test.mutate(ctx, metadataStore); err != nil {
+				t.Fatalf("mutate task-search schema for operational-failure test: %v", err)
+			}
+			search, err := NewTaskSearch(metadataStore, fixture.projector, fixture.statusSnapshots)
+			if err != nil {
+				t.Fatalf("NewTaskSearch: %v", err)
+			}
+			_, err = search.Search(ctx, serverapi.TaskSearchRequest{
+				Mode:     serverapi.TaskSearchModeFTS5,
+				Query:    `"`,
+				Context:  serverapi.TaskSearchDefaultContext,
+				PageSize: serverapi.TaskSearchDefaultPageSize,
+			})
+			var searchErr *serverapi.TaskSearchError
+			if err == nil || errors.As(err, &searchErr) {
+				t.Fatalf("malformed schema + malformed raw expression error = %T %v, want operational schema error", err, err)
+			}
+		})
 	}
 }
 
@@ -1187,35 +1215,19 @@ func TestTaskSearchRawRanksEquivalentBodyAboveComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
-	snapshot, err := fixture.statusSnapshots.Capture(ctx)
-	if err != nil {
-		t.Fatalf("capture status snapshot: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := snapshot.Close(); err != nil {
-			t.Errorf("close status snapshot: %v", err)
-		}
-	})
-	rows, err := search.queryPage(ctx, snapshot, serverapi.TaskSearchRequest{
+	response, err := search.Search(ctx, serverapi.TaskSearchRequest{
 		Mode:            serverapi.TaskSearchModeFTS5,
 		Query:           "needle",
 		Context:         serverapi.TaskSearchDefaultContext,
 		IncludeComments: true,
 		PageSize:        serverapi.TaskSearchDefaultPageSize,
-	}, taskSearchPageToken{}, false)
+	})
 	if err != nil {
-		t.Fatalf("query raw search page: %v", err)
+		t.Fatalf("Search: %v", err)
 	}
-	ranks := map[string]float64{}
-	for _, row := range rows {
-		ranks[row.TaskID] = row.TaskWeightedRank
-	}
-	bodyRank, bodyFound := ranks[string(bodyTask.ID)]
-	commentRank, commentFound := ranks[string(commentTask.ID)]
-	if !bodyFound || !commentFound {
-		t.Fatalf("raw search rows = %+v, want body and Comment Task", rows)
-	}
-	if bodyRank <= commentRank {
-		t.Fatalf("body rank = %f, comment rank = %f; want body above equivalent Comment", bodyRank, commentRank)
+	if len(response.Groups) != 2 ||
+		response.Groups[0].TaskID != string(bodyTask.ID) ||
+		response.Groups[1].TaskID != string(commentTask.ID) {
+		t.Fatalf("raw search group order = %+v, want body Task before Comment Task", response.Groups)
 	}
 }

@@ -220,10 +220,15 @@ func isSQLiteStatementOrFragment(source string) bool {
 	if !valid || len(tokens) == 0 {
 		return false
 	}
+	if hasNonProseRelationTarget(tokens) && parsesSQLiteStatement(source) {
+		return true
+	}
 	if hasStandaloneSQLiteStatementStart(tokens) && parsesSQLiteStatement(source) {
 		return true
 	}
 	switch tokens[0].GetTokenType() {
+	case sqliteparser.SQLiteParserFROM_:
+		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
 	case sqliteparser.SQLiteParserWHERE_, sqliteparser.SQLiteParserHAVING_, sqliteparser.SQLiteParserON_:
 		return hasSQLBoundOrQuotedValue(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
 	case sqliteparser.SQLiteParserORDER_, sqliteparser.SQLiteParserGROUP_:

@@ -134,7 +134,7 @@ func writeTaskSearchResponse(stdout io.Writer, stderr io.Writer, response server
 		return 1
 	}
 	if response.NextPageToken != nil {
-		fmt.Fprintf(stderr, "Next page token: `%s`\n", *response.NextPageToken)
+		fmt.Fprintln(stderr, taskSearchNextPageTokenLine(*response.NextPageToken))
 	}
 	return 0
 }

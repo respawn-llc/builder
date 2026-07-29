@@ -308,6 +308,31 @@ func (q *Queries) CancelTask(ctx context.Context, arg CancelTaskParams) (int64, 
 	return result.RowsAffected()
 }
 
+const checkTaskSearchSchemaContract = `-- name: CheckTaskSearchSchemaContract :one
+SELECT
+    COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
+        FROM task_search_documents
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
+        FROM task_search_content
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(title, body, comment)))
+        FROM task_search_fts
+        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
+    ), 0) AS contract_read
+`
+
+func (q *Queries) CheckTaskSearchSchemaContract(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, checkTaskSearchSchemaContract)
+	var contract_read int64
+	err := recordQueryError(ctx, row.Scan(&contract_read), checkTaskSearchSchemaContract, 0)
+
+	return contract_read, err
+}
+
 const claimWorkflowRun = `-- name: ClaimWorkflowRun :one
 UPDATE task_runs
 SET

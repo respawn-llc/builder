@@ -692,17 +692,17 @@ func renderNormalizationData(source pinnedSQLiteSource, tables normalizationTabl
 	fmt.Fprintf(&output, "const normalizationSQLiteSourceUnit = %q\n", sqliteUnicodeSourceUnit)
 	fmt.Fprintf(&output, "const normalizationSourceChecksum = %q\n\n", sourceChecksum(source))
 	output.WriteString("type normalizationRuneMapping struct {\n")
-	output.WriteString("\tfrom    rune\n")
+	output.WriteString("\tsource  rune\n")
 	output.WriteString("\tto      rune\n")
 	output.WriteString("\tremoved bool\n")
 	output.WriteString("}\n\n")
 	output.WriteString("var insensitiveNormalizationMappings = [...]normalizationRuneMapping{\n")
 	for _, mapping := range mappings {
 		if mapping.to == 0 {
-			fmt.Fprintf(&output, "\t{from: 0x%04X, removed: true},\n", mapping.from)
+			fmt.Fprintf(&output, "\t{source: 0x%04X, removed: true},\n", mapping.from)
 			continue
 		}
-		fmt.Fprintf(&output, "\t{from: 0x%04X, to: 0x%04X},\n", mapping.from, mapping.to)
+		fmt.Fprintf(&output, "\t{source: 0x%04X, to: 0x%04X},\n", mapping.from, mapping.to)
 	}
 	output.WriteString("}\n")
 

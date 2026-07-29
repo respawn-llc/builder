@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"reflect"
+	"strings"
 	"testing"
 
 	"core/shared/serverapi"
@@ -65,7 +67,7 @@ func TestTaskSearchPlainProjectionPreservesHitKindsAndRemainingCount(t *testing.
 	}
 }
 
-func TestTaskSearchPlainRendererWritesOneRecordPerProjectedLine(t *testing.T) {
+func TestTaskSearchPlainRendererWritesCompleteHierarchyWithoutBlankMetadataRows(t *testing.T) {
 	projection := taskSearchPlainProjection{
 		Groups: []taskSearchPlainGroup{{
 			ShortID: "KNT-1",
@@ -78,13 +80,21 @@ func TestTaskSearchPlainRendererWritesOneRecordPerProjectedLine(t *testing.T) {
 			RemainingHitCount: 1,
 		}},
 	}
-	writer := &newlineCountingWriter{}
+	var output bytes.Buffer
 
-	if err := writeTaskSearchPlainProjection(writer, projection); err != nil {
+	if err := writeTaskSearchPlainProjection(&output, projection); err != nil {
 		t.Fatalf("writeTaskSearchPlainProjection: %v", err)
 	}
-	if writer.lines != 5 {
-		t.Fatalf("written line count = %d, want 5", writer.lines)
+	got := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
+	want := []string{
+		taskSearchPlainTaskHeader("KNT-1", "Task"),
+		"one",
+		taskSearchPlainCommentHeading,
+		"two",
+		taskSearchPlainRemainingHitsLine(1),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("plain output lines = %#v, want %#v", got, want)
 	}
 }
 
@@ -99,15 +109,46 @@ func TestTaskSearchPlainFragmentUsesOnlyStructuredLiteralEllipsesAndFoldsWhitesp
 			RightTruncated: true,
 		},
 	})
-	if literal != "… before needle after …" {
+	if literal != taskSearchPlainLiteralOmissionMarker+" before needle after "+taskSearchPlainLiteralOmissionMarker {
 		t.Fatalf("literal fragment = %q", literal)
 	}
 	raw := taskSearchPlainFragment(taskSearchPlainLine{
 		Kind:        taskSearchPlainLineKindHit,
-		FTS5Snippet: "  raw\t…\nfragment  ",
+		FTS5Snippet: "  raw\tfragment  ",
 	})
-	if raw != "raw … fragment" {
+	if raw != "raw fragment" {
 		t.Fatalf("raw fragment = %q", raw)
+	}
+}
+
+func TestTaskSearchPlainProjectionOmitsConditionalCommentAndRemainingLines(t *testing.T) {
+	response := serverapi.TaskSearchResponse{
+		Mode: serverapi.TaskSearchModeFTS5,
+		Groups: []serverapi.TaskSearchGroup{{
+			ProjectID:     "project-1",
+			ProjectKey:    "KNT",
+			TaskID:        "task-1",
+			ShortID:       "KNT-1",
+			WorkflowID:    "workflow-1",
+			Title:         "Task",
+			Status:        serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog, NativeState: serverapi.WorkflowTaskNativeStateActive},
+			TotalHitCount: 2,
+			Hits: []serverapi.TaskSearchHit{
+				{Ordinal: 1, Source: serverapi.TaskSearchSource{Kind: serverapi.TaskSearchSourceKindTitle}, FTS5: &serverapi.TaskSearchFTS5Hit{Snippet: "one"}},
+				{Ordinal: 2, Source: serverapi.TaskSearchSource{Kind: serverapi.TaskSearchSourceKindBody}, FTS5: &serverapi.TaskSearchFTS5Hit{Snippet: "two"}},
+			},
+		}},
+	}
+	projection, err := taskSearchPlainProjectionFromResponse(response)
+	if err != nil {
+		t.Fatalf("taskSearchPlainProjectionFromResponse: %v", err)
+	}
+	group := projection.Groups[0]
+	if len(group.Lines) != 2 ||
+		group.Lines[0].Kind != taskSearchPlainLineKindHit ||
+		group.Lines[1].Kind != taskSearchPlainLineKindHit ||
+		group.RemainingHitCount != 0 {
+		t.Fatalf("projection without Comment/remaining lines = %#v", group)
 	}
 }
 
@@ -116,20 +157,7 @@ func TestTaskSearchPlainRendererPrintsEmptyResponseWithoutMetadataRows(t *testin
 	if err := writeTaskSearchPlainProjection(&output, taskSearchPlainProjection{}); err != nil {
 		t.Fatalf("writeTaskSearchPlainProjection: %v", err)
 	}
-	if output.String() != "No matches.\n" {
+	if output.String() != taskSearchPlainNoMatchesLine+"\n" {
 		t.Fatalf("empty plain output = %q", output.String())
 	}
-}
-
-type newlineCountingWriter struct {
-	lines int
-}
-
-func (w *newlineCountingWriter) Write(data []byte) (int, error) {
-	for _, value := range data {
-		if value == '\n' {
-			w.lines++
-		}
-	}
-	return len(data), nil
 }

@@ -25,6 +25,11 @@ type taskSearchPlainLineKind uint8
 const (
 	taskSearchPlainLineKindHit taskSearchPlainLineKind = iota
 	taskSearchPlainLineKindCommentHeading
+
+	taskSearchPlainNoMatchesLine         = "No matches."
+	taskSearchPlainCommentHeading        = "comments:"
+	taskSearchPlainLiteralOmissionMarker = "…"
+	taskSearchNextPageTokenLineFormat    = "Next page token: `%s`"
 )
 
 type taskSearchPlainLine struct {
@@ -70,17 +75,17 @@ func taskSearchPlainProjectionFromResponse(response serverapi.TaskSearchResponse
 
 func writeTaskSearchPlainProjection(stdout io.Writer, projection taskSearchPlainProjection) error {
 	if len(projection.Groups) == 0 {
-		_, err := fmt.Fprintln(stdout, "No matches.")
+		_, err := fmt.Fprintln(stdout, taskSearchPlainNoMatchesLine)
 		return err
 	}
 	for _, group := range projection.Groups {
-		if _, err := fmt.Fprintf(stdout, "%s: %s\n", group.ShortID, group.Title); err != nil {
+		if _, err := fmt.Fprintln(stdout, taskSearchPlainTaskHeader(group.ShortID, group.Title)); err != nil {
 			return err
 		}
 		for _, line := range group.Lines {
 			switch line.Kind {
 			case taskSearchPlainLineKindCommentHeading:
-				if _, err := fmt.Fprintln(stdout, "comments:"); err != nil {
+				if _, err := fmt.Fprintln(stdout, taskSearchPlainCommentHeading); err != nil {
 					return err
 				}
 			case taskSearchPlainLineKindHit:
@@ -92,7 +97,7 @@ func writeTaskSearchPlainProjection(stdout io.Writer, projection taskSearchPlain
 			}
 		}
 		if group.RemainingHitCount > 0 {
-			if _, err := fmt.Fprintf(stdout, "[%s more hits]\n", strconv.Itoa(group.RemainingHitCount)); err != nil {
+			if _, err := fmt.Fprintln(stdout, taskSearchPlainRemainingHitsLine(group.RemainingHitCount)); err != nil {
 				return err
 			}
 		}
@@ -106,17 +111,29 @@ func taskSearchPlainFragment(line taskSearchPlainLine) string {
 	}
 	var fragment strings.Builder
 	if line.Literal.LeftTruncated {
-		fragment.WriteRune('…')
+		fragment.WriteString(taskSearchPlainLiteralOmissionMarker)
 	}
 	fragment.WriteString(line.Literal.Before)
 	fragment.WriteString(line.Literal.Match)
 	fragment.WriteString(line.Literal.After)
 	if line.Literal.RightTruncated {
-		fragment.WriteRune('…')
+		fragment.WriteString(taskSearchPlainLiteralOmissionMarker)
 	}
 	return taskSearchPlainWhitespace(fragment.String())
 }
 
 func taskSearchPlainWhitespace(fragment string) string {
 	return strings.Join(strings.Fields(fragment), " ")
+}
+
+func taskSearchPlainTaskHeader(shortID string, title string) string {
+	return shortID + ": " + title
+}
+
+func taskSearchPlainRemainingHitsLine(count int) string {
+	return "[" + strconv.Itoa(count) + " more hits]"
+}
+
+func taskSearchNextPageTokenLine(token string) string {
+	return fmt.Sprintf(taskSearchNextPageTokenLineFormat, token)
 }

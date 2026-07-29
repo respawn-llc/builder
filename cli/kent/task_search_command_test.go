@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -122,8 +121,8 @@ func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {
 	if !reflect.DeepEqual(remote.requests, []serverapi.TaskSearchRequest{wantRequest}) {
 		t.Fatalf("search requests = %#v, want %#v", remote.requests, []serverapi.TaskSearchRequest{wantRequest})
 	}
-	if !strings.Contains(stderr.String(), nextPageToken) {
-		t.Fatalf("next-page diagnostic = %q, want token %q", stderr.String(), nextPageToken)
+	if stderr.String() != taskSearchNextPageTokenLine(nextPageToken)+"\n" {
+		t.Fatalf("next-page diagnostic = %q", stderr.String())
 	}
 }
 
