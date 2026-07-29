@@ -181,6 +181,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		stdinOpen:            req.KeepStdinOpen,
 		notify:               make(chan struct{}, 1),
 		done:                 make(chan struct{}),
+		backgroundedReady:    make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {
@@ -260,8 +261,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		RawOutputRequested: req.Raw,
 	}
 	entry.interactMu.Lock()
-	defer entry.interactMu.Unlock()
 	snapshot, backgrounded := entry.transitionToBackground()
+	entry.interactMu.Unlock()
 	if !backgrounded {
 		if pending := entry.drainPending(); len(pending) > 0 {
 			output = append(output, pending...)
@@ -293,6 +294,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
 	m.emitEvent(newBackgroundedEvent(snapshot))
+	close(entry.backgroundedReady)
 	return result, nil
 }
 

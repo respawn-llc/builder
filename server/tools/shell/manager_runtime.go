@@ -160,6 +160,7 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	if state == "killed" {
 		eventType = EventKilled
 	}
+	<-entry.backgroundedReady
 	fullOutput, readErr := readOutputFileLimited(entry.logPath, maxFullLogPostprocessBytes)
 	if readErr == nil {
 		processed, postprocessErr := m.applyPostprocessing(context.Background(), entry, fullOutput, snapshot.ExitCode, true, defaultLimit)
