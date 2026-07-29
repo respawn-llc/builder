@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"core/server/auth"
@@ -38,6 +39,7 @@ type AuthorityOptions struct {
 	ResourceLifecycle  AgentResourceLifecycle
 	StepLifecycle      AgentResourceStepLifecycle
 	PromptFeed         ExecutionPromptFeed
+	BackgroundLogger   *slog.Logger
 }
 
 type Authority struct {
@@ -53,6 +55,7 @@ type Authority struct {
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
+	backgroundLogger   *slog.Logger
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
@@ -65,6 +68,10 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),
+		backgroundLogger:   options.BackgroundLogger,
+	}
+	if authority.backgroundLogger == nil {
+		authority.backgroundLogger = slog.Default()
 	}
 	if authority.options.background != nil {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)

@@ -330,6 +330,13 @@ func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionI
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil {
+		a.backgroundLogger.Error(
+			"background completion has no current ordinary runtime",
+			"process_id", event.Snapshot.ID,
+			"activity_id", event.Snapshot.ActivityID.String(),
+			"session_id", sessionID.String(),
+			"operation", "route_terminal_background_event",
+		)
 		return
 	}
 	a.routeBackgroundEventToResource(resource, event, true)
