@@ -330,6 +330,18 @@ func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionI
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil {
+		diagnostic := runtime.NewBackgroundRoutingDiagnostic(
+			event.Snapshot.ID,
+			event.Snapshot.ActivityID,
+			fmt.Errorf("ordinary background completion had no current runtime"),
+		)
+		a.mu.Lock()
+		if owner, ok := a.backgroundOwners[event.Snapshot.ID].(ordinaryBackgroundOwner); ok &&
+			owner.activityID == event.Snapshot.ActivityID {
+			owner.diagnostic = &diagnostic
+			a.backgroundOwners[event.Snapshot.ID] = owner
+		}
+		a.mu.Unlock()
 		a.backgroundLogger.Error(
 			"background completion has no current ordinary runtime",
 			"process_id", event.Snapshot.ID,
@@ -406,6 +418,16 @@ func (a *Authority) routeBackgroundEventToResource(resource *agentResource, even
 	})
 	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
 		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+	}
+	if routeErr != nil {
+		diagnostic := runtime.NewBackgroundRoutingDiagnostic(event.Snapshot.ID, event.Snapshot.ActivityID, routeErr)
+		a.mu.Lock()
+		if owner, ok := a.backgroundOwners[event.Snapshot.ID].(ordinaryBackgroundOwner); ok &&
+			owner.activityID == event.Snapshot.ActivityID {
+			owner.diagnostic = &diagnostic
+			a.backgroundOwners[event.Snapshot.ID] = owner
+		}
+		a.mu.Unlock()
 	}
 }
 

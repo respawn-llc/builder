@@ -24,6 +24,7 @@ type ordinaryBackgroundOwner struct {
 	sessionID      runtimeids.SessionID
 	launchResource runtimeids.ResourceGeneration
 	launchScopeID  runtimeids.ExecutionScopeID
+	diagnostic     *runtime.PendingBackgroundDeliveryDiagnostic
 }
 
 func (o ordinaryBackgroundOwner) backgroundOwnerProcessID() string               { return o.processID }
@@ -144,6 +145,7 @@ func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
 		return
 	}
 	a.mu.Lock()
+	resource := a.resources[sessionID]
 	processIDs := make([]string, 0)
 	for processID, owner := range a.backgroundOwners {
 		if _, workflow := owner.(workflowBackgroundOwner); !workflow && owner.backgroundOwnerSessionID() == sessionID {
@@ -152,6 +154,39 @@ func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
 	}
 	a.mu.Unlock()
 	for _, processID := range processIDs {
+		a.mu.Lock()
+		owner, ok := a.backgroundOwners[processID].(ordinaryBackgroundOwner)
+		a.mu.Unlock()
+		if !ok {
+			continue
+		}
+		if owner.diagnostic != nil {
+			if resource == nil {
+				return
+			}
+			var receipt session.CommitReceipt
+			err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+				var commitErr error
+				receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(*owner.diagnostic)
+				return commitErr
+			})
+			if !receipt.Committed {
+				a.backgroundLogger.Error(
+					"ordinary background diagnostic replay failed",
+					"process_id", processID,
+					"session_id", sessionID.String(),
+					"error", err,
+				)
+				continue
+			}
+			a.mu.Lock()
+			current, currentOK := a.backgroundOwners[processID].(ordinaryBackgroundOwner)
+			if currentOK && current.activityID == owner.activityID {
+				current.diagnostic = nil
+				a.backgroundOwners[processID] = current
+			}
+			a.mu.Unlock()
+		}
 		a.options.background.ReplayPendingTerminal(processID)
 	}
 }

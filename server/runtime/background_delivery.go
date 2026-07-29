@@ -16,6 +16,7 @@ const maxPendingBackgroundDeliveryDiagnosticBytes = 4 << 10
 type backgroundDeliveryStage string
 
 const backgroundDeliveryStageAutomaticSteering backgroundDeliveryStage = "automatic_steering"
+const backgroundDeliveryStageRouting backgroundDeliveryStage = "routing"
 
 // PendingBackgroundDeliveryDiagnostic is the bounded recovery record for one
 // failed automatic completion delivery. It deliberately owns no error or
@@ -42,7 +43,7 @@ func newPendingBackgroundDeliveryDiagnostic(
 	if activity.Version() != 4 {
 		panic(fmt.Sprintf("background delivery diagnostic requires UUIDv4 activity id: %q", activity))
 	}
-	if stage != backgroundDeliveryStageAutomaticSteering {
+	if stage != backgroundDeliveryStageAutomaticSteering && stage != backgroundDeliveryStageRouting {
 		panic(fmt.Sprintf("background delivery diagnostic has unsupported stage %q", stage))
 	}
 	if attempt == 0 {
@@ -59,6 +60,23 @@ func newPendingBackgroundDeliveryDiagnostic(
 		attempt:   attempt,
 		detail:    boundedUTF8DiagnosticDetail(detail),
 	}
+}
+
+// NewBackgroundRoutingDiagnostic retains an Authority routing failure without
+// retaining the error object or shell payload. It is committed by the next
+// eligible owner resource before the Manager completion is replayed.
+func NewBackgroundRoutingDiagnostic(
+	processID string,
+	activity uuid.UUID,
+	cause error,
+) PendingBackgroundDeliveryDiagnostic {
+	return newPendingBackgroundDeliveryDiagnostic(
+		processID,
+		activity,
+		backgroundDeliveryStageRouting,
+		1,
+		cause,
+	)
 }
 
 func boundedUTF8DiagnosticDetail(value string) string {
