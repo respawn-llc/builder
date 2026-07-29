@@ -74,7 +74,11 @@ func (e *Engine) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
 // diagnostic-only work and therefore continues to block retirement.
 func (e *Engine) DiscardProvisionalBackgroundNotice(processID string) bool {
 	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.ConsumePendingBackgroundNotice(processID).removed
+	consumption := e.backgroundFlow.ConsumePendingBackgroundNotice(processID)
+	if consumption.retainsDiagnostic {
+		e.backgroundFlow.ScheduleIfIdle()
+	}
+	return consumption.removed
 }
 
 func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
