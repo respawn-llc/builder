@@ -43,7 +43,7 @@ type backgroundNoticeScheduler interface {
 	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt)
 	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
 	HasPendingNotices() bool
-	ConsumePendingBackgroundNotice(sessionID string) bool
+	ConsumePendingBackgroundNotice(sessionID string) backgroundNoticeConsumption
 	ScheduleIfIdle()
 	PermitRetry() bool
 	RetirementSnapshot() BackgroundDeliveryRetirementSnapshot

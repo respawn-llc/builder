@@ -513,8 +513,10 @@ func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBac
 }
 func (s *recoverySchedulingObserver) RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice) {}
 func (s *recoverySchedulingObserver) HasPendingNotices() bool                                      { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool                   { return false }
-func (s *recoverySchedulingObserver) PermitRetry() bool                                            { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) backgroundNoticeConsumption {
+	return backgroundNoticeConsumption{}
+}
+func (s *recoverySchedulingObserver) PermitRetry() bool { return false }
 func (s *recoverySchedulingObserver) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
 	return BackgroundDeliveryRetirementSnapshot{}
 }

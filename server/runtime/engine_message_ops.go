@@ -125,8 +125,9 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 		e.ensureOrchestrationCollaborators()
 		if e.cfg.BackgroundOwnerPollFinalizer != nil &&
 			e.cfg.BackgroundOwnerPollFinalizer(e.store.Meta().SessionID, backgroundSessionID) {
-			e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
-			if e.cfg.BackgroundCompletionSettled != nil {
+			consumption := e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
+			if consumption.removed && !consumption.retainsDiagnostic &&
+				e.cfg.BackgroundCompletionSettled != nil {
 				e.cfg.BackgroundCompletionSettled(backgroundSessionID)
 			}
 		}

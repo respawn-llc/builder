@@ -35,6 +35,11 @@ type BackgroundDeliveryWithdrawal struct {
 	Diagnostic        *PendingBackgroundDeliveryDiagnostic
 }
 
+type backgroundNoticeConsumption struct {
+	removed           bool
+	retainsDiagnostic bool
+}
+
 type defaultBackgroundNoticeScheduler struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
@@ -69,7 +74,7 @@ func (e *Engine) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
 // diagnostic-only work and therefore continues to block retirement.
 func (e *Engine) DiscardProvisionalBackgroundNotice(processID string) bool {
 	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.ConsumePendingBackgroundNotice(processID)
+	return e.backgroundFlow.ConsumePendingBackgroundNotice(processID).removed
 }
 
 func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
@@ -229,15 +234,15 @@ func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
 	return b.hasRetirementWorkLocked()
 }
 
-func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(processID string) bool {
+func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(processID string) backgroundNoticeConsumption {
 	processID = strings.TrimSpace(processID)
 	if processID == "" {
-		return false
+		return backgroundNoticeConsumption{}
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ensureChangedLocked()
-	removed := false
+	result := backgroundNoticeConsumption{}
 	next := make([]backgroundNoticeState, 0, len(b.states))
 	for _, state := range b.states {
 		notice, hasNotice := state.queuedBackgroundNotice()
@@ -245,16 +250,17 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(proces
 			next = append(next, state)
 			continue
 		}
-		removed = true
+		result.removed = true
 		if notice.diagnostic != nil {
 			next = append(next, newDiagnosticOnlyBackgroundNotice(*notice.diagnostic))
+			result.retainsDiagnostic = true
 		}
 	}
-	if removed {
+	if result.removed {
 		b.states = next
 		b.signalChangedLocked()
 	}
-	return removed
+	return result
 }
 
 func (b *defaultBackgroundNoticeScheduler) Withdraw(
