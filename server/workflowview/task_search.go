@@ -13,6 +13,8 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/shared/serverapi"
 	"core/shared/tasksearchtext"
 
@@ -23,9 +25,9 @@ import (
 const taskSearchPageTokenVersion = 1
 
 type TaskSearch struct {
-	queries         *sqlitegen.Queries
-	projector       *TaskProjector
-	statusSnapshots *TaskStatusSnapshotCoordinator
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
+	authority *sessionruntime.Authority
 }
 
 type taskSearchPageToken struct {
@@ -36,25 +38,25 @@ type taskSearchPageToken struct {
 	TaskID      string `json:"task_id"`
 }
 
-func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, statusSnapshots *TaskStatusSnapshotCoordinator) (*TaskSearch, error) {
+func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskSearch, error) {
 	switch {
 	case metadataStore == nil || metadataStore.Queries() == nil:
 		return nil, errors.New("metadata store is required")
 	case projector == nil:
 		return nil, errors.New("task projector is required")
-	case statusSnapshots == nil:
-		return nil, errors.New("task status snapshot coordinator is required")
+	case authority == nil:
+		return nil, errors.New("session runtime authority is required")
 	default:
 		return &TaskSearch{
-			queries:         metadataStore.Queries(),
-			projector:       projector,
-			statusSnapshots: statusSnapshots,
+			queries:   metadataStore.Queries(),
+			projector: projector,
+			authority: authority,
 		}, nil
 	}
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.queries == nil || s.projector == nil || s.statusSnapshots == nil {
+	if s == nil || s.queries == nil || s.projector == nil || s.authority == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -71,25 +73,22 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	snapshot, err := s.statusSnapshots.Capture(ctx)
+	liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	defer func() {
-		err = errors.Join(err, snapshot.Close())
-	}()
-	if err := s.validateSchemaAndScope(ctx, snapshot.queries, req); err != nil {
+	if err := s.validateSchemaAndScope(ctx, s.queries, req); err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := snapshot.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := s.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			if taskSearchSQLiteMalformedExpression(validationErr) {
 				return serverapi.TaskSearchResponse{}, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonMalformedFTS5}
 			}
 			return serverapi.TaskSearchResponse{}, validationErr
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot, req, cursor, hasCursor)
+	rows, err := s.queryPage(ctx, liveSnapshots, req, cursor, hasCursor)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -97,7 +96,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, snapshot.queries, req, rows)
+	groups, err := s.materializeGroups(ctx, s.queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -168,8 +167,8 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, snapshot *TaskStatusSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
-	statusProjection, err := snapshot.statusProjectionArguments()
+func (s *TaskSearch) queryPage(ctx context.Context, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
+	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(liveSnapshots)
 	if err != nil {
 		return nil, err
 	}
@@ -203,23 +202,22 @@ func (s *TaskSearch) queryPage(ctx context.Context, snapshot *TaskStatusSnapshot
 	if hasCursor {
 		cursorRank = sql.NullFloat64{Float64: math.Float64frombits(cursor.RankBits), Valid: true}
 	}
-	return snapshot.queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
-		Mode:                      string(req.Mode),
-		CandidateExpression:       candidateExpression,
-		LiteralQuery:              req.Query,
-		CaseMode:                  caseMode,
-		IncludeComments:           boolInt64(req.IncludeComments),
-		ProjectIdsJson:            string(projectIDsJSON),
-		StatusFilterSet:           boolInt64(len(req.StatusKinds) > 0),
-		StatusKindsJson:           string(statusKindsJSON),
-		ContextClusters:           int64(req.Context),
-		CursorSet:                 boolInt64(hasCursor),
-		CursorOrdinal:             cursor.Ordinal,
-		CursorWeightedRank:        cursorRank,
-		CursorTaskID:              cursor.TaskID,
-		LimitRows:                 int64(req.PageSize + 1),
-		AuthorityObservationsJson: statusProjection.authorityObservationsJSON,
-		CurrentRunFactsJson:       statusProjection.currentRunFactsJSON,
+	return s.queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
+		Mode:                string(req.Mode),
+		CandidateExpression: candidateExpression,
+		LiteralQuery:        req.Query,
+		CaseMode:            caseMode,
+		IncludeComments:     boolInt64(req.IncludeComments),
+		ProjectIdsJson:      string(projectIDsJSON),
+		StatusFilterSet:     boolInt64(len(req.StatusKinds) > 0),
+		StatusKindsJson:     string(statusKindsJSON),
+		ContextClusters:     int64(req.Context),
+		CursorSet:           boolInt64(hasCursor),
+		CursorOrdinal:       cursor.Ordinal,
+		CursorWeightedRank:  cursorRank,
+		CursorTaskID:        cursor.TaskID,
+		LimitRows:           int64(req.PageSize + 1),
+		LiveTaskStatesJson:  liveTaskStatesJSON,
 	})
 }
 
@@ -247,23 +245,17 @@ func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Q
 		if err != nil {
 			return nil, err
 		}
-		runIDsJSON, err := taskSearchSQLiteString(row.RunIdsJson, "run ids")
-		if err != nil {
-			return nil, err
-		}
 		attentionTypesJSON, err := taskSearchSQLiteString(row.AttentionTypesJson, "attention types")
 		if err != nil {
 			return nil, err
 		}
-		status, err := workflowTaskStatusFactFromValues(
-			s.projector,
-			row.TaskID,
-			row.IsDone != 0,
-			statusKind,
-			nodeIDsJSON,
-			runIDsJSON,
-			attentionTypesJSON,
-		)
+		status, err := s.projector.DecodeStatus(TaskStatusInput{
+			TaskID:             row.TaskID,
+			Kind:               statusKind,
+			NodeIDsJSON:        nodeIDsJSON,
+			AttentionTypesJSON: attentionTypesJSON,
+			Done:               row.IsDone != 0,
+		})
 		if err != nil {
 			return nil, err
 		}

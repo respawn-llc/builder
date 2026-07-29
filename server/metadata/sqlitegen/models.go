@@ -283,6 +283,28 @@ type TaskRecord struct {
 	MetadataJson                string
 }
 
+type TaskSearchContent struct {
+	DocumentID int64
+	Title      interface{}
+	Body       interface{}
+	Comment    interface{}
+}
+
+type TaskSearchDocument struct {
+	DocumentID int64
+	SourceKind string
+	TaskID     sql.NullString
+	CommentID  sql.NullString
+}
+
+type TaskSearchFt struct {
+	Title         string
+	Body          string
+	Comment       string
+	Rank          sql.NullFloat64
+	TaskSearchFts sql.NullString
+}
+
 type Workflow struct {
 	ID                       string
 	Name                     string

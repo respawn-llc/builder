@@ -68,20 +68,20 @@ func sensitiveCandidateFixtures(t *testing.T) []sensitiveCandidateFixture {
 	mappings := generatedInsensitiveNormalizationMappings(t)
 	fixtures := make([]sensitiveCandidateFixture, 0, len(mappings)*3+5)
 	for _, mapping := range mappings {
-		original := string(mapping.from)
+		original := string(mapping.source)
 		fixtures = append(fixtures,
 			sensitiveCandidateFixture{
-				name:   "mapping-at-start-" + strconv.FormatInt(int64(mapping.from), 16),
+				name:   "mapping-at-start-" + strconv.FormatInt(int64(mapping.source), 16),
 				source: original + "abc",
 				query:  original + "abc",
 			},
 			sensitiveCandidateFixture{
-				name:   "mapping-in-middle-" + strconv.FormatInt(int64(mapping.from), 16),
+				name:   "mapping-in-middle-" + strconv.FormatInt(int64(mapping.source), 16),
 				source: "a" + original + "bc",
 				query:  "a" + original + "bc",
 			},
 			sensitiveCandidateFixture{
-				name:   "mapping-at-end-" + strconv.FormatInt(int64(mapping.from), 16),
+				name:   "mapping-at-end-" + strconv.FormatInt(int64(mapping.source), 16),
 				source: "abc" + original,
 				query:  "abc" + original,
 			},
@@ -144,7 +144,7 @@ WHERE task_search_candidate_superset MATCH ?`,
 }
 
 type normalizationMappingFixture struct {
-	from    rune
+	source  rune
 	to      rune
 	removed bool
 }
@@ -194,7 +194,7 @@ func generatedNormalizationMapping(t *testing.T, expression ast.Expr) normalizat
 		t.Fatalf("generated normalization mapping has type %T, want composite literal", expression)
 	}
 	var mapping normalizationMappingFixture
-	var foundFrom, foundTo bool
+	var foundSource, foundTo bool
 	for _, element := range literal.Elts {
 		field, ok := element.(*ast.KeyValueExpr)
 		if !ok {
@@ -205,9 +205,9 @@ func generatedNormalizationMapping(t *testing.T, expression ast.Expr) normalizat
 			t.Fatalf("generated normalization mapping key has type %T, want identifier", field.Key)
 		}
 		switch name.Name {
-		case "from":
-			mapping.from = generatedRuneLiteral(t, field.Value)
-			foundFrom = true
+		case "source":
+			mapping.source = generatedRuneLiteral(t, field.Value)
+			foundSource = true
 		case "to":
 			mapping.to = generatedRuneLiteral(t, field.Value)
 			foundTo = true
@@ -221,8 +221,8 @@ func generatedNormalizationMapping(t *testing.T, expression ast.Expr) normalizat
 			t.Fatalf("generated normalization mapping has unexpected field %q", name.Name)
 		}
 	}
-	if !foundFrom || (!foundTo && !mapping.removed) {
-		t.Fatalf("generated normalization mapping completeness from=%t to=%t", foundFrom, foundTo)
+	if !foundSource || (!foundTo && !mapping.removed) {
+		t.Fatalf("generated normalization mapping completeness source=%t to=%t", foundSource, foundTo)
 	}
 	return mapping
 }

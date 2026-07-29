@@ -1529,7 +1529,7 @@ live_task_states AS (
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-    FROM args, json_each(args.live_task_states_json)
+    FROM json_each((SELECT live_task_states_json FROM args))
 ),
 effective_status AS (
     SELECT
@@ -1570,6 +1570,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 selected_rows AS (
     SELECT
         t.id,
@@ -3481,3 +3482,144 @@ SELECT
 FROM task_pending_approval_branches
 WHERE approval_id = sqlc.arg(approval_id)
 ORDER BY transition_branch_key;
+
+-- name: ListTaskSearchCandidateFeasibility :many
+WITH matching_sources AS (
+    SELECT
+        document.task_id,
+        document.source_kind,
+        document.document_id,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 0.75
+            END
+            AS REAL
+        ) AS weighted_rank
+    FROM task_search_fts
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    WHERE task_search_fts MATCH sqlc.arg(candidate_expression)
+      AND document.source_kind IN ('title', 'body')
+      AND kent_task_search_occurrence_count_v1(
+          COALESCE(content.title, content.body, content.comment),
+          CAST(sqlc.arg(literal_query) AS TEXT),
+          CAST(sqlc.arg(case_mode) AS INTEGER)
+      ) > 0
+),
+ranked_task_sources AS (
+    SELECT
+        task_id,
+        source_kind,
+        document_id,
+        weighted_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY
+                weighted_rank DESC,
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                document_id ASC
+        ) AS task_source_rank
+    FROM matching_sources
+)
+SELECT
+    task_id,
+    source_kind,
+    document_id,
+    weighted_rank
+FROM ranked_task_sources
+WHERE task_source_rank = 1
+  AND (
+      sqlc.narg(cursor_rank) IS NULL
+      OR weighted_rank < CAST(sqlc.narg(cursor_rank) AS REAL)
+      OR (
+          weighted_rank = CAST(sqlc.narg(cursor_rank) AS REAL)
+          AND task_id > sqlc.narg(cursor_task_id)
+      )
+  )
+ORDER BY weighted_rank DESC, task_id ASC
+LIMIT sqlc.arg(page_size);
+
+-- name: ListTaskSearchSchemaObjects :many
+SELECT
+    type AS object_kind,
+    name AS object_name
+FROM sqlite_schema
+WHERE
+    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
+    OR (type = 'view' AND name = 'task_search_content')
+    OR (
+        type = 'trigger'
+        AND name IN (
+            'task_search_document_insert',
+            'task_search_document_delete',
+            'task_search_task_insert',
+            'task_search_comment_insert',
+            'task_search_task_title_before_update',
+            'task_search_task_title_after_update',
+            'task_search_task_body_before_update',
+            'task_search_task_body_after_update',
+            'task_search_comment_body_before_update',
+            'task_search_comment_body_after_update',
+            'task_search_comment_delete',
+            'task_search_task_delete'
+        )
+    )
+ORDER BY type ASC, name ASC;
+
+-- name: CheckTaskSearchSchemaContract :one
+SELECT
+    COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
+        FROM task_search_documents
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
+        FROM task_search_content
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(title, body, comment)))
+        FROM task_search_fts
+        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
+    ), 0) AS contract_read;
+
+-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(sqlc.arg(project_ids_json))
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC;
+
+-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = sqlc.arg(document_id)
+LIMIT 1;
+
+-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
+LIMIT 1;

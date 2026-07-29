@@ -267,22 +267,21 @@ func TestListTaskSearchPageDescriptorsKeepsSelectiveStatusPageWorkNearLinear(t *
 
 func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery string, caseMode int64) ListTaskSearchPageDescriptorsParams {
 	return ListTaskSearchPageDescriptorsParams{
-		Mode:                      mode,
-		CandidateExpression:       candidateExpression,
-		LiteralQuery:              literalQuery,
-		CaseMode:                  caseMode,
-		IncludeComments:           1,
-		ProjectIdsJson:            "[]",
-		StatusFilterSet:           0,
-		StatusKindsJson:           "[]",
-		ContextClusters:           20,
-		CursorSet:                 0,
-		CursorOrdinal:             0,
-		CursorWeightedRank:        sql.NullFloat64{},
-		CursorTaskID:              "",
-		LimitRows:                 100,
-		AuthorityObservationsJson: "[]",
-		CurrentRunFactsJson:       "[]",
+		Mode:                mode,
+		CandidateExpression: candidateExpression,
+		LiteralQuery:        literalQuery,
+		CaseMode:            caseMode,
+		IncludeComments:     1,
+		ProjectIdsJson:      "[]",
+		StatusFilterSet:     0,
+		StatusKindsJson:     "[]",
+		ContextClusters:     20,
+		CursorSet:           0,
+		CursorOrdinal:       0,
+		CursorWeightedRank:  sql.NullFloat64{},
+		CursorTaskID:        "",
+		LimitRows:           100,
+		LiveTaskStatesJson:  "[]",
 	}
 }
 
@@ -302,8 +301,7 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.CursorWeightedRank,
 		params.CursorTaskID,
 		params.LimitRows,
-		params.AuthorityObservationsJson,
-		params.CurrentRunFactsJson,
+		params.LiveTaskStatesJson,
 	}
 }
 
@@ -326,7 +324,7 @@ CREATE TABLE workflow_task_status_records (
     is_done INTEGER NOT NULL,
     kind TEXT NOT NULL,
     node_ids_json TEXT NOT NULL,
-    run_ids_json TEXT NOT NULL,
+    primary_status_rank INTEGER NOT NULL,
     attention_types_json TEXT NOT NULL
 );
 CREATE TABLE task_comments (
@@ -361,9 +359,9 @@ INSERT INTO workflow_task_status_records (
     is_done,
     kind,
     node_ids_json,
-    run_ids_json,
+    primary_status_rank,
     attention_types_json
-) VALUES ('task-1', 0, 'backlog', '[]', '[]', '[]');
+) VALUES ('task-1', 0, 'backlog', '[]', 7, '[]');
 INSERT INTO task_comments (id, task_id, created_at_unix_ms)
 VALUES ('comment-1', 'task-1', 1);
 INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind) VALUES
@@ -401,7 +399,7 @@ CREATE TABLE workflow_task_status_records (
     is_done INTEGER NOT NULL,
     kind TEXT NOT NULL,
     node_ids_json TEXT NOT NULL,
-    run_ids_json TEXT NOT NULL,
+    primary_status_rank INTEGER NOT NULL,
     attention_types_json TEXT NOT NULL
 );
 CREATE TABLE task_comments (
@@ -440,12 +438,12 @@ INSERT INTO workflow_task_status_records (
     is_done,
     kind,
     node_ids_json,
-    run_ids_json,
+    primary_status_rank,
     attention_types_json
 ) VALUES
-    ('task-a', 1, 'done', '[]', '[]', '[]'),
-    ('task-b', 0, 'backlog', '[]', '[]', '[]'),
-    ('task-c', 1, 'done', '[]', '[]', '[]');
+    ('task-a', 1, 'done', '[]', 1, '[]'),
+    ('task-b', 0, 'backlog', '[]', 7, '[]'),
+    ('task-c', 1, 'done', '[]', 1, '[]');
 INSERT INTO task_comments (id, task_id, created_at_unix_ms) VALUES
     ('comment-old', 'task-a', 1),
     ('comment-new', 'task-a', 2);
@@ -490,7 +488,7 @@ CREATE TABLE workflow_task_status_records (
     is_done INTEGER NOT NULL,
     kind TEXT NOT NULL,
     node_ids_json TEXT NOT NULL,
-    run_ids_json TEXT NOT NULL,
+    primary_status_rank INTEGER NOT NULL,
     attention_types_json TEXT NOT NULL
 );
 CREATE TABLE task_comments (
@@ -537,9 +535,9 @@ INSERT INTO workflow_task_status_records (
     is_done,
     kind,
     node_ids_json,
-    run_ids_json,
+    primary_status_rank,
     attention_types_json
-) VALUES (?, ?, ?, '[]', '[]', '[]')`)
+) VALUES (?, ?, ?, '[]', ?, '[]')`)
 	if err != nil {
 		t.Fatalf("prepare high-cardinality status insertion: %v", err)
 	}
@@ -575,7 +573,11 @@ VALUES (?, NULL, 'needle', NULL)`)
 		if index == 0 {
 			isDone, status = 1, "done"
 		}
-		if _, err := insertStatus.ExecContext(t.Context(), taskID, isDone, status); err != nil {
+		primaryStatusRank := 7
+		if isDone != 0 {
+			primaryStatusRank = 1
+		}
+		if _, err := insertStatus.ExecContext(t.Context(), taskID, isDone, status, primaryStatusRank); err != nil {
 			t.Fatalf("insert high-cardinality Task status %d: %v", index, err)
 		}
 		documentID := index + 1
@@ -640,7 +642,6 @@ func executeTaskSearchDescriptorPageWithCacheMeasurement(
 			&descriptor.IsDone,
 			&descriptor.StatusKind,
 			&descriptor.NodeIdsJson,
-			&descriptor.RunIdsJson,
 			&descriptor.AttentionTypesJson,
 			&descriptor.DocumentID,
 			&descriptor.SourceKind,

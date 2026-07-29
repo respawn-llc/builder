@@ -22,10 +22,9 @@ type taskLabelFilterTemplateData struct {
 }
 
 type taskStatusProjectionTemplateData struct {
-	AuthorityObservationsJSON string
-	CurrentRunFactsJSON       string
-	Indent                    string
-	Suffix                    string
+	LiveTaskStatesJSON string
+	Indent             string
+	Suffix             string
 }
 
 func main() {
@@ -193,15 +192,13 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, statusSource
 	}
 	renderTaskStatusProjection := func(
 		indent string,
-		authorityObservationsJSON string,
-		currentRunFactsJSON string,
+		liveTaskStatesJSON string,
 		suffix string,
 	) (string, error) {
 		data := taskStatusProjectionTemplateData{
-			AuthorityObservationsJSON: authorityObservationsJSON,
-			CurrentRunFactsJSON:       currentRunFactsJSON,
-			Indent:                    indent,
-			Suffix:                    suffix,
+			LiveTaskStatesJSON: liveTaskStatesJSON,
+			Indent:             indent,
+			Suffix:             suffix,
 		}
 		if err := data.validate(); err != nil {
 			return "", err
@@ -244,10 +241,8 @@ func (d taskLabelFilterTemplateData) validate() error {
 
 func (d taskStatusProjectionTemplateData) validate() error {
 	switch {
-	case strings.TrimSpace(d.AuthorityObservationsJSON) == "":
-		return errors.New("authority observations JSON template expression is empty")
-	case strings.TrimSpace(d.CurrentRunFactsJSON) == "":
-		return errors.New("current run facts JSON template expression is empty")
+	case strings.TrimSpace(d.LiveTaskStatesJSON) == "":
+		return errors.New("live task states JSON template expression is empty")
 	case d.Suffix != "" && d.Suffix != ",":
 		return fmt.Errorf("task status projection suffix %q is invalid", d.Suffix)
 	default:

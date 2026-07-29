@@ -95,8 +95,7 @@ type ListTaskSearchPageDescriptorsParams struct {
 	CursorWeightedRank        sql.NullFloat64
 	CursorTaskID              string
 	LimitRows                 int64
-	AuthorityObservationsJson string
-	CurrentRunFactsJson       string
+	LiveTaskStatesJson        string
 }
 
 type ListTaskSearchPageDescriptorsRow struct {
@@ -109,7 +108,6 @@ type ListTaskSearchPageDescriptorsRow struct {
 	IsDone             int64
 	StatusKind         interface{}
 	NodeIdsJson        interface{}
-	RunIdsJson         interface{}
 	AttentionTypesJson interface{}
 	DocumentID         int64
 	SourceKind         string
@@ -137,8 +135,7 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.CursorWeightedRank,
 		arg.CursorTaskID,
 		arg.LimitRows,
-		arg.AuthorityObservationsJson,
-		arg.CurrentRunFactsJson,
+		arg.LiveTaskStatesJson,
 	)
 	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 16)
 	if err != nil {
@@ -158,7 +155,6 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 			&item.IsDone,
 			&item.StatusKind,
 			&item.NodeIdsJson,
-			&item.RunIdsJson,
 			&item.AttentionTypesJson,
 			&item.DocumentID,
 			&item.SourceKind,

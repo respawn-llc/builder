@@ -105,7 +105,7 @@ INSERT INTO tasks (id, title, body) VALUES
     ('task-false-positive', 'FOO', 'no body match');`); err != nil {
 		t.Fatalf("create canonical task-search sources: %v", err)
 	}
-	migration, err := os.ReadFile(filepath.Join(taskSearchCandidateFeasibilityRepositoryRoot(t), "server", "metadata", "migrations", "00060_task_search_index.up.sql"))
+	migration, err := os.ReadFile(filepath.Join(taskSearchCandidateFeasibilityRepositoryRoot(t), "server", "metadata", "migrations", "00061_task_search_index.up.sql"))
 	if err != nil {
 		t.Fatalf("read canonical task-search migration: %v", err)
 	}

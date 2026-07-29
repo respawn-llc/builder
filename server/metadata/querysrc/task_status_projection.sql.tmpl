@@ -1,122 +1,47 @@
-{{.Indent}}live_authority_observations AS (
-{{.Indent}}    SELECT DISTINCT
-{{.Indent}}        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-{{.Indent}}        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
-{{.Indent}}        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
-{{.Indent}}        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-{{.Indent}}    FROM json_each({{.AuthorityObservationsJSON}})
-{{.Indent}}),
-{{.Indent}}anchored_current_run_facts AS (
-{{.Indent}}    SELECT DISTINCT
-{{.Indent}}        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-{{.Indent}}        CAST(json_extract(value, '$.run_id') AS TEXT) AS run_id,
-{{.Indent}}        CAST(json_extract(value, '$.generation') AS INTEGER) AS run_generation,
-{{.Indent}}        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-{{.Indent}}    FROM json_each({{.CurrentRunFactsJSON}})
-{{.Indent}}),
-{{.Indent}}exact_live_runs AS (
+{{.Indent}}live_task_states AS (
 {{.Indent}}    SELECT
-{{.Indent}}        authority.task_id,
-{{.Indent}}        authority.run_id,
-{{.Indent}}        authority.run_generation,
-{{.Indent}}        CAST(
-{{.Indent}}            authority.waiting_question != 0
-{{.Indent}}            AND durable.waiting_question != 0
-{{.Indent}}            AS INTEGER
-{{.Indent}}        ) AS waiting_question
-{{.Indent}}    FROM live_authority_observations authority
-{{.Indent}}    JOIN anchored_current_run_facts durable
-{{.Indent}}      ON durable.task_id = authority.task_id
-{{.Indent}}     AND durable.run_id = authority.run_id
-{{.Indent}}     AND durable.run_generation = authority.run_generation
+{{.Indent}}        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+{{.Indent}}        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+{{.Indent}}        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+{{.Indent}}        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+{{.Indent}}    FROM json_each({{.LiveTaskStatesJSON}})
 {{.Indent}}),
-{{.Indent}}exact_live_task_facts AS (
-{{.Indent}}    SELECT
-{{.Indent}}        live.task_id,
-{{.Indent}}        CAST(MAX(live.waiting_question) AS INTEGER) AS has_waiting_question,
-{{.Indent}}        COALESCE((
-{{.Indent}}            SELECT json_group_array(ordered.run_id)
-{{.Indent}}            FROM (
-{{.Indent}}                SELECT candidate.run_id
-{{.Indent}}                FROM exact_live_runs candidate
-{{.Indent}}                WHERE candidate.task_id = live.task_id
-{{.Indent}}                ORDER BY candidate.run_id ASC
-{{.Indent}}            ) ordered
-{{.Indent}}        ), '[]') AS live_run_ids_json
-{{.Indent}}    FROM exact_live_runs live
-{{.Indent}}    GROUP BY live.task_id
-{{.Indent}}),
-{{.Indent}}canonical_task_status_decisions AS (
+{{.Indent}}effective_status AS (
 {{.Indent}}    SELECT
 {{.Indent}}        durable.task_id,
 {{.Indent}}        durable.is_done,
-{{.Indent}}        durable.kind AS durable_kind,
-{{.Indent}}        durable.node_ids_json,
-{{.Indent}}        durable.run_ids_json,
-{{.Indent}}        durable.attention_types_json,
-{{.Indent}}        live.has_waiting_question,
-{{.Indent}}        live.live_run_ids_json,
 {{.Indent}}        CASE
-{{.Indent}}            WHEN durable.is_done != 0 OR durable.kind = 'canceled' THEN durable.kind
-{{.Indent}}            WHEN COALESCE(live.has_waiting_question, 0) != 0 THEN 'waiting_question'
+{{.Indent}}            WHEN durable.is_done != 0 THEN 'done'
+{{.Indent}}            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
 {{.Indent}}            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
-{{.Indent}}            WHEN live.task_id IS NOT NULL THEN 'running'
+{{.Indent}}            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+{{.Indent}}            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
 {{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
 {{.Indent}}            ELSE durable.kind
-{{.Indent}}        END AS kind
-{{.Indent}}    FROM workflow_task_status_records durable
-{{.Indent}}    LEFT JOIN exact_live_task_facts live ON live.task_id = durable.task_id
-{{.Indent}}),
-{{.Indent}}canonical_task_status AS (
-{{.Indent}}    SELECT
-{{.Indent}}        decisions.task_id,
-{{.Indent}}        decisions.is_done,
-{{.Indent}}        decisions.kind,
-{{.Indent}}        CASE decisions.kind
-{{.Indent}}            WHEN 'canceled' THEN 0
-{{.Indent}}            WHEN 'done' THEN 1
-{{.Indent}}            WHEN 'waiting_question' THEN 2
-{{.Indent}}            WHEN 'waiting_approval' THEN 3
-{{.Indent}}            WHEN 'interrupted' THEN 4
-{{.Indent}}            WHEN 'running' THEN 5
-{{.Indent}}            WHEN 'queued' THEN 6
-{{.Indent}}            WHEN 'backlog' THEN 7
-{{.Indent}}            WHEN 'active' THEN 8
-{{.Indent}}            ELSE NULL
+{{.Indent}}        END AS kind,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN durable.is_done != 0 THEN 1
+{{.Indent}}            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+{{.Indent}}            WHEN durable.kind = 'waiting_approval' THEN 3
+{{.Indent}}            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+{{.Indent}}            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+{{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+{{.Indent}}            ELSE durable.primary_status_rank
 {{.Indent}}        END AS primary_status_rank,
-{{.Indent}}        decisions.node_ids_json,
+{{.Indent}}        durable.node_ids_json,
 {{.Indent}}        CASE
-{{.Indent}}            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.run_ids_json
-{{.Indent}}            WHEN decisions.kind = 'waiting_approval' THEN COALESCE((
-{{.Indent}}                SELECT json_group_array(ordered.run_id)
-{{.Indent}}                FROM (
-{{.Indent}}                    SELECT CAST(value AS TEXT) AS run_id
-{{.Indent}}                    FROM json_each(decisions.run_ids_json)
-{{.Indent}}                    UNION
-{{.Indent}}                    SELECT CAST(value AS TEXT) AS run_id
-{{.Indent}}                    FROM json_each(COALESCE(decisions.live_run_ids_json, '[]'))
-{{.Indent}}                    ORDER BY run_id ASC
-{{.Indent}}                ) ordered
-{{.Indent}}            ), '[]')
-{{.Indent}}            WHEN decisions.kind IN ('waiting_question', 'running') THEN COALESCE(decisions.live_run_ids_json, '[]')
-{{.Indent}}            WHEN decisions.durable_kind IN ('running', 'queued', 'waiting_question') THEN '[]'
-{{.Indent}}            ELSE decisions.run_ids_json
-{{.Indent}}        END AS run_ids_json,
-{{.Indent}}        CASE
-{{.Indent}}            WHEN decisions.is_done != 0 OR decisions.durable_kind = 'canceled' THEN decisions.attention_types_json
-{{.Indent}}            WHEN decisions.kind = 'waiting_approval' THEN decisions.attention_types_json
+{{.Indent}}            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
 {{.Indent}}            ELSE COALESCE((
 {{.Indent}}                SELECT json_group_array(attention_type)
 {{.Indent}}                FROM (
-{{.Indent}}                    SELECT CAST(value AS TEXT) AS attention_type
-{{.Indent}}                    FROM json_each(decisions.attention_types_json)
-{{.Indent}}                    WHERE value != 'question'
+{{.Indent}}                    SELECT value AS attention_type
+{{.Indent}}                    FROM json_each(durable.attention_types_json)
 {{.Indent}}                    UNION
 {{.Indent}}                    SELECT 'question'
-{{.Indent}}                    WHERE decisions.kind = 'waiting_question'
-{{.Indent}}                    ORDER BY attention_type ASC
+{{.Indent}}                    ORDER BY attention_type
 {{.Indent}}                )
-{{.Indent}}            ), '[]')
+{{.Indent}}            ), '["question"]')
 {{.Indent}}        END AS attention_types_json
-{{.Indent}}    FROM canonical_task_status_decisions decisions
+{{.Indent}}    FROM workflow_task_status_records durable
+{{.Indent}}    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 {{.Indent}}){{.Suffix}}

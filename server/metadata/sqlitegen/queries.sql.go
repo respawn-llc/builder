@@ -275,6 +275,31 @@ func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskPa
 	return result.RowsAffected()
 }
 
+const checkTaskSearchSchemaContract = `-- name: CheckTaskSearchSchemaContract :one
+SELECT
+    COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
+        FROM task_search_documents
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
+        FROM task_search_content
+    ), 0)
+    + COALESCE((
+        SELECT SUM(LENGTH(json_array(title, body, comment)))
+        FROM task_search_fts
+        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
+    ), 0) AS contract_read
+`
+
+func (q *Queries) CheckTaskSearchSchemaContract(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, checkTaskSearchSchemaContract)
+	var contract_read int64
+	err := recordQueryError(ctx, row.Scan(&contract_read), checkTaskSearchSchemaContract, 0)
+
+	return contract_read, err
+}
+
 const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
@@ -1870,6 +1895,48 @@ func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) 
 	row := q.db.QueryRowContext(ctx, getTaskProjectWorkflowIDs, taskID)
 	var i GetTaskProjectWorkflowIDsRow
 	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID), getTaskProjectWorkflowIDs, 1)
+
+	return i, err
+}
+
+const getTaskSearchSourceByDocumentID = `-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = ?1
+LIMIT 1
+`
+
+type GetTaskSearchSourceByDocumentIDRow struct {
+	DocumentID int64
+	SourceKind string
+	TaskID     sql.NullString
+	CommentID  sql.NullString
+	Title      interface{}
+	Body       interface{}
+	Comment    interface{}
+}
+
+func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentID int64) (GetTaskSearchSourceByDocumentIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getTaskSearchSourceByDocumentID, documentID)
+	var i GetTaskSearchSourceByDocumentIDRow
+	err := recordQueryError(ctx, row.Scan(
+		&i.DocumentID,
+		&i.SourceKind,
+		&i.TaskID,
+		&i.CommentID,
+		&i.Title,
+		&i.Body,
+		&i.Comment,
+	), getTaskSearchSourceByDocumentID, 1)
 
 	return i, err
 }
@@ -5354,6 +5421,181 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	return items, nil
 }
 
+const listTaskSearchCandidateFeasibility = `-- name: ListTaskSearchCandidateFeasibility :many
+WITH matching_sources AS (
+    SELECT
+        document.task_id,
+        document.source_kind,
+        document.document_id,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 0.75
+            END
+            AS REAL
+        ) AS weighted_rank
+    FROM task_search_fts
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    WHERE task_search_fts MATCH ?4
+      AND document.source_kind IN ('title', 'body')
+      AND kent_task_search_occurrence_count_v1(
+          COALESCE(content.title, content.body, content.comment),
+          CAST(?5 AS TEXT),
+          CAST(?6 AS INTEGER)
+      ) > 0
+),
+ranked_task_sources AS (
+    SELECT
+        task_id,
+        source_kind,
+        document_id,
+        weighted_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY
+                weighted_rank DESC,
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                document_id ASC
+        ) AS task_source_rank
+    FROM matching_sources
+)
+SELECT
+    task_id,
+    source_kind,
+    document_id,
+    weighted_rank
+FROM ranked_task_sources
+WHERE task_source_rank = 1
+  AND (
+      ?1 IS NULL
+      OR weighted_rank < CAST(?1 AS REAL)
+      OR (
+          weighted_rank = CAST(?1 AS REAL)
+          AND task_id > ?2
+      )
+  )
+ORDER BY weighted_rank DESC, task_id ASC
+LIMIT ?3
+`
+
+type ListTaskSearchCandidateFeasibilityParams struct {
+	CursorRank          interface{}
+	CursorTaskID        sql.NullString
+	PageSize            int64
+	CandidateExpression sql.NullString
+	LiteralQuery        string
+	CaseMode            int64
+}
+
+type ListTaskSearchCandidateFeasibilityRow struct {
+	TaskID       sql.NullString
+	SourceKind   string
+	DocumentID   int64
+	WeightedRank float64
+}
+
+func (q *Queries) ListTaskSearchCandidateFeasibility(ctx context.Context, arg ListTaskSearchCandidateFeasibilityParams) ([]ListTaskSearchCandidateFeasibilityRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskSearchCandidateFeasibility,
+		arg.CursorRank,
+		arg.CursorTaskID,
+		arg.PageSize,
+		arg.CandidateExpression,
+		arg.LiteralQuery,
+		arg.CaseMode,
+	)
+	err = recordQueryError(ctx, err, listTaskSearchCandidateFeasibility, 6)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskSearchCandidateFeasibilityRow
+	for rows.Next() {
+		var i ListTaskSearchCandidateFeasibilityRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.TaskID,
+			&i.SourceKind,
+			&i.DocumentID,
+			&i.WeightedRank,
+		), listTaskSearchCandidateFeasibility, 6); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskSearchCandidateFeasibility, 6); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskSearchCandidateFeasibility, 6); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskSearchSchemaObjects = `-- name: ListTaskSearchSchemaObjects :many
+SELECT
+    type AS object_kind,
+    name AS object_name
+FROM sqlite_schema
+WHERE
+    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
+    OR (type = 'view' AND name = 'task_search_content')
+    OR (
+        type = 'trigger'
+        AND name IN (
+            'task_search_document_insert',
+            'task_search_document_delete',
+            'task_search_task_insert',
+            'task_search_comment_insert',
+            'task_search_task_title_before_update',
+            'task_search_task_title_after_update',
+            'task_search_task_body_before_update',
+            'task_search_task_body_after_update',
+            'task_search_comment_body_before_update',
+            'task_search_comment_body_after_update',
+            'task_search_comment_delete',
+            'task_search_task_delete'
+        )
+    )
+ORDER BY type ASC, name ASC
+`
+
+type ListTaskSearchSchemaObjectsRow struct {
+	ObjectKind string
+	ObjectName string
+}
+
+func (q *Queries) ListTaskSearchSchemaObjects(ctx context.Context) ([]ListTaskSearchSchemaObjectsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskSearchSchemaObjects)
+	err = recordQueryError(ctx, err, listTaskSearchSchemaObjects, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskSearchSchemaObjectsRow
+	for rows.Next() {
+		var i ListTaskSearchSchemaObjectsRow
+		if err := recordQueryError(ctx, rows.Scan(&i.ObjectKind, &i.ObjectName), listTaskSearchSchemaObjects, 0); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskSearchSchemaObjects, 0); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskSearchSchemaObjects, 0); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasksByProject = `-- name: ListTasksByProject :many
 SELECT
     id,
@@ -5509,6 +5751,42 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnknownTaskSearchProjectIDs = `-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(?1)
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC
+`
+
+func (q *Queries) ListUnknownTaskSearchProjectIDs(ctx context.Context, projectIdsJson interface{}) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listUnknownTaskSearchProjectIDs, projectIdsJson)
+	err = recordQueryError(ctx, err, listUnknownTaskSearchProjectIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var project_id string
+		if err := recordQueryError(ctx, rows.Scan(&project_id), listUnknownTaskSearchProjectIDs, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, project_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listUnknownTaskSearchProjectIDs, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listUnknownTaskSearchProjectIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6344,7 +6622,7 @@ live_task_states AS (
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-    FROM args, json_each(args.live_task_states_json)
+    FROM json_each((SELECT live_task_states_json FROM args))
 ),
 effective_status AS (
     SELECT
@@ -6385,6 +6663,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 selected_rows AS (
     SELECT
         t.id,
@@ -8733,6 +9012,39 @@ func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) 
 	err = recordQueryError(ctx, err, upsertWorktree, 10)
 
 	return err
+}
+
+const validateTaskSearchFTS5Expression = `-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH ?1
+LIMIT 1
+`
+
+func (q *Queries) ValidateTaskSearchFTS5Expression(ctx context.Context, fts5Expression sql.NullString) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, validateTaskSearchFTS5Expression, fts5Expression)
+	err = recordQueryError(ctx, err, validateTaskSearchFTS5Expression, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var document_id int64
+		if err := recordQueryError(ctx, rows.Scan(&document_id), validateTaskSearchFTS5Expression, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, document_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), validateTaskSearchFTS5Expression, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), validateTaskSearchFTS5Expression, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const workflowHasContinueSessionEdge = `-- name: WorkflowHasContinueSessionEdge :one
