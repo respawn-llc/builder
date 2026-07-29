@@ -1522,7 +1522,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 }
 
-func TestTerminalBackgroundEventRoutesToCurrentResourceAfterReplacement(t *testing.T) {
+func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
@@ -1537,7 +1537,7 @@ func TestTerminalBackgroundEventRoutesToCurrentResourceAfterReplacement(t *testi
 	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release predecessor runtime: %v", err)
 	}
-	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+	successor := openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
@@ -1552,11 +1552,18 @@ func TestTerminalBackgroundEventRoutesToCurrentResourceAfterReplacement(t *testi
 	route(predecessor.Resource().Generation())
 	select {
 	case update := <-updates:
+		t.Fatalf("stale predecessor generation routed background update: %+v", update)
+	default:
+	}
+
+	route(successor.Resource().Generation())
+	select {
+	case update := <-updates:
 		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("replacement resource background update = %+v", update)
+			t.Fatalf("current generation background update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("replacement resource did not receive terminal background update")
+		t.Fatal("current resource generation did not receive background update")
 	}
 }
 

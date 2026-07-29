@@ -248,7 +248,6 @@ type processEntry struct {
 	outputBytes          int64
 	notify               chan struct{}
 	done                 chan struct{}
-	backgroundedReady    chan struct{}
 	killRequested        bool
 	noticeConsumed       bool
 	mu                   sync.Mutex

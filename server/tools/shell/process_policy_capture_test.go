@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/tools"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -87,56 +86,6 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	}
 	if manager.Count() != 0 {
 		t.Fatalf("background process count after completion = %d, want 0", manager.Count())
-	}
-}
-
-func TestRapidTerminalExitWaitsForBackgroundedRegistration(t *testing.T) {
-	workspace := t.TempDir()
-	manager := newShellTestManager(t, time.Millisecond)
-	backgrounded := make(chan struct{})
-	releaseRegistration := make(chan struct{})
-	terminal := make(chan Event, 1)
-	manager.SetEventHandler(func(event Event) {
-		switch event.Type {
-		case EventBackgrounded:
-			close(backgrounded)
-			<-releaseRegistration
-		case EventCompleted, EventKilled:
-			terminal <- event
-		}
-	})
-	tool := NewExecCommandTool(workspace, 16_000, manager, "")
-	results := make(chan tools.Result, 1)
-	go func() {
-		results <- callExecCommand(t, tool, "rapid-terminal", map[string]any{
-			"cmd":           "sleep 0.01; printf done",
-			"shell":         "/bin/sh",
-			"login":         false,
-			"yield_time_ms": 1,
-		})
-	}()
-	select {
-	case <-backgrounded:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for backgrounded registration")
-	}
-	select {
-	case event := <-terminal:
-		t.Fatalf("terminal event overtook backgrounded registration: %+v", event)
-	default:
-	}
-	close(releaseRegistration)
-	result := <-results
-	if result.IsError {
-		t.Fatalf("start background command: %s", string(result.Output))
-	}
-	select {
-	case event := <-terminal:
-		if event.Type != EventCompleted {
-			t.Fatalf("terminal event type = %q, want completed", event.Type)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for terminal event")
 	}
 }
 
