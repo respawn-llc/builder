@@ -130,6 +130,9 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 				e.cfg.BackgroundCompletionSettled != nil {
 				e.cfg.BackgroundCompletionSettled(backgroundSessionID)
 			}
+			if consumption.retainsDiagnostic {
+				e.backgroundFlow.ScheduleIfIdle()
+			}
 		}
 	}
 }

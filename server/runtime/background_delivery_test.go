@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"core/server/tools"
@@ -137,5 +138,57 @@ func TestPendingBackgroundDeliveryDiagnosticReturnsTypedErrorUntilCommitted(t *t
 	receipt, err = engine.CommitPendingBackgroundDeliveryDiagnostic(diagnostic)
 	if !receipt.Committed {
 		t.Fatalf("committed receipt = %+v error=%v", receipt, err)
+	}
+}
+
+func TestDiagnosticOnlyBackgroundWorkPersistsWithoutModelContinuation(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{}
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.ensureOrchestrationCollaborators()
+	scheduler, ok := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
+	if !ok {
+		t.Fatalf("background scheduler = %T", engine.backgroundFlow)
+	}
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"process-diagnostic-only",
+		uuid.New(),
+		backgroundDeliveryStageAutomaticSteering,
+		1,
+		errors.New("delivery failed"),
+	)
+	scheduler.mu.Lock()
+	scheduler.states = []backgroundNoticeState{newDiagnosticOnlyBackgroundNotice(diagnostic)}
+	scheduler.signalChangedLocked()
+	scheduler.mu.Unlock()
+	scheduler.ScheduleIfIdle()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		found := false
+		for _, entry := range engine.ChatSnapshot().Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("diagnostic-only background work did not persist")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	client.mu.Lock()
+	calls := len(client.calls)
+	client.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("diagnostic-only work started model continuations: %d", calls)
+	}
+	if engine.BackgroundDeliveryRetirementSnapshot().Active {
+		t.Fatal("committed diagnostic-only work retained the runtime")
 	}
 }

@@ -353,7 +353,7 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 		// task. It is therefore a valid external retry trigger.
 		b.permitEarliestRetryLocked()
 	}
-	if b.task == nil && b.hasDeliverableNoticeLocked() {
+	if b.task == nil && b.hasScheduledWorkLocked() {
 		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
 		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
 		b.signalChangedLocked()
@@ -428,17 +428,12 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		return
 	}
 	defer b.finishTask(attempt)
-	if _, err := b.runQueuedNotices(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		b.commitPendingDeliveryDiagnostics()
-	}
+	_, _ = b.runQueuedNotices(ctx)
 }
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
 	if !b.hasDeliverableNotice() {
-		return llm.Message{}, nil
+		return llm.Message{}, b.runPendingDeliveryDiagnostics(ctx)
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
 		reserved := b.reserveDeliverable()
@@ -511,6 +506,11 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 	if errors.Is(err, ErrAgentBusy) {
 		return llm.Message{}, nil
 	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		if diagnosticErr := b.commitPendingDeliveryDiagnostics(); diagnosticErr != nil {
+			return llm.Message{}, errors.Join(err, diagnosticErr)
+		}
+	}
 	return assistant, err
 }
 
@@ -521,16 +521,26 @@ func nextBackgroundDeliveryAttempt(previous *PendingBackgroundDeliveryDiagnostic
 	return previous.attempt + 1
 }
 
-func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() {
+func (b *defaultBackgroundNoticeScheduler) runPendingDeliveryDiagnostics(ctx context.Context) error {
+	if !b.hasPendingDeliveryDiagnostics() {
+		return nil
+	}
+	return b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(context.Context, string) error {
+		return b.commitPendingDeliveryDiagnostics()
+	})
+}
+
+func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() error {
 	for _, diagnostic := range b.pendingDiagnosticsSnapshot() {
 		receipt, err := b.engine.commitBackgroundDeliveryDiagnostic(diagnostic)
 		if receipt.Committed {
 			b.clearCommittedDeliveryDiagnostic(diagnostic.processID, diagnostic.activity)
 		}
 		if err != nil {
-			return
+			return err
 		}
 	}
+	return nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) pendingDiagnosticsSnapshot() []PendingBackgroundDeliveryDiagnostic {
@@ -827,6 +837,44 @@ func (b *defaultBackgroundNoticeScheduler) hasDeliverableNoticeLocked() bool {
 		}
 	}
 	return false
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasPendingDeliveryDiagnostics() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hasPendingDeliveryDiagnosticsLocked()
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasPendingDeliveryDiagnosticsLocked() bool {
+	for _, state := range b.states {
+		switch current := state.(type) {
+		case diagnosticOnlyBackgroundNotice:
+			return true
+		case pendingBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
+		case reservedBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
+		case retryDeferredBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
+		case withdrawingBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
+		default:
+			panic(fmt.Sprintf("unknown background notice state %T", state))
+		}
+	}
+	return false
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasScheduledWorkLocked() bool {
+	return b.hasDeliverableNoticeLocked() || b.hasPendingDeliveryDiagnosticsLocked()
 }
 
 func (b *defaultBackgroundNoticeScheduler) hasRetirementWorkLocked() bool {
