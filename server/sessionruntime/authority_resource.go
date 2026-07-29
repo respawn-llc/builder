@@ -995,13 +995,21 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 		resource.mu.Unlock()
 		return nil, fmt.Errorf("session %s runtime is not ready", sessionID)
 	}
+	resource.mu.Unlock()
+	if err := a.replayOrdinaryBackground(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	resource.mu.Lock()
+	if resource.state != AgentResourceReady {
+		resource.mu.Unlock()
+		return nil, fmt.Errorf("session %s runtime became unavailable during background replay", sessionID)
+	}
 	if ownerID != nil {
 		resource.owners[*ownerID] = struct{}{}
 		resource.ownerlessDisposition = agentResourceRemainAvailable
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
-	a.replayOrdinaryBackground(sessionID)
 	return resource, nil
 }
 

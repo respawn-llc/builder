@@ -140,9 +140,12 @@ func (a *Authority) settleBackgroundOwner(processID string) {
 	}
 }
 
-func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
+func (a *Authority) replayOrdinaryBackground(ctx context.Context, sessionID runtimeids.SessionID) error {
 	if a.options.background == nil {
-		return
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
@@ -162,10 +165,10 @@ func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
 		}
 		if owner.diagnostic != nil {
 			if resource == nil {
-				return
+				return fmt.Errorf("ordinary background replay has no resource: session_id=%s", sessionID)
 			}
 			var receipt session.CommitReceipt
-			err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+			err := resource.withEngine(ctx, resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 				var commitErr error
 				receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(*owner.diagnostic)
 				return commitErr
@@ -177,7 +180,15 @@ func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
 					"session_id", sessionID.String(),
 					"error", err,
 				)
-				continue
+				return err
+			}
+			if err != nil {
+				a.backgroundLogger.Error(
+					"ordinary background diagnostic committed with observer error",
+					"process_id", processID,
+					"session_id", sessionID.String(),
+					"error", err,
+				)
 			}
 			a.mu.Lock()
 			current, currentOK := a.backgroundOwners[processID].(ordinaryBackgroundOwner)
@@ -189,6 +200,7 @@ func (a *Authority) replayOrdinaryBackground(sessionID runtimeids.SessionID) {
 		}
 		a.options.background.ReplayPendingTerminal(processID)
 	}
+	return nil
 }
 
 func (a *Authority) replayWorkflowBackground(scope ExecutionScope) {
