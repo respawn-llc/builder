@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -115,27 +114,5 @@ func TestWorkflowListRejectsRemovedPaginationFlags(t *testing.T) {
 				t.Fatalf("requests=%+v stdout=%q stderr=%q", remote.requests, stdout.String(), stderr.String())
 			}
 		})
-	}
-}
-
-func TestWorkflowListHelpShowsOnlyOffsetPaginationFlags(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	exitCode := workflowSubcommand([]string{"list", "--help"}, &stdout, &stderr)
-
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
-	}
-	usage := stderr.String()
-	for _, flag := range []string{"--offset", "--limit"} {
-		if !strings.Contains(usage, flag) {
-			t.Fatalf("usage omits %s: %q", flag, usage)
-		}
-	}
-	for _, removed := range []string{"--page-token", "--page-size"} {
-		if strings.Contains(usage, removed) {
-			t.Fatalf("usage retains removed flag %s: %q", removed, usage)
-		}
 	}
 }

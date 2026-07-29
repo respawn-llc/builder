@@ -22,7 +22,6 @@ const (
 )
 
 const WorkflowPaginationMaxLimit = 100
-const WorkflowTaskListMaxPageSize = 100
 const WorkflowTaskListMaxSortSelectors = 5
 const WorkflowBoardNodeCardsMaxPageSize = 25
 

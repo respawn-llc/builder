@@ -1438,6 +1438,11 @@ effective_status AS (
         durable.node_ids_json,
         CASE
             WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'question'
+            ) THEN durable.attention_types_json
             ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
         END AS attention_types_json
     FROM workflow_task_status_records durable
