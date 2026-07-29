@@ -54,6 +54,40 @@ type ownerlessRetirementLLMClient struct {
 	releaseFirst chan struct{}
 }
 
+type backgroundContinuationLLMClient struct {
+	mu          sync.Mutex
+	responses   []llm.Response
+	calls       int
+	noticeCalls chan llm.Request
+}
+
+func (c *backgroundContinuationLLMClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	for _, item := range request.Items {
+		if item.MessageType != nil && *item.MessageType == llm.MessageTypeBackgroundNotice {
+			select {
+			case c.noticeCalls <- request:
+			default:
+			}
+			break
+		}
+	}
+	if len(c.responses) == 0 {
+		return llm.Response{}, errors.New("unexpected model request")
+	}
+	response := c.responses[0]
+	c.responses = c.responses[1:]
+	return response, nil
+}
+
+func (c *backgroundContinuationLLMClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
@@ -1566,6 +1600,141 @@ func TestOrdinaryTerminalBackgroundEventRoutesToCurrentReplacementResource(t *te
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ordinary terminal event did not route to current replacement resource")
+	}
+}
+
+func TestStoppedWorkflowTerminalDoesNotRouteToCurrentSessionResource(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{}, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "workflow-b", &plan)
+	t.Cleanup(func() {
+		_, _ = attachment.Release(context.Background(), RuntimeReleaseClose)
+	})
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	workflowA := workflowExecutionRefForTest(t, workflow.TaskID("task-a"), workflow.NodeID("node-a"), nil)
+	fixture.authority.mu.Lock()
+	fixture.authority.backgroundOwners[event.Snapshot.ID] = workflowBackgroundOwner{
+		processID:      event.Snapshot.ID,
+		activityID:     event.Snapshot.ActivityID,
+		sessionID:      sessionID,
+		launchResource: attachment.Resource().Generation(),
+		launchScopeID:  runtimeids.NewExecutionScopeID(),
+		workflow:       workflowA,
+		delivery:       pendingWorkflowDeliveryTarget{},
+	}
+	fixture.authority.mu.Unlock()
+
+	fixture.authority.routeBackgroundEvent(event)
+	select {
+	case update := <-updates:
+		t.Fatalf("stopped Workflow completion routed to a current Session resource: %+v", update)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	client := &backgroundContinuationLLMClient{
+		responses: []llm.Response{
+			{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("launching"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+				ToolCalls: []llm.ToolCall{{
+					ID:    "rapid-shell",
+					Name:  string(toolspec.ToolExecCommand),
+					Input: json.RawMessage(`{"cmd":"sleep 0.05; printf RAPID_TERMINAL","shell":"/bin/sh","login":false,"yield_time_ms":1}`),
+				}},
+				Usage: llm.Usage{WindowTokens: 200000},
+			},
+			{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("initial complete"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+				Usage:     llm.Usage{WindowTokens: 200000},
+			},
+			{
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background complete"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+				Usage:     llm.Usage{WindowTokens: 200000},
+			},
+		},
+		noticeCalls: make(chan llm.Request, 1),
+	}
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.MinimumExecToBgSeconds = 1
+	settings.ShellOutputMaxChars = 16_000
+	settings.Reviewer.Frequency = "off"
+	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings:     settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		Workdir:      fixture.config.WorkspaceRoot,
+		Client:       client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		Background:      manager,
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close authority: %v", closeErr)
+		}
+	})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner", &plan)
+	t.Cleanup(func() {
+		_, _ = attachment.Release(context.Background(), RuntimeReleaseClose)
+	})
+	manager.SetMinimumExecToBgTime(time.Millisecond)
+
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(runCtx context.Context, engine *runtime.Engine) error {
+				_, submitErr := engine.SubmitUserMessage(runCtx, "launch background work")
+				return submitErr
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start launching execution: %v", err)
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait launching execution: %v", err)
+	}
+
+	select {
+	case <-client.noticeCalls:
+	case <-time.After(5 * time.Second):
+		authority.mu.Lock()
+		owners := make([]backgroundOwner, 0, len(authority.backgroundOwners))
+		for _, owner := range authority.backgroundOwners {
+			owners = append(owners, owner)
+		}
+		authority.mu.Unlock()
+		t.Fatalf(
+			"rapid terminal completion did not reach an automatic continuation: model_calls=%d manager=%+v owners=%T",
+			client.callCount(),
+			manager.List(),
+			owners,
+		)
+	}
+	if client.callCount() != 3 {
+		t.Fatalf("model calls = %d, want initial tool turn, initial final, and one automatic continuation", client.callCount())
 	}
 }
 

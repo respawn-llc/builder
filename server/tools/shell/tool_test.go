@@ -78,21 +78,6 @@ func waitForManagerCount(t *testing.T, manager *Manager, want int, timeout time.
 	t.Fatalf("manager count = %d, want %d", manager.Count(), want)
 }
 
-func waitForEntryInteraction(t *testing.T, manager *Manager, id string, timeout time.Duration) {
-	t.Helper()
-	entry, err := manager.entry(id)
-	if err != nil {
-		t.Fatalf("background entry %s: %v", id, err)
-	}
-	testsetup.RequireUntil(t, time.Now().Add(timeout), time.Millisecond, func() bool {
-		if !entry.interactMu.TryLock() {
-			return true
-		}
-		entry.interactMu.Unlock()
-		return false
-	}, "timed out waiting for write_stdin to start interacting with session %s", id)
-}
-
 func writeExecutableScript(t *testing.T, contents string) string {
 	t.Helper()
 	return testsetup.WriteExecutable(t, "hook.sh", contents)
@@ -607,7 +592,6 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 		done <- pollResult
 	}()
 
-	waitForEntryInteraction(t, manager, result.SessionID, time.Second)
 	cancel()
 
 	select {

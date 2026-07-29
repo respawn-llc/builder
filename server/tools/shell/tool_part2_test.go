@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"core/server/tools/shell/postprocess"
+	"core/shared/config"
+
 	"github.com/google/uuid"
 )
 
@@ -132,6 +135,63 @@ func TestTerminalEventEmissionDoesNotHoldPollingInteractionLock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminal event")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestPostTransitionPresentationFailureStillRegistersAndReleasesTerminalWaiter(t *testing.T) {
+	hookPath := writeExecutableScript(t, "#!/bin/sh\nflag=\"$(dirname \"$0\")/.first-call\"\nif [ ! -e \"$flag\" ]; then\n  : > \"$flag\"\n  sleep 1\nfi\nprintf '{\"processed\":false}'\n")
+	runner := mustPostprocessRunner(t, postprocess.Settings{
+		Mode:     config.ShellPostprocessingModeUser,
+		HookPath: &hookPath,
+	})
+	manager, err := NewManager(
+		WithMinimumExecToBgTime(50*time.Millisecond),
+		WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond),
+		WithPostprocessor(runner),
+	)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	events := make(chan Event, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type == EventBackgrounded || evt.Type == EventCompleted || evt.Type == EventKilled {
+			events <- evt
+		}
+		if evt.Type == EventBackgrounded {
+			cancel()
+		}
+	})
+
+	_, err = manager.Start(ctx, ExecRequest{
+		Command:        []string{"/bin/sh", "-c", "sleep 0.15; printf terminal"},
+		DisplayCommand: "sleep 0.15; printf terminal",
+		Workdir:        t.TempDir(),
+		YieldTime:      50 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected post-transition presentation failure")
+	}
+
+	select {
+	case event := <-events:
+		if event.Type != EventBackgrounded {
+			t.Fatalf("first event = %q, want backgrounded", event.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background registration after presentation failure")
+	}
+	select {
+	case event := <-events:
+		if event.Type != EventCompleted {
+			t.Fatalf("terminal event = %q, want completed", event.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal waiter remained blocked after post-transition presentation failure")
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
 }

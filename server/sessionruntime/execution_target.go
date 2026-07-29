@@ -302,7 +302,14 @@ func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionI
 			sessionID,
 		))
 	}
-	if deliveryScope, workflow := workflowDeliveryScope(owner); workflow {
+	if workflowOwner, workflow := owner.(workflowBackgroundOwner); workflow {
+		deliveryScope, admitted := workflowDeliveryScope(workflowOwner)
+		if !admitted {
+			// A stopped Workflow scope returns its completion to Manager-owned
+			// pending state. Generic Session readiness cannot consume it;
+			// explicit Resume is the only operation that installs a new target.
+			return
+		}
 		a.mu.Lock()
 		execution := a.byScope[deliveryScope]
 		resource := a.resources[sessionID]

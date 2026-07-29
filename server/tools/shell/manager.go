@@ -159,10 +159,12 @@ func (m *Manager) ReplayPendingTerminal(processID string) bool {
 	if err != nil {
 		return false
 	}
-	if _, pending := entry.beginTerminalHandoff(); !pending {
+	entry.interactMu.Lock()
+	_, pending := entry.terminal.(pendingTerminalDisposition)
+	entry.interactMu.Unlock()
+	if !pending {
 		return false
 	}
-	entry.finishTerminalHandoff()
 	go m.deliverPendingTerminal(entry)
 	return true
 }
@@ -344,9 +346,15 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return result, nil
 	}
 	_ = deprioritizeManagedProcess(cmd.Process)
+	// Registration is the causal boundary for a terminal handoff. The waiter
+	// may already have recorded terminal facts, but cannot deliver them until
+	// the Authority has synchronously recorded ownership from this event.
+	// Release it even when presentation post-processing subsequently fails:
+	// the terminal process is still a real lifecycle obligation.
+	m.emitEvent(newBackgroundedEvent(snapshot))
+	close(entry.backgroundedReady)
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
-		close(entry.backgroundedReady)
 		return ExecResult{}, err
 	}
 	display, truncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, backgroundTruncationBannerTemplate)
@@ -357,8 +365,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
-	m.emitEvent(newBackgroundedEvent(snapshot))
-	close(entry.backgroundedReady)
 	return result, nil
 }
 
@@ -371,29 +377,31 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	if err != nil {
 		return ExecResult{}, err
 	}
-	entry.interactMu.Lock()
-	defer entry.interactMu.Unlock()
-
 	yieldTime := normalizeWriteYieldTime(req.YieldTime, defaultWriteYieldTime)
 	maxOutputChars := req.MaxOutputChars
 	if maxOutputChars <= 0 {
 		maxOutputChars = defaultOutputTokenCap * 4
 	}
 	if req.Input != "" {
+		entry.interactMu.Lock()
 		entry.mu.Lock()
 		stdin := entry.stdin
 		running := entry.running
 		stdinOpen := entry.stdinOpen
 		entry.mu.Unlock()
 		if !running {
+			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("unknown session_id %s", id)
 		}
 		if stdin == nil || !stdinOpen {
+			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("stdin is closed for session %s", id)
 		}
 		if _, err := io.WriteString(stdin, req.Input); err != nil {
+			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("write stdin: %w", err)
 		}
+		entry.interactMu.Unlock()
 	}
 
 	start := time.Now()
