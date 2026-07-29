@@ -41,6 +41,82 @@
 - `No labels` matches Tasks with zero Label assignments and is mutually exclusive with named Label conditions. No named Label conditions means no Label restriction.
 - Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and cursor behavior. A client never loads the complete board or Task list to apply filters.
 
+## Task Dependencies
+
+- A Task Dependency is one directed relationship from a Blocker Task to a
+  Blocked Task.
+- The ordered Blocker Task and Blocked Task identities identify the
+  relationship. A Task Dependency has no separate product identifier.
+- Both Tasks in a Task Dependency must belong to the same Project. They may
+  belong to different linked Workflows or source workspaces in that Project.
+- Kent stores one relationship direction. It derives `Blocked by` and `Blocks`
+  views and never stores a reverse copy.
+- A Task may have at most 50 direct Blocker Tasks.
+- A Task may directly block at most 50 Tasks.
+- Kent returns each complete direct relationship direction without pagination.
+- A Task cannot depend on itself.
+- Kent rejects a relationship when the reverse direct relationship already
+  exists.
+- Kent permits directed dependency cycles of three or more Tasks.
+- Kent never traverses transitive dependencies for attachment, display, start
+  confirmation, or agent context.
+- Task Dependencies are advisory planning metadata. They never pause, move,
+  resume, interrupt, or otherwise mutate work already underway.
+- Users may add or remove Task Dependencies in every Task state.
+- Adding an existing relationship succeeds without changing state.
+- Removing an absent relationship succeeds without changing state.
+- An actual relationship addition or removal changes the update time of both
+  affected Tasks.
+- An idempotent no-op does not change either Task's update time.
+- A change in dependency satisfaction updates authoritative dependency
+  projections without changing the Blocked Task's update time.
+- Kent validates Task existence, Project scope, self-dependency, reciprocal
+  dependency, and both cardinality limits before it adds a relationship.
+- Kent validates and applies one relationship mutation atomically.
+- A relationship validation failure changes neither Task nor relationship
+  state.
+- Concurrent relationship additions cannot exceed either cardinality limit.
+- Typed relationship errors identify the violated rule and the affected Tasks.
+- A Task Dependency is satisfied if and only if its Blocker Task has
+  authoritative `done` status.
+- Every Terminal Node satisfies a Task Dependency, including a Terminal Node
+  reached through Manual Move.
+- Reopening a done Blocker Task makes its Task Dependencies unsatisfied again.
+- Task title changes and Project Key changes preserve Task Dependencies and
+  immediately change their displayed Task metadata.
+- Task Delete atomically removes every incoming and outgoing Task Dependency.
+- Deleting a Workflow or Project removes every Task Dependency that touches a
+  deleted Task.
+- Deletion-induced relationship removal changes each surviving related Task's
+  update time once.
+- Task Delete confirmation does not add dependency-specific copy or another
+  confirmation step.
+- `Blocked by` and `Blocks` lists put Tasks whose status is not `done` first,
+  then order each group by Task Short ID.
+- Task detail exposes both complete directions, canonical related-Task status,
+  current satisfaction, and direct aggregate counts from one authoritative
+  server projection.
+- Task Start and human Manual Move to an executable Node check the Blocked
+  Task's current direct unsatisfied dependencies.
+- Kent performs the dependency check after it validates that the requested
+  action is otherwise available and before Execution Target selection or
+  another continuation dialog.
+- When unsatisfied dependencies exist and the request has no explicit proceed
+  intent, Kent returns a typed dependency-confirmation-required outcome with the
+  unsatisfied count and changes nothing.
+- Proceeding despite dependencies acknowledges one initiating operation. Kent
+  does not retain that acknowledgement on the Task.
+- Proceeding despite dependencies does not acknowledge a relationship snapshot.
+  A concurrent dependency change does not require another confirmation within
+  that same initiating operation.
+- If a later continuation is dismissed, Kent leaves the Task unchanged and
+  discards the proceed intent.
+- A later independent Start or Manual Move checks dependencies again.
+- Resume, Approval, and automatic Workflow transitions do not request
+  dependency acknowledgement.
+- Dependencies never become a scheduler gate. An explicitly acknowledged Start
+  or Manual Move remains allowed.
+
 ## Workflow Definitions
 
 - Workflow definitions are globally reusable and linked to projects. Projects do not copy graph definitions.
@@ -164,6 +240,13 @@
 - Workflow Task Sessions reject user `/goal` control; the current workflow Node is the Task objective driver. Agents may set themselves Goals and complete them, per the agent Goal rules in core-runtime-tools.
 - Client input accepted by Runtime Command before the Completion Fence supersedes pending completion. Input that reaches the server after the fence is rejected with a typed retryable result, remains unapplied, and is never transferred to a successor current Node or Session execution.
 - Task Comment bodies are not added automatically to agent context. New Workflow instructions include the current visible Comment count and `kent task comment list <task>` when Comments exist. Kent never rewrites older model-visible instructions to update that count.
+- Unsatisfied Task Dependencies use the same instruction lifecycle as Task
+  Comment awareness.
+- When one or more direct unsatisfied dependencies exist, new Workflow
+  instructions include the current count and `kent task show <task-short-id>`.
+- Workflow instructions do not embed related Task bodies or relationship lists.
+- Kent never rewrites older model-visible instructions when relationships or
+  dependency satisfaction changes.
 
 ## Questions And Approvals
 
@@ -402,6 +485,8 @@
 - Confirmed Workflow deletion removes the Workflow, its Project Workflow Links, its Tasks, and its graph as one atomic change.
 - Workflow deletion preserves Sessions, worktrees, and other external artifacts. It does not perform individual Task Delete cleanup.
 - Task Delete requires Quiescence. It safely removes reconstructible managed artifacts, preserves Session artifacts, and removes the Task only after cleanup succeeds.
+- Task Delete removes Task Dependencies according to the Task Dependencies
+  contract.
 - Repeating Task cleanup for an artifact that is already absent succeeds.
 - Saving a Workflow checks the expected Workflow Version, validates the Workflow Draft, reports active blockers, and requires confirmation for destructive removals.
 - A successful Workflow save applies details and graph changes as one atomic change.
@@ -451,3 +536,73 @@
 - `kent task edit <task>` changes a Task's title, body, or source workspace. It requires at least one of `--title`, `--body`, `--body-file`, or `--source-workspace`. It preserves the current title when `--title` is absent. Agents can use it. `--json` prints the result.
 - `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.
 - Workflow/task CLI commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.
+- Task dependency commands use canonical group `kent task dep`.
+- `kent task deps`, `kent task dependency`, and `kent task dependencies` invoke
+  the same command group but are not shown in help or documentation.
+- `kent task dep add --blocker <task> --blocked <task>` adds one directed
+  relationship.
+- `kent task dep remove --blocker <task> --blocked <task>` removes one directed
+  relationship.
+- `kent task dep list <task>` inspects both direct relationship directions.
+- `kent task dep list <task> --direction blocks|blocked-by` inspects one
+  direction.
+- Every dependency command accepts `--project` for Task Short ID resolution and
+  `--json` for machine-readable output.
+- Dependency add and remove resolve both Task selectors before mutation.
+- Plain dependency add and remove output is exactly `done`.
+- Dependency add JSON returns Blocker Task ID and Short ID, Blocked Task ID and
+  Short ID, and typed outcome `added` or `already_present`.
+- Dependency remove JSON returns the same identities and typed outcome `removed`
+  or `already_absent`.
+- Dependency mutation JSON uses `outcome`, `blocker_task_id`,
+  `blocker_short_id`, `blocked_task_id`, and `blocked_short_id`.
+- Dependency list JSON includes the inspected Task ID and Short ID plus a
+  `directions` array.
+- Dependency list JSON uses top-level `task_id`, `short_id`, and `directions`.
+- Each dependency direction object uses `direction`, `total_count`, and
+  `items`.
+- A compact dependency Task item uses `task_id`, `short_id`, `title`,
+  `workflow_id`, and canonical typed `status`.
+- A `blocked-by` direction also uses `unsatisfied_count`.
+- Each `blocked-by` item also uses typed `satisfaction`.
+- Empty directions are omitted. A Task with no relationships returns
+  `directions: []`.
+- The cardinality limit makes every returned direction complete. Dependency
+  list output has no continuation token and the command accepts no page token.
+- Human dependency-list output omits empty directions and uses this shape:
+
+  ```text
+  Blocks <count> tasks:
+  <short-id>: <title> (<status>)
+  ...
+  Blocked by:
+  <short-id>: <title> (<status>)
+  ...
+  ```
+
+- Human `kent task show` uses the same dependency sections and shows every
+  relationship permitted by the cardinality limits.
+- Human dependency sections order unfinished related Tasks first and then Task
+  Short ID.
+- Human `kent task show` omits dependency output when both directions are empty.
+- `kent task show --json` never embeds dependency Task items.
+- When at least one relationship exists, `kent task show --json` includes only
+  direct Blocker Task count, direct unsatisfied Blocker Task count, and directly
+  blocked Task count.
+- The JSON field is `dependencies` with `blocker_count`,
+  `unsatisfied_blocker_count`, and `blocked_task_count`.
+- `kent task show --json` omits dependency summary when all three counts are
+  zero.
+- `kent task start` and `kent task move` accept `--ignore-dependencies`.
+- Without that flag, an otherwise valid Start or executable Manual Move with
+  unsatisfied dependencies returns a typed `dependency_confirmation_required`
+  outcome containing only the unsatisfied count.
+- Dependency-confirmation JSON uses `outcome` and
+  `unsatisfied_dependency_count`.
+- Human dependency-confirmation output identifies the count, directs the
+  operator to `kent task show <task>`, and gives the
+  `--ignore-dependencies` rerun.
+- Human and JSON dependency-confirmation outcomes exit nonzero because the
+  requested action was not applied.
+- `--ignore-dependencies` applies only to that command invocation and does not
+  remove relationships or suppress later Workflow dependency awareness.

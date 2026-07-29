@@ -45,6 +45,17 @@
 - A board is one Project and one Workflow, and shows Tasks from all attached workspaces. Workspace is context, not the board scope.
 - Workflow selection orders the Project default first, then recently used Workflows, then display name. Backlog is fixed left, Workflow Nodes follow their defined order, and Done is fixed right. Join Nodes are not columns. Groups preserve their Workflow grouping.
 - A Task card shows Task Short ID, title, server-native status text, and workspace context only when the Project has multiple workspaces and the Task source differs from the default workspace. It does not show Execution Target facts.
+- A Task card with one or more direct Blocker Tasks shows a dependency-progress
+  chip before its Labels.
+- The dependency-progress chip uses a circular progress indicator and
+  `satisfied blockers / total blockers` text.
+- The chip uses the primary tone while any direct dependency is unsatisfied and
+  the success tone when every direct dependency is satisfied.
+- A Task card with no direct Blocker Tasks omits the chip.
+- The server supplies both dependency-progress counts. Desktop never derives
+  them from loaded relationship rows.
+- Selecting the dependency-progress chip opens Task Detail focused on
+  Dependencies.
 - Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's newest page without changing its expanded state.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
@@ -52,6 +63,22 @@
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
 - Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. A usable fixed policy is not overridden.
+- When an otherwise valid Start or executable Manual Move has unsatisfied Task
+  Dependencies, Desktop opens dependency confirmation before Execution Target
+  selection or another continuation dialog.
+- The dependency-confirmation title is `Start task ahead of dependencies?`.
+- The dependency-confirmation body is
+  `The task still has N unsatisfied dependencies, do you still want to start it?`.
+- Dependency confirmation has a corner Close control, outline `View deps`, and
+  primary `Start`.
+- Dependency confirmation does not list Blocker Tasks.
+- Close and ordinary dialog dismissal leave the Task unchanged.
+- `View deps` closes the confirmation and opens the Blocked Task's own Task
+  Detail focused on Dependencies.
+- `Start` carries one proceed intent through the remaining start or move
+  continuation.
+- Dismissing a later continuation leaves the Task unchanged and discards that
+  proceed intent.
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
 - Closing Execution Target selection leaves the Task unchanged. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
@@ -76,6 +103,8 @@
 - Rename edits in place and can be committed or cancelled; validation failures remain inline. Deleting a Label requires confirmation and removes it from all Tasks.
 - Assignment omits OR/AND and `No labels` and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. Labels are neutral chips, ordered case-insensitively in the chooser, Task Detail, and board cards. Renaming can reposition them.
 - Board cards show fitting complete Labels in their footer and replace the last fitting position with `+N` when needed. Task Detail places Labels directly after Task ID; the entire Label value opens the chooser.
+- A board card lays out its dependency-progress chip before Label chips. Labels
+  use only the remaining width and retain their existing `+N` behavior.
 - Labels can change in every Task state. The interface updates immediately, then adopts the server result; failures restore the prior state and show a persistent Retry error.
 
 ## Tasks
@@ -93,6 +122,63 @@
 - Source URL is read-only. Valid web, secure web, and mail links use their host as the label and open externally; other values are plain source text.
 - Core Task Detail, Task attention, and comments load independently. Attention has its own loading and retry state and never blocks core detail. Opening from Inbox focuses its requested attention item once available. Live server changes update open Task Detail without replacing unsaved title or body edits or collapsing the surface.
 - A non-attention Task Detail failure uses the standard error state; reopening or refreshing Task Detail is its recovery path. Deleted comments are hidden.
+
+## Task Dependencies
+
+- Desktop follows the Task Dependency behavior in the Workflow orchestration
+  specification.
+- Task Detail places one flat Dependencies area after the description and
+  metadata islands.
+- The Dependencies header shows the exact dependency-progress chip used by Task
+  cards.
+- The Dependencies header omits the chip when the Task has no direct Blocker
+  Tasks.
+- Dependencies contains `Blocked by` first and `Blocks` second, separated by
+  one divider.
+- Each subsection header is a separate row and includes its relationship count
+  and an icon-only Add control.
+- Add uses the circular icon-control presentation.
+- Empty subsections remain visible so their Add controls remain reachable.
+- The `Blocked by` and `Blocks` lists are complete and do not paginate.
+- Each related-Task row shows one status icon, Task Short ID, and one-line title.
+- A related-Task title truncates with an end ellipsis through layout. Desktop
+  does not shorten or rewrite the source title.
+- A related-Task row does not show its Workflow name.
+- Related-Task rows put Tasks whose status is not `done` first, then order each
+  group by Task Short ID.
+- `done` uses a success-colored circular checkmark.
+- `backlog` uses an empty foreground-colored circle.
+- `active` uses a static primary-colored progress circle.
+- `queued` and `running` use a spinner.
+- `waiting_approval` and `interrupted` use a secondary-colored circle.
+- `waiting_question` uses a primary-colored circle.
+- Selecting a related-Task row replaces the current Task Detail with that Task
+  in the same sidebar or Task Detail presentation.
+- Dependency navigation has no sidebar-local Back or Forward action.
+- Closing Task Detail after dependency navigation closes the current Task Detail
+  as usual.
+- Each relationship row has an accessible trailing Remove action rendered as a
+  minimal uncircled red `X`.
+- Remove acts immediately without confirmation.
+- Dependency actions use icon-only controls outside confirmation dialogs.
+- `Blocked by` Add opens the ordinary New Task form for a new Blocker Task.
+- `Blocks` Add opens the ordinary New Task form for a new Blocked Task.
+- Related-Task creation uses the open Task's Project and Workflow.
+- Related-Task creation defaults source workspace to the open Task's source
+  workspace and keeps the ordinary source-workspace selector available.
+- The New Task form shows no dependency field, picker, relationship copy, or
+  other dependency-specific visible state.
+- Submitting related-Task creation atomically creates the Backlog Task and the
+  directed Task Dependency.
+- A related-Task creation failure creates neither Task nor relationship and
+  preserves the ordinary New Task recovery path.
+- Canceling related-Task creation creates neither Task nor relationship.
+- Desktop has no existing-Task dependency picker.
+- The Add control is unavailable with an accessible explanation when its
+  relationship direction has reached the 50-Task limit.
+- Kent rechecks the limit when related-Task creation is submitted.
+- Dependency changes refresh open Task Detail and visible board cards from
+  server-authoritative state.
 
 ## Inbox, Questions, Approvals, And Notifications
 
