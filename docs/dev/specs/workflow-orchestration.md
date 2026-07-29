@@ -94,7 +94,7 @@
 - `Blocked by` and `Blocks` lists put Tasks whose status is not `done` first,
   then order each group by Task Short ID.
 - Task detail exposes both complete directions, canonical related-Task status,
-  current satisfaction, and direct aggregate counts from one authoritative
+  Blocker satisfaction, and direct aggregate counts from one authoritative
   server projection.
 - Task Start and human Manual Move to an executable Node check the Blocked
   Task's current direct unsatisfied dependencies.
@@ -556,8 +556,6 @@
   or `already_absent`.
 - Dependency mutation JSON uses `outcome`, `blocker_task_id`,
   `blocker_short_id`, `blocked_task_id`, and `blocked_short_id`.
-- Dependency list JSON includes the inspected Task ID and Short ID plus a
-  `directions` array.
 - Dependency list JSON uses top-level `task_id`, `short_id`, and `directions`.
 - Each dependency direction object uses `direction`, `total_count`, and
   `items`.
