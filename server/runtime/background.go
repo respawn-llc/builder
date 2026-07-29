@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -293,6 +294,15 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 						intent:     notice.intent,
 						diagnostic: &diagnostic,
 					}}
+					slog.Error(
+						"background completion delivery failed",
+						"process_id", notice.processID,
+						"activity_id", notice.activity.String(),
+						"stage", backgroundDeliveryStageAutomaticSteering,
+						"attempt", diagnostic.attempt,
+						"committed", false,
+						"error", steerErr,
+					)
 				}
 				if !receipt.Committed {
 					b.restoreRetryDeferredFront(pending[index:])
