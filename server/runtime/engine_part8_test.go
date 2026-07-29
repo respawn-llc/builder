@@ -40,8 +40,9 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var (
-		mu     sync.Mutex
-		events []Event
+		mu        sync.Mutex
+		events    []Event
+		finalized []string
 	)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
@@ -49,6 +50,12 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 			mu.Lock()
 			events = append(events, evt)
 			mu.Unlock()
+		},
+		BackgroundAutomaticFinalizer: func(processID string, _ uuid.UUID) bool {
+			mu.Lock()
+			finalized = append(finalized, processID)
+			mu.Unlock()
+			return true
 		},
 	})
 
@@ -128,6 +135,9 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	mu.Lock()
 	defer mu.Unlock()
+	if len(finalized) != 2 || finalized[0] != "1000" || finalized[1] != "1001" {
+		t.Fatalf("combined background finalizers = %#v, want [1000 1001]", finalized)
+	}
 	immediateUpdates := map[string]bool{"1000": false, "1001": false}
 	for _, evt := range events {
 		if evt.Kind != EventBackgroundUpdated || evt.Background == nil {
