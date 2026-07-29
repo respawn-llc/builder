@@ -534,6 +534,13 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
+	if a.hasOrdinaryBackgroundOwner(sessionID) {
+		if request.DropOwner {
+			resource.ownerlessDisposition = agentResourceRetireWhenIdle
+		}
+		resource.mu.Unlock()
+		return RuntimeReleaseResult{Active: true}, nil
+	}
 	if request.Policy == RuntimeReleaseCloseIfIdle {
 		if request.DropOwner && len(resource.owners) != 0 {
 			resource.mu.Unlock()
@@ -569,6 +576,9 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	sessionID := resource.ref.SessionID()
+	if a.hasOrdinaryBackgroundOwner(sessionID) {
+		return nil
+	}
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
@@ -743,6 +753,9 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
+	if workflowRef != nil {
+		a.replayWorkflowBackground(scope)
+	}
 
 	go func() {
 		if request.Workflow != nil {
@@ -975,6 +988,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
+	a.replayOrdinaryBackground(sessionID)
 	return resource, nil
 }
 

@@ -19,6 +19,8 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type RuntimeWiring struct {
@@ -55,6 +57,7 @@ type RuntimeWiringOptions struct {
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
 	LifecycleTaskFinished               func() error
+	BackgroundCompletionSettled         func(processID string)
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -256,6 +259,19 @@ func NewRuntimeWiringWithBackground(
 		},
 		StepLifecycle:         opts.StepLifecycle,
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
+		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) bool {
+			if background == nil {
+				return false
+			}
+			return background.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+		},
+		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
+			if background == nil {
+				return false
+			}
+			return background.FinalizeAutomaticTerminal(processID, activityID)
+		},
+		BackgroundCompletionSettled: opts.BackgroundCompletionSettled,
 	})
 	if err != nil {
 		return nil, err

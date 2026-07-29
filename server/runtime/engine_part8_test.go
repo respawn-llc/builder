@@ -18,6 +18,8 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
@@ -188,7 +190,15 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
-	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, registry, Config{
+		Model: "gpt-5",
+		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) bool {
+			return manager.FinalizeTerminalOwnerPoll(callerSessionID, processID)
+		},
+		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
+			return manager.FinalizeAutomaticTerminal(processID, activityID)
+		},
+	})
 	manager.SetEventHandler(func(evt shelltool.Event) {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
 		if summaryErr != nil {
@@ -196,6 +206,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			return
 		}
 		preview, previewRemoved := summary.RuntimePreview()
+		terminal := evt.Type == shelltool.EventCompleted || evt.Type == shelltool.EventKilled
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
 			Type:           backgroundShellEventTypeForTest(evt.Type),
 			ID:             evt.Snapshot.ID,
@@ -214,6 +225,15 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
 		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
+		if terminal {
+			switch manager.AcknowledgeTerminalHandoff(evt.Snapshot.ID, evt.Snapshot.ActivityID) {
+			case shelltool.TerminalHandoffAcknowledged:
+			case shelltool.TerminalHandoffAlreadyFinalizedByOwnerPoll:
+				eng.DiscardProvisionalBackgroundNotice(evt.Snapshot.ID)
+			default:
+				t.Errorf("acknowledge terminal handoff for process %s", evt.Snapshot.ID)
+			}
+		}
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")

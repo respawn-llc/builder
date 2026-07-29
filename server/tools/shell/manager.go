@@ -114,6 +114,69 @@ func (m *Manager) SetMinimumExecToBgTime(value time.Duration) {
 	m.minimumExecToBgTime = value
 }
 
+// AcknowledgeTerminalHandoff transfers one in-flight terminal completion to
+// its runtime queue. It is intentionally narrow: queue admission, not durable
+// transcript acceptance, is the only fact it records.
+func (m *Manager) AcknowledgeTerminalHandoff(processID string, activityID uuid.UUID) TerminalHandoffAcknowledgement {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return TerminalHandoffRejected
+	}
+	return entry.acknowledgeTerminalHandoff(activityID)
+}
+
+// FinalizeTerminalOwnerPoll records a durable owner-session write_stdin
+// completion. A remote session is an independent reader and cannot alter the
+// owner's terminal disposition.
+func (m *Manager) FinalizeTerminalOwnerPoll(callerSessionID string, processID string) bool {
+	callerSessionID = strings.TrimSpace(callerSessionID)
+	if callerSessionID == "" {
+		return false
+	}
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.finalizeOwnerPoll(callerSessionID)
+}
+
+// FinalizeAutomaticTerminal records the automatic path's durable acceptance.
+// It can only settle a completion that was previously acknowledged by the
+// runtime queue.
+func (m *Manager) FinalizeAutomaticTerminal(processID string, activityID uuid.UUID) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.finalizeAutomatic(activityID)
+}
+
+// ReplayPendingTerminal retries delivery after an Authority resource boundary.
+// Terminal output is re-materialized from the existing command log only after
+// the pending state wins the attempt transition.
+func (m *Manager) ReplayPendingTerminal(processID string) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	if _, pending := entry.beginTerminalHandoff(); !pending {
+		return false
+	}
+	entry.finishTerminalHandoff()
+	go m.deliverPendingTerminal(entry)
+	return true
+}
+
+// WithdrawTerminalHandoff returns an uncommitted Workflow handoff to Manager
+// ownership before its Exact Execution Scope retires.
+func (m *Manager) WithdrawTerminalHandoff(processID string, activityID uuid.UUID) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.withdrawTerminalHandoff(activityID)
+}
+
 func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	if len(req.Command) == 0 {
 		return ExecResult{}, errors.New("command is required")
@@ -342,8 +405,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		return ExecResult{}, err
 	}
 	snapshot := entry.snapshot()
-	consumedCompletion := false
-	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
+	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
@@ -355,13 +417,11 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 			if err != nil {
 				return ExecResult{}, err
 			}
-			consumedCompletion = true
 		} else {
 			var previewTruncated bool
 			preview, _, previewTruncated, previewErr := readBackgroundSummaryFromFile(snapshot.LogPath, maxOutputChars, BackgroundOutputDefault, !snapshot.RawOutput)
 			if previewErr == nil {
 				processed = postprocess.Result{Output: preview}
-				consumedCompletion = true
 				sourceTruncated = previewTruncated
 				warning, warningErr = mergeOperationalWarning(warning, fmt.Sprintf("full output log skipped: %v", readErr))
 				if warningErr != nil {
@@ -375,10 +435,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 			}
 		}
 	}
-	if consumedCompletion {
-		entry.markCompletionNoticeConsumed()
-	}
-	if !consumedCompletion {
+	if !harvestingCompletion {
 		processed, err = m.applyPostprocessing(ctx, entry, string(output), snapshot.ExitCode, snapshot.Backgrounded, maxOutputChars)
 		if err != nil {
 			return ExecResult{}, err

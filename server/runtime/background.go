@@ -12,6 +12,8 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type defaultBackgroundNoticeScheduler struct {
@@ -24,13 +26,35 @@ type defaultBackgroundNoticeScheduler struct {
 }
 
 type queuedBackgroundNotice struct {
-	sessionID string
+	processID string
+	activity  uuid.UUID
 	intent    steeringIntent
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
 	e.ensureOrchestrationCollaborators()
 	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
+}
+
+// AdmitBackgroundShellUpdate adds a terminal notice without scheduling it.
+// Authority uses this during the Manager acknowledgement boundary so automatic
+// delivery cannot overtake the handoff that owns the notice.
+func (e *Engine) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
+	e.ensureOrchestrationCollaborators()
+	e.backgroundFlow.AdmitBackgroundShellUpdate(evt)
+}
+
+// DiscardProvisionalBackgroundNotice removes only an uncommitted automatic
+// notice. It is used when a Manager owner-poll receipt supersedes a terminal
+// handoff while the Authority callback is still returning.
+func (e *Engine) DiscardProvisionalBackgroundNotice(processID string) bool {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.ConsumePendingBackgroundNotice(processID)
+}
+
+func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
+	e.ensureOrchestrationCollaborators()
+	e.backgroundFlow.ScheduleIfIdle()
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
@@ -41,7 +65,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 	if !evt.Type.IsTerminal() {
 		return
 	}
-	b.QueueDeveloperNotice(llm.Message{
+	b.queueBackgroundShellNotice(evt, llm.Message{
 		Role:                 llm.RoleDeveloper,
 		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:                 textutil.OptionalTrimmedString(evt.ID),
@@ -49,7 +73,23 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
 		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
-	})
+	}, true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) AdmitBackgroundShellUpdate(evt BackgroundShellEvent) {
+	if !evt.Type.IsTerminal() {
+		panic(fmt.Sprintf("background admission requires terminal event: process_id=%q type=%q", evt.ID, evt.Type))
+	}
+	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+	b.queueBackgroundShellNotice(evt, llm.Message{
+		Role:                 llm.RoleDeveloper,
+		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
+		Name:                 textutil.OptionalTrimmedString(evt.ID),
+		BackgroundActivityID: textutil.Value(evt.ActivityID.String()),
+		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
+		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
+		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
+	}, false)
 }
 
 func formatBackgroundShellNotice(evt BackgroundShellEvent) string {
@@ -86,23 +126,42 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 		return
 	}
 	shouldSchedule := false
-	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
 	notice := queuedBackgroundNotice{
-		sessionID: sessionID,
-		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
+		intent: steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
 	}
-	b.mu.Lock()
-	b.pending = append(b.pending, notice)
-	if !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
-		b.scheduled = true
-		shouldSchedule = true
-	}
-	b.mu.Unlock()
+	b.admitNotice(notice, true, &shouldSchedule)
 	if shouldSchedule {
 		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
 			b.clearScheduled()
 		}
 	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt BackgroundShellEvent, msg llm.Message, schedule bool) {
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+		return
+	}
+	shouldSchedule := false
+	b.admitNotice(queuedBackgroundNotice{
+		processID: strings.TrimSpace(evt.ID),
+		activity:  evt.ActivityID,
+		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
+	}, schedule, &shouldSchedule)
+	if shouldSchedule {
+		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
+			b.clearScheduled()
+		}
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNotice, schedule bool, shouldSchedule *bool) {
+	b.mu.Lock()
+	b.pending = append(b.pending, notice)
+	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+		b.scheduled = true
+		*shouldSchedule = true
+	}
+	b.mu.Unlock()
 }
 
 func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []steeringIntent {
@@ -129,8 +188,8 @@ func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
 }
 
 func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessionID string) bool {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
+	processID := strings.TrimSpace(sessionID)
+	if processID == "" {
 		return false
 	}
 	b.mu.Lock()
@@ -139,7 +198,7 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessio
 	removed := false
 	filtered := b.pending[:0]
 	for _, notice := range b.pending {
-		if strings.TrimSpace(notice.sessionID) == sessionID {
+		if notice.processID == processID {
 			removed = true
 			continue
 		}
@@ -205,15 +264,30 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
-		pending := b.DrainPendingNotices()
+		pending := b.drainPending()
 		if len(pending) == 0 {
 			return nil
 		}
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			b.restorePendingFront(pending)
 			return err
 		}
-		if err := b.engine.steer(stepID, pending...); err != nil {
-			return err
+		for index, notice := range pending {
+			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
+			if receipt.Committed && notice.processID != "" && b.engine.cfg.BackgroundAutomaticFinalizer != nil {
+				if b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID, notice.activity) &&
+					b.engine.cfg.BackgroundCompletionSettled != nil {
+					b.engine.cfg.BackgroundCompletionSettled(notice.processID)
+				}
+			}
+			if steerErr != nil {
+				if !receipt.Committed {
+					b.restorePendingFront(pending[index:])
+				} else {
+					b.restorePendingFront(pending[index+1:])
+				}
+				return steerErr
+			}
 		}
 		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
 		assistant = msg
@@ -230,6 +304,32 @@ func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundN
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]queuedBackgroundNotice(nil), b.pending...)
+}
+
+func (b *defaultBackgroundNoticeScheduler) drainPending() []queuedBackgroundNotice {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pending) == 0 {
+		b.scheduled = false
+		return nil
+	}
+	pending := append([]queuedBackgroundNotice(nil), b.pending...)
+	b.pending = nil
+	b.scheduled = false
+	return pending
+}
+
+func (b *defaultBackgroundNoticeScheduler) restorePendingFront(notices []queuedBackgroundNotice) {
+	if len(notices) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	restored := make([]queuedBackgroundNotice, 0, len(notices)+len(b.pending))
+	restored = append(restored, notices...)
+	restored = append(restored, b.pending...)
+	b.pending = restored
+	b.scheduled = false
 }
 
 func (b *defaultBackgroundNoticeScheduler) clearScheduled() {

@@ -49,6 +49,7 @@ type Authority struct {
 	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
+	backgroundOwners   map[string]backgroundOwner
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
@@ -60,6 +61,7 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
+		backgroundOwners:   make(map[string]backgroundOwner),
 		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),

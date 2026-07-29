@@ -1522,7 +1522,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
+func TestOrdinaryTerminalBackgroundEventRoutesToCurrentReplacementResource(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
@@ -1537,10 +1537,19 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release predecessor runtime: %v", err)
 	}
-	successor := openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
+	authority.mu.Lock()
+	authority.backgroundOwners[event.Snapshot.ID] = ordinaryBackgroundOwner{
+		processID:      event.Snapshot.ID,
+		activityID:     event.Snapshot.ActivityID,
+		sessionID:      sessionID,
+		launchResource: predecessor.Resource().Generation(),
+		launchScopeID:  runtimeids.NewExecutionScopeID(),
+	}
+	authority.mu.Unlock()
 	route := func(generation runtimeids.ResourceGeneration) {
 		correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), generation)
 		if err != nil {
@@ -1552,18 +1561,11 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 	route(predecessor.Resource().Generation())
 	select {
 	case update := <-updates:
-		t.Fatalf("stale predecessor generation routed background update: %+v", update)
-	default:
-	}
-
-	route(successor.Resource().Generation())
-	select {
-	case update := <-updates:
 		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("current generation background update = %+v", update)
+			t.Fatalf("replacement terminal update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("current resource generation did not receive background update")
+		t.Fatal("ordinary terminal event did not route to current replacement resource")
 	}
 }
 

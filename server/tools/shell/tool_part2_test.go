@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID string, pollYieldMS int) (*Manager, <-chan Event) {
@@ -40,13 +42,13 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	return manager, events
 }
 
-func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
+func TestWriteStdinCompletionKeepsTerminalNoticeProvisional(t *testing.T) {
 	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 15_000)
 
 	select {
 	case evt := <-events:
-		if !evt.NoticeSuppressed {
-			t.Fatalf("expected completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		if evt.NoticeSuppressed {
+			t.Fatalf("write_stdin harvest must not suppress a terminal notice before durable acceptance, got %+v", evt)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completion event")
@@ -54,7 +56,7 @@ func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
-func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
+func TestWriteStdinKeepsFallbackCompletionNoticeProvisional(t *testing.T) {
 	manager, events := runCompletionNoticeTest(
 		t,
 		"bg-large-1",
@@ -68,8 +70,8 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 		if evt.completion == nil || evt.completion.source != completionOutputFallback {
 			t.Fatalf("expected fallback completion event, got %+v", evt)
 		}
-		if !evt.NoticeSuppressed {
-			t.Fatalf("expected fallback completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		if evt.NoticeSuppressed {
+			t.Fatalf("write_stdin harvest must not suppress a fallback terminal notice before durable acceptance, got %+v", evt)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for fallback completion event")
@@ -132,6 +134,92 @@ func TestTerminalEventEmissionDoesNotHoldPollingInteractionLock(t *testing.T) {
 		t.Fatal("timed out waiting for terminal event")
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestTerminalOwnerPollFinalizationIsOwnerRelativeAndCommitGated(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	terminal := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type == EventCompleted || evt.Type == EventKilled {
+			terminal <- evt
+		}
+	})
+	execTool := NewExecCommandTool(t.TempDir(), 16_000, manager, "owner-session")
+	start := callExecCommand(t, execTool, "owner-poll-start", map[string]any{
+		"cmd":           "sleep 0.15; printf done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("background start: %s", string(start.Output))
+	}
+	poll, err := manager.WriteStdin(context.Background(), WriteRequest{
+		SessionID:      "1000",
+		YieldTime:      time.Second,
+		MaxOutputChars: 16_000,
+	})
+	if err != nil {
+		t.Fatalf("provisional terminal poll: %v", err)
+	}
+	if poll.ExitCode == nil {
+		t.Fatalf("terminal poll did not return completion: %+v", poll)
+	}
+	select {
+	case <-terminal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal handoff")
+	}
+	if manager.FinalizeTerminalOwnerPoll("remote-session", "1000") {
+		t.Fatal("remote poll finalized the owner's completion")
+	}
+	if !manager.FinalizeTerminalOwnerPoll("owner-session", "1000") {
+		t.Fatal("committed owner poll did not finalize the pending completion")
+	}
+	if manager.ReplayPendingTerminal("1000") {
+		t.Fatal("finalized owner-poll completion became replayable")
+	}
+	if manager.FinalizeAutomaticTerminal("1000", uuid.New()) {
+		t.Fatal("automatic finalizer settled an owner-poll completion")
+	}
+}
+
+func TestAutomaticFinalizationRequiresAcknowledgedTerminalHandoff(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	terminal := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type != EventCompleted && evt.Type != EventKilled {
+			return
+		}
+		if manager.AcknowledgeTerminalHandoff(evt.Snapshot.ID, evt.Snapshot.ActivityID) != TerminalHandoffAcknowledged {
+			t.Errorf("acknowledge terminal handoff")
+		}
+		terminal <- evt
+	})
+	start := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, "owner-session"), "automatic-start", map[string]any{
+		"cmd":           "sleep 0.15; printf done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("background start: %s", string(start.Output))
+	}
+	var evt Event
+	select {
+	case evt = <-terminal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for acknowledged terminal handoff")
+	}
+	if !manager.FinalizeAutomaticTerminal(evt.Snapshot.ID, evt.Snapshot.ActivityID) {
+		t.Fatal("automatic finalizer did not settle acknowledged handoff")
+	}
+	if manager.FinalizeTerminalOwnerPoll("owner-session", evt.Snapshot.ID) {
+		t.Fatal("owner poll retroactively replaced automatic settlement")
+	}
+	if manager.ReplayPendingTerminal(evt.Snapshot.ID) {
+		t.Fatal("automatically finalized completion became replayable")
+	}
 }
 
 func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {

@@ -162,6 +162,15 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
+	if _, workflow := e.scope.Workflow(); workflow {
+		e.beginWorkflowFinalization()
+		if e.resource != nil {
+			e.resource.mu.Lock()
+			engine := e.resource.engine
+			e.resource.mu.Unlock()
+			e.authority.withdrawWorkflowBackground(e.scope, engine)
+		}
+	}
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
 	e.retire()
@@ -230,6 +239,10 @@ func (e *execution) retire() {
 func (e *execution) beginWorkflowFinalization() {
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
+		e.authority.mu.Unlock()
+		return
+	}
+	if e.phase == executionPhaseFinalizing {
 		e.authority.mu.Unlock()
 		return
 	}

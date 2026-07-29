@@ -45,6 +45,38 @@
 - Except in `none` and `raw` modes, generic command-output sanitization runs before built-ins and the optional hook. Built-ins run before the hook; a built-in halt stops only later built-ins. A user hook receives JSON on stdin containing the original sanitized and current processed output, and returns JSON on stdout. Hook failures do not change the model-facing output envelope.
 - `/ps` can show and operate on background processes from other sessions in the same app instance.
 - Background process IDs are unique for one server lifetime. Their Session association controls notices and history, not access.
+- A terminal background-command completion remains owned by the Session that launched the command. Replacing that Session's live resources does not change the destination or permit Kent to drop the completion.
+- While an ordinary Session owns a background command, Kent keeps its runtime available until the completion reaches final acceptance. A replacement resource may supersede that runtime and becomes the completion destination.
+- Every terminal background-command completion must reach exactly one final acceptance in its owning Session.
+- A terminal `write_stdin` result committed in the owning Session may consume the completion before its automatic Session continuation begins.
+- Otherwise, the automatic Session continuation must consume the queued notice.
+- A path reaches final acceptance only after its transcript and model-visible record commits durably.
+- If persistence does not commit, the completion remains pending and recoverable by the other path or a later attempt.
+- A committed path remains final when the committing operation also reports an error.
+- A terminal `write_stdin` result committed in another Session is an independent inline read. It never suppresses the owning Session's automatic notice.
+- A poll after the owning Session reaches final acceptance cannot undo that acceptance.
+- Kent never finalizes both owning-Session paths.
+- Kent may batch several queued background completions into one automatic Session continuation. Batching does not change each completion's exactly-once final acceptance.
+- A background completion never starts or resumes a Workflow Node after its Exact Execution Scope stops.
+- When a Workflow Exact Execution Scope stops, Kent must release its runtime.
+- The stop must preserve every background completion and developer diagnostic that has not committed, including obligations already accepted by that runtime.
+- The stop is not complete until every uncommitted obligation is recoverable without the stopped runtime.
+- When stop races with delivery, a completion or developer diagnostic committed before the stop boundary remains final.
+- Every other obligation must become pending for explicit Workflow Resume before runtime release.
+- After the stop boundary, Kent must not attempt a preserved completion or its developer diagnostic except as part of explicit Workflow Resume.
+- Only explicit Workflow Resume may consume an obligation preserved by stop.
+- Opening or attaching to the Session without Workflow Resume does not consume that obligation.
+- Workflow Resume must commit a pending developer diagnostic before it attempts the corresponding preserved completion.
+- If the completion is already final, Resume may commit only the pending diagnostic.
+- Resume must not repeat the completion notice or automatic continuation for a final completion.
+- A background-delivery failure that prevents the automatic Session continuation from starting must never be log-only.
+- Kent must keep the completion recoverable after a background-delivery failure.
+- Kent must record an operator diagnostic for the failed attempt.
+- Kent must persist a user-visible developer diagnostic as soon as the owning Session can accept it.
+- If a synchronous owning operation cannot durably commit that developer diagnostic, it must return a typed retryable error.
+- When that developer diagnostic does not commit, Kent must preserve any already-ready Session runtime, the completion, and the diagnostic for a later attempt.
+- An uncommitted background-delivery diagnostic remains pending.
+- A committed background-delivery diagnostic remains final even when its committing operation also reports an error.
 
 ## Patch And Image Tools
 
@@ -60,7 +92,7 @@
 - Kent truncates large tool output for model context with standardized head/tail content and truncation metadata. The threshold is configurable and applies after command post-processing.
 - Foreground shell output is evaluated after sanitization, post-processing, warnings, truncation, and presentation trimming. Whitespace-only content is no output.
 - A successful foreground command with output returns only that plaintext. Any completed foreground command without output returns `Exit code N, no output.`. An unsuccessful foreground command with output returns `Exit code N, output:` followed by the output.
-- Background completion and polling always include the exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
+- Background completion and polling always include the background process ID and exit code. Completion with no output says `Exit code N, no output.`. Lifecycle facts remain separate from output summaries.
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.
 - An invalid background-completion state fails fast with diagnostics in debug mode. Production preserves the terminal process facts, records the diagnostic, and reports an explicit Kent error instead of inventing successful or empty output.
 - Transient model-step failures retry after `1s`, `2s`, `4s`, `8s`, and `16s`. Ongoing mode shows concise model/API errors; detail and logs retain full details.

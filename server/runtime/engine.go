@@ -133,6 +133,16 @@ type Config struct {
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
+	// BackgroundOwnerPollFinalizer runs only after a terminal write_stdin
+	// completion has a durable receipt. It returns true only when this Engine's
+	// Session owns and won the completion disposition.
+	BackgroundOwnerPollFinalizer func(callerSessionID string, processID string) bool
+	// BackgroundAutomaticFinalizer records durable automatic acceptance for one
+	// admitted terminal notice after that notice's steering receipt commits.
+	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) bool
+	// BackgroundCompletionSettled releases Authority-owned lifecycle retention
+	// only after this Engine has removed its provisional automatic notice.
+	BackgroundCompletionSettled func(processID string)
 }
 
 type ReviewerConfig struct {
