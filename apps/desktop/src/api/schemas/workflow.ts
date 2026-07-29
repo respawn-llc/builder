@@ -63,11 +63,11 @@ const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
 export const workflowListSchema: z.ZodType<WorkflowPage> = z
   .object({
     workflows: z.array(workflowRecordSchema).nullish().transform(emptyArray),
-    next_page_token: emptyString,
+    next_offset: z.number().int().nonnegative().nullable().optional(),
   })
   .transform((value) => ({
     workflows: value.workflows,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset ?? null,
   }));
 
 export const workflowCreateSchema: z.ZodType<WorkflowRecord> = z

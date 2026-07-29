@@ -96,7 +96,7 @@ export type TaskListPage = Readonly<{
     workflowID: string | null;
   }>;
   matchingWorkflowCardinality: "none" | "one" | "multiple";
-  nextPageToken: string | null;
+  nextOffset: number | null;
   generatedAt: number;
   tasks: readonly TaskListItem[];
 }>;

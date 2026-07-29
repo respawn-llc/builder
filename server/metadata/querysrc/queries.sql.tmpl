@@ -302,67 +302,6 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
       sqlc.narg(project_id) IS NULL
       OR project_link.id IS NOT NULL
   )
-  AND (
-      sqlc.arg(cursor_active) = 0
-      OR (
-          sqlc.narg(project_id) IS NULL
-          AND (
-              MAX(
-                  workflows.updated_at_unix_ms,
-                  COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                  ), workflows.updated_at_unix_ms)
-              ) < sqlc.narg(cursor_activity_at_unix_ms)
-              OR (
-                  MAX(
-                      workflows.updated_at_unix_ms,
-                      COALESCE((
-                          SELECT MAX(task_records.updated_at_unix_ms)
-                          FROM task_records
-                          WHERE task_records.workflow_id = workflows.id
-                      ), workflows.updated_at_unix_ms)
-                  ) = sqlc.narg(cursor_activity_at_unix_ms)
-                  AND workflows.id < sqlc.arg(cursor_workflow_id)
-              )
-          )
-      )
-      OR (
-          sqlc.narg(project_id) IS NOT NULL
-          AND (
-              project_link.is_default < sqlc.narg(cursor_project_default)
-              OR (
-                  project_link.is_default = sqlc.narg(cursor_project_default)
-                  AND (
-                      (
-                          sqlc.narg(cursor_activity_at_unix_ms) IS NOT NULL
-                          AND (
-                              project_latest_task.updated_at_unix_ms IS NULL
-                              OR project_latest_task.updated_at_unix_ms < sqlc.narg(cursor_activity_at_unix_ms)
-                          )
-                      )
-                      OR (
-                          (
-                              project_latest_task.updated_at_unix_ms = sqlc.narg(cursor_activity_at_unix_ms)
-                              OR (
-                                  project_latest_task.updated_at_unix_ms IS NULL
-                                  AND sqlc.narg(cursor_activity_at_unix_ms) IS NULL
-                              )
-                          )
-                          AND (
-                              lower(workflows.name) > sqlc.narg(cursor_project_name)
-                              OR (
-                                  lower(workflows.name) = sqlc.narg(cursor_project_name)
-                                  AND workflows.id > sqlc.arg(cursor_workflow_id)
-                              )
-                          )
-                      )
-                  )
-              )
-          )
-      )
-  )
 ORDER BY
     project_link_default DESC,
     CASE
@@ -372,7 +311,8 @@ ORDER BY
     CASE WHEN project_link_default IS NOT NULL THEN lower(workflows.name) END ASC,
     CASE WHEN project_link_default IS NULL THEN workflows.id END DESC,
     CASE WHEN project_link_default IS NOT NULL THEN workflows.id END ASC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
 
 -- name: InsertWorkflowNode :exec
 INSERT INTO workflow_nodes (
@@ -1416,13 +1356,7 @@ args AS (
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
-        CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
-        CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
-        CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
-        CAST(sqlc.arg(cursor_primary_status_rank) AS INTEGER) AS cursor_primary_status_rank,
-        CAST(sqlc.narg(cursor_column_rank) AS INTEGER) AS cursor_column_rank,
-        CAST(sqlc.arg(cursor_title_sort) AS TEXT) AS cursor_title_sort,
-        CAST(sqlc.arg(cursor_task_id) AS TEXT) AS cursor_task_id,
+        CAST(sqlc.arg(offset_rows) AS INTEGER) AS offset_rows,
         CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
         CAST(sqlc.arg(sort_1_desc) AS INTEGER) AS sort_1_desc,
         CAST(sqlc.arg(sort_2_field) AS TEXT) AS sort_2_field,
@@ -1504,16 +1438,7 @@ effective_status AS (
         durable.node_ids_json,
         CASE
             WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-            ELSE COALESCE((
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT value AS attention_type
-                    FROM json_each(durable.attention_types_json)
-                    UNION
-                    SELECT 'question'
-                    ORDER BY attention_type
-                )
-            ), '["question"]')
+            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
@@ -1637,105 +1562,57 @@ matching_workflows AS (
       )
     LIMIT 2
 ),
-cursor_values AS (
-    SELECT
-        CASE args.sort_1_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_1_value,
-        CASE args.sort_2_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_2_value,
-        CASE args.sort_3_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_3_value,
-        CASE args.sort_4_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_4_value,
-        CASE args.sort_5_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_5_value
-    FROM args
+page_rows AS (
+    SELECT rows.*
+    FROM selected_rows rows
+    CROSS JOIN args
+    ORDER BY
+        CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
+        CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
+        CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
+        CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
+        CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
+        CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
+        CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
+        CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
+        CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
+        CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
+        rows.id ASC
+    LIMIT (SELECT limit_rows FROM args)
+    OFFSET (SELECT offset_rows FROM args)
 )
 SELECT
-    rows.id,
-    rows.project_id,
-    rows.project_workflow_link_id,
-    rows.workflow_id,
-    rows.workflow_name,
-    rows.workflow_revision_seen,
-    rows.task_seq,
-    rows.short_id,
-    rows.title,
-    rows.body,
-    rows.source_url,
-    rows.source_workspace_id,
-    rows.managed_worktree_id,
-    rows.execution_target_mode,
-    rows.execution_target_requested_ref,
-    rows.execution_target_resolved_ref,
-    rows.execution_target_commit_oid,
-    rows.execution_target_provenance,
-    rows.created_at_unix_ms,
-    rows.updated_at_unix_ms,
-    rows.metadata_json,
-    rows.column_rank,
-    rows.column_keys_json,
-    rows.kind,
-    rows.primary_status_rank,
-    rows.node_ids_json,
-    rows.attention_types_json,
-    rows.title_sort,
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_name,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    page.column_rank,
+    page.column_keys_json,
+    page.kind,
+    page.primary_status_rank,
+    page.node_ids_json,
+    page.attention_types_json,
+    page.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count
-FROM selected_rows rows
-CROSS JOIN args
-CROSS JOIN cursor_values cursor
-WHERE args.cursor_set = 0
-   OR (
-       (args.sort_1_field != '' AND ((args.sort_1_desc = 0 AND rows.sort_1_value > cursor.sort_1_value) OR (args.sort_1_desc != 0 AND rows.sort_1_value < cursor.sort_1_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND args.sort_2_field != '' AND ((args.sort_2_desc = 0 AND rows.sort_2_value > cursor.sort_2_value) OR (args.sort_2_desc != 0 AND rows.sort_2_value < cursor.sort_2_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND args.sort_3_field != '' AND ((args.sort_3_desc = 0 AND rows.sort_3_value > cursor.sort_3_value) OR (args.sort_3_desc != 0 AND rows.sort_3_value < cursor.sort_3_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND args.sort_4_field != '' AND ((args.sort_4_desc = 0 AND rows.sort_4_value > cursor.sort_4_value) OR (args.sort_4_desc != 0 AND rows.sort_4_value < cursor.sort_4_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND args.sort_5_field != '' AND ((args.sort_5_desc = 0 AND rows.sort_5_value > cursor.sort_5_value) OR (args.sort_5_desc != 0 AND rows.sort_5_value < cursor.sort_5_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND (args.sort_5_field = '' OR rows.sort_5_value = cursor.sort_5_value) AND rows.id > args.cursor_task_id)
-   )
-ORDER BY
-    CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
-    CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
-    CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
-    CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
-    CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
-    CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
-    CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
-    CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
-    CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
-    CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
-    rows.id ASC
-LIMIT (SELECT limit_rows FROM args);
+FROM (SELECT 1) summary
+LEFT JOIN page_rows page ON TRUE;
 
 -- name: ListBoardNodeTasks :many
 WITH board_node_tasks AS (
@@ -1914,28 +1791,6 @@ WHERE task_id = sqlc.arg(task_id)
 ORDER BY created_at_unix_ms DESC, id DESC
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
-
--- name: ListTaskCommentsPage :many
-SELECT
-    id,
-    task_id,
-    body,
-    author_kind,
-    author_id,
-    created_at_unix_ms,
-    updated_at_unix_ms
-FROM task_comments
-WHERE task_id = sqlc.arg(task_id)
-    AND (
-        sqlc.arg(has_cursor) = 0
-        OR created_at_unix_ms < sqlc.arg(cursor_created_at_unix_ms)
-        OR (
-            created_at_unix_ms = sqlc.arg(cursor_created_at_unix_ms)
-            AND id < sqlc.arg(cursor_id)
-        )
-    )
-ORDER BY created_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(limit_rows);
 
 -- name: GetWorkspaceBindingByID :one
 SELECT

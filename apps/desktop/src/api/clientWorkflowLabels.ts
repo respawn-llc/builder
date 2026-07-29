@@ -150,8 +150,8 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
         attention_kinds: input.attentionKinds ?? [],
         label_filter: taskLabelFilterPayload(input.labelFilter),
         sort: input.sort ?? [],
-        page_size: input.pageSize,
-        page_token: input.pageToken,
+        offset: input.offset ?? 0,
+        limit: input.limit ?? 40,
       }),
     ),
   );

@@ -549,11 +549,11 @@ function taskDetailPaging({
   loadMore: () => void;
 }> {
   if (selectedTab === "comments") {
-    const nextPageToken = comments.data?.pages.at(-1)?.nextPageToken ?? "";
+    const nextOffset = comments.data?.pages.at(-1)?.nextOffset ?? 0;
     return {
       hasNextPage: comments.hasNextPage,
       isFetchingNextPage: comments.isFetchingNextPage,
-      loadMoreKey: `${detailID}:comments:${nextPageToken}:${comments.dataUpdatedAt.toString()}`,
+      loadMoreKey: `${detailID}:comments:${nextOffset.toString()}:${comments.dataUpdatedAt.toString()}`,
       loadMore: () => {
         void comments.fetchNextPage();
       },

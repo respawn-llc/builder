@@ -188,7 +188,7 @@ describe("ApiClient workflow labels", () => {
         result: {
           scope: { project_id: "project-1", workflow_id: "workflow-1" },
           matching_workflow_cardinality: "one",
-          next_page_token: null,
+          next_offset: null,
           generated_at_unix_ms: 7,
           tasks: [
             {
@@ -224,7 +224,7 @@ describe("ApiClient workflow labels", () => {
           labelIDs: [priorityID, urgentID],
           excludedLabelIDs: [smallID],
         },
-        pageSize: 25,
+        limit: 25,
       }),
     ).resolves.toMatchObject({
       scope: { projectID: "project-1", workflowID: "workflow-1" },
@@ -249,7 +249,8 @@ describe("ApiClient workflow labels", () => {
             },
           },
           sort: [],
-          page_size: 25,
+          offset: 0,
+          limit: 25,
         },
       },
     ]);

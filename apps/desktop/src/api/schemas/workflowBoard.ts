@@ -63,7 +63,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
       })
       .strict(),
     matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
-    next_page_token: z.string().min(1).nullable().optional(),
+    next_offset: z.number().int().nonnegative().nullable().optional(),
     generated_at_unix_ms: z.number(),
     tasks: z.array(
       z
@@ -101,7 +101,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
       workflowID: value.scope.workflow_id ?? null,
     },
     matchingWorkflowCardinality: value.matching_workflow_cardinality,
-    nextPageToken: value.next_page_token ?? null,
+    nextOffset: value.next_offset ?? null,
     generatedAt: value.generated_at_unix_ms,
     tasks: value.tasks,
   }));
@@ -508,9 +508,9 @@ export const commentAddResponseSchema = z.object({ comment: commentSchema });
 export const commentPageSchema: z.ZodType<CommentPage> = z
   .object({
     comments: z.array(commentSchema).nullish().transform(emptyArray),
-    next_page_token: z.string().optional().default(""),
+    next_offset: z.number().int().nonnegative().nullable().optional(),
   })
   .transform((value) => ({
     comments: value.comments,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset ?? null,
   }));

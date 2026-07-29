@@ -71,39 +71,11 @@ func (s *Store) ListComments(ctx context.Context, taskID workflow.TaskID) ([]Com
 	return s.listComments(ctx, taskID, 0, -1)
 }
 
-// CommentPageCursor is a stable keyset position into a task's comment history,
-// ordered by (created_at_unix_ms DESC, id DESC). Using a keyset instead of an
-// offset keeps infinite-scroll pages stable when comments are added or removed
-// while the reader pages through them.
-type CommentPageCursor struct {
-	CreatedAtUnixMs int64
-	ID              string
-	HasValue        bool
-}
-
-func (s *Store) ListCommentsPage(ctx context.Context, taskID workflow.TaskID, cursor CommentPageCursor, limit int) ([]CommentRecord, error) {
+func (s *Store) ListCommentsPage(ctx context.Context, taskID workflow.TaskID, offset int, limit int) ([]CommentRecord, error) {
 	if limit < 1 {
 		return nil, errors.New("comment limit must be positive")
 	}
-	hasCursor := int64(0)
-	if cursor.HasValue {
-		hasCursor = 1
-	}
-	rows, err := s.queries.ListTaskCommentsPage(ctx, sqlitegen.ListTaskCommentsPageParams{
-		TaskID:                string(taskID),
-		HasCursor:             hasCursor,
-		CursorCreatedAtUnixMs: cursor.CreatedAtUnixMs,
-		CursorID:              cursor.ID,
-		LimitRows:             int64(limit),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]CommentRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, CommentRecord{ID: row.ID, TaskID: workflow.TaskID(row.TaskID), Body: row.Body, Author: row.AuthorKind, AuthorID: row.AuthorID, CreatedAt: row.CreatedAtUnixMs, UpdatedAt: row.UpdatedAtUnixMs})
-	}
-	return out, nil
+	return s.listComments(ctx, taskID, offset, limit)
 }
 
 func (s *Store) listComments(ctx context.Context, taskID workflow.TaskID, offset int, limit int) ([]CommentRecord, error) {

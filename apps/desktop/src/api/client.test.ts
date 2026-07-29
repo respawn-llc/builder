@@ -222,13 +222,13 @@ describe("ApiClient", () => {
         method: "workflow.task.comment.list",
         result: {
           comments: [commentResponse],
-          next_page_token: "cursor-2",
+          next_offset: 40,
         },
       },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.listTaskComments("task-1", "cursor-1")).resolves.toMatchObject({
+    await expect(client.listTaskComments("task-1", 0)).resolves.toMatchObject({
       comments: [
         {
           id: "comment-1",
@@ -237,11 +237,11 @@ describe("ApiClient", () => {
           authorID: "Nek-12",
         },
       ],
-      nextPageToken: "cursor-2",
+      nextOffset: 40,
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.task.comment.list",
-      params: { task_id: "task-1", page_size: 40, page_token: "cursor-1" },
+      params: { task_id: "task-1", offset: 0, limit: 40 },
     });
   });
 
@@ -433,7 +433,7 @@ describe("ApiClient", () => {
               project_link: { default: true },
             },
           ],
-          next_page_token: "cursor-2",
+          next_offset: 10,
         },
       },
       {
@@ -471,9 +471,9 @@ describe("ApiClient", () => {
     const client = new ApiClient(transport);
 
     await expect(
-      client.listWorkflows({ pageSize: 10, pageToken: "cursor-1", query: "ship" }),
+      client.listWorkflows({ offset: 0, limit: 10, query: "ship" }),
     ).resolves.toMatchObject({
-      nextPageToken: "cursor-2",
+      nextOffset: 10,
       workflows: [
         {
           id: "workflow-1",
@@ -507,7 +507,7 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "workflow.list",
-      params: { page_size: 10, page_token: "cursor-1", query: "ship" },
+      params: { offset: 0, limit: 10, query: "ship" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.createAndLinkProject",
