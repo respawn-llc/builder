@@ -6,6 +6,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"core/server/tools"
+	"core/shared/transcript"
+
 	"github.com/google/uuid"
 )
 
@@ -62,5 +65,46 @@ func TestPendingBackgroundDeliveryDiagnosticRejectsInvalidRequiredIdentity(t *te
 			}()
 			test.run()
 		})
+	}
+}
+
+func TestBackgroundDeliveryDiagnosticPersistsOnlyAfterCommit(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		"process-1",
+		uuid.New(),
+		backgroundDeliveryStageAutomaticSteering,
+		1,
+		errors.New("persistence failed"),
+	)
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	receipt, err := engine.commitBackgroundDeliveryDiagnostic(diagnostic)
+	if err == nil || receipt.Committed {
+		t.Fatalf("uncommitted diagnostic receipt = %+v error = %v", receipt, err)
+	}
+	before := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			before++
+		}
+	}
+
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log appends: %v", err)
+	}
+	receipt, err = engine.commitBackgroundDeliveryDiagnostic(diagnostic)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("committed diagnostic receipt = %+v error = %v", receipt, err)
+	}
+	after := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			after++
+		}
+	}
+	if after != before+1 {
+		t.Fatalf("committed background delivery diagnostics = %d, want %d", after, before+1)
 	}
 }
