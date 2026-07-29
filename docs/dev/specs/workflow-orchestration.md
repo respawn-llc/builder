@@ -398,6 +398,7 @@
 - Context Source selection uses retained Sessions and does not depend on discarded execution records.
 - Pending Approval retains the exact Transition facts that the operator is approving. Ordinary work uses current inputs and the latest Workflow definition.
 - When legacy serial state contains a persisted pending Approval and a conflicting serial current position, Kent retains the Approval source as the Task's only Current Node.
+- When legacy serial state has no pending Approval and contains several active Start or Terminal Nodes, Kent retains the placement with the latest update time, then latest creation time, then greatest identifier.
 - Task Comments retain their author identity when available.
 - Session listings retain the first prompt preview.
 - Sessions retain unsent input drafts for recovery.

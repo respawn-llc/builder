@@ -880,6 +880,10 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 	client := newScriptedGoalLoopClient()
 	client.ignoreCancelUntilRelease = true
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	t.Cleanup(func() {
+		client.releaseCall(1)
+		client.releaseCall(2)
+	})
 	client.beforeReturn = func(call int) {
 		if call == 2 {
 			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
@@ -1146,14 +1150,16 @@ type scriptedGoalLoopClient struct {
 	calls                    int
 	started                  map[int]chan struct{}
 	release                  map[int]chan struct{}
+	releaseOnce              map[int]*sync.Once
 	beforeReturn             func(int)
 	ignoreCancelUntilRelease bool
 }
 
 func newScriptedGoalLoopClient() *scriptedGoalLoopClient {
 	return &scriptedGoalLoopClient{
-		started: map[int]chan struct{}{},
-		release: map[int]chan struct{}{},
+		started:     map[int]chan struct{}{},
+		release:     map[int]chan struct{}{},
+		releaseOnce: map[int]*sync.Once{},
 	}
 }
 
@@ -1220,8 +1226,13 @@ func (c *scriptedGoalLoopClient) assertNotStarted(t *testing.T, call int) {
 func (c *scriptedGoalLoopClient) releaseCall(call int) {
 	c.mu.Lock()
 	release := c.channelLocked(c.release, call)
+	once, ok := c.releaseOnce[call]
+	if !ok {
+		once = &sync.Once{}
+		c.releaseOnce[call] = once
+	}
 	c.mu.Unlock()
-	close(release)
+	once.Do(func() { close(release) })
 }
 
 func (c *scriptedGoalLoopClient) callCount() int {
