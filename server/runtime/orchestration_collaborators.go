@@ -46,6 +46,7 @@ type backgroundNoticeScheduler interface {
 	ConsumePendingBackgroundNotice(sessionID string) backgroundNoticeConsumption
 	ScheduleIfIdle()
 	PermitRetry() bool
+	AttachDiagnostic(PendingBackgroundDeliveryDiagnostic) bool
 	RetirementSnapshot() BackgroundDeliveryRetirementSnapshot
 	Withdraw(context.Context, string, uuid.UUID) (BackgroundDeliveryWithdrawal, bool, error)
 }

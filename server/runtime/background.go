@@ -98,6 +98,11 @@ func (e *Engine) PermitBackgroundDeliveryRetry() bool {
 	return e.backgroundFlow.PermitRetry()
 }
 
+func (e *Engine) AttachBackgroundDeliveryDiagnostic(diagnostic PendingBackgroundDeliveryDiagnostic) bool {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.AttachDiagnostic(diagnostic)
+}
+
 // WithdrawBackgroundDelivery joins the matching receipt classification before
 // returning. It is the only scheduler operation Workflow retirement uses to
 // reclaim uncommitted background work from a closing Engine.
@@ -367,6 +372,41 @@ func (b *defaultBackgroundNoticeScheduler) PermitRetry() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.permitEarliestRetryLocked()
+}
+
+func (b *defaultBackgroundNoticeScheduler) AttachDiagnostic(diagnostic PendingBackgroundDeliveryDiagnostic) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ensureChangedLocked()
+	for index, state := range b.states {
+		notice, hasNotice := state.queuedBackgroundNotice()
+		if !hasNotice || !notice.matches(diagnostic.processID, diagnostic.activity) {
+			continue
+		}
+		if notice.diagnostic != nil {
+			return false
+		}
+		notice.diagnostic = &diagnostic
+		switch current := state.(type) {
+		case pendingBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		case reservedBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		case retryDeferredBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		case withdrawingBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		default:
+			return false
+		}
+		b.signalChangedLocked()
+		return true
+	}
+	return false
 }
 
 func (b *defaultBackgroundNoticeScheduler) permitEarliestRetryLocked() bool {

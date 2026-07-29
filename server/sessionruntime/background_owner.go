@@ -24,7 +24,6 @@ type ordinaryBackgroundOwner struct {
 	sessionID      runtimeids.SessionID
 	launchResource runtimeids.ResourceGeneration
 	launchScopeID  runtimeids.ExecutionScopeID
-	diagnostic     *runtime.PendingBackgroundDeliveryDiagnostic
 }
 
 func (o ordinaryBackgroundOwner) backgroundOwnerProcessID() string               { return o.processID }
@@ -163,17 +162,24 @@ func (a *Authority) replayOrdinaryBackground(ctx context.Context, sessionID runt
 		if !ok {
 			continue
 		}
-		if owner.diagnostic != nil {
-			if resource == nil {
-				return fmt.Errorf("ordinary background replay has no resource: session_id=%s", sessionID)
-			}
+		if resource == nil {
+			return fmt.Errorf("ordinary background replay has no resource: session_id=%s", sessionID)
+		}
+		if diagnostic, hasDiagnostic := a.options.background.TakeTerminalDeliveryDiagnostic(processID, owner.activityID); hasDiagnostic {
 			var receipt session.CommitReceipt
 			err := resource.withEngine(ctx, resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 				var commitErr error
-				receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(*owner.diagnostic)
+				runtimeDiagnostic := runtime.NewBackgroundRoutingDiagnosticDetail(
+					diagnostic.ProcessID,
+					diagnostic.Activity,
+					diagnostic.Attempt,
+					diagnostic.Detail,
+				)
+				receipt, commitErr = engine.CommitPendingBackgroundDeliveryDiagnostic(runtimeDiagnostic)
 				return commitErr
 			})
 			if !receipt.Committed {
+				a.options.background.RestoreTerminalDeliveryDiagnostic(diagnostic)
 				a.backgroundLogger.Error(
 					"ordinary background diagnostic replay failed",
 					"process_id", processID,
@@ -190,13 +196,6 @@ func (a *Authority) replayOrdinaryBackground(ctx context.Context, sessionID runt
 					"error", err,
 				)
 			}
-			a.mu.Lock()
-			current, currentOK := a.backgroundOwners[processID].(ordinaryBackgroundOwner)
-			if currentOK && current.activityID == owner.activityID {
-				current.diagnostic = nil
-				a.backgroundOwners[processID] = current
-			}
-			a.mu.Unlock()
 		}
 		a.options.background.ReplayPendingTerminal(processID)
 	}

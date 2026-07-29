@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"core/server/tools/shell/postprocess"
 	"core/shared/runtimeids"
@@ -29,6 +30,7 @@ const (
 	maxFullLogPostprocessBytes = 2 << 20
 	backgroundLogDirPrefix     = "kent-bg-shells-"
 	initialProcessID           = 1000
+	maxTerminalDiagnosticBytes = 4 << 10
 )
 
 type EventType string
@@ -218,6 +220,55 @@ func (e *PollingCanceledError) Unwrap() error {
 	return context.Canceled
 }
 
+// TerminalDeliveryDiagnostic is a bounded, payload-free recovery descriptor
+// retained by Manager before ownership transfers to the runtime scheduler.
+type TerminalDeliveryDiagnostic struct {
+	ProcessID string
+	Activity  uuid.UUID
+	Attempt   uint64
+	Detail    string
+}
+
+func newTerminalDeliveryDiagnostic(
+	processID string,
+	activity uuid.UUID,
+	attempt uint64,
+	cause error,
+) TerminalDeliveryDiagnostic {
+	processID = strings.TrimSpace(processID)
+	if processID == "" {
+		panic("terminal delivery diagnostic requires process id")
+	}
+	if activity.Version() != 4 {
+		panic(fmt.Sprintf("terminal delivery diagnostic requires UUIDv4 activity id: %q", activity))
+	}
+	if attempt == 0 {
+		panic("terminal delivery diagnostic requires attempt")
+	}
+	detail := "background delivery failed"
+	if cause != nil {
+		detail = cause.Error()
+	}
+	return TerminalDeliveryDiagnostic{
+		ProcessID: processID,
+		Activity:  activity,
+		Attempt:   attempt,
+		Detail:    boundedTerminalDiagnosticDetail(detail),
+	}
+}
+
+func boundedTerminalDiagnosticDetail(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	if len(value) <= maxTerminalDiagnosticBytes {
+		return value
+	}
+	value = value[:maxTerminalDiagnosticBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
+}
+
 type processEntry struct {
 	id                   string
 	activityID           uuid.UUID
@@ -252,6 +303,7 @@ type processEntry struct {
 	terminalChanged      chan struct{}
 	killRequested        bool
 	terminal             terminalDisposition
+	deliveryDiagnostic   *TerminalDeliveryDiagnostic
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }
@@ -615,6 +667,50 @@ func (p *processEntry) waitForTerminalHandoff(ctx context.Context) error {
 		case <-changed:
 		}
 	}
+}
+
+func (p *processEntry) recordTerminalDeliveryFailure(activityID uuid.UUID, cause error) bool {
+	p.interactMu.Lock()
+	defer p.interactMu.Unlock()
+	if p.terminal == nil || p.terminal.terminalFacts().snapshot.ActivityID != activityID {
+		return false
+	}
+	switch p.terminal.(type) {
+	case finalizedByOwnerPollTerminalDisposition, finalizedAutomaticallyTerminalDisposition:
+		return false
+	}
+	attempt := uint64(1)
+	if p.deliveryDiagnostic != nil {
+		attempt = p.deliveryDiagnostic.Attempt + 1
+	}
+	diagnostic := newTerminalDeliveryDiagnostic(p.id, activityID, attempt, cause)
+	p.deliveryDiagnostic = &diagnostic
+	return true
+}
+
+func (p *processEntry) takeTerminalDeliveryDiagnostic(activityID uuid.UUID) (TerminalDeliveryDiagnostic, bool) {
+	p.interactMu.Lock()
+	defer p.interactMu.Unlock()
+	if p.deliveryDiagnostic == nil || p.deliveryDiagnostic.Activity != activityID {
+		return TerminalDeliveryDiagnostic{}, false
+	}
+	diagnostic := *p.deliveryDiagnostic
+	p.deliveryDiagnostic = nil
+	return diagnostic, true
+}
+
+func (p *processEntry) restoreTerminalDeliveryDiagnostic(diagnostic TerminalDeliveryDiagnostic) bool {
+	p.interactMu.Lock()
+	defer p.interactMu.Unlock()
+	if diagnostic.ProcessID != p.id || diagnostic.Activity != p.activityID || diagnostic.Attempt == 0 {
+		return false
+	}
+	if p.deliveryDiagnostic != nil {
+		return false
+	}
+	copy := diagnostic
+	p.deliveryDiagnostic = &copy
+	return true
 }
 
 type outputWriter struct {

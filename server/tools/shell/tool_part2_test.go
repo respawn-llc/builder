@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
@@ -210,6 +212,57 @@ func TestPostTransitionPresentationFailureStillRegistersAndReleasesTerminalWaite
 		t.Fatal("terminal waiter remained blocked after post-transition presentation failure")
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestTerminalDeliveryDiagnosticTransfersWithoutRetainingCause(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	transferred := make(chan struct{})
+	manager.SetEventHandler(func(event Event) {
+		if event.Type != EventCompleted && event.Type != EventKilled {
+			return
+		}
+		cause := errors.New(string([]byte{0xff}) + strings.Repeat("x", maxTerminalDiagnosticBytes*2))
+		if !manager.RecordTerminalDeliveryFailure(event.Snapshot.ID, event.Snapshot.ActivityID, cause) {
+			t.Errorf("record terminal delivery failure")
+		}
+		close(transferred)
+	})
+	start := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, "owner"), "diagnostic-transfer", map[string]any{
+		"cmd":           "sleep 0.15; printf done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("start background process: %s", string(start.Output))
+	}
+	select {
+	case <-transferred:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal diagnostic")
+	}
+	diagnostic, ok := manager.TakeTerminalDeliveryDiagnostic("1000", uuidFromSnapshot(t, manager, "1000"))
+	if !ok {
+		t.Fatal("terminal diagnostic was not available for transfer")
+	}
+	if len(diagnostic.Detail) > maxTerminalDiagnosticBytes || !utf8.ValidString(diagnostic.Detail) {
+		t.Fatalf("terminal diagnostic detail is not bounded valid UTF-8: %d", len(diagnostic.Detail))
+	}
+	if !manager.RestoreTerminalDeliveryDiagnostic(diagnostic) {
+		t.Fatal("restore terminal diagnostic")
+	}
+	if _, ok := manager.TakeTerminalDeliveryDiagnostic("1000", diagnostic.Activity); !ok {
+		t.Fatal("restored terminal diagnostic was not transferable")
+	}
+}
+
+func uuidFromSnapshot(t *testing.T, manager *Manager, processID string) uuid.UUID {
+	t.Helper()
+	snapshot, err := manager.Snapshot(processID)
+	if err != nil {
+		t.Fatalf("background snapshot: %v", err)
+	}
+	return snapshot.ActivityID
 }
 
 func TestTerminalOwnerPollFinalizationIsOwnerRelativeAndCommitGated(t *testing.T) {

@@ -179,6 +179,35 @@ func (m *Manager) WithdrawTerminalHandoff(processID string, activityID uuid.UUID
 	return entry.withdrawTerminalHandoff(activityID)
 }
 
+// RecordTerminalDeliveryFailure retains a bounded diagnostic until a runtime
+// queue accepts it. It is intentionally separate from terminal facts so the
+// Manager never retains an error interface or command output.
+func (m *Manager) RecordTerminalDeliveryFailure(processID string, activityID uuid.UUID, cause error) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.recordTerminalDeliveryFailure(activityID, cause)
+}
+
+// TakeTerminalDeliveryDiagnostic transfers one Manager-owned diagnostic after
+// runtime queue admission. The caller must restore it if admission fails.
+func (m *Manager) TakeTerminalDeliveryDiagnostic(processID string, activityID uuid.UUID) (TerminalDeliveryDiagnostic, bool) {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return TerminalDeliveryDiagnostic{}, false
+	}
+	return entry.takeTerminalDeliveryDiagnostic(activityID)
+}
+
+func (m *Manager) RestoreTerminalDeliveryDiagnostic(diagnostic TerminalDeliveryDiagnostic) bool {
+	entry, err := m.entry(strings.TrimSpace(diagnostic.ProcessID))
+	if err != nil {
+		return false
+	}
+	return entry.restoreTerminalDeliveryDiagnostic(diagnostic)
+}
+
 func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	if len(req.Command) == 0 {
 		return ExecResult{}, errors.New("command is required")

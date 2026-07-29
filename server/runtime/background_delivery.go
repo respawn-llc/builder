@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -76,6 +77,21 @@ func NewBackgroundRoutingDiagnostic(
 		backgroundDeliveryStageRouting,
 		1,
 		cause,
+	)
+}
+
+func NewBackgroundRoutingDiagnosticDetail(
+	processID string,
+	activity uuid.UUID,
+	attempt uint64,
+	detail string,
+) PendingBackgroundDeliveryDiagnostic {
+	return newPendingBackgroundDeliveryDiagnostic(
+		processID,
+		activity,
+		backgroundDeliveryStageRouting,
+		attempt,
+		errors.New(detail),
 	)
 }
 

@@ -517,6 +517,9 @@ func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) back
 	return backgroundNoticeConsumption{}
 }
 func (s *recoverySchedulingObserver) PermitRetry() bool { return false }
+func (s *recoverySchedulingObserver) AttachDiagnostic(PendingBackgroundDeliveryDiagnostic) bool {
+	return false
+}
 func (s *recoverySchedulingObserver) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
 	return BackgroundDeliveryRetirementSnapshot{}
 }
