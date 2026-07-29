@@ -506,9 +506,11 @@ type recoverySchedulingObserver struct {
 func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
 func (s *recoverySchedulingObserver) AdmitBackgroundShellUpdate(BackgroundShellEvent)        {}
 func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
-func (s *recoverySchedulingObserver) DrainPendingNotices() []steeringIntent                  { return nil }
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                                { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool             { return false }
+func (s *recoverySchedulingObserver) DrainPendingNotices() []queuedBackgroundNotice          { return nil }
+func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) {
+}
+func (s *recoverySchedulingObserver) HasPendingNotices() bool                    { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool { return false }
 
 func (s *recoverySchedulingObserver) ScheduleIfIdle() {
 	if s != nil && s.onSchedule != nil {

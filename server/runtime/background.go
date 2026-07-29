@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -164,7 +165,7 @@ func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNo
 	b.mu.Unlock()
 }
 
-func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []steeringIntent {
+func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.pending) == 0 {
@@ -174,11 +175,7 @@ func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []steeringInten
 	pending := append([]queuedBackgroundNotice(nil), b.pending...)
 	b.pending = nil
 	b.scheduled = false
-	intents := make([]steeringIntent, 0, len(pending))
-	for _, notice := range pending {
-		intents = append(intents, notice.intent)
-	}
-	return intents
+	return pending
 }
 
 func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
@@ -274,12 +271,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		}
 		for index, notice := range pending {
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
-			if receipt.Committed && notice.processID != "" && b.engine.cfg.BackgroundAutomaticFinalizer != nil {
-				if b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID, notice.activity) &&
-					b.engine.cfg.BackgroundCompletionSettled != nil {
-					b.engine.cfg.BackgroundCompletionSettled(notice.processID)
-				}
-			}
+			b.FinalizeCommittedBackgroundNotice(notice, receipt)
 			if steerErr != nil {
 				if !receipt.Committed {
 					b.restorePendingFront(pending[index:])
@@ -298,6 +290,16 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	return assistant, err
+}
+
+func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(notice queuedBackgroundNotice, receipt session.CommitReceipt) {
+	if !receipt.Committed || notice.processID == "" || b.engine.cfg.BackgroundAutomaticFinalizer == nil {
+		return
+	}
+	if b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID, notice.activity) &&
+		b.engine.cfg.BackgroundCompletionSettled != nil {
+		b.engine.cfg.BackgroundCompletionSettled(notice.processID)
+	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {

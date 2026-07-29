@@ -37,7 +37,8 @@ type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
 	AdmitBackgroundShellUpdate(evt BackgroundShellEvent)
 	QueueDeveloperNotice(msg llm.Message)
-	DrainPendingNotices() []steeringIntent
+	DrainPendingNotices() []queuedBackgroundNotice
+	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()
