@@ -1805,7 +1805,7 @@ func TestWorkflowResumePreservesDiagnosticWhenItsCommitDoesNotPersist(t *testing
 	}
 }
 
-func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *testing.T) {
+func TestDelayedTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
@@ -1820,7 +1820,7 @@ func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *test
 				ToolCalls: []llm.ToolCall{{
 					ID:    "rapid-shell",
 					Name:  string(toolspec.ToolExecCommand),
-					Input: json.RawMessage(`{"cmd":"sleep 0.05; printf RAPID_TERMINAL","shell":"/bin/sh","login":false,"yield_time_ms":1}`),
+					Input: json.RawMessage(`{"cmd":"read line; printf DELAYED_TERMINAL","shell":"/bin/sh","login":false,"tty":true,"yield_time_ms":1}`),
 				}},
 				Usage: llm.Usage{WindowTokens: 200000},
 			},
@@ -1882,6 +1882,18 @@ func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *test
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait launching execution: %v", err)
 	}
+	snapshots := manager.List()
+	if len(snapshots) != 1 || !snapshots[0].Running || !snapshots[0].Backgrounded {
+		t.Fatalf("background process after initial turn = %+v, want one running background process", snapshots)
+	}
+	if _, err := manager.WriteStdin(context.Background(), shelltool.WriteRequest{
+		SessionID:      snapshots[0].ID,
+		Input:          "release\n",
+		YieldTime:      time.Second,
+		MaxOutputChars: 16_000,
+	}); err != nil {
+		t.Fatalf("complete delayed background process after its owning turn: %v", err)
+	}
 
 	select {
 	case <-client.noticeCalls:
@@ -1893,7 +1905,7 @@ func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *test
 		}
 		authority.mu.Unlock()
 		t.Fatalf(
-			"rapid terminal completion did not reach an automatic continuation: model_calls=%d manager=%+v owners=%T",
+			"delayed terminal completion did not reach an automatic continuation: model_calls=%d manager=%+v owners=%T",
 			client.callCount(),
 			manager.List(),
 			owners,
