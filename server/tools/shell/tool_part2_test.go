@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -113,19 +114,34 @@ func TestTerminalEventEmissionDoesNotHoldPollingInteractionLock(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for terminal event handler")
 	}
+	entry, err := manager.entry("1000")
+	if err != nil {
+		t.Fatalf("terminal process entry: %v", err)
+	}
+	if !entry.interactMu.TryLock() {
+		t.Fatal("terminal event handler held the polling interaction lock")
+	}
+	entry.interactMu.Unlock()
+	pollCtx, cancel := context.WithCancel(context.Background())
 	pollDone := make(chan struct{})
+	pollErr := make(chan error, 1)
 	go func() {
-		_, _ = manager.WriteStdin(context.Background(), WriteRequest{
+		_, err := manager.WriteStdin(pollCtx, WriteRequest{
 			SessionID:      "1000",
 			YieldTime:      250 * time.Millisecond,
 			MaxOutputChars: 16_000,
 		})
+		pollErr <- err
 		close(pollDone)
 	}()
+	cancel()
 	select {
 	case <-pollDone:
 	case <-time.After(time.Second):
-		t.Fatal("poll remained blocked by terminal event delivery")
+		t.Fatal("canceled poll remained blocked by terminal delivery")
+	}
+	if err := <-pollErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled poll error = %v, want context canceled", err)
 	}
 	close(releaseTerminalHandler)
 	select {

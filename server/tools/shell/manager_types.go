@@ -249,6 +249,7 @@ type processEntry struct {
 	notify               chan struct{}
 	done                 chan struct{}
 	backgroundedReady    chan struct{}
+	terminalChanged      chan struct{}
 	killRequested        bool
 	terminal             terminalDisposition
 	mu                   sync.Mutex
@@ -307,6 +308,11 @@ type finalizedAutomaticallyTerminalDisposition struct {
 
 func (d finalizedAutomaticallyTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
 func (finalizedAutomaticallyTerminalDisposition) terminalDisposition()           {}
+
+func (p *processEntry) signalTerminalChangedLocked() {
+	close(p.terminalChanged)
+	p.terminalChanged = make(chan struct{})
+}
 
 func (p *processEntry) signal() {
 	select {
@@ -490,6 +496,7 @@ func (p *processEntry) recordTerminal(facts terminalFacts) {
 		panic(fmt.Sprintf("shell process %s recorded terminal facts more than once", p.id))
 	}
 	p.terminal = pendingTerminalDisposition{facts: facts}
+	p.signalTerminalChangedLocked()
 }
 
 func (p *processEntry) beginTerminalHandoff() (terminalFacts, bool) {
@@ -500,6 +507,7 @@ func (p *processEntry) beginTerminalHandoff() (terminalFacts, bool) {
 		return terminalFacts{}, false
 	}
 	p.terminal = inFlightTerminalDisposition{facts: pending.facts}
+	p.signalTerminalChangedLocked()
 	return pending.facts, true
 }
 
@@ -511,6 +519,7 @@ func (p *processEntry) finishTerminalHandoff() {
 		return
 	}
 	p.terminal = pendingTerminalDisposition{facts: inFlight.facts}
+	p.signalTerminalChangedLocked()
 }
 
 func (p *processEntry) acknowledgeTerminalHandoff(activityID uuid.UUID) TerminalHandoffAcknowledgement {
@@ -522,6 +531,7 @@ func (p *processEntry) acknowledgeTerminalHandoff(activityID uuid.UUID) Terminal
 			return TerminalHandoffRejected
 		}
 		p.terminal = queuedTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
 		return TerminalHandoffAcknowledged
 	case finalizedByOwnerPollTerminalDisposition:
 		if current.facts.snapshot.ActivityID != activityID {
@@ -542,6 +552,7 @@ func (p *processEntry) finalizeOwnerPoll(callerSessionID string) bool {
 	switch current := p.terminal.(type) {
 	case pendingTerminalDisposition:
 		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
 	case inFlightTerminalDisposition:
 		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
 	case queuedTerminalDisposition:
@@ -560,6 +571,7 @@ func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) bool {
 		return false
 	}
 	p.terminal = finalizedAutomaticallyTerminalDisposition{facts: queued.facts}
+	p.signalTerminalChangedLocked()
 	return true
 }
 
@@ -574,15 +586,34 @@ func (p *processEntry) withdrawTerminalHandoff(activityID uuid.UUID) bool {
 			return false
 		}
 		p.terminal = pendingTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
 		return true
 	case queuedTerminalDisposition:
 		if current.facts.snapshot.ActivityID != activityID {
 			return false
 		}
 		p.terminal = pendingTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
 		return true
 	default:
 		return false
+	}
+}
+
+func (p *processEntry) waitForTerminalHandoff(ctx context.Context) error {
+	for {
+		p.interactMu.Lock()
+		_, inFlight := p.terminal.(inFlightTerminalDisposition)
+		changed := p.terminalChanged
+		p.interactMu.Unlock()
+		if !inFlight {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-changed:
+		}
 	}
 }
 

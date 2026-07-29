@@ -247,6 +247,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		notify:               make(chan struct{}, 1),
 		done:                 make(chan struct{}),
 		backgroundedReady:    make(chan struct{}),
+		terminalChanged:      make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {
@@ -414,6 +415,15 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	}
 	snapshot := entry.snapshot()
 	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil
+	if harvestingCompletion {
+		if err := entry.waitForTerminalHandoff(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return ExecResult{}, &PollingCanceledError{SessionID: id, Active: entry.snapshot().Running}
+			}
+			return ExecResult{}, err
+		}
+		snapshot = entry.snapshot()
+	}
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
