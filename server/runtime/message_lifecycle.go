@@ -333,9 +333,9 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 		if err != nil {
 			if scheduler, ok := m.background.(*defaultBackgroundNoticeScheduler); ok {
 				if receipt.Committed {
-					scheduler.restorePendingFront(pendingNotices[index+1:])
+					scheduler.restoreRetryDeferredNoticesFront(pendingNotices[index+1:])
 				} else {
-					scheduler.restorePendingFront(pendingNotices[index:])
+					scheduler.restoreRetryDeferredNoticesFront(pendingNotices[index:])
 				}
 			}
 			return result, err

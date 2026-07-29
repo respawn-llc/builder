@@ -21,10 +21,11 @@ type defaultBackgroundNoticeScheduler struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
 
-	mu       sync.Mutex
-	pending  []queuedBackgroundNotice
-	task     backgroundLifecycleTask
-	nextTask uint64
+	mu        sync.Mutex
+	pending   []backgroundNoticeState
+	task      backgroundLifecycleTask
+	nextTask  uint64
+	nextRetry uint64
 }
 
 type queuedBackgroundNotice struct {
@@ -159,7 +160,7 @@ func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt Backgr
 
 func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNotice, schedule bool, shouldSchedule *bool) {
 	b.mu.Lock()
-	b.pending = append(b.pending, notice)
+	b.pending = append(b.pending, pendingBackgroundNotice{notice: notice})
 	if schedule && b.task == nil && (b.steps == nil || !b.steps.IsBusy()) {
 		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
 		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
@@ -174,7 +175,7 @@ func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []queuedBackgro
 	if len(b.pending) == 0 {
 		return nil
 	}
-	pending := append([]queuedBackgroundNotice(nil), b.pending...)
+	pending := backgroundNoticesFromStates(b.pending)
 	b.pending = nil
 	return pending
 }
@@ -195,12 +196,13 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessio
 
 	removed := false
 	filtered := b.pending[:0]
-	for _, notice := range b.pending {
+	for _, state := range b.pending {
+		notice := state.backgroundNotice()
 		if notice.processID == processID {
 			removed = true
 			continue
 		}
-		filtered = append(filtered, notice)
+		filtered = append(filtered, state)
 	}
 	b.pending = filtered
 	return removed
@@ -269,10 +271,11 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 			return nil
 		}
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-			b.restorePendingFront(pending)
+			b.restoreRetryDeferredFront(pending)
 			return err
 		}
-		for index, notice := range pending {
+		for index, state := range pending {
+			notice := state.backgroundNotice()
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
 			b.FinalizeCommittedBackgroundNotice(notice, receipt)
 			if steerErr != nil {
@@ -284,12 +287,17 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 						nextBackgroundDeliveryAttempt(notice.diagnostic),
 						steerErr,
 					)
-					pending[index].diagnostic = &diagnostic
+					pending[index] = pendingBackgroundNotice{notice: queuedBackgroundNotice{
+						processID:  notice.processID,
+						activity:   notice.activity,
+						intent:     notice.intent,
+						diagnostic: &diagnostic,
+					}}
 				}
 				if !receipt.Committed {
-					b.restorePendingFront(pending[index:])
+					b.restoreRetryDeferredFront(pending[index:])
 				} else {
-					b.restorePendingFront(pending[index+1:])
+					b.restoreRetryDeferredFront(pending[index+1:])
 				}
 				return steerErr
 			}
@@ -329,10 +337,20 @@ func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() {
 func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(processID string, activity uuid.UUID) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for index := range b.pending {
-		notice := &b.pending[index]
+	for index, state := range b.pending {
+		notice := state.backgroundNotice()
 		if notice.processID == processID && notice.activity == activity {
 			notice.diagnostic = nil
+			switch current := state.(type) {
+			case pendingBackgroundNotice:
+				current.notice = notice
+				b.pending[index] = current
+			case retryDeferredBackgroundNotice:
+				current.notice = notice
+				b.pending[index] = current
+			default:
+				panic(fmt.Sprintf("unknown background notice state %T", state))
+			}
 		}
 	}
 }
@@ -350,30 +368,65 @@ func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(not
 func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return append([]queuedBackgroundNotice(nil), b.pending...)
+	return backgroundNoticesFromStates(b.pending)
 }
 
-func (b *defaultBackgroundNoticeScheduler) drainPending() []queuedBackgroundNotice {
+func (b *defaultBackgroundNoticeScheduler) drainPending() []backgroundNoticeState {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.pending) == 0 {
 		return nil
 	}
-	pending := append([]queuedBackgroundNotice(nil), b.pending...)
+	pending := append([]backgroundNoticeState(nil), b.pending...)
 	b.pending = nil
 	return pending
 }
 
-func (b *defaultBackgroundNoticeScheduler) restorePendingFront(notices []queuedBackgroundNotice) {
+func (b *defaultBackgroundNoticeScheduler) restoreRetryDeferredFront(notices []backgroundNoticeState) {
 	if len(notices) == 0 {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	restored := make([]queuedBackgroundNotice, 0, len(notices)+len(b.pending))
-	restored = append(restored, notices...)
+	b.nextRetry++
+	if b.nextRetry == 0 {
+		panic("background retry generation overflow")
+	}
+	restored := make([]backgroundNoticeState, 0, len(notices)+len(b.pending))
+	for _, state := range notices {
+		restored = append(restored, newRetryDeferredBackgroundNotice(state.backgroundNotice(), b.nextRetry))
+	}
 	restored = append(restored, b.pending...)
 	b.pending = restored
+}
+
+func (b *defaultBackgroundNoticeScheduler) restoreRetryDeferredNoticesFront(notices []queuedBackgroundNotice) {
+	if len(notices) == 0 {
+		return
+	}
+	states := make([]backgroundNoticeState, 0, len(notices))
+	for _, notice := range notices {
+		states = append(states, pendingBackgroundNotice{notice: notice})
+	}
+	b.restoreRetryDeferredFront(states)
+}
+
+func backgroundNoticesFromStates(states []backgroundNoticeState) []queuedBackgroundNotice {
+	if len(states) == 0 {
+		return nil
+	}
+	notices := make([]queuedBackgroundNotice, 0, len(states))
+	for _, state := range states {
+		switch current := state.(type) {
+		case pendingBackgroundNotice:
+			notices = append(notices, current.notice)
+		case retryDeferredBackgroundNotice:
+			notices = append(notices, current.notice)
+		default:
+			panic(fmt.Sprintf("unknown background notice state %T", state))
+		}
+	}
+	return notices
 }
 
 func (b *defaultBackgroundNoticeScheduler) clearScheduledTask() {

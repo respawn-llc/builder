@@ -2,6 +2,37 @@ package runtime
 
 import "fmt"
 
+type backgroundNoticeState interface {
+	backgroundNoticeState()
+	backgroundNotice() queuedBackgroundNotice
+}
+
+type pendingBackgroundNotice struct {
+	notice queuedBackgroundNotice
+}
+
+func (pendingBackgroundNotice) backgroundNoticeState() {}
+func (s pendingBackgroundNotice) backgroundNotice() queuedBackgroundNotice {
+	return s.notice
+}
+
+type retryDeferredBackgroundNotice struct {
+	notice     queuedBackgroundNotice
+	generation uint64
+}
+
+func (retryDeferredBackgroundNotice) backgroundNoticeState() {}
+func (s retryDeferredBackgroundNotice) backgroundNotice() queuedBackgroundNotice {
+	return s.notice
+}
+
+func newRetryDeferredBackgroundNotice(notice queuedBackgroundNotice, generation uint64) retryDeferredBackgroundNotice {
+	if generation == 0 {
+		panic("retry-deferred background notice requires generation")
+	}
+	return retryDeferredBackgroundNotice{notice: notice, generation: generation}
+}
+
 type backgroundLifecycleTask interface {
 	backgroundLifecycleTask()
 	backgroundLifecycleTaskAttempt() uint64
