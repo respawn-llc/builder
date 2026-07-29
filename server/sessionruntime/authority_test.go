@@ -1690,6 +1690,121 @@ func TestStoppedWorkflowTerminalDoesNotRouteToCurrentSessionResource(t *testing.
 	}
 }
 
+func TestWorkflowResumePreservesDiagnosticWhenItsCommitDoesNotPersist(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	manager, err := shelltool.NewManager()
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		Background:      manager,
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close authority: %v", closeErr)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "resume-owner", &plan)
+	if _, err := attachment.Release(context.Background(), RuntimeReleaseDetach); err != nil {
+		t.Fatalf("release runtime owner before workflow Resume: %v", err)
+	}
+
+	workflowRef := workflowExecutionRefForTest(t, workflow.TaskID("task-diagnostic-resume"), workflow.NodeID("node-diagnostic-resume"), nil)
+	processID := "workflow-diagnostic-process"
+	activityID := uuid.New()
+	diagnostic := runtime.NewBackgroundRoutingDiagnostic(processID, activityID, errors.New("background route failed"))
+	authority.mu.Lock()
+	authority.backgroundOwners[processID] = workflowBackgroundOwner{
+		processID:      processID,
+		activityID:     activityID,
+		sessionID:      sessionID,
+		launchResource: attachment.Resource().Generation(),
+		launchScopeID:  runtimeids.NewExecutionScopeID(),
+		workflow:       workflowRef,
+		delivery:       pendingWorkflowDeliveryTarget{},
+		diagnostic:     &diagnostic,
+	}
+	resource := authority.resources[sessionID]
+	authority.mu.Unlock()
+	if resource == nil {
+		t.Fatal("ready resource is missing before workflow Resume")
+	}
+
+	blocker := mustBlockSessionRuntimeEventLogAppends(t, fixture.store)
+	runnerStarted := make(chan struct{}, 1)
+	_, err = authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			runnerStarted <- struct{}{}
+			return nil
+		},
+	})
+	var deliveryErr *runtime.BackgroundDeliveryError
+	if !errors.As(err, &deliveryErr) {
+		t.Fatalf("workflow Resume error = %T %v, want BackgroundDeliveryError", err, err)
+	}
+	select {
+	case <-runnerStarted:
+		t.Fatal("workflow Resume started its runner before the retained diagnostic committed")
+	default:
+	}
+	if execution, live := authority.ExecutionByWorkflow(workflowRef); live {
+		t.Fatalf("failed workflow Resume installed execution scope %s", execution.Scope().ID())
+	}
+	authority.mu.Lock()
+	owner, ok := authority.backgroundOwners[processID].(workflowBackgroundOwner)
+	authority.mu.Unlock()
+	if !ok || owner.diagnostic == nil || *owner.diagnostic != diagnostic {
+		t.Fatalf("failed workflow Resume changed retained diagnostic ownership: %+v", owner)
+	}
+	resource.mu.Lock()
+	state := resource.state
+	current := resource.current
+	ownerCount := len(resource.owners)
+	resource.mu.Unlock()
+	if state != AgentResourceReady || current != nil || ownerCount != 0 {
+		t.Fatalf("failed workflow Resume changed ready ownerless resource: state=%d current=%T owners=%d", state, current, ownerCount)
+	}
+
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event-log appends: %v", err)
+	}
+	successfulRunnerStarted := make(chan struct{}, 1)
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			successfulRunnerStarted <- struct{}{}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("retry workflow Resume after diagnostic persistence recovered: %v", err)
+	}
+	select {
+	case <-successfulRunnerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("successful workflow Resume did not start its runner")
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait successful workflow Resume: %v", err)
+	}
+	authority.mu.Lock()
+	owner, ok = authority.backgroundOwners[processID].(workflowBackgroundOwner)
+	authority.mu.Unlock()
+	if !ok || owner.diagnostic != nil {
+		t.Fatalf("successful workflow Resume did not settle retained diagnostic: %+v", owner)
+	}
+}
+
 func TestRapidTerminalBackgroundCompletionStartsOneAutomaticContinuation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

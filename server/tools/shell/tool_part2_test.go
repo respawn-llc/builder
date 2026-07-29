@@ -157,6 +157,84 @@ func TestTerminalEventEmissionDoesNotHoldPollingInteractionLock(t *testing.T) {
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
+func TestRapidTerminalExitRecordsFactBeforeBackgroundRegistrationReturns(t *testing.T) {
+	manager := newShellTestManager(t, time.Millisecond)
+	backgrounded := make(chan struct{})
+	releaseBackgrounded := make(chan struct{})
+	terminal := make(chan Event, 1)
+	manager.SetEventHandler(func(event Event) {
+		switch event.Type {
+		case EventBackgrounded:
+			close(backgrounded)
+			<-releaseBackgrounded
+		case EventCompleted, EventKilled:
+			terminal <- event
+		}
+	})
+
+	type startResult struct {
+		result ExecResult
+		err    error
+	}
+	started := make(chan startResult, 1)
+	go func() {
+		result, err := manager.Start(context.Background(), ExecRequest{
+			Command:        []string{"/bin/sh", "-c", "sleep 0.05; printf terminal"},
+			DisplayCommand: "sleep 0.05; printf terminal",
+			Workdir:        t.TempDir(),
+			YieldTime:      time.Millisecond,
+		})
+		started <- startResult{result: result, err: err}
+	}()
+
+	select {
+	case <-backgrounded:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background registration")
+	}
+	entry, err := manager.entry("1000")
+	if err != nil {
+		t.Fatalf("background process entry: %v", err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		entry.interactMu.Lock()
+		_, terminalRecorded := entry.terminal.(pendingTerminalDisposition)
+		changed := entry.terminalChanged
+		entry.interactMu.Unlock()
+		if terminalRecorded {
+			break
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatal("terminal process did not record facts while background registration was blocked")
+		}
+	}
+
+	close(releaseBackgrounded)
+	select {
+	case outcome := <-started:
+		if outcome.err != nil {
+			t.Fatalf("background start: %v", outcome.err)
+		}
+		if !outcome.result.Backgrounded || !outcome.result.Running {
+			t.Fatalf("rapid terminal start did not report background work: %+v", outcome.result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background start did not return after registration released")
+	}
+	select {
+	case event := <-terminal:
+		if event.Type != EventCompleted || event.Snapshot.ExitCode == nil || *event.Snapshot.ExitCode != 0 {
+			t.Fatalf("terminal event = %+v, want completed exit 0", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal completion did not deliver after registration released")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
 func TestPostTransitionPresentationFailureStillRegistersAndReleasesTerminalWaiter(t *testing.T) {
 	hookPath := writeExecutableScript(t, "#!/bin/sh\nflag=\"$(dirname \"$0\")/.first-call\"\nif [ ! -e \"$flag\" ]; then\n  : > \"$flag\"\n  sleep 1\nfi\nprintf '{\"processed\":false}'\n")
 	runner := mustPostprocessRunner(t, postprocess.Settings{
