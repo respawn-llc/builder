@@ -460,14 +460,11 @@ WHERE task.canceled_at_unix_ms IS NULL
   AND node.kind IN ('agent', 'script')
   AND (
       placement.state = 'active'
-      OR (
-          placement.state = 'waiting_approval'
-          AND EXISTS (
-              SELECT 1
-              FROM task_transitions pending
-              WHERE pending.source_placement_id = placement.id
-                AND pending.state = 'pending_approval'
-          )
+      OR EXISTS (
+          SELECT 1
+          FROM task_transitions pending
+          WHERE pending.source_placement_id = placement.id
+            AND pending.state = 'pending_approval'
       )
   )
 GROUP BY placement.id
@@ -656,10 +653,49 @@ WHERE task.canceled_at_unix_ms IS NULL
   AND node.kind IN ('agent', 'script')
   AND (
       placement.state = 'active'
-      OR (
-          placement.state = 'waiting_approval'
-          AND pending_transition.id IS NOT NULL
-      )
+      OR pending_transition.id IS NOT NULL
+  );
+
+INSERT INTO task_current_nodes (
+    task_id,
+    node_id,
+    transition_branch_key,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+)
+SELECT
+    transition.task_id,
+    placement.node_id,
+    NULL,
+    value_environment.current_input_values_json,
+    value_environment.prior_node_values_json,
+    CASE
+        WHEN node.kind = 'agent' THEN run.session_id
+        ELSE NULL
+    END,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+FROM task_transitions transition
+JOIN task_node_placements placement ON placement.id = transition.source_placement_id
+JOIN workflow_nodes node ON node.id = placement.node_id
+LEFT JOIN task_runs run ON run.id = transition.source_run_id
+JOIN task_records task ON task.id = transition.task_id
+JOIN migration_current_node_value_environments value_environment
+    ON value_environment.placement_id = placement.id
+WHERE transition.state = 'pending_approval'
+  AND task.canceled_at_unix_ms IS NULL
+  AND placement.parallel_batch_transition_id IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = transition.task_id
   );
 
 INSERT INTO task_current_nodes (
@@ -1147,49 +1183,6 @@ WHERE placement.parallel_batch_transition_id IS NOT NULL
       FROM task_current_nodes current_node
       WHERE current_node.task_id = placement.task_id
         AND current_node.transition_branch_key = edge.edge_key
-  );
-
-INSERT INTO task_current_nodes (
-    task_id,
-    node_id,
-    transition_branch_key,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-)
-SELECT
-    transition.task_id,
-    placement.node_id,
-    NULL,
-    value_environment.current_input_values_json,
-    value_environment.prior_node_values_json,
-    CASE
-        WHEN node.kind = 'agent' THEN run.session_id
-        ELSE NULL
-    END,
-    NULL,
-    NULL,
-    NULL,
-    NULL
-FROM task_transitions transition
-JOIN task_node_placements placement ON placement.id = transition.source_placement_id
-JOIN workflow_nodes node ON node.id = placement.node_id
-LEFT JOIN task_runs run ON run.id = transition.source_run_id
-JOIN task_records task ON task.id = transition.task_id
-JOIN migration_current_node_value_environments value_environment
-    ON value_environment.placement_id = placement.id
-WHERE transition.state = 'pending_approval'
-  AND task.canceled_at_unix_ms IS NULL
-  AND placement.state IN ('active', 'waiting_approval')
-  AND placement.parallel_batch_transition_id IS NULL
-  AND NOT EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = transition.task_id
   );
 
 INSERT INTO task_current_nodes (
