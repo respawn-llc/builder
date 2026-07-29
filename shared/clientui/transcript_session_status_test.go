@@ -51,7 +51,7 @@ func TestTranscriptSessionStatusRejectsPartialNestedState(t *testing.T) {
 		}(),
 		func() TranscriptSessionStatus {
 			status := base
-			status.Workflow = &TranscriptWorkflowSession{RunID: "run-1"}
+			status.Workflow = &TranscriptWorkflowSession{TaskID: "task-1"}
 			return status
 		}(),
 	}

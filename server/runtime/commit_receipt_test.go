@@ -13,6 +13,7 @@ import (
 )
 
 func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
+	t.Parallel()
 	t.Run("uncommitted error", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		var events []Event
@@ -69,6 +70,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 }
 
 func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
+	t.Parallel()
 	type controlCase struct {
 		name      string
 		newEngine func(*testing.T, *session.Store) *Engine

@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -146,7 +147,7 @@ func TestCompletedResponseWithoutActiveStreamPublishesNoStreamTerminal(t *testin
 
 func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T) {
 	t.Parallel()
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowCompletionAccountingController{}
 	rejected := scriptedllm.ToolBatch(
 		"working",
@@ -167,10 +168,9 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 		t,
 		mustCreateTestSession(t),
 		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{rejected, accepted}}),
-		&workflowruntime.Config{
-			RunID: runID,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
-				RunID: runID,
 				Transitions: []workflowruntime.CompletionTransition{{
 					ID:         "done",
 					Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -617,16 +617,16 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 		return nil
 	}
 	var events []Event
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewExecTestEngine(
 		t,
 		mustCreateTestSession(t),
 		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        scopeID,
+				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
 				Controller:     controller,
 			},
@@ -692,7 +692,7 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 	t.Parallel()
 	controller := &externallyCompletedWorkflowController{}
 	controller.completed.Store(true)
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant},
 	}}}
@@ -702,9 +702,9 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        scopeID,
+				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
 				Controller:     controller,
 			},
@@ -720,7 +720,6 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 	terminal := engine.WorkflowTerminalState()
 	if !terminal.Completed ||
 		terminal.Source != WorkflowCompletionSourceObserved ||
-		terminal.RunID != string(runID) ||
 		terminal.CompletedAt.IsZero() {
 		t.Fatalf("workflow terminal state after durable completion = %+v", terminal)
 	}
@@ -730,7 +729,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 	t.Parallel()
 	const callID = "workflow-delayed-completion-call"
 	controller := &externallyCompletedWorkflowController{completeAfterObservations: 4}
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	toolCall := llm.ToolCall{
 		ID:    callID,
 		Name:  string(toolspec.ToolExecCommand),
@@ -754,9 +753,9 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 		Config{
 			Model:        "gpt-5",
 			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
-			WorkflowRun: &workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        scopeID,
+				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
 				Controller:     controller,
 			},
@@ -789,8 +788,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 	}
 	terminal := engine.WorkflowTerminalState()
 	if !terminal.Completed ||
-		terminal.Source != WorkflowCompletionSourceObserved ||
-		terminal.RunID != string(runID) {
+		terminal.Source != WorkflowCompletionSourceObserved {
 		t.Fatalf("workflow terminal state after delayed completion = %+v", terminal)
 	}
 	if observations := controller.observations.Load(); observations < controller.completeAfterObservations {
@@ -804,7 +802,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 
 func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.T) {
 	t.Parallel()
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &interruptingWorkflowProtocolViolationController{}
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
@@ -819,9 +817,9 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID:                        runID,
-				Contract:                     workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:                      scopeID,
+				Contract:                     workflowruntime.CompletionContract{},
 				CompletionMode:               workflowruntime.CompletionModeTool,
 				MaxInvalidCompletionAttempts: 0,
 				UseAutomaticToolChoice:       true,
@@ -851,7 +849,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 
 func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
 	t.Parallel()
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &failingWorkflowCompletionController{}
 	completionResponse := llm.Response{Assistant: llm.Message{
 		Role:    llm.RoleAssistant,
@@ -868,10 +866,9 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 		}},
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID: runID,
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID: scopeID,
 				Contract: workflowruntime.CompletionContract{
-					RunID: runID,
 					Transitions: []workflowruntime.CompletionTransition{{
 						ID:         "done",
 						Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -913,7 +910,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 
 func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
 	t.Parallel()
-	runID := workflow.RunID("workflow-run")
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &externallyCompletedWorkflowController{}
 	controller.completed.Store(true)
 	var statuses []QueuedUserMessageStatusEvent
@@ -924,9 +921,9 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		client,
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        scopeID,
+				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
 				Controller:     controller,
 			},
@@ -994,7 +991,7 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 	}
 	if err := engine.steer(
 		"compaction",
-		steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", nil),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", "", nil),
 	); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
@@ -1079,7 +1076,7 @@ type interruptingWorkflowProtocolViolationController struct {
 	result     workflowruntime.ViolationResult
 }
 
-func (c *interruptingWorkflowProtocolViolationController) RecordWorkflowProtocolViolation(
+func (c *interruptingWorkflowProtocolViolationController) RecordProtocolViolation(
 	_ context.Context,
 	request workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {
@@ -1094,14 +1091,14 @@ type failingWorkflowCompletionController struct {
 	violationResults  []workflowruntime.ViolationResult
 }
 
-func (c *failingWorkflowCompletionController) CompleteWorkflowRun(
+func (c *failingWorkflowCompletionController) CompleteCurrentNode(
 	context.Context,
 	workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
 	return workflowruntime.CompletionResult{}, errors.New("workflow completion unavailable")
 }
 
-func (c *failingWorkflowCompletionController) RecordWorkflowProtocolViolation(
+func (c *failingWorkflowCompletionController) RecordProtocolViolation(
 	_ context.Context,
 	request workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {
@@ -1114,28 +1111,28 @@ func (c *failingWorkflowCompletionController) RecordWorkflowProtocolViolation(
 	return result, nil
 }
 
-func (c *externallyCompletedWorkflowController) CompleteWorkflowRun(
+func (c *externallyCompletedWorkflowController) CompleteCurrentNode(
 	context.Context,
 	workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
 	return workflowruntime.CompletionResult{}, nil
 }
 
-func (c *externallyCompletedWorkflowController) RecordWorkflowProtocolViolation(
+func (c *externallyCompletedWorkflowController) RecordProtocolViolation(
 	context.Context,
 	workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {
 	return workflowruntime.ViolationResult{}, nil
 }
 
-func (c *externallyCompletedWorkflowController) ResetWorkflowProtocolViolationBudget(
+func (c *externallyCompletedWorkflowController) ResetProtocolViolationBudget(
 	context.Context,
 	workflowruntime.ViolationResetRequest,
 ) error {
 	return nil
 }
 
-func (c *externallyCompletedWorkflowController) ObserveWorkflowRunCompletion(
+func (c *externallyCompletedWorkflowController) ObserveCurrentNodeCompletion(
 	context.Context,
 	workflowruntime.CompletionObservationRequest,
 ) (workflowruntime.CompletionObservationResult, error) {

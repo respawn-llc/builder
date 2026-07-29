@@ -15,6 +15,7 @@ import (
 )
 
 func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestart(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -155,6 +156,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 }
 
 func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued answer")},
@@ -185,6 +187,7 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 }
 
 func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eventLog := mustMaterializeTestEventLog(t, store)
 	appendMalformedRollbackCandidateHistoryReplacement(t, store)

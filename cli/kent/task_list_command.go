@@ -284,7 +284,7 @@ func parseTaskListStatusKinds(raw []string) ([]serverapi.WorkflowTaskStatusKind,
 	for _, value := range values {
 		status := serverapi.WorkflowTaskStatusKind(value)
 		switch status {
-		case serverapi.WorkflowTaskStatusKindCanceled, serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
+		case serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
 			statuses = append(statuses, status)
 		default:
 			return nil, fmt.Errorf("--status is invalid")
@@ -355,11 +355,9 @@ func parseTaskListSortField(value string) (serverapi.WorkflowTaskListSortField, 
 		return serverapi.WorkflowTaskListSortFieldStatus, nil
 	case "column":
 		return serverapi.WorkflowTaskListSortFieldColumn, nil
-	case "run_count":
-		return serverapi.WorkflowTaskListSortFieldRunCount, nil
 	case "title":
 		return serverapi.WorkflowTaskListSortFieldTitle, nil
 	default:
-		return "", fmt.Errorf("--sort field must be created, updated, status, column, run_count, or title")
+		return "", fmt.Errorf("--sort field must be created, updated, status, column, or title")
 	}
 }

@@ -21,7 +21,6 @@ import (
 	"core/server/onboarding"
 	"core/server/serverstatus"
 	"core/server/transport"
-	"core/server/workflowexecution"
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -181,10 +180,6 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		rpc.shutdown()
 		rpc.wait()
 		return ctx.Err()
-	case fatalErr := <-workflowExecutionFailures(s.Core, s.deps):
-		rpc.shutdown()
-		rpc.wait()
-		return fmt.Errorf("server stopped after fatal workflow execution failure: %w", fatalErr)
 	case serveErr := <-rpc.errCh:
 		rpc.shutdown()
 		rpc.waitRemaining()
@@ -454,19 +449,9 @@ func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstra
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if coreOptions.WorkflowExecutionFatal == nil {
-		coreOptions.WorkflowExecutionFatal = workflowexecution.NewFatalSignal()
-	}
 	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease, coreOptions: coreOptions}
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
-}
-
-func (d *startupGatewayDependencies) workflowExecutionFailures() <-chan error {
-	if d == nil || d.coreOptions.WorkflowExecutionFatal == nil {
-		return nil
-	}
-	return d.coreOptions.WorkflowExecutionFatal.Failures()
 }
 
 func (d *startupGatewayDependencies) Close() error {

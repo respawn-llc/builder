@@ -14,6 +14,14 @@ type DerivedWiring struct {
 	possibleProvisionFieldsByNode    map[NodeID][]OutputField
 	requiredProviderFieldsByJoinEdge map[EdgeID][]OutputField
 	joinOutputFieldsByNode           map[NodeID][]OutputField
+	currentNodeInputBindingsByEdge   map[EdgeID][]InputBinding
+	currentNodeOutputFieldsByGroup   map[TransitionGroupID][]OutputField
+	priorNodeValueRequirementsByNode map[NodeID][]PriorNodeValueRequirement
+}
+
+type PriorNodeValueRequirement struct {
+	NodeKey    ModelKey
+	OutputName string
 }
 
 func DeriveWiring(def Definition) DerivedWiring {
@@ -24,10 +32,14 @@ func DeriveWiring(def Definition) DerivedWiring {
 		possibleProvisionFieldsByNode:    map[NodeID][]OutputField{},
 		requiredProviderFieldsByJoinEdge: map[EdgeID][]OutputField{},
 		joinOutputFieldsByNode:           map[NodeID][]OutputField{},
+		currentNodeInputBindingsByEdge:   map[EdgeID][]InputBinding{},
+		currentNodeOutputFieldsByGroup:   map[TransitionGroupID][]OutputField{},
+		priorNodeValueRequirementsByNode: map[NodeID][]PriorNodeValueRequirement{},
 	}
 	nodesByID := make(map[NodeID]Node, len(def.Nodes))
 	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
 	incomingByNode := make(map[NodeID][]Edge, len(def.Edges))
+	outgoingByNode := make(map[NodeID][]Edge, len(def.Edges))
 	for _, node := range def.Nodes {
 		if strings.TrimSpace(string(NodeIDOf(node))) != "" {
 			nodesByID[NodeIDOf(node)] = node
@@ -40,6 +52,9 @@ func DeriveWiring(def Definition) DerivedWiring {
 	}
 	for _, edge := range def.Edges {
 		incomingByNode[edge.TargetNodeID] = append(incomingByNode[edge.TargetNodeID], edge)
+		if group, ok := groupsByID[edge.TransitionGroupID]; ok {
+			outgoingByNode[group.SourceNodeID] = append(outgoingByNode[group.SourceNodeID], edge)
+		}
 	}
 	for _, edge := range def.Edges {
 		group, groupExists := groupsByID[edge.TransitionGroupID]
@@ -63,6 +78,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 			derived.deriveJoinAggregateParameters(node, incomingByNode)
 		}
 	}
+	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode)
 	return derived
 }
 
@@ -88,6 +104,18 @@ func (w DerivedWiring) RequiredProviderFieldsForJoinEdge(edgeID EdgeID) []Output
 
 func (w DerivedWiring) JoinOutputFieldsForNode(nodeID NodeID) []OutputField {
 	return append([]OutputField(nil), w.joinOutputFieldsByNode[nodeID]...)
+}
+
+func (w DerivedWiring) CurrentNodeInputBindingsForEdge(edgeID EdgeID) []InputBinding {
+	return append([]InputBinding(nil), w.currentNodeInputBindingsByEdge[edgeID]...)
+}
+
+func (w DerivedWiring) CurrentNodeOutputFieldsForTransitionGroup(groupID TransitionGroupID) []OutputField {
+	return append([]OutputField(nil), w.currentNodeOutputFieldsByGroup[groupID]...)
+}
+
+func (w DerivedWiring) PriorNodeValueRequirementsForNode(nodeID NodeID) []PriorNodeValueRequirement {
+	return append([]PriorNodeValueRequirement(nil), w.priorNodeValueRequirementsByNode[nodeID]...)
 }
 
 func (w DerivedWiring) TransitionOutputFieldsForEdge(edge Edge, source Node) []OutputField {
@@ -183,6 +211,147 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 		}
 	}
 	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
+}
+
+func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
+	def Definition,
+	nodesByID map[NodeID]Node,
+	groupsByID map[TransitionGroupID]TransitionGroup,
+	outgoingByNode map[NodeID][]Edge,
+) {
+	priorRequirementsByPromptNode := make(map[NodeID][]PriorNodeValueRequirement, len(nodesByID))
+	for _, edge := range def.Edges {
+		target, targetExists := nodesByID[edge.TargetNodeID]
+		if !targetExists {
+			continue
+		}
+		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
+		if err != nil {
+			continue
+		}
+		for _, inputField := range NodeInputFields(target) {
+			name := strings.TrimSpace(inputField.Name)
+			if name == "" {
+				continue
+			}
+			w.currentNodeInputBindingsByEdge[edge.ID] = appendUniqueInputBindings(
+				w.currentNodeInputBindingsByEdge[edge.ID],
+				[]InputBinding{{Name: name, Source: BindingSourceTransitionOutput, Field: name}},
+			)
+			group, groupExists := groupsByID[edge.TransitionGroupID]
+			if !groupExists {
+				continue
+			}
+			w.addCurrentNodeOutputField(group.ID, OutputField{Name: name, Description: inputField.Description})
+		}
+		for _, priorNode := range refs.PriorNodes {
+			nodeKey := ModelKey(strings.TrimSpace(string(priorNode.NodeKey)))
+			outputName := strings.TrimSpace(priorNode.OutputName)
+			if nodeKey == "" || outputName == "" {
+				continue
+			}
+			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniquePriorNodeValueRequirements(
+				priorRequirementsByPromptNode[edge.TargetNodeID],
+				[]PriorNodeValueRequirement{{NodeKey: nodeKey, OutputName: outputName}},
+			)
+		}
+	}
+	for nodeID := range nodesByID {
+		requirements := []PriorNodeValueRequirement{}
+		for reachableNodeID := range reachableNodeIDs(nodeID, outgoingByNode) {
+			requirements = appendUniquePriorNodeValueRequirements(requirements, priorRequirementsByPromptNode[reachableNodeID])
+		}
+		w.priorNodeValueRequirementsByNode[nodeID] = requirements
+	}
+	for _, group := range def.TransitionGroups {
+		source, sourceExists := nodesByID[group.SourceNodeID]
+		if !sourceExists || !IsExecutableNode(source) {
+			continue
+		}
+		sourceKey := NodeKey(source)
+		for _, edge := range outgoingByNode[group.SourceNodeID] {
+			if edge.TransitionGroupID != group.ID {
+				continue
+			}
+			for _, requirement := range w.priorNodeValueRequirementsByNode[edge.TargetNodeID] {
+				if requirement.NodeKey != sourceKey {
+					continue
+				}
+				field, exists := outputFieldByName(NodeOutputFields(source), requirement.OutputName)
+				if !exists {
+					continue
+				}
+				w.addCurrentNodeOutputField(group.ID, field)
+			}
+		}
+	}
+}
+
+func (w *DerivedWiring) addCurrentNodeOutputField(groupID TransitionGroupID, field OutputField) {
+	w.currentNodeOutputFieldsByGroup[groupID] = appendUniqueOutputFields(
+		w.currentNodeOutputFieldsByGroup[groupID],
+		[]OutputField{field},
+	)
+}
+
+func outputFieldByName(fields []OutputField, name string) (OutputField, bool) {
+	for _, field := range fields {
+		if strings.TrimSpace(field.Name) == name {
+			return OutputField{Name: name, Description: strings.TrimSpace(field.Description)}, true
+		}
+	}
+	return OutputField{}, false
+}
+
+func reachableNodeIDs(start NodeID, outgoingByNode map[NodeID][]Edge) map[NodeID]struct{} {
+	visited := map[NodeID]struct{}{}
+	stack := []NodeID{start}
+	for len(stack) > 0 {
+		nodeID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, seen := visited[nodeID]; seen {
+			continue
+		}
+		visited[nodeID] = struct{}{}
+		for _, edge := range outgoingByNode[nodeID] {
+			if _, seen := visited[edge.TargetNodeID]; !seen {
+				stack = append(stack, edge.TargetNodeID)
+			}
+		}
+	}
+	return visited
+}
+
+func appendUniqueInputBindings(existing []InputBinding, additions []InputBinding) []InputBinding {
+	out := append([]InputBinding(nil), existing...)
+	seen := make(map[string]struct{}, len(out))
+	for _, binding := range out {
+		seen[binding.Name] = struct{}{}
+	}
+	for _, binding := range additions {
+		if _, exists := seen[binding.Name]; exists {
+			continue
+		}
+		seen[binding.Name] = struct{}{}
+		out = append(out, binding)
+	}
+	return out
+}
+
+func appendUniquePriorNodeValueRequirements(existing []PriorNodeValueRequirement, additions []PriorNodeValueRequirement) []PriorNodeValueRequirement {
+	out := append([]PriorNodeValueRequirement(nil), existing...)
+	seen := make(map[PriorNodeValueRequirement]struct{}, len(out))
+	for _, requirement := range out {
+		seen[requirement] = struct{}{}
+	}
+	for _, requirement := range additions {
+		if _, exists := seen[requirement]; exists {
+			continue
+		}
+		seen[requirement] = struct{}{}
+		out = append(out, requirement)
+	}
+	return out
 }
 
 func (w *DerivedWiring) addDiagnostic(code ValidationErrorCode, message string, ref ValidationError) {

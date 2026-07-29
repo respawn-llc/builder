@@ -6,13 +6,14 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
 
 func TestSelectWorkflowTaskPromptForFirstNodeAssignmentInSession(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		nil,
 		"run-current",
@@ -24,6 +25,7 @@ func TestSelectWorkflowTaskPromptForFirstNodeAssignmentInSession(t *testing.T) {
 }
 
 func TestSelectWorkflowTaskPromptForAnotherNodeAssignmentInSameSession(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-previous"),
 		"run-current",
@@ -35,6 +37,7 @@ func TestSelectWorkflowTaskPromptForAnotherNodeAssignmentInSameSession(t *testin
 }
 
 func TestSelectWorkflowTaskPromptOmitsDuplicateForCurrentTaskRequest(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-current"),
 		"run-current",
@@ -46,6 +49,7 @@ func TestSelectWorkflowTaskPromptOmitsDuplicateForCurrentTaskRequest(t *testing.
 }
 
 func TestSelectWorkflowTaskPromptAfterSameNodeAssignmentCompaction(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-current"),
 		"run-current",
@@ -57,6 +61,7 @@ func TestSelectWorkflowTaskPromptAfterSameNodeAssignmentCompaction(t *testing.T)
 }
 
 func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *testing.T) {
+	t.Parallel()
 	kind, ok := selectWorkflowTaskPrompt(
 		workflowPromptItems("run-previous"),
 		"run-current",
@@ -68,6 +73,7 @@ func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *test
 }
 
 func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testing.T) {
+	t.Parallel()
 	source := mustCreateTestSession(t)
 	mustAppendTestEvent(t, source, "previous-assignment", llm.Message{
 		Role:        llm.RoleDeveloper,
@@ -90,14 +96,14 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 	if clone.Meta().SessionID == source.Meta().SessionID {
 		t.Fatalf("fan-out clone reused source Session ID %q", source.Meta().SessionID)
 	}
-	runID := workflow.RunID("run-current")
+	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
 		clone,
 		&fakeClient{},
-		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -106,7 +112,7 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 
 	kind, ok := selectWorkflowTaskPrompt(
 		engine.transcriptRuntimeState().SnapshotItems(),
-		string(runID),
+		scopeID.String(),
 		workflowTaskPromptTriggerTaskDelivery,
 	)
 	if !ok || kind != prompts.WorkflowTaskPromptReassignment {
@@ -114,11 +120,11 @@ func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testin
 	}
 }
 
-func workflowPromptItems(runID string) []llm.ResponseItem {
+func workflowPromptItems(scopeID string) []llm.ResponseItem {
 	return llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-		SourcePath:  textutil.Value(runID),
+		SourcePath:  textutil.Value(scopeID),
 		Content:     textutil.Value("workflow instructions"),
 	}})
 }

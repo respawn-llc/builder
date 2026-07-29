@@ -48,7 +48,7 @@ func TestWorkflowProjectEventBrokerCopiesRelatedIDs(t *testing.T) {
 	}
 	defer func() { _ = sub.Close() }()
 
-	relatedIDs := []string{"run-1"}
+	relatedIDs := []string{"session-1"}
 	if err := broker.PublishWorkflowEvent(context.Background(), workflowstore.WorkflowEventRecord{
 		ProjectID:        stringPtr("project-1"),
 		WorkflowID:       stringPtr("workflow-1"),
@@ -66,7 +66,7 @@ func TestWorkflowProjectEventBrokerCopiesRelatedIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if len(event.RelatedIDs) != 1 || event.RelatedIDs[0] != "run-1" {
+	if len(event.RelatedIDs) != 1 || event.RelatedIDs[0] != "session-1" {
 		t.Fatalf("related ids = %+v, want defensive copy", event.RelatedIDs)
 	}
 }

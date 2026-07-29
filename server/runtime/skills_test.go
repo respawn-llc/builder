@@ -185,6 +185,7 @@ func TestSkillsContextMessageFailsOnUnreadableSkillsDirectory(t *testing.T) {
 }
 
 func TestSplitMetaContextMessagesSeparatesMetaContextWithoutDeduplication(t *testing.T) {
+	t.Parallel()
 	skillsMessage := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSkills), Content: textutil.Value("## Skills\n### Available skills")}
 	messages := []llm.Message{
 		skillsMessage,
@@ -212,6 +213,7 @@ func TestSplitMetaContextMessagesSeparatesMetaContextWithoutDeduplication(t *tes
 }
 
 func TestSplitMetaContextMessagesTreatsHeadlessContextAsMeta(t *testing.T) {
+	t.Parallel()
 	headless := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value("headless mode instructions")}
 	messages := []llm.Message{
 		headless,
@@ -232,6 +234,7 @@ func TestSplitMetaContextMessagesTreatsHeadlessContextAsMeta(t *testing.T) {
 }
 
 func TestSplitMetaContextMessagesTreatsHeadlessExitContextAsMeta(t *testing.T) {
+	t.Parallel()
 	headlessExit := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value("interactive mode instructions")}
 	messages := []llm.Message{
 		headlessExit,
@@ -252,6 +255,7 @@ func TestSplitMetaContextMessagesTreatsHeadlessExitContextAsMeta(t *testing.T) {
 }
 
 func TestBuildReviewerTranscriptMessagesSkipsSkillsContextEntries(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSkills), Content: textutil.Value("## Skills\n### Available skills\n- demo: desc")},
 		{Role: llm.RoleUser, Content: textutil.Value("request")},

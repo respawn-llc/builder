@@ -21,6 +21,7 @@ type TaskExecution struct {
 	Ref             WorkflowExecutionRef
 	Agent           *TaskAgentExecutionTarget
 	Script          *TaskScriptExecutionTarget
+	Queued          bool
 	WaitingQuestion bool
 }
 
@@ -28,131 +29,177 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
-type WorkflowExecutionMapRevision uint64
-
-type WorkflowExecutionPromptRevision uint64
-
-type AllWorkflowExecutionSnapshot struct {
-	ExecutionMapRevision WorkflowExecutionMapRevision
-	Executions           []WorkflowExecutionObservation
-}
-
-type WorkflowExecutionObservation struct {
-	Execution      TaskExecution
-	PromptRevision WorkflowExecutionPromptRevision
-}
-
-func (o WorkflowExecutionObservation) Validate() error {
-	return o.Execution.validate()
-}
-
-func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
-	snapshots, err := a.CurrentTaskExecutionSnapshots([]workflow.TaskID{taskID})
+func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
+	snapshots, err := a.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
 	if err != nil {
 		return TaskExecutionSnapshot{}, err
 	}
 	return snapshots[taskID], nil
 }
 
-func (a *Authority) CurrentTaskExecutionSnapshots(taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+// CurrentWorkflowTaskExecutionSnapshots captures every live workflow Exact
+// Execution Scope once. Read models use this bounded process-local snapshot as
+// liveness evidence; SQLite never substitutes for it.
+func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	wanted := make(map[workflow.TaskID]struct{}, len(taskIDs))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	var snapshotErr error
+	a.forEachWorkflowExecutionLocked(func(execution *execution) {
+		if snapshotErr != nil {
+			return
+		}
+		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+	})
+	if snapshotErr != nil {
+		return nil, snapshotErr
+	}
+	for taskID, snapshot := range snapshots {
+		sort.Slice(snapshot.Executions, func(i, j int) bool {
+			return workflowExecutionLess(snapshot.Executions[i], snapshot.Executions[j])
+		})
+		snapshots[taskID] = snapshot
+	}
+	return snapshots, nil
+}
+
+func (a *Authority) CurrentProjectTaskExecutionSnapshots(projectID string) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return nil, errors.New("workflow project id is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	var snapshotErr error
+	for _, byTask := range a.workflowExecutions[projectID] {
+		for _, executions := range byTask {
+			for _, execution := range executions {
+				if snapshotErr == nil {
+					snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+				}
+			}
+		}
+	}
+	if snapshotErr != nil {
+		return nil, snapshotErr
+	}
+	sortTaskExecutionSnapshots(snapshots)
+	return snapshots, nil
+}
+
+func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID string, workflowID workflow.WorkflowID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(string(workflowID)) == "" {
+		return nil, errors.New("workflow execution scope is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	var snapshotErr error
+	for _, executions := range a.workflowExecutions[projectID][workflowID] {
+		for _, execution := range executions {
+			if snapshotErr == nil {
+				snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+			}
+		}
+	}
+	if snapshotErr != nil {
+		return nil, snapshotErr
+	}
+	sortTaskExecutionSnapshots(snapshots)
+	return snapshots, nil
+}
+
+func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workflowID workflow.WorkflowID, taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(string(workflowID)) == "" {
+		return nil, errors.New("workflow execution scope is required")
+	}
 	snapshots := make(map[workflow.TaskID]TaskExecutionSnapshot, len(taskIDs))
 	for _, taskID := range taskIDs {
 		if strings.TrimSpace(string(taskID)) == "" {
 			return nil, errors.New("workflow task id is required")
 		}
-		if _, exists := wanted[taskID]; exists {
+		if _, duplicate := snapshots[taskID]; duplicate {
 			return nil, errors.New("workflow task id is duplicated")
 		}
-		wanted[taskID] = struct{}{}
 		snapshots[taskID] = TaskExecutionSnapshot{Executions: []TaskExecution{}}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for ref, execution := range a.byWorkflow {
-		if !execution.activated.Load() || execution.finalizing.Load() {
-			continue
-		}
-		if _, exists := wanted[ref.TaskID]; !exists {
-			continue
-		}
-		observed, err := workflowExecutionObservation(ref, execution)
-		if err != nil {
-			return nil, err
-		}
-		taskSnapshot := snapshots[ref.TaskID]
-		taskSnapshot.Executions = append(taskSnapshot.Executions, observed.Execution)
-		snapshots[ref.TaskID] = taskSnapshot
-	}
-	for taskID, taskSnapshot := range snapshots {
-		sort.Slice(taskSnapshot.Executions, func(i, j int) bool {
-			if taskSnapshot.Executions[i].Ref.RunID != taskSnapshot.Executions[j].Ref.RunID {
-				return taskSnapshot.Executions[i].Ref.RunID < taskSnapshot.Executions[j].Ref.RunID
+	byTask := a.workflowExecutions[projectID][workflowID]
+	for taskID := range snapshots {
+		for _, execution := range byTask[taskID] {
+			if err := appendTaskExecutionSnapshot(snapshots, execution); err != nil {
+				return nil, err
 			}
-			return taskSnapshot.Executions[i].Ref.Generation < taskSnapshot.Executions[j].Ref.Generation
-		})
-		snapshots[taskID] = taskSnapshot
+		}
 	}
+	sortTaskExecutionSnapshots(snapshots)
 	return snapshots, nil
 }
 
-func (a *Authority) AllWorkflowExecutionSnapshot() (AllWorkflowExecutionSnapshot, error) {
-	if a == nil {
-		return AllWorkflowExecutionSnapshot{}, errors.New("session runtime authority is required")
+func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnapshot, execution *execution) error {
+	ref, ok := execution.scope.Workflow()
+	if !ok {
+		return errors.New("workflow execution index contains a non-workflow scope")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.allWorkflowExecutionSnapshotLocked()
-}
-
-func (a *Authority) allWorkflowExecutionSnapshotLocked() (AllWorkflowExecutionSnapshot, error) {
-	snapshot := AllWorkflowExecutionSnapshot{
-		ExecutionMapRevision: a.executionMapRevision,
-		Executions:           make([]WorkflowExecutionObservation, 0, len(a.byWorkflow)),
+	if execution.phase != executionPhaseQueued && execution.phase != executionPhaseRunning {
+		return errors.New("live workflow execution has an invalid phase")
 	}
-	for ref, execution := range a.byWorkflow {
-		if !execution.activated.Load() || execution.finalizing.Load() {
-			continue
-		}
-		target, err := workflowExecutionObservation(ref, execution)
-		if err != nil {
-			return AllWorkflowExecutionSnapshot{}, err
-		}
-		snapshot.Executions = append(snapshot.Executions, target)
-	}
-	sort.Slice(snapshot.Executions, func(i, j int) bool {
-		if snapshot.Executions[i].Execution.Ref.TaskID != snapshot.Executions[j].Execution.Ref.TaskID {
-			return snapshot.Executions[i].Execution.Ref.TaskID < snapshot.Executions[j].Execution.Ref.TaskID
-		}
-		if snapshot.Executions[i].Execution.Ref.RunID != snapshot.Executions[j].Execution.Ref.RunID {
-			return snapshot.Executions[i].Execution.Ref.RunID < snapshot.Executions[j].Execution.Ref.RunID
-		}
-		return snapshot.Executions[i].Execution.Ref.Generation < snapshot.Executions[j].Execution.Ref.Generation
-	})
-	return snapshot, nil
-}
-
-func workflowExecutionObservation(ref WorkflowExecutionRef, execution *execution) (WorkflowExecutionObservation, error) {
-	waitingQuestion, promptRevision := execution.prompts.observation()
 	target := TaskExecution{
 		Ref:             ref,
-		WaitingQuestion: waitingQuestion,
+		Queued:          execution.phase == executionPhaseQueued,
+		WaitingQuestion: execution.prompts.hasPending(),
 	}
 	if resource, ok := execution.scope.Resource(); ok {
 		target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
 	} else {
 		if execution.script == nil {
-			return WorkflowExecutionObservation{}, errors.New("live workflow script execution is missing its target")
+			return errors.New("live workflow script execution is missing its target")
 		}
 		target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
 	}
 	if err := target.validate(); err != nil {
-		return WorkflowExecutionObservation{}, err
+		return err
 	}
-	return WorkflowExecutionObservation{Execution: target, PromptRevision: promptRevision}, nil
+	snapshot := snapshots[ref.CurrentNode.TaskID]
+	snapshot.Executions = append(snapshot.Executions, target)
+	snapshots[ref.CurrentNode.TaskID] = snapshot
+	return nil
+}
+
+func sortTaskExecutionSnapshots(snapshots map[workflow.TaskID]TaskExecutionSnapshot) {
+	for taskID, snapshot := range snapshots {
+		sort.Slice(snapshot.Executions, func(i, j int) bool {
+			return workflowExecutionLess(snapshot.Executions[i], snapshot.Executions[j])
+		})
+		snapshots[taskID] = snapshot
+	}
+}
+
+func workflowExecutionLess(leftExecution TaskExecution, rightExecution TaskExecution) bool {
+	left := leftExecution.Ref.CurrentNode
+	right := rightExecution.Ref.CurrentNode
+	if left.NodeID != right.NodeID {
+		return left.NodeID < right.NodeID
+	}
+	leftBranch, leftScoped := left.TransitionBranchKey()
+	rightBranch, rightScoped := right.TransitionBranchKey()
+	if leftScoped != rightScoped {
+		return !leftScoped
+	}
+	return leftBranch < rightBranch
 }
 
 func (e TaskExecution) validate() error {
@@ -172,6 +219,9 @@ func (e TaskExecution) validate() error {
 		if e.WaitingQuestion {
 			return errors.New("live workflow script execution cannot wait for a question")
 		}
+	}
+	if e.Queued && e.WaitingQuestion {
+		return errors.New("queued workflow execution cannot wait for a question")
 	}
 	return nil
 }

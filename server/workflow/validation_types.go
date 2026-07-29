@@ -122,6 +122,7 @@ type ValidationError struct {
 }
 
 type RuntimeSupportEdge struct {
+	SourceKind       NodeKind
 	ContextMode      ContextMode
 	RequiresApproval bool
 	TargetKind       NodeKind
@@ -135,6 +136,12 @@ type RuntimeSupportIssue struct {
 
 func UnsupportedRuntimeFeatures(edge RuntimeSupportEdge) []RuntimeSupportIssue {
 	issues := []RuntimeSupportIssue{}
+	if edge.SourceKind == NodeKindJoin && edge.RequiresApproval {
+		issues = append(issues, RuntimeSupportIssue{
+			Code:    CodeUnsupportedApprovalExecution,
+			Message: "join outgoing transitions cannot require approval",
+		})
+	}
 	return issues
 }
 

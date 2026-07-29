@@ -15,6 +15,7 @@ import (
 )
 
 func TestPersistedTranscriptScanCollectsRequestedPageOnly(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 1, Limit: 2})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")}),
@@ -41,6 +42,7 @@ func TestPersistedTranscriptScanCollectsRequestedPageOnly(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanTracksDormantRecentTailWindow(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{TrackRecentTail: true, TailLimit: 3})
 	for i := 0; i < 5; i++ {
 		if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before-" + strconv.Itoa(i))})); err != nil {
@@ -72,6 +74,7 @@ func TestPersistedTranscriptScanTracksDormantRecentTailWindow(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanKeepsLatestCompactionSegmentInDormantRecentTail(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{TrackRecentTail: true, TailLimit: 2})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")}),
@@ -99,6 +102,7 @@ func TestPersistedTranscriptScanKeepsLatestCompactionSegmentInDormantRecentTail(
 }
 
 func TestPersistedTranscriptScanWithoutLimitCollectsEntireDormantTranscript(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")}),
@@ -124,6 +128,7 @@ func TestPersistedTranscriptScanWithoutLimitCollectsEntireDormantTranscript(t *t
 }
 
 func TestPersistedTranscriptScanEnrichesToolResultFromCompletion(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
 	toolOutput, err := json.Marshal(map[string]any{"ok": true})
 	if err != nil {
@@ -153,6 +158,7 @@ func TestPersistedTranscriptScanEnrichesToolResultFromCompletion(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanProjectsDeveloperAndToolSummaryMetadata(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("Internal developer note")}),
@@ -180,6 +186,7 @@ func TestPersistedTranscriptScanProjectsDeveloperAndToolSummaryMetadata(t *testi
 }
 
 func TestPersistedTranscriptScanSynthesizesCompletedToolResultWithoutToolMessage(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}),
@@ -204,6 +211,7 @@ func TestPersistedTranscriptScanSynthesizesCompletedToolResultWithoutToolMessage
 }
 
 func TestFormatPersistedToolCallBuildsFallbackMetadata(t *testing.T) {
+	t.Parallel()
 	entry := formatPersistedToolCall(llm.ToolCall{
 		ID:    "call-1",
 		Name:  string(toolspec.ToolExecCommand),
@@ -224,6 +232,7 @@ func TestFormatPersistedToolCallBuildsFallbackMetadata(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testing.T) {
+	t.Parallel()
 	singlePatch := "*** Begin Patch\n*** Update File: cli/app/ui_status.go\n@@\n type uiStatusAuthInfo struct {\n-\tSummary string\n+\tSummary string\n+\tReady bool\n }\n*** End Patch\n"
 	multiPatch := "*** Begin Patch\n*** Update File: a.go\n+new\n*** Update File: b.go\n-old\n*** End Patch\n"
 	rawPatch := "not a structured patch payload"
@@ -292,6 +301,7 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 }
 
 func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
@@ -327,6 +337,7 @@ func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing
 }
 
 func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
@@ -354,6 +365,7 @@ func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testi
 }
 
 func TestPersistedTranscriptScanMaterializesCompactedDeveloperContextInDetailPage(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
@@ -392,6 +404,7 @@ func TestPersistedTranscriptScanMaterializesCompactedDeveloperContextInDetailPag
 }
 
 func TestPersistedTranscriptScanReplaysCacheWarnings(t *testing.T) {
+	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, sessionEventCacheWarning, transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix})); err != nil {
 		t.Fatalf("ApplyPersistedEvent(cache_warning): %v", err)
@@ -410,6 +423,7 @@ func TestPersistedTranscriptScanReplaysCacheWarnings(t *testing.T) {
 }
 
 func TestPersistedTranscriptScanUsesCacheWarningModeVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.CacheWarningMode

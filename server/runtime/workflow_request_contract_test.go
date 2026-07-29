@@ -13,18 +13,20 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
 func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -61,12 +63,13 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 }
 
 func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []workflowruntime.CompletionMode{
 		workflowruntime.CompletionModeTool,
 		workflowruntime.CompletionModeShellCommand,
 	} {
 		t.Run(string(mode), func(t *testing.T) {
-			runID := workflow.RunID("workflow-run")
+			scopeID := runtimeids.NewExecutionScopeID()
 			client := &fakeClient{caps: llm.ProviderCapabilities{
 				ProviderID:           "provider-without-required-choice",
 				SupportsResponsesAPI: false,
@@ -75,9 +78,9 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 				t,
 				mustCreateTestSession(t),
 				client,
-				&workflowruntime.Config{
-					RunID:                  runID,
-					Contract:               workflowruntime.CompletionContract{RunID: runID},
+				&workflowruntime.CurrentNodeExecutionConfig{
+					ScopeID:                scopeID,
+					Contract:               workflowruntime.CompletionContract{},
 					CompletionMode:         mode,
 					UseAutomaticToolChoice: true,
 					Controller:             &externallyCompletedWorkflowController{},
@@ -108,6 +111,7 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 }
 
 func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
+	t.Parallel()
 	engine := mustNewExecTestEngine(
 		t,
 		mustCreateTestSession(t),
@@ -131,14 +135,15 @@ func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
 }
 
 func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	engine := mustNewWorkflowTestEngine(
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeShellCommand,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -161,7 +166,8 @@ func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
 }
 
 func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{}
 	engine := mustNewTestEngine(
 		t,
@@ -170,9 +176,9 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
-			WorkflowRun: &workflowruntime.Config{
-				RunID:          runID,
-				Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID:        scopeID,
+				Contract:       workflowruntime.CompletionContract{},
 				CompletionMode: workflowruntime.CompletionModeShellCommand,
 				Controller:     &externallyCompletedWorkflowController{},
 			},
@@ -188,7 +194,8 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 }
 
 func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{caps: llm.ProviderCapabilities{
 		ProviderID:           "provider-without-required-choice",
 		SupportsResponsesAPI: false,
@@ -197,9 +204,9 @@ func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionModeShellCommand,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -218,15 +225,16 @@ func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
 }
 
 func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	client := &fakeClient{}
 	engine := mustNewWorkflowTestEngine(
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID:          runID,
-			Contract:       workflowruntime.CompletionContract{RunID: runID},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			Contract:       workflowruntime.CompletionContract{},
 			CompletionMode: workflowruntime.CompletionMode("unknown"),
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -245,7 +253,8 @@ func TestWorkflowRequestRejectsUnresolvedCompletionModeBeforeProviderDispatch(t 
 }
 
 func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	sideEffect := &workflowSideEffectTool{}
 	controller := &workflowCompletionAccountingController{}
 	var resultMu sync.Mutex
@@ -282,10 +291,9 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 				results = append(results, *event.ToolResult)
 				resultMu.Unlock()
 			},
-			WorkflowRun: &workflowruntime.Config{
-				RunID: runID,
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID: scopeID,
 				Contract: workflowruntime.CompletionContract{
-					RunID: runID,
 					Transitions: []workflowruntime.CompletionTransition{{
 						ID:         "done",
 						Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -338,7 +346,8 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 }
 
 func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowCompletionAccountingController{}
 	client := &fakeClient{responses: []llm.Response{
 		finalTextResponse(`{"commentary":"complete","summary":"done"}`),
@@ -348,10 +357,9 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID: runID,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
-				RunID: runID,
 				Transitions: []workflowruntime.CompletionTransition{{
 					ID:         "done",
 					Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -382,7 +390,8 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 }
 
 func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
-	runID := workflow.RunID("workflow-run")
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &workflowCompletionAccountingController{}
 	client := &fakeClient{responses: []llm.Response{
 		finalTextResponse(`{"commentary":"complete","summary":"done"}`),
@@ -392,10 +401,9 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		&workflowruntime.Config{
-			RunID: runID,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: scopeID,
 			Contract: workflowruntime.CompletionContract{
-				RunID: runID,
 				Transitions: []workflowruntime.CompletionTransition{{
 					ID:         "done",
 					Parameters: []workflow.Parameter{{Key: "summary"}},
@@ -418,8 +426,7 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 		t.Fatalf("unstructured workflow completion requests = %+v, want one", requests)
 	}
 	request := requests[0]
-	if request.RunID != runID ||
-		request.TransitionID != "done" ||
+	if request.TransitionID != "done" ||
 		request.OutputValues["summary"] != "done" {
 		t.Fatalf("unstructured workflow completion request = %+v", request)
 	}
@@ -430,6 +437,7 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 }
 
 func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		model        string
@@ -504,6 +512,7 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 }
 
 func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model:        "gpt-5",
@@ -585,7 +594,7 @@ type workflowCompletionAccountingController struct {
 	violations         atomic.Int32
 }
 
-func (c *workflowCompletionAccountingController) CompleteWorkflowRun(
+func (c *workflowCompletionAccountingController) CompleteCurrentNode(
 	_ context.Context,
 	request workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
@@ -602,7 +611,7 @@ func (c *workflowCompletionAccountingController) CompletionRequests() []workflow
 	return append([]workflowruntime.CompletionRequest(nil), c.completionRequests...)
 }
 
-func (c *workflowCompletionAccountingController) RecordWorkflowProtocolViolation(
+func (c *workflowCompletionAccountingController) RecordProtocolViolation(
 	context.Context,
 	workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {

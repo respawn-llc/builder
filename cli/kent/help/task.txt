@@ -2,14 +2,14 @@ Usage of kent task:
   kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--label <name-or-uuid>]... [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
   kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]
+  kent task interrupt <short-id-or-task-id> [--project <project>] [--session <session-id>] [--reason <text>]
   kent task resume <short-id-or-task-id> [--project <project>]
-  kent task approve <transition-id> [--execution-target none|head|default-branch|ref:<revision>]
+  kent task approve <approval-id>
   kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]
-  kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
+  kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task search <query> [--fts5] [--case-sensitive] [--context <n>] [--include-comments] [--project <project>]... [--status <status>[,<status>...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
-  kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
   kent task delete <short-id-or-task-id> [--project <project>]
   kent task label create <name> [--project <project>] [--json]
   kent task label list [--project <project>] [--name <name>] [--json]
@@ -45,16 +45,16 @@ Labels:
   Create, add, and remove resolve every selector before one atomic task mutation.
 
 Selecting an execution target:
-  Task start, approve, and move never prompt. If a workflow requires target
+  Task start and move never prompt. If a workflow requires target
   selection, rerun the action with
   `--execution-target none|head|default-branch|ref:<revision>`. The override
   applies only to an unlocked task and does not edit its workflow.
 
 Completing workflow work:
-For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Humans, and humans only, can pass `--force` and exactly one of `--run`, `--session`, or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted.
+For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Humans, and humans only, can pass `--force` and exactly one of `--session` or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted.
 If you are an agent, refer to the developer guidance you received for how to mark your task as completed if you are confused, or ask the User a question if stuck or unable to complete the task for any reason.
 
-Subcommands `resume`, `approve`, `move`, `cancel`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
+Subcommands `interrupt`, `resume`, `approve`, `move`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
 
 Listing tasks:
   Task listing is always project-scoped. `--project` defaults to the project
@@ -65,7 +65,7 @@ Listing tasks:
   node keys.
   `--column` and `--sort column` require `--workflow` because column keys and
   positions belong to one workflow.
-  `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
+  `--sort` accepts `created`, `updated`, `status`, `column`, or `title`
   followed by `:asc` or `:desc`.
   `--label-match` defaults to `any`; `all` requires every included and excluded
   label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`,

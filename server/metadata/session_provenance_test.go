@@ -13,6 +13,7 @@ import (
 )
 
 func TestTypedSessionProvenanceRoundTripsAndMakesSessionVisible(t *testing.T) {
+	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
 	sessionDir := filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID, "sessions")
 	root, err := session.Create(
@@ -71,6 +72,7 @@ func TestTypedSessionProvenanceRoundTripsAndMakesSessionVisible(t *testing.T) {
 }
 
 func TestResolvePersistedSessionRejectsMalformedPresentProvenanceID(t *testing.T) {
+	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
 	if _, err := store.db.ExecContext(

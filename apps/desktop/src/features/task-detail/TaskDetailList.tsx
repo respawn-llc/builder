@@ -103,7 +103,7 @@ export function TaskDetailList({
   const attentionItems = useMemo(
     () =>
       sourceAttentionItems.filter(
-        (item) => item.kind !== "question" || questionSelections.get(item.askID)?.submission !== "accepted",
+        (item) => item.kind !== "question" || questionSelections.get(item.questionID)?.submission !== "accepted",
       ),
     [questionSelections, sourceAttentionItems],
   );

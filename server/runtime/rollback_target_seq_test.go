@@ -10,6 +10,7 @@ import (
 )
 
 func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	mustAppendTestEvent(t, store, "s1", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")})
 	mustAppendTestEvent(t, store, "s1", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("a1")})

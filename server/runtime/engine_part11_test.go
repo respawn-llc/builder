@@ -63,6 +63,7 @@ func assertRequestHasUserMessage(t *testing.T, request llm.Request, content stri
 }
 
 func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
+	t.Parallel()
 	client, started, release := newGatedHookClient(
 		llm.Response{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -142,6 +143,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 }
 
 func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistantFirst(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -232,6 +234,7 @@ func assertRuntimeEventsAdvanceCommittedFrontierContiguously(t *testing.T, event
 }
 
 func TestModelResponseEventCarriesContextUsage(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 420, WindowTokens: 1_000},
@@ -259,6 +262,7 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 }
 
 func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
@@ -291,6 +295,7 @@ func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 }
 
 func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
+	t.Parallel()
 	seedContent := "raw \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
 
@@ -327,6 +332,7 @@ func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
 }
 
 func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -411,6 +417,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 }
 
 func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
+	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
 	first := mustQueueUserMessage(t, eng, "same")
@@ -432,6 +439,7 @@ func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 }
 
 func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
@@ -447,6 +455,7 @@ func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
 }
 
 func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
+	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
 		t.Fatalf("append message: %v", err)
@@ -462,6 +471,7 @@ func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
 }
 
 func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T) {
+	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 
 	if usage := eng.ContextUsage(); usage.HasCacheHitPercentage {
@@ -482,6 +492,7 @@ func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T
 }
 
 func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
+	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
@@ -501,6 +512,7 @@ func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 }
 
 func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
+	t.Parallel()
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
@@ -525,6 +537,7 @@ func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
 }
 
 func TestEstimateItemsTokensDoesNotTreatInlineImagePayloadAsPlainText(t *testing.T) {
+	t.Parallel()
 	base64Payload := strings.Repeat("A", 24_000)
 	item := llm.ResponseItem{
 		Type:   llm.ResponseItemTypeFunctionCallOutput,
@@ -544,6 +557,7 @@ func TestEstimateItemsTokensDoesNotTreatInlineImagePayloadAsPlainText(t *testing
 }
 
 func TestContextUsageDoesNotInflateInlineImagePayloadByBase64Length(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
@@ -567,6 +581,7 @@ func TestContextUsageDoesNotInflateInlineImagePayloadByBase64Length(t *testing.T
 }
 
 func TestPreSubmitCompactionTokenLimitUsesFixedRunwayReserve(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		limit    int

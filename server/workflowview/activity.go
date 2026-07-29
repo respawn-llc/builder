@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"strconv"
@@ -11,26 +10,18 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/workflowattention"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 type Activity struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	projector   *TaskProjector
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
 }
 
 type activityPage struct {
 	task          sqlitegen.TaskRecord
 	rows          []taskActivityRow
 	comments      map[string]sqlitegen.TaskComment
-	transitions   map[string]sqlitegen.TaskTransitionRecord
-	edges         map[string][]sqlitegen.TaskTransitionEdgeRecord
-	runs          map[string]sqlitegen.TaskRunRecord
-	nodes         map[string]serverapi.WorkflowNode
-	sessionNames  map[string]string
 	nextPageToken string
 }
 
@@ -40,7 +31,7 @@ type taskActivityRow struct {
 	sourceID         string
 	occurredAtUnixMs int64
 	updatedAtUnixMs  int64
-	actor            string
+	sessionName      *string
 }
 
 type activityPageCursor struct {
@@ -49,21 +40,14 @@ type activityPageCursor struct {
 	hasValue         bool
 }
 
-func NewActivity(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector) (*Activity, error) {
+func NewActivity(metadataStore *metadata.Store, projector *TaskProjector) (*Activity, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
-	}
-	if definitions == nil {
-		return nil, errors.New("definition projection is required")
 	}
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
-	return &Activity{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		projector:   projector,
-	}, nil
+	return &Activity{queries: metadataStore.Queries(), projector: projector}, nil
 }
 
 func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
@@ -93,10 +77,6 @@ func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskActiv
 	if err != nil {
 		return activityPage{}, err
 	}
-	snapshot, err := a.definitions.snapshot(ctx, task.WorkflowID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return activityPage{}, err
-	}
 	pageSize := req.PageSize
 	if pageSize == 0 {
 		pageSize = 50
@@ -118,22 +98,6 @@ func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskActiv
 	if err != nil {
 		return activityPage{}, err
 	}
-	transitions, err := a.transitionsByID(ctx, sourceIDsByType(pageRows, "transition"))
-	if err != nil {
-		return activityPage{}, err
-	}
-	edges, err := loadTransitionEdgesByTransitionID(ctx, a.queries, transitions)
-	if err != nil {
-		return activityPage{}, err
-	}
-	runs, err := a.runsByID(ctx, sourceIDsByTypes(pageRows, "run_started", "run_completed", "run_interrupted"))
-	if err != nil {
-		return activityPage{}, err
-	}
-	sessionNames, err := loadSessionNamesByRun(ctx, a.queries, runs)
-	if err != nil {
-		return activityPage{}, err
-	}
 	nextPageToken := ""
 	if hasNext && len(pageRows) > 0 {
 		nextPageToken = activityPageToken(pageRows[len(pageRows)-1])
@@ -142,11 +106,6 @@ func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskActiv
 		task:          task,
 		rows:          pageRows,
 		comments:      comments,
-		transitions:   taskTransitionByID(transitions),
-		edges:         edges,
-		runs:          taskRunByID(runs),
-		nodes:         workflowNodeByID(snapshot.api),
-		sessionNames:  sessionNames,
 		nextPageToken: nextPageToken,
 	}, nil
 }
@@ -177,7 +136,7 @@ func (a *Activity) activityRows(ctx context.Context, taskID string, cursor activ
 			sourceID:         row.SourceID,
 			occurredAtUnixMs: row.OccurredAtUnixMs,
 			updatedAtUnixMs:  row.UpdatedAtUnixMs,
-			actor:            row.Actor,
+			sessionName:      metadata.OptionalString(row.SessionName),
 		})
 	}
 	return out, nil
@@ -198,20 +157,6 @@ func (a *Activity) commentsByID(ctx context.Context, ids []string) (map[string]s
 	return out, nil
 }
 
-func (a *Activity) transitionsByID(ctx context.Context, ids []string) ([]sqlitegen.TaskTransitionRecord, error) {
-	if len(ids) == 0 {
-		return []sqlitegen.TaskTransitionRecord{}, nil
-	}
-	return a.queries.ListTaskTransitionsByIDs(ctx, ids)
-}
-
-func (a *Activity) runsByID(ctx context.Context, ids []string) ([]sqlitegen.TaskRunRecord, error) {
-	if len(ids) == 0 {
-		return []sqlitegen.TaskRunRecord{}, nil
-	}
-	return a.queries.ListTaskRunsByIDs(ctx, ids)
-}
-
 func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskActivityItem, error) {
 	items := make([]serverapi.WorkflowTaskActivityItem, 0, len(page.rows))
 	for _, row := range page.rows {
@@ -221,7 +166,6 @@ func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskAct
 			TaskID:           page.task.ID,
 			OccurredAtUnixMs: row.occurredAtUnixMs,
 			UpdatedAtUnixMs:  row.updatedAtUnixMs,
-			Actor:            row.actor,
 		}
 		switch row.kind {
 		case "comment":
@@ -229,65 +173,13 @@ func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskAct
 			if !ok {
 				return nil, errors.New("activity comment source is missing")
 			}
-			item.Summary = "Comment"
 			dto := a.projector.ProjectComment(comment)
 			item.Comment = &dto
-		case "transition":
-			transition, ok := page.transitions[row.sourceID]
-			if !ok {
-				return nil, errors.New("activity transition source is missing")
+		case "session_started":
+			if row.sessionName == nil || strings.TrimSpace(*row.sessionName) == "" {
+				return nil, errors.New("activity session source has no name")
 			}
-			dto, err := a.projector.ProjectTransition(TransitionProjectionInput{
-				Transition: transition,
-				Edges:      page.edges[transition.ID],
-			})
-			if err != nil {
-				return nil, err
-			}
-			summary := strings.TrimSpace(dto.TransitionDisplayName)
-			if summary == "" {
-				summary = dto.TransitionID
-			}
-			item.Actor = transition.Actor
-			item.Summary = "Transition: " + summary
-			item.Transition = &dto
-		case "run_started", "run_completed", "run_interrupted":
-			run, ok := page.runs[row.sourceID]
-			if !ok {
-				return nil, errors.New("activity run source is missing")
-			}
-			runView := a.projector.ProjectRun(RunProjectionInput{
-				Run:          run,
-				Nodes:        page.nodes,
-				SessionNames: page.sessionNames,
-			})
-			item.Run = &runView
-			switch row.kind {
-			case "run_started":
-				item.Summary = "Run started"
-			case "run_completed":
-				item.Summary = "Run completed"
-			case "run_interrupted":
-				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), textutil.OptionalExactString(run.InterruptionDetailJson))
-				workflowID := page.task.WorkflowID
-				attention := serverapi.WorkflowAttentionItem{
-					ID:               attentionKindInterruptedRun + ":" + run.ID,
-					Kind:             attentionKindInterruptedRun,
-					ProjectID:        page.task.ProjectID,
-					WorkflowID:       &workflowID,
-					TaskID:           page.task.ID,
-					TaskShortID:      page.task.ShortID,
-					TaskTitle:        page.task.Title,
-					RunID:            textutil.Pointer(&run.ID),
-					SessionID:        textutil.Pointer(metadata.OptionalString(run.SessionID)),
-					Message:          item.Summary,
-					DetailJSON:       textutil.OptionalExactString(run.InterruptionDetailJson),
-					OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64,
-				}
-				item.Attention = &attention
-			}
-		case "task_canceled":
-			item.Summary = "Task canceled"
+			item.SessionStarted = &serverapi.WorkflowTaskSessionStarted{SessionID: row.sourceID, Name: *row.sessionName}
 		default:
 			return nil, errors.New("activity kind is unsupported")
 		}
@@ -307,39 +199,6 @@ func sourceIDsByType(rows []taskActivityRow, kind string) []string {
 		seen[row.sourceID] = true
 	}
 	return ids
-}
-
-func sourceIDsByTypes(rows []taskActivityRow, kinds ...string) []string {
-	allowed := map[string]bool{}
-	for _, kind := range kinds {
-		allowed[kind] = true
-	}
-	ids := []string{}
-	seen := map[string]bool{}
-	for _, row := range rows {
-		if !allowed[row.kind] || seen[row.sourceID] {
-			continue
-		}
-		ids = append(ids, row.sourceID)
-		seen[row.sourceID] = true
-	}
-	return ids
-}
-
-func taskTransitionByID(transitions []sqlitegen.TaskTransitionRecord) map[string]sqlitegen.TaskTransitionRecord {
-	out := make(map[string]sqlitegen.TaskTransitionRecord, len(transitions))
-	for _, transition := range transitions {
-		out[transition.ID] = transition
-	}
-	return out
-}
-
-func taskRunByID(runs []sqlitegen.TaskRunRecord) map[string]sqlitegen.TaskRunRecord {
-	out := make(map[string]sqlitegen.TaskRunRecord, len(runs))
-	for _, run := range runs {
-		out[run.ID] = run
-	}
-	return out
 }
 
 func parseActivityPageToken(token string) (activityPageCursor, error) {

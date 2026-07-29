@@ -58,7 +58,6 @@ type ProviderHistoryItem struct {
 type HistoryReplacementRecord struct {
 	Engine                            string                           `json:"engine"`
 	Mode                              CompactionMode                   `json:"mode"`
-	WorkflowRunID                     *string                          `json:"workflow_run_id,omitempty"`
 	CompactionNumber                  *int                             `json:"compaction_number,omitempty"`
 	CommittedEntryStart               *int                             `json:"committed_entry_start,omitempty"`
 	PendingHandoffFutureMessage       *string                          `json:"pending_handoff_future_message,omitempty"`
@@ -110,10 +109,6 @@ func normalizeHistoryReplacementRecord(record HistoryReplacementRecord) (History
 		return HistoryReplacementRecord{}, fmt.Errorf("unsupported compaction mode %q", record.Mode)
 	}
 
-	var err error
-	if record.WorkflowRunID, err = normalizeOptionalEventText("workflow run identity", record.WorkflowRunID); err != nil {
-		return HistoryReplacementRecord{}, err
-	}
 	if record.CompactionNumber != nil {
 		if *record.CompactionNumber <= 0 {
 			return HistoryReplacementRecord{}, fmt.Errorf(
@@ -134,6 +129,7 @@ func normalizeHistoryReplacementRecord(record HistoryReplacementRecord) (History
 		value := *record.CommittedEntryStart
 		record.CommittedEntryStart = &value
 	}
+	var err error
 	if record.PendingHandoffFutureMessage, err = normalizeOptionalEventText(
 		"pending handoff future message",
 		record.PendingHandoffFutureMessage,
@@ -323,7 +319,6 @@ func encodeHistoryReplacementRecordV1(record HistoryReplacementRecord) ([]byte, 
 		return nil, err
 	}
 	for _, write := range []func() error{
-		func() error { return writeOptionalHistoryField(&buffer, "workflow_run_id", record.WorkflowRunID) },
 		func() error { return writeOptionalHistoryField(&buffer, "compaction_number", record.CompactionNumber) },
 		func() error {
 			return writeOptionalHistoryField(&buffer, "committed_entry_start", record.CommittedEntryStart)

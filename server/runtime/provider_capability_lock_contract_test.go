@@ -11,6 +11,7 @@ import (
 )
 
 func TestEnsureLockedLeavesProviderContractAbsentAfterTransientCapabilityFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		capsErr: errors.New("transient provider capability failure"),

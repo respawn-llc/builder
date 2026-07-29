@@ -19,6 +19,7 @@ import (
 )
 
 func TestSessionMessageRecordAdapterRoundTrip(t *testing.T) {
+	t.Parallel()
 	contextID := uuid.New()
 	branch := "feature/session-v1"
 	exitCode := 17
@@ -66,6 +67,7 @@ func TestSessionMessageRecordAdapterRoundTrip(t *testing.T) {
 }
 
 func TestSessionMessageRecordAdapterPersistsToolCallWithoutSemanticContent(t *testing.T) {
+	t.Parallel()
 	message := llm.Message{
 		Role: llm.RoleAssistant,
 		ToolCalls: []llm.ToolCall{{
@@ -92,6 +94,7 @@ func TestSessionMessageRecordAdapterPersistsToolCallWithoutSemanticContent(t *te
 }
 
 func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(t *testing.T) {
+	t.Parallel()
 	record, err := sessionMessageRecordFromLLM(llm.Message{
 		Role:    llm.RoleUser,
 		Content: textutil.Value("hello"),
@@ -137,6 +140,7 @@ func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(
 }
 
 func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
+	t.Parallel()
 	presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{
 		ToolName:     string(toolspec.ToolExecCommand),
 		Presentation: transcript.ToolPresentationShell,
@@ -189,6 +193,7 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 }
 
 func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
+	t.Parallel()
 	afterToolCallID := "call-1"
 	localEntry := storedLocalEntry{
 		Visibility:      transcript.EntryVisibilityDetail,
@@ -301,7 +306,8 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSessionHistoryReplacementRecordAdapterRejectsPresentBlankOptionalFacts(t *testing.T) {
+func TestSessionHistoryReplacementRecordAdapterRejectsInvalidOptionalFacts(t *testing.T) {
+	t.Parallel()
 	base := historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeAuto),
@@ -313,12 +319,6 @@ func TestSessionHistoryReplacementRecordAdapterRejectsPresentBlankOptionalFacts(
 	}
 
 	invalid := base
-	invalid.WorkflowRunID = textutil.Value(" \t")
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present blank workflow run identity")
-	}
-
-	invalid = base
 	invalid.CompactionNumber = textutil.Value(0)
 	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
 		t.Fatal("history-replacement adapter accepted a present zero compaction number")
@@ -337,6 +337,7 @@ func TestSessionHistoryReplacementRecordAdapterRejectsPresentBlankOptionalFacts(
 }
 
 func TestMigratedToolCompletionRecordsPreserveProviderAndCacheLineage(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		record session.ToolCompletionRecord
@@ -432,6 +433,7 @@ func TestMigratedToolCompletionRecordsPreserveProviderAndCacheLineage(t *testing
 }
 
 func TestSessionToolCompletionRecordAdaptersPreserveProviderPaths(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		result        tools.Result
@@ -538,6 +540,7 @@ func stringPointerRuntime(value string) *string {
 }
 
 func TestSessionToolCompletionRecordAdapterRejectsUnsupportedProviderItems(t *testing.T) {
+	t.Parallel()
 	for _, itemType := range []llm.ResponseItemType{
 		llm.ResponseItemTypeMessage,
 		llm.ResponseItemTypeFunctionCall,
@@ -563,6 +566,7 @@ func TestSessionToolCompletionRecordAdapterRejectsUnsupportedProviderItems(t *te
 }
 
 func TestSessionHistoryReplacementRecordAdapterPreservesProviderHistoryAndProvenance(t *testing.T) {
+	t.Parallel()
 	committedEntryStart := 19
 	contextID := uuid.New()
 	branch := "feature/compacted-history"
@@ -570,7 +574,6 @@ func TestSessionHistoryReplacementRecordAdapterPreservesProviderHistoryAndProven
 	payload := historyReplacementPayload{
 		Engine:                            "local",
 		Mode:                              string(compactionModeAuto),
-		WorkflowRunID:                     textutil.Value("workflow-run-1"),
 		CompactionNumber:                  textutil.Value(4),
 		CommittedEntryStart:               &committedEntryStart,
 		PendingHandoffFutureMessage:       textutil.Value("continue from the compacted prefix"),
@@ -701,6 +704,7 @@ func TestSessionHistoryReplacementRecordAdapterPreservesProviderHistoryAndProven
 }
 
 func TestSessionHistoryReplacementRecordAdapterGeneratesOnlyDerivableOutputRaw(t *testing.T) {
+	t.Parallel()
 	for _, item := range []llm.ResponseItem{
 		{
 			Type:   llm.ResponseItemTypeFunctionCallOutput,
@@ -746,6 +750,7 @@ func TestSessionHistoryReplacementRecordAdapterGeneratesOnlyDerivableOutputRaw(t
 }
 
 func TestSessionHistoryReplacementUsesItemOrderInsteadOfProviderParserOutputIndex(t *testing.T) {
+	t.Parallel()
 	items := llm.PrepareOpenAIInputItems([]llm.ResponseItem{
 		{
 			Type:        llm.ResponseItemTypeMessage,

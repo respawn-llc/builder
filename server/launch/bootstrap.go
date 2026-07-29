@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -24,11 +25,19 @@ type BootstrapPlan struct {
 }
 
 func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpolicy.Caller, error) {
-	store, err := openSessionByID(persistenceRoot, sessionID)
+	if _, err := openSessionByID(persistenceRoot, sessionID); err != nil {
+		return subagentpolicy.Caller{}, err
+	}
+	metadataStore, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		return subagentpolicy.Caller{}, err
 	}
-	return subagentpolicy.Caller{Workflow: store.Meta().WorkflowSession != nil}, nil
+	defer func() { _ = metadataStore.Close() }()
+	workflow, err := metadataStore.SessionHasWorkflowTask(context.Background(), sessionID)
+	if err != nil {
+		return subagentpolicy.Caller{}, err
+	}
+	return subagentpolicy.Caller{Workflow: workflow}, nil
 }
 
 // ValidateSessionExists verifies a session reference without exposing its

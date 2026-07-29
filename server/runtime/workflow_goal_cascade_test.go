@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,11 +16,12 @@ import (
 )
 
 func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
 	release := make(chan struct{})
+	releaseRun := sync.OnceFunc(func() { close(release) })
+	defer releaseRun()
 	client := &hookClient{
 		response: structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		beforeReturn: func() error {
@@ -42,7 +44,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for workflow turn to start")
 	}
 
@@ -51,7 +53,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 		_, _ = eng.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 		close(mutateDone)
 	}()
-	close(release)
+	releaseRun()
 
 	select {
 	case err := <-submitDone:

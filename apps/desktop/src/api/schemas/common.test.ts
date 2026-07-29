@@ -1,22 +1,20 @@
 import {
   attentionItemSchema,
-  runSchema,
   taskStatusSchema,
-  transitionSchema,
   validationErrorSchema,
 } from "./common";
 
 const baseAttentionItem = {
-  id: "question:run-1:ask-1",
+  id: "question:node-1:ask-1",
   kind: "question",
   project_id: "project-1",
   workflow_id: "workflow-1",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
-  run_id: "run-1",
+  current_node: { node_id: "node-1", transition_branch_key: null, session_id: "session-1" },
   session_id: "session-1",
-  ask_id: "ask-1",
+  question_id: "ask-1",
   message: "Approve protected path?",
   occurred_at_unix_ms: 1,
 };
@@ -30,29 +28,30 @@ const approvalSnapshot = {
 };
 
 const approvalAttentionItem = {
-  id: "approval:transition-1",
+  id: "approval:approval-1",
   kind: "approval",
   project_id: "project-1",
   workflow_id: "workflow-1",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
-  task_transition_id: "transition-1",
+  approval_id: "approval-1",
   message: "Approval required",
   approval_snapshot: approvalSnapshot,
   occurred_at_unix_ms: 1,
 };
 
-const interruptedRunAttentionItem = {
-  id: "interrupted_run:run-1",
-  kind: "interrupted_run",
+const interruptedCurrentNodeAttentionItem = {
+  id: "interrupted_current_node:node-1",
+  kind: "interrupted_current_node",
   project_id: "project-1",
   workflow_id: "workflow-1",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
-  run_id: "run-1",
-  message: "Run interrupted",
+  current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
+  session_id: null,
+  message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
 
@@ -60,18 +59,18 @@ describe("attentionItemSchema", () => {
   it("decodes only the task-scoped discriminated attention variants", () => {
     const question = attentionItemSchema.parse(baseAttentionItem);
     const approval = attentionItemSchema.parse(approvalAttentionItem);
-    const interrupted = attentionItemSchema.parse(interruptedRunAttentionItem);
+    const interrupted = attentionItemSchema.parse(interruptedCurrentNodeAttentionItem);
     if (
       question.kind !== "question" ||
       approval.kind !== "approval" ||
-      interrupted.kind !== "interrupted_run"
+      interrupted.kind !== "interrupted_current_node"
     ) {
       throw new Error("attention variants did not decode to their discriminants");
     }
     expect(question.question).toBeNull();
     expect(question.recommendedOptionIndex).toBeNull();
     expect(approval.approvalSnapshot).not.toBeNull();
-    expect(interrupted.runID).toBe("run-1");
+    expect(interrupted.currentNode.nodeID).toBe("node-1");
     expect(interrupted.sessionID).toBeNull();
     expect(interrupted.detailJSON).toBeNull();
 
@@ -84,33 +83,33 @@ describe("attentionItemSchema", () => {
       { ...baseAttentionItem, task_short_id: "" },
       { ...baseAttentionItem, task_title: "" },
       { ...baseAttentionItem, workflow_id: "" },
-      { ...baseAttentionItem, run_id: "" },
-      { ...baseAttentionItem, ask_id: "" },
-      { ...baseAttentionItem, task_transition_id: "transition-1" },
+      { ...baseAttentionItem, current_node: { ...baseAttentionItem.current_node, node_id: "" } },
+      { ...baseAttentionItem, question_id: "" },
+      { ...baseAttentionItem, approval_id: "approval-1" },
       { ...baseAttentionItem, approval_snapshot: approvalSnapshot },
       { ...baseAttentionItem, detail_json: "{}" },
-      { ...approvalAttentionItem, task_transition_id: "" },
+      { ...approvalAttentionItem, approval_id: "" },
       (() => {
         const item = { ...approvalAttentionItem };
         Reflect.deleteProperty(item, "approval_snapshot");
         return item;
       })(),
-      { ...approvalAttentionItem, ask_id: "ask-1" },
-      { ...approvalAttentionItem, run_id: "run-1" },
+      { ...approvalAttentionItem, question_id: "ask-1" },
+      { ...approvalAttentionItem, current_node: baseAttentionItem.current_node },
       { ...approvalAttentionItem, session_id: "session-1" },
       { ...approvalAttentionItem, suggestions: [] },
       { ...approvalAttentionItem, recommended_option_index: 1 },
       { ...approvalAttentionItem, question: { kind: "ordinary" } },
       { ...approvalAttentionItem, detail_json: "{}" },
-      { ...interruptedRunAttentionItem, run_id: "" },
-      { ...interruptedRunAttentionItem, ask_id: "ask-1" },
-      { ...interruptedRunAttentionItem, suggestions: [] },
-      { ...interruptedRunAttentionItem, recommended_option_index: 1 },
-      { ...interruptedRunAttentionItem, question: { kind: "ordinary" } },
-      { ...interruptedRunAttentionItem, task_transition_id: "transition-1" },
-      { ...interruptedRunAttentionItem, approval_snapshot: approvalSnapshot },
+      { ...interruptedCurrentNodeAttentionItem, current_node: { node_id: "", transition_branch_key: null, session_id: null } },
+      { ...interruptedCurrentNodeAttentionItem, question_id: "ask-1" },
+      { ...interruptedCurrentNodeAttentionItem, suggestions: [] },
+      { ...interruptedCurrentNodeAttentionItem, recommended_option_index: 1 },
+      { ...interruptedCurrentNodeAttentionItem, question: { kind: "ordinary" } },
+      { ...interruptedCurrentNodeAttentionItem, approval_id: "approval-1" },
+      { ...interruptedCurrentNodeAttentionItem, approval_snapshot: approvalSnapshot },
       { ...baseAttentionItem, session_id: "" },
-      { ...interruptedRunAttentionItem, detail_json: "" },
+      { ...interruptedCurrentNodeAttentionItem, detail_json: "" },
       (() => {
         const item = { ...baseAttentionItem };
         Reflect.deleteProperty(item, "project_id");
@@ -192,12 +191,10 @@ describe("taskStatusSchema", () => {
     kind: "queued",
     native_state: "queued",
     node_ids: [],
-    run_ids: [],
   };
 
   it("accepts every typed task status kind without a display label", () => {
     for (const kind of [
-      "canceled",
       "done",
       "waiting_question",
       "waiting_approval",
@@ -216,54 +213,6 @@ describe("taskStatusSchema", () => {
   });
 });
 
-describe("workflow lifecycle schemas", () => {
-  it("normalizes omitted and explicit null lifecycle facts to null", () => {
-    const baseRun = {
-      id: "run-1",
-      task_id: "task-1",
-      placement_id: "placement-1",
-      node_id: "node-1",
-      status: "queued",
-      generation: 1,
-    };
-    const omittedRun = runSchema.parse(baseRun);
-    const explicitNullRun = runSchema.parse({
-      ...baseRun,
-      waiting_ask_id: null,
-      started_at_unix_ms: null,
-      completed_at_unix_ms: null,
-      interrupted_at_unix_ms: null,
-      interruption_reason: null,
-    });
-    const baseTransition = {
-      id: "transition-1",
-      task_id: "task-1",
-      source_node_id: "node-1",
-      source_node_key: "implement",
-      transition_id: "done",
-      actor: "agent",
-      state: "pending_approval",
-      created_at_unix_ms: 1,
-    };
-
-    expect(omittedRun).toMatchObject({
-      waitingAskID: null,
-      startedAt: null,
-      completedAt: null,
-      interruptedAt: null,
-      interruptionReason: null,
-    });
-    expect(explicitNullRun).toMatchObject({
-      waitingAskID: null,
-      startedAt: null,
-      completedAt: null,
-      interruptedAt: null,
-      interruptionReason: null,
-    });
-    expect(transitionSchema.parse(baseTransition).appliedAt).toBeNull();
-    expect(transitionSchema.parse({ ...baseTransition, applied_at_unix_ms: null }).appliedAt).toBeNull();
-  });
-});
 
 describe("validationErrorSchema", () => {
   const base = { code: "code", message: "message", blocks_context: true };

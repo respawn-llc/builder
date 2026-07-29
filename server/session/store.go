@@ -1175,26 +1175,6 @@ func (s *Store) MarkGeneratedRecoveredWarningIssued() error {
 	})
 }
 
-func (s *Store) SetWorkflowSessionState(state *WorkflowSessionState) error {
-	return s.mutateAndPersist(func() error {
-		if state == nil {
-			s.meta.WorkflowSession = nil
-		} else {
-			normalized := *state
-			normalized.RunID = strings.TrimSpace(normalized.RunID)
-			normalized.TaskID = strings.TrimSpace(normalized.TaskID)
-			normalized.WorkflowID = strings.TrimSpace(normalized.WorkflowID)
-			if normalized.RunID == "" && normalized.TaskID == "" && normalized.WorkflowID == "" {
-				s.meta.WorkflowSession = nil
-			} else {
-				s.meta.WorkflowSession = &normalized
-			}
-		}
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
-	})
-}
-
 func (s *Store) MarkModelDispatchLocked(contract LockedContract) error {
 	return s.mutateAndPersist(func() error {
 		s.meta.ModelRequestCount++

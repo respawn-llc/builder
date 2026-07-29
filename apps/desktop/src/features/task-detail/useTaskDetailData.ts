@@ -10,7 +10,7 @@ import { workflowProjectEventAffectsTask } from "@/app-facade";
 
 // useTaskDetailLiveRefresh keeps an open task detail in sync with the server by
 // subscribing to its project's workflow events. Any event that mutates this
-// task (status, runs, transitions/approvals, comments, questions, title/body)
+// task (status, Current Nodes/Approvals, comments, questions, title/body)
 // invalidates the detail's queries so the surface refreshes on its own,
 // regardless of which route hosts it (board sidebar, attention inbox, or the
 // standalone task window). Invalidations target active observers only and reuse
@@ -155,10 +155,6 @@ export function useTaskMutations(
       mutationFn: async (commentID: string) => api.deleteComment(commentID),
       onSuccess: refresh,
     }),
-    cancel: useMutation({
-      mutationFn: async () => api.cancelTask(taskID),
-      onSuccess: refresh,
-    }),
     interrupt: useMutation({
       mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),
       onError: (error) => {
@@ -171,6 +167,10 @@ export function useTaskMutations(
       onError: (error) => {
         onActionError?.("resume", error);
       },
+      onSuccess: refresh,
+    }),
+    approveApproval: useMutation({
+      mutationFn: async (approvalID: string) => api.approveApproval(approvalID),
       onSuccess: refresh,
     }),
     answerQuestion: useMutation({

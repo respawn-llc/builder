@@ -58,7 +58,7 @@ type metaContextBuildOptions struct {
 	ActiveGoal                *session.GoalState
 	IncludeWorkflow           bool
 	WorkflowCompletionMode    workflowruntime.CompletionMode
-	WorkflowRun               *workflowruntime.Config
+	WorkflowPrompt            *workflowruntime.PromptContract
 	WorkflowTaskCommentCount  int64
 	WorkflowTaskPromptKind    prompts.WorkflowTaskPromptKind
 	WorktreeReminder          *session.WorktreeReminderState
@@ -232,16 +232,16 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		message, ok, err := workflowModeMetaMessage(
 			opts.WorkflowTaskPromptKind,
 			opts.WorkflowCompletionMode,
-			opts.WorkflowRun,
+			opts.WorkflowPrompt,
 			opts.WorkflowTaskCommentCount,
 		)
 		if err != nil {
 			return metaContextBuildResult{}, err
 		}
 		if ok {
-			if opts.WorkflowRun != nil {
+			if opts.WorkflowPrompt != nil {
 				message.SourcePath = textutil.OptionalTrimmedString(
-					string(opts.WorkflowRun.Contract.RunID),
+					opts.WorkflowPrompt.Identity,
 				)
 			}
 			collector.addMessages([]llm.Message{message})
@@ -438,7 +438,7 @@ func headlessModeExitMetaMessage() (llm.Message, bool) {
 	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value(content)}, true
 }
 
-func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (llm.Message, bool, error) {
+func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (llm.Message, bool, error) {
 	if cfg != nil {
 		content, err := workflowTaskInstructionsContent(kind, mode, cfg, taskCommentCount)
 		if err != nil {
@@ -461,9 +461,9 @@ func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowr
 	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 }
 
-func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (string, error) {
+func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (string, error) {
 	instructions := cfg.Instructions
-	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, cfg.Contract)
+	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})
 	if err != nil {
 		return "", err
 	}
@@ -471,13 +471,13 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		return "", nil
 	}
 	return prompts.RenderWorkflowTaskInstructions(kind, prompts.WorkflowNodeContextArgs{
-		TaskId:               instructions.TaskID,
+		TaskId:               string(instructions.CurrentNode.TaskID),
 		TaskShortId:          instructions.TaskShortID,
 		TaskTitle:            instructions.TaskTitle,
 		TaskBody:             instructions.TaskBody,
 		WorkflowId:           instructions.WorkflowID,
 		WorkflowName:         instructions.WorkflowName,
-		NodeId:               instructions.NodeID,
+		NodeId:               string(instructions.CurrentNode.NodeID),
 		NodeKey:              instructions.NodeKey,
 		NodeDisplayName:      instructions.NodeDisplayName,
 		ContextMode:          instructions.ContextMode,

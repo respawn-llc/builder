@@ -16,10 +16,6 @@ import (
 	"core/shared/lifecyclecontract"
 )
 
-type lifecycleServerProcessReady struct {
-	PID int `json:"pid"`
-}
-
 func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -316,19 +312,12 @@ func waitForLifecycleServerReady(
 	path string,
 	done <-chan error,
 	output *bytes.Buffer,
-) lifecycleServerProcessReady {
+) appfixture.LifecycleServerProcessReady {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		encoded, err := os.ReadFile(path)
+		ready, err := appfixture.ReadLifecycleServerProcessReady(path)
 		if err == nil {
-			var ready lifecycleServerProcessReady
-			if err := json.Unmarshal(encoded, &ready); err != nil {
-				t.Fatalf("decode lifecycle server readiness: %v", err)
-			}
-			if ready.PID <= 0 {
-				t.Fatalf("lifecycle server readiness has invalid PID: %+v", ready)
-			}
 			return ready
 		}
 		if !errors.Is(err, os.ErrNotExist) {
@@ -341,5 +330,5 @@ func waitForLifecycleServerReady(
 		}
 	}
 	t.Fatalf("lifecycle server did not become ready output=%q", output.String())
-	return lifecycleServerProcessReady{}
+	return appfixture.LifecycleServerProcessReady{}
 }

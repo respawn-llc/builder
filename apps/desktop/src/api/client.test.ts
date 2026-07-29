@@ -14,9 +14,7 @@ const startTaskParamsSchema = z.object({
 const appliedStartResponse = {
   outcome: "applied",
   applied: {
-    transition_id: "transition-1",
-    placement_id: "placement-1",
-    run_id: "run-1",
+    current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
   },
 } as const;
 
@@ -64,9 +62,7 @@ describe("ApiClient", () => {
     await expect(client.startTask("task-1")).resolves.toMatchObject({
       outcome: "applied",
       applied: {
-        transitionID: "transition-1",
-        placementID: "placement-1",
-        runID: "run-1",
+        currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }],
       },
     });
 
@@ -164,7 +160,8 @@ describe("ApiClient", () => {
     await expect(client.getTask("task-1")).resolves.toMatchObject({
       id: "task-1",
       labelIDs: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
-      currentSessionIDs: [],
+      currentNodes: [],
+      liveSessionIDs: [],
       currentScripts: [],
       attentionCount: 0,
       sourceURL: "",
@@ -545,8 +542,8 @@ describe("ApiClient", () => {
       linkCount: 1,
       defaultReplacementProjectCount: 0,
       taskCount: 2,
-      activeRunCount: 0,
-      runnableRunCount: 1,
+      currentNodeCount: 0,
+      pendingApprovalCount: 1,
       blockedTaskCount: 1,
     });
     await expect(
@@ -561,7 +558,7 @@ describe("ApiClient", () => {
       }),
     ).resolves.toMatchObject({
       deleted: false,
-      blockers: [{ code: "runnable_runs", count: 1 }],
+      blockers: [{ code: "pending_approvals", count: 1 }],
     });
 
     expect(transport.calls).toContainEqual({
@@ -881,7 +878,6 @@ const emptyTaskDetailResponse = {
       created_at_unix_ms: 1,
       updated_at_unix_ms: 1,
       done: false,
-      canceled_at_unix_ms: null,
     },
     project: {
       display_name: "Project",
@@ -901,21 +897,22 @@ const emptyTaskDetailResponse = {
       kind: "backlog",
       native_state: "active",
       node_ids: [],
-      run_ids: [],
       attention_types: [],
     },
     actions: {
       can_start: true,
       can_interrupt: false,
       can_resume: false,
-      can_cancel: true,
+      can_delete: true,
       manual_move_target_node_ids: [],
     },
     label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
     attention_count: 0,
     worktree_path: null,
-    current_session_ids: [],
+    current_nodes: [],
+    live_session_ids: [],
     current_scripts: [],
+    retained_session_count: 0,
   },
 };
 
@@ -1048,8 +1045,8 @@ const workflowDeleteImpactResponse = {
   link_count: 1,
   default_replacement_project_count: 0,
   task_count: 2,
-  active_run_count: 0,
-  runnable_run_count: 1,
+  current_node_count: 0,
+  pending_approval_count: 1,
   blocked_task_count: 1,
 };
 
@@ -1060,7 +1057,7 @@ const workflowDeletePreviewResponse = {
 const workflowDeleteResponse = {
   deleted: false,
   impact: workflowDeleteImpactResponse,
-  blockers: [{ code: "runnable_runs", message: "Workflow has runnable runs.", count: 1 }],
+  blockers: [{ code: "pending_approvals", message: "Workflow has pending approvals.", count: 1 }],
 };
 
 const workflowGraphSaveImpactResponse = {
@@ -1069,10 +1066,8 @@ const workflowGraphSaveImpactResponse = {
   removed_edge_count: 1,
   node_task_reference_count: 0,
   edge_task_reference_count: 0,
-  active_node_placement_count: 0,
+  active_current_node_count: 0,
   pending_approval_count: 0,
-  active_run_count: 0,
-  runnable_run_count: 0,
   start_node_change_count: 0,
   last_terminal_change_count: 0,
   task_referenced_node_kind_change_count: 0,

@@ -107,6 +107,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 }
 
 func TestRunWhenIdleHelpersRequireExplicitActiveKind(t *testing.T) {
+	t.Parallel()
 	file := parseRuntimeSource(t, "server/runtime/engine_queue_submission.go")
 	for _, name := range []string{"RunWhenIdle", "RunWhenIdleBeforeQueuedUserWork"} {
 		fn := findRuntimeFunc(t, file, name)

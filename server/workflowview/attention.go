@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -12,33 +13,35 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/workflowattention"
+	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
-
-const attentionKindInterruptedRun = "interrupted_run"
-
-const interruptedRunAttentionMessage = "This task's run was stopped."
 
 type Attention struct {
 	queries     *sqlitegen.Queries
-	projector   *TaskProjector
-	transcripts SessionActiveTranscriptProvider
+	definitions *DefinitionProjection
+	authority   *sessionruntime.Authority
 	prompts     PendingPromptSource
 }
 
-func NewAttention(queries *sqlitegen.Queries, projector *TaskProjector, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
-	if queries == nil {
-		return nil, errors.New("metadata queries are required")
+func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, authority *sessionruntime.Authority, prompts PendingPromptSource) (*Attention, error) {
+	if metadataStore == nil || metadataStore.Queries() == nil {
+		return nil, errors.New("metadata store is required")
 	}
-	if projector == nil {
-		return nil, errors.New("task projector is required")
+	if definitions == nil {
+		return nil, errors.New("definition projection is required")
+	}
+	if authority == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if prompts == nil {
+		return nil, errors.New("pending prompt source is required")
 	}
 	return &Attention{
-		queries:     queries,
-		projector:   projector,
-		transcripts: transcripts,
+		queries:     metadataStore.Queries(),
+		definitions: definitions,
+		authority:   authority,
 		prompts:     prompts,
 	}, nil
 }
@@ -58,9 +61,23 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	items, nextPageToken, err := a.itemsPage(ctx, pageSize, cursor)
+	live, err := a.liveQuestionCandidates(ctx, nil, nil)
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	durable, err := a.durableCandidates(ctx, cursor, nil, pageSize+len(live)+1)
+	if err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	items := mergeAttentionCandidates(cursor, durable, live)
+	hasNext := len(items) > pageSize
+	if hasNext {
+		items = items[:pageSize]
+	}
+	nextPageToken := ""
+	if hasNext && len(items) != 0 {
+		last := items[len(items)-1]
+		nextPageToken = attentionPageTokenFor(last.OccurredAtUnixMs, last.ID)
 	}
 	return serverapi.WorkflowAttentionListResponse{
 		Items:             items,
@@ -81,29 +98,19 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	rows, err := a.queries.ListWorkflowTaskAttentionCandidates(ctx, task.ID)
+	durable, err := a.durableCandidates(ctx, attentionPageCursor{}, &taskID, 0)
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	candidates := attentionCandidateRows(rows)
-	items := make([]serverapi.WorkflowAttentionItem, 0, len(candidates))
-	questions := newPendingQuestionResolver(a.transcripts, a.prompts)
-	for _, candidate := range candidates {
-		item, include, err := a.itemFromCandidate(ctx, candidate, questions)
-		if err != nil {
-			return serverapi.WorkflowTaskAttentionListResponse{}, err
-		}
-		if include {
-			items = append(items, item)
-		}
+	live, err := a.liveQuestionCandidates(ctx, &taskID, &task)
+	if err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].OccurredAtUnixMs != items[j].OccurredAtUnixMs {
-			return items[i].OccurredAtUnixMs > items[j].OccurredAtUnixMs
-		}
-		return items[i].ID > items[j].ID
-	})
-	return serverapi.WorkflowTaskAttentionListResponse{Items: items, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
+	items := mergeAttentionCandidates(attentionPageCursor{}, durable, live)
+	return serverapi.WorkflowTaskAttentionListResponse{
+		Items:             items,
+		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
+	}, nil
 }
 
 type attentionPageCursor struct {
@@ -112,226 +119,258 @@ type attentionPageCursor struct {
 	hasValue         bool
 }
 
-type attentionCandidateRow struct {
-	kind                   string
-	id                     string
-	projectID              string
-	workflowID             string
-	taskID                 *string
-	shortID                *string
-	title                  *string
-	runID                  *string
-	sessionID              *string
-	askID                  *string
-	taskTransitionID       *string
-	interruptionReason     *string
-	interruptionDetailJSON *string
-	occurredAtUnixMs       int64
+type attentionCandidate struct {
+	item serverapi.WorkflowAttentionItem
 }
 
-func (a *Attention) itemsPage(ctx context.Context, pageSize int, cursor attentionPageCursor) ([]serverapi.WorkflowAttentionItem, string, error) {
-	questions := newPendingQuestionResolver(a.transcripts, a.prompts)
-	page, err := fillAttentionPage(
-		pageSize,
-		cursor,
-		func(current attentionPageCursor, limit int) ([]attentionCandidateRow, error) {
-			return a.itemCandidates(ctx, current, limit)
-		},
-		func(candidate attentionCandidateRow) (serverapi.WorkflowAttentionItem, bool, error) {
-			return a.itemFromCandidate(ctx, candidate, questions)
-		},
-	)
+func (a *Attention) durableCandidates(ctx context.Context, cursor attentionPageCursor, taskID *string, limit int) ([]attentionCandidate, error) {
+	rows, err := a.durableCandidateRows(ctx, cursor, taskID, limit)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	if page.continuation == nil {
-		return page.items, "", nil
+	out := make([]attentionCandidate, 0, len(rows))
+	for _, row := range rows {
+		item, err := a.durableCandidate(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, attentionCandidate{item: item})
 	}
-	return page.items, attentionPageTokenFor(page.continuation.occurredAtUnixMs, page.continuation.itemID), nil
+	return out, nil
 }
 
-func attentionCandidateCursor(row attentionCandidateRow) attentionPageCursor {
-	return attentionPageCursor{occurredAtUnixMs: row.occurredAtUnixMs, itemID: row.id, hasValue: true}
-}
-
-func (a *Attention) itemCandidates(ctx context.Context, cursor attentionPageCursor, limit int) ([]attentionCandidateRow, error) {
-	cursorSet := int64(0)
-	if cursor.hasValue {
-		cursorSet = 1
+func (a *Attention) durableCandidateRows(ctx context.Context, cursor attentionPageCursor, taskID *string, limit int) ([]sqlitegen.ListWorkflowDurableAttentionCandidatesRow, error) {
+	task := sql.NullString{}
+	if taskID != nil {
+		task = sql.NullString{String: *taskID, Valid: true}
 	}
-	rows, err := a.queries.ListWorkflowAttentionCandidates(ctx, sqlitegen.ListWorkflowAttentionCandidatesParams{
+	return a.queries.ListWorkflowDurableAttentionCandidates(ctx, sqlitegen.ListWorkflowDurableAttentionCandidatesParams{
+		SelectedTaskID:         task,
 		PageLimit:              int64(limit),
-		CursorActive:           cursorSet,
+		CursorActive:           boolInt64(cursor.hasValue),
 		CursorOccurredAtUnixMs: cursor.occurredAtUnixMs,
 		CursorItemID:           cursor.itemID,
 	})
+}
+
+func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (serverapi.WorkflowAttentionItem, error) {
+	reference, err := durableAttentionNotificationReference(row)
+	if err != nil {
+		return serverapi.WorkflowAttentionItem{}, err
+	}
+	switch typed := reference.(type) {
+	case DurableApprovalAttentionReference:
+		approvalID := typed.ApprovalID.String()
+		approval, err := a.pendingApproval(ctx, workflow.TaskID(row.TaskID), approvalID)
+		if err != nil {
+			return serverapi.WorkflowAttentionItem{}, err
+		}
+		snapshot := approvalAttentionSnapshot(approval)
+		return serverapi.WorkflowAttentionItem{
+			ID:               row.ID,
+			Kind:             "approval",
+			ProjectID:        row.ProjectID,
+			WorkflowID:       row.WorkflowID,
+			TaskID:           row.TaskID,
+			TaskShortID:      row.ShortID,
+			TaskTitle:        row.Title,
+			ApprovalID:       &approvalID,
+			ApprovalSnapshot: &snapshot,
+			OccurredAtUnixMs: row.OccurredAtUnixMs,
+		}, nil
+	case DurableInterruptedCurrentNodeAttentionReference:
+		currentNode, err := currentNodeFromAttentionCandidate(row, typed.CurrentNode)
+		if err != nil {
+			return serverapi.WorkflowAttentionItem{}, err
+		}
+		return serverapi.WorkflowAttentionItem{
+			ID:               row.ID,
+			Kind:             "interrupted",
+			ProjectID:        row.ProjectID,
+			WorkflowID:       row.WorkflowID,
+			TaskID:           row.TaskID,
+			TaskShortID:      row.ShortID,
+			TaskTitle:        row.Title,
+			CurrentNode:      &currentNode,
+			OccurredAtUnixMs: row.OccurredAtUnixMs,
+		}, nil
+	default:
+		return serverapi.WorkflowAttentionItem{}, fmt.Errorf("unsupported durable workflow attention notification reference %T", reference)
+	}
+}
+
+func (a *Attention) pendingApproval(ctx context.Context, taskID workflow.TaskID, approvalID string) (workflow.PendingApproval, error) {
+	approvals, err := a.definitions.store.ListPendingApprovals(ctx, taskID)
+	if err != nil {
+		return workflow.PendingApproval{}, err
+	}
+	for _, approval := range approvals {
+		if approval.ID.String() == approvalID {
+			return approval, nil
+		}
+	}
+	return workflow.PendingApproval{}, fmt.Errorf("approval attention candidate %q is no longer pending for task %q", approvalID, taskID)
+}
+
+func approvalAttentionSnapshot(approval workflow.PendingApproval) serverapi.WorkflowAttentionApprovalSnapshot {
+	targets := make([]serverapi.WorkflowAttentionApprovalTarget, 0, len(approval.Branches))
+	for _, branch := range approval.Branches {
+		targets = append(targets, serverapi.WorkflowAttentionApprovalTarget{DisplayName: branch.Target.DisplayName})
+	}
+	return serverapi.WorkflowAttentionApprovalSnapshot{
+		SourceNodeDisplayName: approval.Transition.SourceDisplayName,
+		Targets:               targets,
+		Commentary:            "",
+		OutputValues:          cloneOutputValues(approval.OutputValues),
+		WorkflowRevisionSeen:  approval.WorkflowVersion,
+	}
+}
+
+func cloneOutputValues(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func currentNodeFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentionCandidatesRow, reference workflow.CurrentNodeReference) (serverapi.WorkflowTaskCurrentNode, error) {
+	currentNode := workflowCurrentNodeReference(reference)
+	if row.SessionID.Valid {
+		value := strings.TrimSpace(row.SessionID.String)
+		if value == "" {
+			return serverapi.WorkflowTaskCurrentNode{}, fmt.Errorf("interrupted attention candidate %q has blank session id", row.ID)
+		}
+		currentNode.SessionID = &value
+	}
+	return currentNode, nil
+}
+
+func currentNodeReferenceFromAttentionCandidate(row sqlitegen.ListWorkflowDurableAttentionCandidatesRow) (workflow.CurrentNodeReference, error) {
+	if !row.NodeID.Valid || strings.TrimSpace(row.NodeID.String) == "" {
+		return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has no current node", row.ID)
+	}
+	var branchKey *workflow.TransitionBranchKey
+	if row.TransitionBranchKey.Valid {
+		value := workflow.TransitionBranchKey(strings.TrimSpace(row.TransitionBranchKey.String))
+		if value == "" {
+			return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has invalid branch key", row.ID)
+		}
+		branchKey = &value
+	}
+	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID.String), branchKey)
+	if err != nil {
+		return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has invalid current node: %w", row.ID, err)
+	}
+	return reference, nil
+}
+
+func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *string, selectedTask *sqlitegen.TaskRecord) ([]attentionCandidate, error) {
+	var snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	var err error
+	if selectedTask == nil {
+		snapshots, err = a.authority.CurrentWorkflowTaskExecutionSnapshots()
+	} else {
+		snapshots, err = a.authority.CurrentScopedTaskExecutionSnapshots(
+			selectedTask.ProjectID, workflow.WorkflowID(selectedTask.WorkflowID), []workflow.TaskID{workflow.TaskID(selectedTask.ID)},
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return attentionCandidateRows(rows), nil
+	out := []attentionCandidate{}
+	for taskID, snapshot := range snapshots {
+		if taskFilter != nil && string(taskID) != *taskFilter {
+			continue
+		}
+		var task *sqlitegen.TaskRecord
+		for _, execution := range snapshot.Executions {
+			if !execution.WaitingQuestion {
+				continue
+			}
+			if execution.Agent == nil {
+				return nil, fmt.Errorf("task %q has a question on a non-agent execution", taskID)
+			}
+			if task == nil {
+				record, err := a.queries.GetTask(ctx, string(taskID))
+				if err != nil {
+					return nil, err
+				}
+				task = &record
+			}
+			prompts, err := a.prompts.ListPendingPrompts(execution.Agent.SessionID.String())
+			if err != nil {
+				return nil, err
+			}
+			for _, prompt := range prompts {
+				if strings.TrimSpace(prompt.ID) == "" {
+					return nil, fmt.Errorf("task %q session %q has a pending prompt without question identity", taskID, execution.Agent.SessionID)
+				}
+				question, present, err := pendingQuestionFromPrompt(prompt)
+				if err != nil {
+					return nil, err
+				}
+				if !present {
+					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, prompt.ID)
+				}
+				occurredAt := prompt.CreatedAt.UnixMilli()
+				if occurredAt <= 0 {
+					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, prompt.ID)
+				}
+				questionID := prompt.ID
+				sessionID := execution.Agent.SessionID.String()
+				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
+				currentNode.SessionID = &sessionID
+				out = append(out, attentionCandidate{item: serverapi.WorkflowAttentionItem{
+					ID:                     "question:" + sessionID + ":" + questionID,
+					Kind:                   "question",
+					ProjectID:              task.ProjectID,
+					WorkflowID:             task.WorkflowID,
+					TaskID:                 task.ID,
+					TaskShortID:            task.ShortID,
+					TaskTitle:              task.Title,
+					CurrentNode:            &currentNode,
+					SessionID:              &sessionID,
+					QuestionID:             &questionID,
+					Suggestions:            question.suggestions,
+					RecommendedOptionIndex: question.recommendedOptionIndex,
+					Question:               question.prompt,
+					OccurredAtUnixMs:       occurredAt,
+				}})
+			}
+		}
+	}
+	return out, nil
 }
 
-func attentionCandidateRows(rows []sqlitegen.WorkflowAttentionCandidate) []attentionCandidateRow {
-	items := make([]attentionCandidateRow, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, attentionCandidateRow{
-			kind:                   row.Kind,
-			id:                     row.ID,
-			projectID:              row.ProjectID,
-			workflowID:             row.WorkflowID,
-			taskID:                 metadata.OptionalString(row.TaskID),
-			shortID:                metadata.OptionalString(row.ShortID),
-			title:                  metadata.OptionalString(row.Title),
-			runID:                  metadata.OptionalString(row.RunID),
-			sessionID:              metadata.OptionalString(row.SessionID),
-			askID:                  metadata.OptionalString(row.AskID),
-			taskTransitionID:       metadata.OptionalString(row.TaskTransitionID),
-			interruptionReason:     metadata.OptionalString(row.InterruptionReason),
-			interruptionDetailJSON: metadata.OptionalString(row.InterruptionDetailJson),
-			occurredAtUnixMs:       row.OccurredAtUnixMs,
-		})
+func mergeAttentionCandidates(cursor attentionPageCursor, groups ...[]attentionCandidate) []serverapi.WorkflowAttentionItem {
+	items := []serverapi.WorkflowAttentionItem{}
+	seen := map[string]struct{}{}
+	for _, group := range groups {
+		for _, candidate := range group {
+			item := candidate.item
+			if cursor.hasValue && !attentionItemBefore(item, cursor) {
+				continue
+			}
+			if _, exists := seen[item.ID]; exists {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			items = append(items, item)
+		}
 	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAtUnixMs != items[j].OccurredAtUnixMs {
+			return items[i].OccurredAtUnixMs > items[j].OccurredAtUnixMs
+		}
+		return items[i].ID > items[j].ID
+	})
 	return items
 }
 
-func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidateRow, questions *pendingQuestionResolver) (serverapi.WorkflowAttentionItem, bool, error) {
-	workflowID := row.workflowID
-	switch row.kind {
-	case "approval":
-		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		shortID, err := requiredAttentionCandidateValue(row, "short_id", row.shortID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		title, err := requiredAttentionCandidateValue(row, "title", row.title)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		transitionID, err := requiredAttentionCandidateValue(row, "task_transition_id", row.taskTransitionID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		snapshot, err := a.approvalSnapshot(ctx, taskID, transitionID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		if snapshot == nil {
-			return serverapi.WorkflowAttentionItem{}, false, nil
-		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: textutil.Pointer(&transitionID), Message: workflowattention.ApprovalRequiredMessage, ApprovalSnapshot: snapshot, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
-	case "question":
-		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		shortID, err := requiredAttentionCandidateValue(row, "short_id", row.shortID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		title, err := requiredAttentionCandidateValue(row, "title", row.title)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		runID, err := requiredAttentionCandidateValue(row, "run_id", row.runID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		askID, err := requiredAttentionCandidateValue(row, "ask_id", row.askID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		question, err := questions.Question(ctx, row.sessionID, askID)
-		if err != nil {
-			if !errors.Is(err, ErrPendingQuestionNotFound) {
-				return serverapi.WorkflowAttentionItem{}, false, err
-			}
-			question = pendingQuestion{message: pendingQuestionFallbackMessage}
-		}
-		return workflowQuestionAttentionItem(row.id, row.projectID, row.workflowID, taskID, shortID, title, runID, row.sessionID, askID, question, row.occurredAtUnixMs), true, nil
-	case attentionKindInterruptedRun:
-		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		shortID, err := requiredAttentionCandidateValue(row, "short_id", row.shortID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		title, err := requiredAttentionCandidateValue(row, "title", row.title)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		runID, err := requiredAttentionCandidateValue(row, "run_id", row.runID)
-		if err != nil {
-			return serverapi.WorkflowAttentionItem{}, false, err
-		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: textutil.Pointer(&runID), SessionID: textutil.Pointer(row.sessionID), Message: workflowattention.InterruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: textutil.Pointer(row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
-	default:
-		return serverapi.WorkflowAttentionItem{}, false, attentionCandidateValidationError(row, serverapi.WorkflowRequestErrorInvalidMode, "kind", "kind must be approval, question, or interrupted_run")
-	}
-}
-
-func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transitionID string) (*serverapi.WorkflowAttentionApprovalSnapshot, error) {
-	transitions, err := a.queries.ListTaskTransitionsByIDs(ctx, []string{transitionID})
-	if err != nil {
-		return nil, err
-	}
-	if len(transitions) == 0 {
-		return nil, nil
-	}
-	if len(transitions) > 1 {
-		return nil, fmt.Errorf("approval attention transition %q returned %d records", transitionID, len(transitions))
-	}
-	transition := transitions[0]
-	if transition.ID != transitionID || transition.TaskID != taskID {
-		return nil, fmt.Errorf("approval attention transition %q does not match task %q", transitionID, taskID)
-	}
-	if transition.State != "pending_approval" {
-		return nil, nil
-	}
-	edges, err := a.queries.ListTaskTransitionEdges(ctx, transitionID)
-	if err != nil {
-		return nil, err
-	}
-	projected, err := a.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edges})
-	if err != nil {
-		return nil, err
-	}
-	outputValues := projected.OutputValues
-	if outputValues == nil {
-		outputValues = map[string]string{}
-	}
-	snapshot := serverapi.WorkflowAttentionApprovalSnapshot{
-		SourceNodeDisplayName: projected.SourceNodeDisplayName,
-		Targets:               make([]serverapi.WorkflowAttentionApprovalTarget, 0, len(projected.Edges)),
-		Commentary:            projected.Commentary,
-		OutputValues:          outputValues,
-		WorkflowRevisionSeen:  projected.WorkflowRevisionSeen,
-	}
-	for _, edge := range projected.Edges {
-		snapshot.Targets = append(snapshot.Targets, serverapi.WorkflowAttentionApprovalTarget{
-			DisplayName: edge.TargetNodeDisplayName,
-		})
-	}
-	return &snapshot, nil
-}
-
-func requiredAttentionCandidateValue(row attentionCandidateRow, field string, value *string) (string, error) {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return "", attentionCandidateValidationError(row, serverapi.WorkflowRequestErrorRequired, field, field+" is required")
-	}
-	return *value, nil
-}
-
-func attentionCandidateValidationError(row attentionCandidateRow, code string, field string, message string) error {
-	return serverapi.WorkflowRequestValidationError{
-		Code:    code,
-		Field:   field,
-		Message: fmt.Sprintf("workflow attention candidate kind=%q id=%q: %s", row.kind, row.id, message),
-	}
+func attentionItemBefore(item serverapi.WorkflowAttentionItem, cursor attentionPageCursor) bool {
+	return item.OccurredAtUnixMs < cursor.occurredAtUnixMs ||
+		(item.OccurredAtUnixMs == cursor.occurredAtUnixMs && item.ID < cursor.itemID)
 }
 
 func parseAttentionPageToken(token string) (attentionPageCursor, error) {
@@ -341,15 +380,15 @@ func parseAttentionPageToken(token string) (attentionPageCursor, error) {
 	}
 	timestampPart, encodedID, ok := strings.Cut(trimmed, "|")
 	if !ok {
-		return attentionPageCursor{}, errors.New("page_token is invalid")
+		return attentionPageCursor{}, ErrInvalidPageToken
 	}
 	occurredAt, err := strconv.ParseInt(timestampPart, 10, 64)
 	if err != nil || occurredAt < 0 {
-		return attentionPageCursor{}, errors.New("page_token is invalid")
+		return attentionPageCursor{}, ErrInvalidPageToken
 	}
 	decodedID, err := base64.RawURLEncoding.DecodeString(encodedID)
 	if err != nil || strings.TrimSpace(string(decodedID)) == "" {
-		return attentionPageCursor{}, errors.New("page_token is invalid")
+		return attentionPageCursor{}, ErrInvalidPageToken
 	}
 	return attentionPageCursor{occurredAtUnixMs: occurredAt, itemID: string(decodedID), hasValue: true}, nil
 }

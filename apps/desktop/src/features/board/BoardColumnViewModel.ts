@@ -21,7 +21,6 @@ export type KanbanCardVM = Readonly<{
   updatedAt: number;
   activeNodeIDs: readonly string[];
   statusKind: TaskStatusKind;
-  statusRunIDs: readonly string[];
   labels: readonly KanbanCardLabelVM[];
   workspaceChipLabel: string | null;
   borderTone: BoardCardBorderTone;
@@ -29,6 +28,7 @@ export type KanbanCardVM = Readonly<{
     canInterrupt: boolean;
     canResume: boolean;
     canStart: boolean;
+    canDelete: boolean;
     manualMoveTargetNodeIDs: readonly string[];
   }>;
 }>;
@@ -75,7 +75,6 @@ export function toKanbanCardVM(
     updatedAt: card.updatedAt,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
-    statusRunIDs: card.status.runIDs,
     labels: cardLabels(card.labelIDs, labelNamesByID),
     workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
     borderTone: boardCardBorderTone(card.status.kind),
@@ -83,6 +82,7 @@ export function toKanbanCardVM(
       canInterrupt: card.actions.canInterrupt,
       canResume: card.actions.canResume,
       canStart: card.actions.canStart,
+      canDelete: card.actions.canDelete,
       manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
     },
   };
@@ -122,7 +122,6 @@ function boardCardBorderTone(statusKind: TaskStatusKind): BoardCardBorderTone {
     case "backlog":
     case "active":
     case "done":
-    case "canceled":
     case "interrupted":
     case "running":
     case "queued":

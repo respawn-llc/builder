@@ -404,10 +404,8 @@ export type WorkflowGraphSaveImpact = Readonly<{
   removedEdgeCount: number;
   nodeTaskReferenceCount: number;
   edgeTaskReferenceCount: number;
-  activeNodePlacementCount: number;
+  activeCurrentNodeCount: number;
   pendingApprovalCount: number;
-  activeRunCount: number;
-  runnableRunCount: number;
   startNodeChangeCount: number;
   lastTerminalChangeCount: number;
   taskReferencedNodeKindChangeCount: number;
@@ -449,8 +447,8 @@ export type WorkflowDeleteImpact = Readonly<{
   linkCount: number;
   defaultReplacementProjectCount: number;
   taskCount: number;
-  activeRunCount: number;
-  runnableRunCount: number;
+  currentNodeCount: number;
+  pendingApprovalCount: number;
   blockedTaskCount: number;
 }>;
 
@@ -484,7 +482,6 @@ export type WorkflowPickerItem = Readonly<{
 }>;
 
 export type TaskStatusKind =
-  | "canceled"
   | "done"
   | "waiting_question"
   | "waiting_approval"
@@ -498,7 +495,6 @@ export type TaskStatus = Readonly<{
   kind: TaskStatusKind;
   nativeState: string;
   nodeIDs: readonly string[];
-  runIDs: readonly string[];
   attentionTypes: readonly string[];
 }>;
 
@@ -506,7 +502,7 @@ export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;
   canResume: boolean;
-  canCancel: boolean;
+  canDelete: boolean;
   manualMoveTargetNodeIDs: readonly string[];
 }>;
 
@@ -618,47 +614,16 @@ export type CommentPage = Readonly<{
   nextPageToken: string;
 }>;
 
-export type TaskRun = Readonly<{
-  id: string;
-  taskID: string;
-  placementID: string;
+export type TaskCurrentNode = Readonly<{
   nodeID: string;
-  nodeKind: string;
-  scriptPath: string;
-  sessionID: string;
-  sessionName: string;
-  role: string;
-  status: string;
-  generation: number;
-  waitingAskID: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-  interruptedAt: number | null;
-  interruptionReason: string | null;
-  interruptionDetail: string;
+  transitionBranchKey: string | null;
+  sessionID: string | null;
 }>;
 
-export type TaskTransition = Readonly<{
-  id: string;
-  transitionID: string;
-  transitionName: string;
-  sourceNodeName: string;
-  state: string;
-  commentary: string;
-  outputValues: Readonly<Record<string, string>>;
-  edges: readonly TransitionEdge[];
-  version: number;
-  createdAt: number;
-  appliedAt: number | null;
-}>;
-
-export type TransitionEdge = Readonly<{
-  id: string;
-  edgeKey: string;
-  targetNodeName: string;
-  state: string;
-  requiresApproval: boolean;
-  outputRequirements: readonly string[];
+export type TaskScriptCurrentNode = Readonly<{
+  nodeID: string;
+  transitionBranchKey: string | null;
+  sessionID: null;
 }>;
 
 export type TaskDetail = Readonly<{
@@ -679,28 +644,35 @@ export type TaskDetail = Readonly<{
   attentionCount: number;
   executionTarget: WorkflowExecutionTarget | null;
   worktreePath: string | null;
-  currentSessionIDs: readonly string[];
-  currentScripts: readonly Readonly<{ runID: string; path: string }>[];
+  currentNodes: readonly TaskCurrentNode[];
+  liveSessionIDs: readonly string[];
+  currentScripts: readonly Readonly<{ currentNode: TaskScriptCurrentNode; path: string }>[];
+  retainedSessionCount: number;
   createdAt: number;
   updatedAt: number;
   done: boolean;
-  canceledAt: number | null;
-  cancelReason: string | null;
 }>;
 
-export type ActivityItem = Readonly<{
+export type CommentActivityItem = Readonly<{
   id: string;
-  type: string;
+  type: "comment";
   taskID: string;
   occurredAt: number;
   updatedAt: number;
-  actor: string;
-  summary: string;
-  comment: TaskComment | null;
-  transition: TaskTransition | null;
-  run: TaskRun | null;
-  attention: AttentionItem | null;
+  comment: TaskComment;
 }>;
+
+export type SessionStartedActivityItem = Readonly<{
+  id: string;
+  type: "session_started";
+  taskID: string;
+  occurredAt: number;
+  updatedAt: number;
+  sessionID: string;
+  sessionName: string;
+}>;
+
+export type ActivityItem = CommentActivityItem | SessionStartedActivityItem;
 
 export type ActivityPage = Readonly<{
   items: readonly ActivityItem[];

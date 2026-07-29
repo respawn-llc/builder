@@ -45,6 +45,21 @@ func (p *DefinitionProjection) GetDefinition(ctx context.Context, workflowID str
 	return snapshot.api, snapshot.nodeKinds, nil
 }
 
+func (p *DefinitionProjection) CurrentNodesByTask(ctx context.Context, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+	if p == nil || p.store == nil {
+		return nil, errors.New("definition projection is required")
+	}
+	return p.store.ListCurrentNodesByTask(ctx, taskIDs)
+}
+
+func workflowNodesByID(def serverapi.WorkflowDefinition) map[string]serverapi.WorkflowNode {
+	nodes := make(map[string]serverapi.WorkflowNode, len(def.Nodes))
+	for _, node := range def.Nodes {
+		nodes[node.ID] = node
+	}
+	return nodes
+}
+
 func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID string) (definitionSnapshot, error) {
 	if p == nil {
 		return definitionSnapshot{}, errors.New("definition projection is required")
@@ -57,11 +72,12 @@ func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID string) 
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
-	api, nodeKinds := projectDefinition(domain, record)
+	api, nodeKinds := ProjectDefinition(domain, record)
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 
-func projectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
+// ProjectDefinition is the canonical pure domain-to-API workflow projection.
+func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
 	api := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{
 			ID:                    string(record.ID),

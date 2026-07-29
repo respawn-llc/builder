@@ -39,10 +39,10 @@ func (e *Engine) workflowCompletionRejectedResult(ctx context.Context, result to
 }
 
 func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workflowruntime.ViolationKind, detail string) (workflowruntime.ViolationResult, error) {
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
 		return workflowruntime.ViolationResult{}, nil
 	}
-	maxCount := e.cfg.WorkflowRun.MaxInvalidCompletionAttempts
+	maxCount := e.cfg.CurrentNodeExecution.MaxInvalidCompletionAttempts
 	if maxCount <= 0 {
 		maxCount = workflowInvalidCompletionFailClosedMaxCount
 	}
@@ -50,35 +50,29 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 		"kind":   string(kind),
 		"detail": strings.TrimSpace(detail),
 	})
-	return e.cfg.WorkflowRun.Controller.RecordWorkflowProtocolViolation(ctx, workflowruntime.ViolationRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		Kind:               kind,
-		MaxCount:           maxCount,
-		Detail:             string(payload),
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	return e.cfg.CurrentNodeExecution.Controller.RecordProtocolViolation(ctx, workflowruntime.ViolationRequest{
+		ScopeID:  e.cfg.CurrentNodeExecution.ScopeID,
+		Kind:     kind,
+		MaxCount: maxCount,
+		Detail:   string(payload),
 	})
 }
 
 func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error {
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
 		return nil
 	}
-	return e.cfg.WorkflowRun.Controller.ResetWorkflowProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	return e.cfg.CurrentNodeExecution.Controller.ResetProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
+		ScopeID: e.cfg.CurrentNodeExecution.ScopeID,
 	})
 }
 
 func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, error) {
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
 		return false, nil
 	}
-	result, err := e.cfg.WorkflowRun.Controller.ObserveWorkflowRunCompletion(ctx, workflowruntime.CompletionObservationRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	result, err := e.cfg.CurrentNodeExecution.Controller.ObserveCurrentNodeCompletion(ctx, workflowruntime.CompletionObservationRequest{
+		ScopeID: e.cfg.CurrentNodeExecution.ScopeID,
 	})
 	if err != nil {
 		return false, err

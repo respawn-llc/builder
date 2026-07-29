@@ -10,8 +10,6 @@ type NodeID string
 type TransitionGroupID string
 type EdgeID string
 type TaskID string
-type PlacementID string
-type RunID string
 type TransitionID string
 type ModelKey string
 

@@ -69,9 +69,10 @@ See [Headless runs](../headless/#subagent-roles) for the role configuration refe
 - A workflow is the reusable graph definition.
 - A project links workflows, provides workspaces, and owns the task board.
 - A task is the durable unit of work that moves through one workflow.
-- A run is one execution attempt for one executable node. Agent runs start or continue Kent sessions. Script runs execute a local server-side script.
+- A task directly owns its Current Nodes: normally one node, or several while a transition fans out into parallel branches. Current Nodes have no independent identity.
+- An Agent Current Node can bind to a retained Kent Session. A Script Current Node has no Session and retains only the state needed to resume its script.
 
-Creating a task puts it in Backlog. Starting the task applies the workflow's start transition and begins automation. This makes it safe to collect work in Backlog before the workflow is fully executable.
+Creating a task puts it in Backlog. Starting the task applies the workflow's start transition and creates its first executable Current Node. Leaving a node removes its execution state; retained Sessions remain available to the task.
 
 ### Nodes
 
@@ -103,7 +104,7 @@ Use transition descriptions for choice criteria. For example, a Review node migh
 
 ### Parallelism, Node Groups, And Joins
 
-Use a node group when one source agent should fan out into parallel branches. Parallel branches are ordinary workflow nodes, not subtasks: one task temporarily has multiple active placements, one per branch, until the branches reach the group's join.
+Use a node group when one source agent should fan out into parallel branches. Parallel branches are ordinary workflow nodes, not subtasks: one task temporarily owns one Current Node per branch until the branches reach the group's join.
 
 For example, an SWE workflow can send implementation output to Code Review and QA at the same time, join both results, then continue to an Approval Gate node that decides whether to ship or send the task back for changes.
 
@@ -173,13 +174,14 @@ The node script receiver JSON as stdin:
 {
   "plan_file": "docs/plan.md",
   "_kent": {
-    "run_id": "run_123",
-    "placement_id": "placement_123"
+    "task_id": "task_123",
+    "node_id": "node_456",
+    "transition_branch_key": "release_notes"
   }
 }
 ```
 
-Top-level properties are the incoming workflow parameter values. `_kent` object contains meta-info about the agent run & other parameters.
+Top-level properties are incoming workflow parameter values. `_kent` contains only the Task and Node identity, plus `transition_branch_key` when the Current Node belongs to a parallel branch.
 
 Stdout must be the workflow completion JSON. Stderr is diagnostics only. For example:
 
@@ -191,7 +193,7 @@ Stdout must be the workflow completion JSON. Stderr is diagnostics only. For exa
 }
 ```
 
-If the script exits non-zero, writes invalid completion JSON, omits required parameters, or becomes unavailable, Kent interrupts the run. Resume reruns the script with the same incoming parameter values and the current workflow script path and transition contracts.
+If the script exits non-zero, writes invalid completion JSON, omits required parameters, or becomes unavailable, Kent interrupts the Current Node. Resume reruns the script with the same incoming parameter values and the current workflow script path and transition contracts.
 
 ### Parameters
 
@@ -223,8 +225,8 @@ Continuation modes also have a context source:
 
 - Immediate source uses the session from the node that just completed.
 - Selected node uses a previous node that is guaranteed to have run before this transition.
-- Previous run of this target is for loops where the workflow returns to a node and should continue that node's prior session.
-- Previous run of this target, or new session is for re-review loops where the first pass starts fresh and later passes continue the target's prior session.
+- Previous target uses the latest retained Session associated with this edge's target node. Use it for loops where the workflow returns to a node and should continue that node's prior Session.
+- Previous target, or new session uses the latest retained Session associated with this edge's target node when one exists. Use it for re-review loops where the first pass starts fresh and later passes continue the target's prior Session.
 
 Use `new_session` or `compact_and_continue_session` when you want to change subagent roles. Use `continue_session` when preserving the exact working context matters more than changing roles.
 
@@ -241,7 +243,7 @@ Only agent nodes have completion modes; Start, Join, and Terminal nodes do not e
 | --- | --- | --- |
 | Inherit global default | Use the workflow completion mode from [configuration](../config/#workflow). | Same behavior as the resolved configured mode. |
 | Auto | Best default for most nodes. Kent picks the effective mode from the workflow shape, provider support, and shell availability. | Usually gives the safest cache/cost trade-off automatically. |
-| Structured output | Provider-native structured output. Use it when the provider supports strict structured responses and the node is not part of a `continue_session` chain. | Lowest-friction on capable providers, but fails run start when unsupported and fully invalidates cache on continued sessions. |
+| Structured output | Provider-native structured output. Use it when the provider supports strict structured responses and the node is not part of a `continue_session` chain. | Lowest-friction on capable providers, but prevents the Current Node from starting when unsupported and fully invalidates cache on continued sessions. |
 | Tool call | Dedicated completion tool. Use it for providers without structured-output support. | Reliable tool-driven completion, but fully invalidates cache on continued sessions. |
 | Shell command | Completion through the agent's shell environment. Prefer this for `continue_session` chains. | Requires the shell tool for the target role and gives the agent shell access, but avoids completion-contract cache invalidation. |
 | Unstructured output | Best-effort raw JSON final answer. Use only when you need `continue_session` and cannot use shell command. | Most fragile mode. It avoids dynamic completion metadata, but depends on the model following exact final-answer instructions. |
@@ -267,6 +269,16 @@ Create tasks from a project board. Each task belongs to one project and one link
 New tasks start in Backlog and follow the project's default workflow unless you choose another linked workflow.
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
+
+### Current Work, Sessions, And Activity
+
+Task detail shows the task's Current Nodes and retained Session count. A retained Session can outlive the Current Node that used it, so it remains available through the Session picker after the workflow moves on.
+
+Interrupt stops exact live work. Interrupting a Task stops every live Agent Session and Script for that Task; interrupting a Session selects one live Agent Session. Kent waits for the selected work to stop before returning. Resume waits for the prior scope to retire, resolves the latest workflow definition, then resumes the retained Session or current Script.
+
+Delete permanently removes a quiescent Task. Interrupt preserves the task for Resume.
+
+Task Activity is an infinite-scroll stream of durable comments and retained Session creation. It records a Session as `Session started`.
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 
@@ -311,16 +323,18 @@ kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
 
-### Search Tasks
+### Complete Work From The CLI
 
-`kent task search <query>` searches Task titles and bodies across Projects. Literal search is the default and requires at least three normalized characters. Use `--fts5` for a raw FTS5 expression over the `title`, `body`, and `comment` columns.
+An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.
+
+Human-forced completion requires exactly one selector: a Session, or a Task with one unambiguous idle executable Current Node.
 
 ```bash
-kent task search "retry policy"
-kent task search 'body:"retry policy"' --fts5 --include-comments --status active --project .
+kent task complete --force --session <session-id> --transition done
+kent task complete --force --task <task-id-or-short-id> --project . --transition done
 ```
 
-`--include-comments` adds Task Comments, repeatable `--project` narrows the Project union, and repeatable or comma-separated `--status` filters canonical Task status. `--context` accepts `1..64`; `--page-size` accepts `1..100`. A continuation token is written to stderr when another page exists and can be passed to `--page-token`. `--json` writes the grouped server response unchanged.
+Completion has no Current Node selector. Use `--json` or `--json-file` to submit a JSON transition result instead of individual completion fields.
 
 ### Choose The Execution Target
 

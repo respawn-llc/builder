@@ -14,6 +14,7 @@ import (
 )
 
 func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	globalConfigDir := filepath.Join(root, "global")
 	workspace := filepath.Join(root, "workspace")

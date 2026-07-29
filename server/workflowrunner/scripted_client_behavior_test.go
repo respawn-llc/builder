@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/workflowruntime"
+	"core/shared/config"
 )
 
 func TestScriptedClientRecordsRequestsAndSteps(t *testing.T) {
@@ -47,6 +49,15 @@ func TestScriptedClientProviderCapabilitiesDefault(t *testing.T) {
 	}
 	if caps.ProviderID != "openai" || !caps.SupportsResponsesAPI || !caps.IsOpenAIFirstParty {
 		t.Fatalf("caps = %+v, want openai defaults", caps)
+	}
+}
+
+func TestForcedShellCompletionRequiresExecCommand(t *testing.T) {
+	_, err := workflowruntime.SelectCompletionMode(workflowruntime.CompletionModeSelection{
+		ConfiguredMode: config.WorkflowCompletionModeShellCommand,
+	})
+	if !errors.Is(err, workflowruntime.ErrShellCompletionUnavailable) {
+		t.Fatalf("SelectCompletionMode error = %v, want unavailable shell completion", err)
 	}
 }
 

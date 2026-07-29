@@ -1,5 +1,8 @@
 # Platform A — loop viability (Phase 3 of tui-rebuild-plan.md)
 
+> [!CAUTION]
+> Rust work is frozen. This document is a historical planning record and does not authorize implementation. Do not edit or run `tui-rs/` unless Rust work is explicitly reactivated.
+
 Mission (ratified 2026-07-03, reworded post-nuke 2026-07-04): build the runtime loop from first principles — the old 5-layer onion is deleted, not a reference. Subscription I/O lives off the reducer/work loop behind channels; structured concurrency only; one composition. Generalize as the platform effect runtime (typed channel contract between sync reducer and I/O workers, cancellation, single-flight frozen-mutation primitive). Recreate tui-bin; restore build.sh TUI artifact. Gate: harness-certified unattended 15-minute chat session (turns render, keys respond, no hang, no crash), artifacts attached — pass or abandon.
 
 Post-mortem root cause this layer exists to kill: blocking subscription I/O starved the single work loop → first-chat-turn hang. Old shape (deleted): runtime_host/runtime_driver/runtime_work_loop/endpoint_* onion, 649-type message layer, 9.5K reducer.

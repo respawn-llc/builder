@@ -11,6 +11,7 @@ import (
 )
 
 func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndManualCarryover(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),

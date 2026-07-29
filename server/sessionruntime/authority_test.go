@@ -152,31 +152,25 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 		t.Skipf("sleep executable unavailable: %v", err)
 	}
 
-	predecessor := WorkflowExecutionRef{
-		TaskID:     workflow.TaskID(uuid.NewString()),
-		RunID:      workflow.RunID(uuid.NewString()),
-		Generation: 1,
-	}
-	successor := WorkflowExecutionRef{
-		TaskID:     predecessor.TaskID,
-		RunID:      predecessor.RunID,
-		Generation: 2,
-	}
+	predecessor := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
+	successor := predecessor
 	type startResult struct {
 		handle ExecutionHandle
 		err    error
 	}
 	successorStarted := make(chan startResult, 1)
 	successorCancellationGrace := 50 * time.Millisecond
+	var predecessorScopeID runtimeids.ExecutionScopeID
 
 	var authority *Authority
 	authority = NewAuthority(AuthorityOptions{
-		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized WorkflowExecutionRef) {
-			if finalized != predecessor {
+		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized ExecutionScope) {
+			finalizedRef, ok := finalized.Workflow()
+			if !ok || !finalizedRef.CurrentNode.Equal(predecessor.CurrentNode) || finalized.ID() != predecessorScopeID {
 				return
 			}
 			handle, startErr := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-				Workflow: &successor,
+				Workflow: releasedWorkflowLeaseForTest(t, authority, successor),
 				Command: ScriptCommand{
 					Path:              sleepPath,
 					Args:              []string{"30"},
@@ -191,9 +185,15 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 			t.Errorf("close authority: %v", err)
 		}
 	})
+	predecessorLease, err := authority.NewWorkflowExecutionLease(predecessor)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease predecessor: %v", err)
+	}
+	predecessorScopeID = predecessorLease.ScopeID()
+	predecessorLease.Release()
 
 	predecessorHandle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &predecessor,
+		Workflow: &predecessorLease,
 		Command:  ScriptCommand{Path: truePath},
 	})
 	if err != nil {
@@ -915,15 +915,11 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 		}
 	})
 
-	workflowRef := WorkflowExecutionRef{
-		TaskID:     workflow.TaskID(uuid.NewString()),
-		RunID:      workflow.RunID(uuid.NewString()),
-		Generation: 1,
-	}
+	workflowRef := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
 	agent, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &workflowRef,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
 			<-ctx.Done()
@@ -933,7 +929,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start agent execution: %v", err)
 	}
-	targets, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -950,7 +946,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 		t.Skipf("true executable unavailable: %v", err)
 	}
 	script, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &workflowRef,
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Command:  ScriptCommand{Path: truePath},
 	})
 	if err == nil {
@@ -979,9 +975,9 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 	taskID := workflow.TaskID("task-a")
 	cancellationGrace := 50 * time.Millisecond
 	handles := make([]ExecutionHandle, 0, 2)
-	for _, runID := range []workflow.RunID{"run-a", "run-b"} {
+	for _, nodeID := range []workflow.NodeID{"node-a", "node-b"} {
 		handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-			Workflow: &WorkflowExecutionRef{TaskID: taskID, RunID: runID, Generation: 1},
+			Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, nodeID, nil)),
 			Command: ScriptCommand{
 				Path:              sleepPath,
 				Args:              []string{"30"},
@@ -989,20 +985,20 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 			},
 		})
 		if err != nil {
-			t.Fatalf("start script %s: %v", runID, err)
+			t.Fatalf("start script %s: %v", nodeID, err)
 		}
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentTaskExecutionSnapshot(taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
 	if len(targets.Executions) != 2 {
 		t.Fatalf("targets = %+v", targets)
 	}
-	for index, runID := range []workflow.RunID{"run-a", "run-b"} {
-		if targets.Executions[index].Ref.RunID != runID ||
+	for index, nodeID := range []workflow.NodeID{"node-a", "node-b"} {
+		if targets.Executions[index].Ref.CurrentNode.NodeID != nodeID ||
 			targets.Executions[index].Agent != nil ||
 			targets.Executions[index].Script == nil ||
 			targets.Executions[index].Script.Path != sleepPath {
@@ -1014,6 +1010,57 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		if err := handle.Stop(context.Background()); err != nil {
 			t.Fatalf("stop script: %v", err)
 		}
+	}
+}
+
+func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	grace := 50 * time.Millisecond
+	start := func(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
+		t.Helper()
+		ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID(uuid.NewString()), nil)
+		ref.ProjectID, ref.WorkflowID = projectID, workflowID
+		handle, startErr := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+			Workflow: releasedWorkflowLeaseForTest(t, authority, ref),
+			Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}, CancellationGrace: &grace},
+		})
+		if startErr != nil {
+			t.Fatalf("start %s/%s/%s: %v", projectID, workflowID, taskID, startErr)
+		}
+		return handle
+	}
+	selected := start("project-a", "workflow-a", "task-a")
+	unrelatedWorkflow := start("project-a", "workflow-b", "task-b")
+	unrelatedProject := start("project-b", "workflow-a", "task-c")
+	t.Cleanup(func() {
+		for _, handle := range []ExecutionHandle{selected, unrelatedWorkflow, unrelatedProject} {
+			_ = handle.Stop(context.Background())
+		}
+	})
+
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	if err != nil {
+		t.Fatalf("scoped snapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Ref.CurrentNode.TaskID != "task-a" {
+		t.Fatalf("scoped snapshot included unrelated execution: %+v", snapshot)
+	}
+	snapshot.Executions[0].Script.Path = "mutated"
+	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	if err != nil {
+		t.Fatalf("repeat scoped snapshot: %v", err)
+	}
+	if len(again.Executions) != 1 || again.Executions[0].Script.Path != sleepPath {
+		t.Fatalf("snapshot mutation leaked into authority state: %+v", again)
 	}
 }
 
@@ -1032,7 +1079,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	finalizeStarted := make(chan struct{})
 	releaseFinalize := make(chan struct{})
 	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &WorkflowExecutionRef{TaskID: taskID, RunID: "run-finalizing-script", Generation: 1},
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-finalizing-script", nil)),
 		Command:  ScriptCommand{Path: truePath},
 		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
 			close(finalizeStarted)
@@ -1053,17 +1100,162 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentTaskExecutionSnapshot(taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
 	if len(targets.Executions) != 0 {
 		t.Fatalf("finalizing script remains interruptible: %+v", targets)
 	}
+	selectionCalled := false
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+		selectionCalled = true
+		return nil
+	})
+	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
+		t.Fatalf("finalizing script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+	}
+	if selectionCalled {
+		t.Fatal("finalizing script alone authorized task interrupt")
+	}
 
 	close(releaseFinalize)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-finalizing-selection")
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	finalizing, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-finalizing", nil)),
+		Command:  ScriptCommand{Path: truePath},
+		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start finalizing script: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = finalizing.Close(context.Background())
+	})
+	<-finalizeStarted
+
+	grace := 50 * time.Millisecond
+	running, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-running", nil)),
+		Command: ScriptCommand{
+			Path:              sleepPath,
+			Args:              []string{"30"},
+			CancellationGrace: &grace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start running script: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = running.Stop(context.Background())
+	})
+
+	deadline := time.After(3 * time.Second)
+	for {
+		var selection WorkflowInterruptSelection
+		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
+			selection = got
+			return nil
+		})
+		if selectionErr == nil &&
+			len(selection.Interruptible) == 1 &&
+			selection.Interruptible[0].Scope().ID() == running.Scope().ID() &&
+			len(selection.Queued) == 0 &&
+			len(selection.Finalizing) == 1 &&
+			selection.Finalizing[0].Scope().ID() == finalizing.Scope().ID() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("task interrupt selection = %+v, error = %v", selection, selectionErr)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-script-startup-failure")
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: releasedWorkflowLeaseForTest(t, authority, workflowExecutionRefForTest(t, taskID, "node-startup-failure", nil)),
+		Command:  ScriptCommand{Path: filepath.Join(t.TempDir(), "missing-script")},
+		Finalize: func(_ context.Context, _ ExecutionScope, _ ScriptResult, startErr error) error {
+			if startErr == nil {
+				t.Error("startup finalizer error = nil, want command start error")
+			}
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = handle.Close(context.Background())
+	})
+	<-finalizeStarted
+
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(targets.Executions) != 0 {
+		t.Fatalf("startup failure published workflow execution: %+v", targets)
+	}
+	selectionCalled := false
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+		selectionCalled = true
+		return nil
+	})
+	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
+		t.Fatalf("startup failure selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+	}
+	if selectionCalled {
+		t.Fatal("startup failure authorized task interrupt")
 	}
 }
 
@@ -1195,99 +1387,6 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 	if _, err := outcome.handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait replacement: %v", err)
-	}
-}
-
-func TestPreparedAgentExecutionIsHiddenUntilActivation(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	workflowRef := WorkflowExecutionRef{
-		TaskID:     "task-prepared-agent",
-		RunID:      "run-prepared-agent",
-		Generation: 1,
-	}
-	runnerStarted := make(chan struct{})
-	runnerRelease := make(chan struct{})
-	var releaseRunner sync.Once
-	defer releaseRunner.Do(func() { close(runnerRelease) })
-	prepared, err := authority.PrepareAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   &workflowRef,
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			close(runnerStarted)
-			<-runnerRelease
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("prepare agent execution: %v", err)
-	}
-	if _, ok := authority.ExecutionByWorkflow(workflowRef); ok {
-		t.Fatal("prepared agent execution was exposed as an Exact Execution Scope before activation")
-	}
-	observed, err := authority.AllWorkflowExecutionSnapshot()
-	if err != nil {
-		t.Fatalf("all-workflow execution snapshot before activation: %v", err)
-	}
-	if len(observed.Executions) != 0 || observed.ExecutionMapRevision == 0 {
-		t.Fatalf("prepared all-workflow execution snapshot = %+v, want no visible execution with a registration revision", observed)
-	}
-	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
-	if err != nil {
-		t.Fatalf("current task execution snapshot before activation: %v", err)
-	}
-	if len(snapshot.Executions) != 0 {
-		t.Fatalf("prepared task executions = %+v, want none before activation", snapshot.Executions)
-	}
-	select {
-	case <-runnerStarted:
-		t.Fatal("prepared agent runner started before activation")
-	default:
-	}
-
-	prepared.Activate()
-	select {
-	case <-runnerStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("activated agent runner did not start")
-	}
-	if _, ok := authority.ExecutionByWorkflow(workflowRef); !ok {
-		t.Fatal("activated agent execution was not exposed as an Exact Execution Scope")
-	}
-	activatedObserved, err := authority.AllWorkflowExecutionSnapshot()
-	if err != nil {
-		t.Fatalf("all-workflow execution snapshot after activation: %v", err)
-	}
-	if len(activatedObserved.Executions) != 1 ||
-		activatedObserved.Executions[0].Execution.Ref != workflowRef ||
-		activatedObserved.ExecutionMapRevision <= observed.ExecutionMapRevision {
-		t.Fatalf("activated all-workflow execution snapshot = %+v, want exact execution with revision > %d", activatedObserved, observed.ExecutionMapRevision)
-	}
-	snapshot, err = authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
-	if err != nil {
-		t.Fatalf("current task execution snapshot after activation: %v", err)
-	}
-	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Ref != workflowRef {
-		t.Fatalf("activated task executions = %+v, want %v", snapshot.Executions, workflowRef)
-	}
-	releaseRunner.Do(func() { close(runnerRelease) })
-	if _, err := prepared.Handle().Wait(context.Background()); err != nil {
-		t.Fatalf("wait prepared agent execution: %v", err)
 	}
 }
 
@@ -1662,9 +1761,11 @@ func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *tes
 func TestAuthorityWithDormantSessionStoreSelectsLiveForEveryRegisteredResourceState(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 1)
 	authority := NewAuthority(AuthorityOptions{
 		PersistenceRoot: fixture.config.PersistenceRoot,
 		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
 	})
 	t.Cleanup(func() {
 		if closeErr := authority.Close(context.Background()); closeErr != nil {
@@ -1925,16 +2026,12 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	request := tools.AskQuestionRequest{
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
-	workflowRef := WorkflowExecutionRef{
-		TaskID:     "task-pending-question",
-		RunID:      "run-pending-question",
-		Generation: 3,
-	}
+	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
 	responseDone := make(chan executionPromptResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &workflowRef,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
@@ -1951,7 +2048,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
-	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1980,6 +2077,66 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 }
 
+func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 1)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	askID := uuid.NewString()
+	request := tools.AskQuestionRequest{ID: askID, StepID: uuid.NewString(), Question: "Proceed?"}
+	workflowRef := workflowExecutionRefForTest(t, "task-exact-prompt", "node-exact-prompt", nil)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	responseDone := make(chan executionPromptResult, 1)
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			responseDone <- executionPromptResult{response: response, err: askErr}
+			return askErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	if pending := <-feed; pending.scopeID != handle.Scope().ID() || pending.requestID != askID {
+		t.Fatalf("pending prompt = %+v, want scope %s ask %s", pending, handle.Scope().ID(), askID)
+	}
+
+	resolved, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID)
+	if err != nil {
+		t.Fatalf("ResolvePendingWorkflowPrompt: %v", err)
+	}
+	if resolved.ScopeID != handle.Scope().ID() || resolved.SessionID != sessionID || !resolved.CurrentNode.Equal(workflowRef.CurrentNode) {
+		t.Fatalf("prompt resolution = %+v, want scope %s session %s node %v", resolved, handle.Scope().ID(), sessionID, workflowRef.CurrentNode)
+	}
+	response := tools.AskQuestionResponse{RequestID: askID, Answer: "yes"}
+	if err := authority.SubmitPromptResponseForScope(resolved.ScopeID, response, nil); err != nil {
+		t.Fatalf("SubmitPromptResponseForScope: %v", err)
+	}
+	if result := <-responseDone; result.err != nil || result.response != response {
+		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, response)
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait agent execution: %v", err)
+	}
+	if _, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID); !errors.Is(err, serverapi.ErrPromptNotFound) {
+		t.Fatalf("retired prompt resolution error = %v, want prompt not found", err)
+	}
+}
+
 func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -1996,15 +2153,11 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	request := tools.AskQuestionRequest{
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
-	workflowRef := WorkflowExecutionRef{
-		TaskID:     "task-question-replacement",
-		RunID:      "run-question-replacement",
-		Generation: 1,
-	}
+	workflowRef := workflowExecutionRefForTest(t, "task-question-replacement", "node-question-replacement", nil)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &workflowRef,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
@@ -2028,15 +2181,11 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 		t.Fatalf("wait questioning execution: %v", err)
 	}
 
-	successorRef := WorkflowExecutionRef{
-		TaskID:     workflowRef.TaskID,
-		RunID:      "run-question-successor",
-		Generation: 1,
-	}
+	successorRef := workflowExecutionRefForTest(t, workflowRef.CurrentNode.TaskID, "node-question-successor", nil)
 	successor, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
-		Workflow:   &successorRef,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, successorRef),
 		Resource:   ReplaceAgentResource{},
 		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
 	})
@@ -2049,6 +2198,41 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	if err := authority.Close(context.Background()); err != nil {
 		t.Fatalf("close authority: %v", err)
 	}
+}
+
+func workflowExecutionRefForTest(
+	t *testing.T,
+	taskID workflow.TaskID,
+	nodeID workflow.NodeID,
+	branchKey *workflow.TransitionBranchKey,
+) WorkflowExecutionRef {
+	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, branchKey)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: "workflow-test", CurrentNode: reference}
+}
+
+func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref WorkflowExecutionRef) *WorkflowExecutionLease {
+	t.Helper()
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	return &lease
+}
+
+func workflowExecutionRefForTestPointer(
+	t *testing.T,
+	taskID workflow.TaskID,
+	nodeID workflow.NodeID,
+	branchKey *workflow.TransitionBranchKey,
+) *WorkflowExecutionRef {
+	t.Helper()
+	ref := workflowExecutionRefForTest(t, taskID, nodeID, branchKey)
+	return &ref
 }
 
 func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {

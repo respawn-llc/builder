@@ -2,9 +2,6 @@ import type { TaskStatus } from "@/api";
 import type { BadgeTone } from "@/ui";
 
 export function taskStatusTone(status: TaskStatus): BadgeTone {
-  if (status.kind === "canceled" || status.nativeState === "canceled") {
-    return "danger";
-  }
   if (status.kind === "done") {
     return "success";
   }
@@ -32,7 +29,6 @@ function isWaitingOrAttention(status: TaskStatus): boolean {
     status.kind === "waiting_question" ||
     status.nativeState === "waiting_approval" ||
     status.nativeState === "waiting_ask" ||
-    status.attentionTypes.length > 0 ||
-    status.runIDs.length > 0
+    status.attentionTypes.length > 0
   );
 }

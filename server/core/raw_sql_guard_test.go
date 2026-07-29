@@ -303,47 +303,12 @@ func hasSQLiteStatementQualifier(tokens []antlr.Token, qualifiers ...int) bool {
 }
 
 func sqliteTokens(source string) ([]antlr.Token, bool) {
-	errors := &sqliteSyntaxErrors{}
-	lexer := sqliteparser.NewSQLiteLexer(antlr.NewInputStream(source))
-	lexer.RemoveErrorListeners()
-	lexer.AddErrorListener(errors)
-	rawTokens := lexer.GetAllTokens()
-	tokens := make([]antlr.Token, 0, len(rawTokens))
-	for _, token := range rawTokens {
-		if token.GetChannel() == antlr.TokenDefaultChannel {
-			tokens = append(tokens, token)
-		}
-	}
-	return tokens, errors.count == 0
+	tokens, err := testharness.SQLiteTokens(source)
+	return tokens, err == nil
 }
 
 func parsesSQLiteStatement(source string) bool {
-	errors := &sqliteSyntaxErrors{}
-	lexer := sqliteparser.NewSQLiteLexer(antlr.NewInputStream(source))
-	lexer.RemoveErrorListeners()
-	lexer.AddErrorListener(errors)
-	parser := sqliteparser.NewSQLiteParser(antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel))
-	parser.RemoveErrorListeners()
-	parser.AddErrorListener(errors)
-	document := parser.Parse()
-	if errors.count != 0 {
-		return false
-	}
-	for _, statements := range document.AllSql_stmt_list() {
-		if len(statements.AllSql_stmt()) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-type sqliteSyntaxErrors struct {
-	antlr.DefaultErrorListener
-	count int
-}
-
-func (e *sqliteSyntaxErrors) SyntaxError(antlr.Recognizer, interface{}, int, int, string, antlr.RecognitionException) {
-	e.count++
+	return testharness.ParseSQLite(source) == nil
 }
 
 func hasComparisonOperator(tokens []antlr.Token) bool {

@@ -67,7 +67,6 @@ export type BoardRailMotionControllerProps = Readonly<{
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onInterruptTask: (taskID: string) => void;
   onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
@@ -95,7 +94,6 @@ export function BoardRailMotionController({
   onDeleteTask,
   onDropTask,
   onExpandColumn,
-  onInterruptedRunObserved,
   onInterruptTask,
   onRegisterColumnScrollport,
   onResumeTask,
@@ -459,7 +457,6 @@ export function BoardRailMotionController({
                     onDeleteTask={onDeleteTask}
                     onDropTask={onDropTask}
                     onExpandColumn={onExpandColumn}
-                    onInterruptedRunObserved={onInterruptedRunObserved}
                     onInterruptTask={onInterruptTask}
                     onReportColumnSnapshot={reportColumnSnapshot}
                     onRegisterColumn={registerColumn}
@@ -490,7 +487,6 @@ export function BoardRailMotionController({
                 onDeleteTask={onDeleteTask}
                 onDropTask={onDropTask}
                 onExpandColumn={onExpandColumn}
-                onInterruptedRunObserved={onInterruptedRunObserved}
                 onInterruptTask={onInterruptTask}
                 onReportColumnSnapshot={reportColumnSnapshot}
                 onRegisterColumn={registerColumn}

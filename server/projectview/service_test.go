@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -61,6 +65,9 @@ func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
 	if _, err := os.Stat(created.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session dir stat = %v, want not exists", err)
 	}
+	if _, err := os.Stat(sessionDir + ".deleting"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session tombstone stat = %v, want not exists", err)
+	}
 	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
 		t.Fatal("expected deleted project lookup to fail")
 	}
@@ -100,6 +107,79 @@ func TestServiceDeletesProjectWithBacklogTasks(t *testing.T) {
 	}
 }
 
+func TestServiceProjectDeleteRequiresWorkflowExecution(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc, err := NewMetadataService(store, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("NewMetadataService: %v", err)
+	}
+	if _, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); err == nil {
+		t.Fatal("DeleteProject succeeded without the shared workflow execution permit")
+	}
+}
+
+func TestServiceProjectDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newProjectViewMetadataStore(t)
+	workflowStore, err := workflowstore.New(store)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowRecord, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Quiescence Board"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowRecord.ID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Blocked", Body: "Body"}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.workflowExecution = projectViewQuiescentExecution{err: workflowexecution.ErrTaskExecutionNotQuiescent}
+
+	if _, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("DeleteProject error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
+	}
+	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err != nil {
+		t.Fatalf("GetProjectOverview after rejected delete: %v", err)
+	}
+}
+
+func TestServiceProjectDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- svc.mutationPermit.Run(context.Background(), func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+		deleted <- err
+	}()
+	select {
+	case err := <-deleted:
+		t.Fatalf("DeleteProject escaped concurrent workflow mutation: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-held; err != nil {
+		t.Fatalf("concurrent workflow mutation: %v", err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+}
+
 func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
@@ -123,6 +203,69 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
 	}
+}
+
+func TestServiceDeleteProjectRuntimeGuardChecksBeforeAndAfterBlockingSessionStarts(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "guarded-delete")
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 1}}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.runtimeGuard = guard
+	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("delete response = %+v, want post-block active_sessions blocker", deleted)
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
+}
+
+func TestProjectMutationsSerializeOnlyEqualProjectIDs(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, first := newProjectViewMetadataStore(t)
+	second, err := store.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding second project: %v", err)
+	}
+	created := createProjectViewSession(t, store, cfg, first.ProjectID, cfg.WorkspaceRoot, "serialized")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 0}, blockStarted: started, releaseBlock: release}
+	svc := newProjectViewMetadataService(t, store, "")
+	svc.runtimeGuard = guard
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: first.ProjectID})
+		deleteDone <- err
+	}()
+	<-started
+	sameDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: first.ProjectID, DisplayName: "same"})
+		sameDone <- err
+	}()
+	otherDone := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateProject(ctx, serverapi.ProjectUpdateRequest{ProjectID: second.ProjectID, DisplayName: "other"})
+		otherDone <- err
+	}()
+	if err := <-otherDone; err != nil {
+		t.Fatalf("unrelated project update: %v", err)
+	}
+	select {
+	case err := <-sameDone:
+		t.Fatalf("same-project update completed while delete was paused: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if err := <-sameDone; err == nil {
+		t.Fatal("same-project update succeeded after project deletion")
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
 }
 
 func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
@@ -210,7 +353,7 @@ func TestServiceProjectStartBlockExcludesRuntimeMaintenance(t *testing.T) {
 	}
 }
 
-func TestDeleteSessionArtifactRejectsSymlinkEscape(t *testing.T) {
+func TestProjectSessionDeleteArtifactsRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "keep"), []byte("keep"), 0o644); err != nil {
@@ -223,13 +366,62 @@ func TestDeleteSessionArtifactRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("create symlink: %v", err)
 	}
 
-	err := deleteSessionArtifact(root, "project-1", filepath.Join("projects", "project-1", "sessions", "keep"), true)
+	err := (projectSessionDeleteArtifacts{
+		persistenceRoot: root,
+		projectID:       "project-1",
+	}).Validate(workflowstore.ProjectSessionArtifact{
+		SessionID:       "session-1",
+		ArtifactRelpath: filepath.Join("projects", "project-1", "sessions", "keep"),
+	})
 
 	if err == nil || !errors.Is(err, ErrSessionArtifactEscapesRoot) {
-		t.Fatalf("deleteSessionArtifact error = %v, want escape rejection", err)
+		t.Fatalf("Validate error = %v, want escape rejection", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
 		t.Fatalf("outside file should remain: %v", err)
+	}
+}
+
+func TestProjectSessionDeleteArtifactsRecoversDeterministically(t *testing.T) {
+	root := t.TempDir()
+	artifacts := projectSessionDeleteArtifacts{
+		persistenceRoot: root,
+		projectID:       "project-1",
+	}
+	sessionsRoot := filepath.Join(root, "projects", "project-1", "sessions")
+	if err := os.MkdirAll(sessionsRoot, 0o755); err != nil {
+		t.Fatalf("create sessions root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "artifact"), []byte("retain"), 0o644); err != nil {
+		t.Fatalf("write session artifact: %v", err)
+	}
+
+	if err := artifacts.Stage(); err != nil {
+		t.Fatalf("stage artifacts: %v", err)
+	}
+	recovered, err := artifacts.Recover(workflowstore.ProjectDeleteArtifactRecoveryProjectPresent)
+	if err != nil {
+		t.Fatalf("recover existing project artifacts: %v", err)
+	}
+	if !recovered {
+		t.Fatal("existing project tombstone was not restored")
+	}
+	if _, err := os.Stat(filepath.Join(sessionsRoot, "artifact")); err != nil {
+		t.Fatalf("restored artifact stat: %v", err)
+	}
+
+	if err := artifacts.Stage(); err != nil {
+		t.Fatalf("stage artifacts for deleted project: %v", err)
+	}
+	recovered, err = artifacts.Recover(workflowstore.ProjectDeleteArtifactRecoveryProjectAbsent)
+	if err != nil {
+		t.Fatalf("recover deleted project artifacts: %v", err)
+	}
+	if !recovered {
+		t.Fatal("deleted project tombstone was not finalized")
+	}
+	if _, err := os.Stat(sessionsRoot + ".deleting"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("tombstone stat = %v, want not exists", err)
 	}
 }
 
@@ -447,6 +639,23 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("unlink response = %+v, want active_sessions blocker", unlinked)
 	}
+}
+
+func TestMetadataServiceUnlinkWorkspaceRuntimeGuardChecksBeforeAndAfterBlockingSessionStarts(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "guarded-unlink")
+	guard := &projectViewRuntimeGuard{activityCounts: []int{0, 1}}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.runtimeGuard = guard
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{ProjectID: binding.ProjectID, WorkspaceID: attached.WorkspaceID})
+	if err != nil {
+		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
+	}
+	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("unlink response = %+v, want post-block active_sessions blocker", unlinked)
+	}
+	guard.assertCalls(t, created.Meta().SessionID)
 }
 
 func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
@@ -702,7 +911,19 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
-	return svc
+	workflowStore, err := workflowstore.New(store)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{}, workflowStore)
+}
+
+type projectViewQuiescentExecution struct {
+	err error
+}
+
+func (e projectViewQuiescentExecution) EnsureTaskQuiescent(workflow.TaskID) error {
+	return e.err
 }
 
 func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.App, projectID string, workspaceRoot string, name string) *session.Store {
@@ -722,6 +943,43 @@ type projectViewTestLLMClient struct{}
 
 func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
+}
+
+type projectViewRuntimeGuard struct {
+	activityCounts []int
+	calls          []string
+	released       bool
+	blockStarted   chan struct{}
+	releaseBlock   <-chan struct{}
+}
+
+func (g *projectViewRuntimeGuard) CountBlockingRuntimeActivity(_ context.Context, sessionIDs []string) (int, error) {
+	g.calls = append(g.calls, "check:"+strings.Join(sessionIDs, ","))
+	if len(g.activityCounts) == 0 {
+		return 0, errors.New("unexpected runtime activity check")
+	}
+	count := g.activityCounts[0]
+	g.activityCounts = g.activityCounts[1:]
+	return count, nil
+}
+
+func (g *projectViewRuntimeGuard) BlockSessionStarts(_ context.Context, sessionIDs []string) (func(), error) {
+	g.calls = append(g.calls, "block:"+strings.Join(sessionIDs, ","))
+	if g.blockStarted != nil {
+		close(g.blockStarted)
+	}
+	if g.releaseBlock != nil {
+		<-g.releaseBlock
+	}
+	return func() { g.released = true }, nil
+}
+
+func (g *projectViewRuntimeGuard) assertCalls(t testing.TB, sessionID string) {
+	t.Helper()
+	want := []string{"check:" + sessionID, "block:" + sessionID, "check:" + sessionID}
+	if !slices.Equal(g.calls, want) || !g.released || len(g.activityCounts) != 0 {
+		t.Fatalf("runtime guard state = calls=%v released=%t remaining=%v", g.calls, g.released, g.activityCounts)
+	}
 }
 
 func newProjectViewActiveRuntimeAuthority(t testing.TB, store *metadata.Store, cfg config.App, sessionStore *session.Store) *sessionruntime.Authority {

@@ -11,7 +11,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
-	"core/shared/serverapi"
 )
 
 type CreateTaskRequest struct {
@@ -32,7 +31,6 @@ type preparedTaskCreate struct {
 	sourceURL         string
 	sourceWorkspaceID string
 	taskID            string
-	placementID       string
 	labelIDs          []label.ID
 	nowUnixMs         int64
 }
@@ -45,39 +43,26 @@ type UpdateTaskRequest struct {
 }
 
 type StartTaskResult struct {
-	TransitionID string
-	PlacementID  workflow.PlacementID
-	RunID        workflow.RunID
+	Mutation workflow.CurrentNodeMutationResult
 }
 
-type CompleteRunRequest struct {
-	RunID              workflow.RunID
-	TransitionID       string
-	OutputValues       map[string]string
-	Commentary         string
-	Actor              string
-	ExpectedGeneration int64
-	RequireGeneration  bool
-	Admission          CompletionAdmission
+type TaskExecutionScope struct {
+	ProjectID  string
+	WorkflowID workflow.WorkflowID
 }
 
-type CompletionAdmission struct {
-	idleSessionID *string
-}
-
-func NewIdleSessionCompletionAdmission(sessionID string) (CompletionAdmission, error) {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return CompletionAdmission{}, errors.New("session id is required")
+func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) (TaskExecutionScope, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return TaskExecutionScope{}, errors.New("task id is required")
 	}
-	return CompletionAdmission{idleSessionID: &trimmedSessionID}, nil
-}
-
-func (a CompletionAdmission) idleSession() (string, bool) {
-	if a.idleSessionID == nil {
-		return "", false
+	row, err := s.queries.GetTaskProjectWorkflowIDs(ctx, string(taskID))
+	if err != nil {
+		return TaskExecutionScope{}, err
 	}
-	return *a.idleSessionID, true
+	if strings.TrimSpace(row.ProjectID) == "" || strings.TrimSpace(row.WorkflowID) == "" {
+		return TaskExecutionScope{}, fmt.Errorf("task %q has incomplete execution scope", taskID)
+	}
+	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: workflow.WorkflowID(row.WorkflowID)}, nil
 }
 
 type CompletionValidationIssue struct {
@@ -105,61 +90,9 @@ func (e CompletionValidationError) Error() string {
 	return "workflow completion is invalid: " + strings.Join(parts, "; ")
 }
 
-type ProtocolViolationKind string
-
-const (
-	ProtocolViolationInvalidCompletion ProtocolViolationKind = "invalid_completion"
-)
-
-type RecordProtocolViolationRequest struct {
-	RunID              workflow.RunID
-	Kind               ProtocolViolationKind
-	MaxCount           int
-	Detail             string
-	ExpectedGeneration int64
-	RequireGeneration  bool
-}
-
-type RecordProtocolViolationResult struct {
-	Count       int64
-	Interrupted bool
-}
-
-type ResetProtocolViolationBudgetRequest struct {
-	RunID              workflow.RunID
-	ExpectedGeneration int64
-	RequireGeneration  bool
-}
-
-type CompleteRunResult struct {
-	TransitionID                          workflow.TransitionID
-	State                                 string
-	PlacementIDs                          []workflow.PlacementID
-	RunIDs                                []workflow.RunID
-	InterruptedRunIDs                     []workflow.RunID
-	RequiresApproval                      bool
-	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
-	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
-}
-
 type CompletionHandoff struct {
 	SourceNodeDisplayName  string
 	DestinationDisplayName string
-}
-
-type CompleteRunOutcome struct {
-	Result  CompleteRunResult
-	Handoff CompletionHandoff
-}
-
-type TaskAttentionResolution struct {
-	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
-	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
-}
-
-type CancelTaskResult struct {
-	TaskRecord
-	TaskAttentionResolution
 }
 
 type DeleteTaskResult struct {
@@ -167,23 +100,19 @@ type DeleteTaskResult struct {
 	TaskAttentionResolution
 }
 
-type ResumeTaskRunsResult struct {
-	Runs []RunRecord
+type ManualMoveRequest struct {
+	TaskID       workflow.TaskID
+	TargetNodeID workflow.NodeID
+	OutputValues map[string]string
+	Commentary   string
+}
+
+type ManualMoveResult struct {
+	workflow.CurrentNodeMutationResult
+	Retained        []workflow.CurrentNode
+	PendingApproval *workflow.PendingApproval
 	TaskAttentionResolution
 }
-
-type ManualMoveRequest struct {
-	TaskID           workflow.TaskID
-	TargetNodeID     workflow.NodeID
-	OutputValues     map[string]string
-	Commentary       string
-	Actor            string
-	AllowMissingEdge bool
-	AutoApprove      bool
-	ExecutionTarget  *ExecutionTargetCandidate
-}
-
-type ManualMoveResult = CompleteRunResult
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
 	projectID := strings.TrimSpace(req.ProjectID)
@@ -200,31 +129,17 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	}
 	if len(req.LabelIDs) > label.MaxProjectLabels {
 		limit := label.MaxProjectLabels
-		return TaskRecord{}, TaskLabelMutationError{
-			Reason: TaskLabelMutationTooManyAdd,
-			Field:  "label_ids",
-			Limit:  &limit,
-		}
+		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
-	labelIDs, _, err := parseUniqueLabelIDs(
-		req.LabelIDs,
-		"label_ids",
-		TaskLabelMutationDuplicateAdd,
-	)
+	labelIDs, _, err := parseUniqueLabelIDs(req.LabelIDs, "label_ids", TaskLabelMutationDuplicateAdd)
 	if err != nil {
 		return TaskRecord{}, err
 	}
 	prepared := preparedTaskCreate{
-		projectID:         projectID,
-		workflowID:        workflowID,
-		title:             strings.TrimSpace(req.Title),
-		body:              strings.TrimSpace(req.Body),
-		sourceURL:         strings.TrimSpace(req.SourceURL),
-		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID),
-		taskID:            prefixedID("task"),
-		placementID:       prefixedID("placement"),
-		labelIDs:          labelIDs,
-		nowUnixMs:         s.now().UnixMilli(),
+		projectID: projectID, workflowID: workflowID, title: strings.TrimSpace(req.Title),
+		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
+		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
+		labelIDs: labelIDs, nowUnixMs: s.now().UnixMilli(),
 	}
 	if prepared.title == "" {
 		return TaskRecord{}, errors.New("task title is required")
@@ -234,8 +149,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	task, err := createTaskWithQueries(ctx, q, prepared)
+	task, err := createTaskWithQueries(ctx, s.queries.WithTx(tx), prepared)
 	if err != nil {
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
@@ -254,48 +168,53 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	def, wf, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(link.WorkflowID))
+	definition, record, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(link.WorkflowID))
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	startNode, err := startNode(def)
+	start, err := startNode(definition)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := validateTaskLabelReferences(
-		ctx,
-		q,
-		workflow.TaskID(prepared.taskID),
-		prepared.projectID,
-		prepared.labelIDs,
-	); err != nil {
+	if err := validateTaskLabelReferences(ctx, q, workflow.TaskID(prepared.taskID), prepared.projectID, prepared.labelIDs); err != nil {
 		return TaskRecord{}, err
 	}
 	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: prepared.projectID, UpdatedAtUnixMs: prepared.nowUnixMs})
 	if err != nil {
 		return TaskRecord{}, fmt.Errorf("allocate task sequence: %w", err)
 	}
-	seq := allocated.NextTaskSeq - 1
-	shortID := fmt.Sprintf("%s-%d", strings.TrimSpace(allocated.ProjectKey), seq)
+	sequence := allocated.NextTaskSeq - 1
+	shortID := fmt.Sprintf("%s-%d", strings.TrimSpace(allocated.ProjectKey), sequence)
 	metadataJSON, err := taskMetadataWithSourceWorkspaceSnapshot(ctx, q, "{}", sourceWorkspaceID)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: wf.Version, TaskSeq: seq, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceUrl: prepared.sourceURL, SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON}); err != nil {
+	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{
+		ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: record.Version,
+		TaskSeq: sequence, ShortID: shortID, Title: prepared.title, Body: prepared.body,
+		SourceUrl: prepared.sourceURL, SourceWorkspaceID: nullableString(sourceWorkspaceID),
+		ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs,
+		UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON,
+	}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prepared.placementID, TaskID: prepared.taskID, NodeID: nullableString(string(workflow.NodeIDOf(startNode))), State: "active", CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs}); err != nil {
-		return TaskRecord{}, fmt.Errorf("insert start placement: %w", err)
+	currentNode, err := newBacklogCurrentNode(workflow.TaskID(prepared.taskID), workflow.NodeIDOf(start))
+	if err != nil {
+		return TaskRecord{}, err
+	}
+	if err := insertTaskCurrentNode(ctx, q, currentNode); err != nil {
+		return TaskRecord{}, fmt.Errorf("insert task start current node: %w", err)
 	}
 	for _, id := range prepared.labelIDs {
-		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{
-			TaskID:  prepared.taskID,
-			LabelID: id.String(),
-		}); err != nil {
-			return TaskRecord{}, fmt.Errorf("insert initial task label assignment: %w", err)
+		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{TaskID: prepared.taskID, LabelID: id.String()}); err != nil {
+			return TaskRecord{}, fmt.Errorf("insert task label: %w", err)
 		}
 	}
-	return TaskRecord{ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: workflow.WorkflowID(link.WorkflowID), LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: wf.Version}, nil
+	return TaskRecord{
+		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: workflow.WorkflowID(link.WorkflowID),
+		LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body,
+		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: record.Version,
+	}, nil
 }
 
 func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskRecord, error) {
@@ -305,7 +224,6 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return TaskRecord{}, errors.New("task title is required")
 	}
-	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TaskRecord{}, err
@@ -316,46 +234,27 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	title := task.Title
+	title, body := task.Title, task.Body
 	if req.Title != nil {
 		title = strings.TrimSpace(*req.Title)
 	}
-	body := task.Body
 	if req.Body != nil {
 		body = strings.TrimSpace(*req.Body)
 	}
-	currentSourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
-	sourceWorkspaceID := currentSourceWorkspaceID
+	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	metadataJSON := task.MetadataJson
-	requestedSourceWorkspaceID := strings.TrimSpace(req.SourceWorkspaceID)
-	if requestedSourceWorkspaceID != "" && requestedSourceWorkspaceID != currentSourceWorkspaceID {
-		if task.CanceledAtUnixMs.Valid {
-			return TaskRecord{}, ErrSourceWorkspaceForCanceledTask
-		}
-		snapshot, err := executionTargetSnapshotFromTask(task)
-		if err != nil {
-			return TaskRecord{}, err
-		}
-		if snapshot != nil && snapshot.Mode != workflow.ExecutionTargetModeNone {
-			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
-		}
+	if requested := strings.TrimSpace(req.SourceWorkspaceID); requested != "" && requested != sourceWorkspaceID {
 		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
 		}
-		runCount, err := q.CountTaskRunsByTask(ctx, task.ID)
+		sessions, err := q.CountTaskSessions(ctx, sql.NullString{String: task.ID, Valid: true})
 		if err != nil {
 			return TaskRecord{}, err
 		}
-		if runCount != 0 {
+		if sessions != 0 {
 			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
 		}
-		if _, err := q.GetActiveStartPlacementForTask(ctx, task.ID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
-			}
-			return TaskRecord{}, err
-		}
-		sourceWorkspaceID, err = resolveTaskSourceWorkspaceWithQueries(ctx, q, task.ProjectID, requestedSourceWorkspaceID)
+		sourceWorkspaceID, err = resolveTaskSourceWorkspaceWithQueries(ctx, q, task.ProjectID, requested)
 		if err != nil {
 			return TaskRecord{}, err
 		}
@@ -364,7 +263,10 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 			return TaskRecord{}, err
 		}
 	}
-	updated, err := q.UpdateTaskEditableFields(ctx, sqlitegen.UpdateTaskEditableFieldsParams{ID: task.ID, Title: title, Body: body, SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, MetadataJson: metadataJSON, UpdatedAtUnixMs: now})
+	updated, err := q.UpdateTaskEditableFields(ctx, sqlitegen.UpdateTaskEditableFieldsParams{
+		ID: task.ID, Title: title, Body: body, SourceWorkspaceID: nullableString(sourceWorkspaceID),
+		MetadataJson: metadataJSON, UpdatedAtUnixMs: s.now().UnixMilli(),
+	})
 	if err != nil {
 		return TaskRecord{}, fmt.Errorf("update task: %w", err)
 	}
@@ -382,8 +284,7 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 }
 
 func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteTaskResult, error) {
-	trimmedTaskID := strings.TrimSpace(string(taskID))
-	if trimmedTaskID == "" {
+	if strings.TrimSpace(string(taskID)) == "" {
 		return DeleteTaskResult{}, errors.New("task id is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -392,22 +293,34 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	task, err := q.GetTask(ctx, trimmedTaskID)
+	task, err := q.GetTask(ctx, string(taskID))
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
-	taskRecord, err := taskRecordFromTask(task)
+	record, err := taskRecordFromTask(task)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
-	resolution, err := taskAttentionResolution(ctx, q, trimmedTaskID)
+	resolution, err := taskAttentionResolution(ctx, q, taskID)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
-	if err := deleteTaskScopedChildren(ctx, q, trimmedTaskID); err != nil {
+	if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(taskID)); err != nil {
 		return DeleteTaskResult{}, err
 	}
-	deleted, err := q.DeleteTask(ctx, trimmedTaskID)
+	if _, err := q.DeleteTaskLabelAssignmentsByTask(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, err
+	}
+	if _, err := q.DeleteTaskCurrentNodes(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, err
+	}
+	if _, err := q.DeleteTaskActiveFanout(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, err
+	}
+	if _, err := q.DeleteTaskCommentsByTask(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, err
+	}
+	deleted, err := q.DeleteTask(ctx, string(taskID))
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
@@ -417,103 +330,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 	if err := tx.Commit(); err != nil {
 		return DeleteTaskResult{}, err
 	}
-	return DeleteTaskResult{TaskRecord: taskRecord, TaskAttentionResolution: resolution}, nil
-}
-
-func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID string) error {
-	// Remove task-scoped children explicitly before the task row itself. Several
-	// runtime cross-link columns (placement<->transition, transition->run,
-	// transition_edge->placement) use ON DELETE SET NULL, and the runtime
-	// validation triggers re-check that each remaining row still resolves to its
-	// task's workflow. Letting `DELETE FROM tasks` cascade would fire those SET
-	// NULL updates after the task row is already gone, so the triggers abort with
-	// "references must stay within one task workflow". Deleting the children while
-	// the task still exists keeps every trigger's task lookup satisfied; the
-	// SET-NULL'd columns simply become NULL. Order matters: label assignments
-	// first, transitions next (cascades transition_edges), then placements
-	// (cascades runs), then comments.
-	if _, err := q.DeleteTaskLabelAssignmentsByTask(ctx, taskID); err != nil {
-		return err
-	}
-	if _, err := q.DeleteTaskTransitionsByTask(ctx, taskID); err != nil {
-		return err
-	}
-	if _, err := q.DeleteTaskNodePlacementsByTask(ctx, taskID); err != nil {
-		return err
-	}
-	if _, err := q.DeleteTaskCommentsByTask(ctx, taskID); err != nil {
-		return err
-	}
-	return nil
-}
-
-func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspaceID string) (string, error) {
-	trimmedProjectID := strings.TrimSpace(projectID)
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedProjectID == "" {
-		return "", errors.New("project id is required")
-	}
-	if trimmedWorkspaceID != "" {
-		workspace, err := q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
-		if err != nil {
-			return "", fmt.Errorf("source workspace %q: %w", trimmedWorkspaceID, err)
-		}
-		if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
-			return "", fmt.Errorf("source workspace %q does not belong to project %q: %w", trimmedWorkspaceID, trimmedProjectID, ErrSourceWorkspaceNotInProject)
-		}
-		return trimmedWorkspaceID, nil
-	}
-	workspaces, err := q.ListProjectWorkspaces(ctx, trimmedProjectID)
-	if err != nil {
-		return "", err
-	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary != 0 && strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	return "", fmt.Errorf("project %q has no source workspace", trimmedProjectID)
-}
-
-func taskMetadataWithSourceWorkspaceSnapshot(ctx context.Context, q *sqlitegen.Queries, currentMetadata string, sourceWorkspaceID string) (string, error) {
-	payload := map[string]any{}
-	if strings.TrimSpace(currentMetadata) != "" {
-		if err := workflow.UnmarshalString(currentMetadata, &payload); err != nil {
-			return "", fmt.Errorf("decode task metadata json: %w", err)
-		}
-	}
-	trimmedWorkspaceID := strings.TrimSpace(sourceWorkspaceID)
-	if trimmedWorkspaceID == "" {
-		delete(payload, "source_workspace_snapshot")
-		return workflow.MarshalString(payload)
-	}
-	workspace, err := q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
-	if err != nil {
-		return "", fmt.Errorf("source workspace snapshot %q: %w", trimmedWorkspaceID, err)
-	}
-	payload["source_workspace_snapshot"] = map[string]string{
-		"workspace_id": workspace.ID,
-		"display_name": workspaceSnapshotDisplayName(workspace.CanonicalRootPath),
-		"root_path":    workspace.CanonicalRootPath,
-	}
-	return workflow.MarshalString(payload)
-}
-
-func workspaceSnapshotDisplayName(rootPath string) string {
-	trimmed := strings.TrimSpace(rootPath)
-	if trimmed == "" {
-		return ""
-	}
-	base := filepath.Base(filepath.Clean(trimmed))
-	if base == "." || base == string(filepath.Separator) {
-		return ""
-	}
-	return base
+	return DeleteTaskResult{TaskRecord: record, TaskAttentionResolution: resolution}, nil
 }
 
 func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTaskResult, error) {
@@ -524,94 +341,63 @@ func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflo
 	return s.startTask(ctx, taskID, candidate, true)
 }
 
-func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireExecutionTarget bool) (StartTaskResult, error) {
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	var executionRoot *ExecutionRoot
 	var targetMutation preparedExecutionTargetMutation
-	if requireExecutionTarget {
+	if requireTarget {
 		targetMutation, err = s.prepareExecutionTargetMutation(ctx, prepared.task, candidate)
 		if err != nil {
 			return StartTaskResult{}, err
 		}
-		executionRoot = &targetMutation.executionRoot
-	} else {
-		executionRoot, err = executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
-		if err != nil {
-			return StartTaskResult{}, err
-		}
+	}
+	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
+	if err != nil {
+		return StartTaskResult{}, err
 	}
 	if prepared.target.Kind() == workflow.NodeKindScript {
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
 			return StartTaskResult{}, err
 		}
 	}
-	now := s.now().UnixMilli()
-	transitionID := prefixedID("transition")
-	targetPlacementID := prefixedID("placement")
-	runID := prefixedID("run")
+	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if requireExecutionTarget {
+	now := s.now().UnixMilli()
+	if requireTarget {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
 			return StartTaskResult{}, err
 		}
 	}
-	updatedStart, err := q.StartTaskCompleteStartPlacement(ctx, sqlitegen.StartTaskCompleteStartPlacementParams{
-		State:           "completed",
-		UpdatedAtUnixMs: now,
-		PlacementID:     prepared.startPlacement.ID,
-		TaskID:          string(taskID),
-	})
+	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{TaskID: string(taskID), NodeID: string(workflow.NodeIDOf(prepared.start))})
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	if updatedStart != 1 {
+	if removed != 1 {
 		return StartTaskResult{}, sql.ErrNoRows
 	}
+	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+		return StartTaskResult{}, err
+	}
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(taskID), SourcePlacementID: sql.NullString{String: prepared.startPlacement.ID, Valid: true}, SourceNodeKey: string(workflow.NodeKey(prepared.start)), SourceNodeDisplayName: workflow.NodeDisplayName(prepared.start), TransitionID: string(prepared.group.TransitionID), TransitionDisplayName: prepared.group.DisplayName, WorkflowRevisionSeen: prepared.workflow.Version, Actor: "system", State: "applied", OutputValuesJson: "{}", CreatedAtUnixMs: now, AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}}); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(prepared.target))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
-		return StartTaskResult{}, err
-	}
-	runSnapshot, err := newRunStartSnapshot(prepared.definition, prepared.workflow, workflow.NodeIDOf(prepared.target))
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	startEdgeSnapshot := edgeSnapshotWithDerivedWiring(prepared.edge, prepared.start, prepared.target, workflow.DeriveWiring(prepared.definition))
-	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, startEdgeSnapshot, targetPlacementID, "applied", workflowRunMetadata{}); err != nil {
-		return StartTaskResult{}, err
-	}
-	runSnapshotJSON, err := workflow.MarshalString(runSnapshot)
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	runMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-		ContextMode:    string(startEdgeSnapshot.ContextMode),
-		ContextSource:  workflow.CanonicalContextSource(startEdgeSnapshot.ContextSource),
-		PromptTemplate: strings.TrimSpace(startEdgeSnapshot.PromptTemplate),
-		Parameters:     append([]workflow.Parameter(nil), startEdgeSnapshot.Parameters...),
-	})
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: runID, PlacementID: targetPlacementID, WorkflowRevisionSeen: prepared.workflow.Version, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: runSnapshotJSON, MetadataJson: runMetadataJSON}); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return StartTaskResult{}, err
 	}
-	return StartTaskResult{TransitionID: transitionID, PlacementID: workflow.PlacementID(targetPlacementID), RunID: workflow.RunID(runID)}, nil
+	return StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
+		Created: []workflow.CurrentNode{target},
+	}}, nil
 }
 
 func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) error {
@@ -620,14 +406,11 @@ func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) e
 }
 
 type preparedTaskStart struct {
-	task           sqlitegen.TaskRecord
-	definition     workflow.Definition
-	workflow       WorkflowRecord
-	start          workflow.Node
-	group          workflow.TransitionGroup
-	edge           workflow.Edge
-	target         workflow.Node
-	startPlacement sqlitegen.TaskNodePlacementRecord
+	task             sqlitegen.TaskRecord
+	start            workflow.Node
+	target           workflow.Node
+	startEdge        workflow.Edge
+	startCurrentNode workflow.CurrentNode
 }
 
 func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (preparedTaskStart, error) {
@@ -635,399 +418,41 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	if task.CanceledAtUnixMs.Valid {
-		return preparedTaskStart{}, ErrTaskCanceled
-	}
-	def, wf, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	startPlacement, err := s.queries.GetActiveStartPlacementForTask(ctx, string(taskID))
+	start, err := startNode(definition)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	if err := s.preflightInitialExecution(def); err != nil {
-		return preparedTaskStart{}, err
-	}
-	start, err := startNode(def)
+	reference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(start), nil)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	group, edge, target, err := startTransition(def, workflow.NodeIDOf(start))
+	current, err := currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	return preparedTaskStart{task: task, definition: def, workflow: wf, start: start, group: group, edge: edge, target: target, startPlacement: startPlacement}, nil
+	if current.SessionID != nil || current.Scheduling != nil {
+		return preparedTaskStart{}, sql.ErrNoRows
+	}
+	if err := s.preflightInitialExecution(definition); err != nil {
+		return preparedTaskStart{}, err
+	}
+	_, edge, target, err := startTransition(definition, workflow.NodeIDOf(start))
+	if err != nil {
+		return preparedTaskStart{}, err
+	}
+	return preparedTaskStart{task: task, start: start, target: target, startEdge: edge, startCurrentNode: current}, nil
 }
 
-func (s *Store) preflightInitialExecution(def workflow.Definition) error {
-	validation := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-		Context:      workflow.ValidationContextExecution,
-		RoleResolver: s.roleResolver,
-	})
+func (s *Store) preflightInitialExecution(definition workflow.Definition) error {
+	validation := workflow.ValidateDefinition(definition, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: s.roleResolver})
 	if !validation.HasBlockingErrors() {
 		return nil
 	}
 	return WorkflowValidationError{Diagnostics: validation.BlockingErrors()}
-}
-
-type preparedRunCompletion struct {
-	run           sqlitegen.TaskRunRecord
-	task          sqlitegen.TaskRecord
-	executionRoot *ExecutionRoot
-	snapshot      runStartSnapshot
-	group         transitionContractSnapshot
-}
-
-func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (CompleteRunOutcome, error) {
-	preparedRequest, err := prepareCompleteRunRequest(req)
-	if err != nil {
-		return CompleteRunOutcome{}, err
-	}
-	prepared, err := s.prepareRunCompletion(ctx, preparedRequest)
-	if err != nil {
-		return CompleteRunOutcome{}, err
-	}
-	handoff, err := completionHandoff(prepared.snapshot, prepared.group)
-	if err != nil {
-		return CompleteRunOutcome{}, err
-	}
-	result, err := s.completePreparedRun(ctx, preparedRequest, prepared)
-	if err != nil {
-		return CompleteRunOutcome{}, err
-	}
-	return CompleteRunOutcome{Result: result, Handoff: handoff}, nil
-}
-
-func prepareCompleteRunRequest(req CompleteRunRequest) (CompleteRunRequest, error) {
-	if strings.TrimSpace(string(req.RunID)) == "" {
-		return CompleteRunRequest{}, errors.New("run id is required")
-	}
-	if len(req.Commentary) > workflow.MaxCommentaryBytes {
-		return CompleteRunRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeCommentaryTooLarge, Field: "commentary", Message: "commentary is too large"}}}
-	}
-	issues := []CompletionValidationIssue{}
-	for _, name := range sortedStringKeys(req.OutputValues) {
-		value := req.OutputValues[name]
-		if strings.TrimSpace(name) == "" {
-			issues = append(issues, CompletionValidationIssue{Code: CompletionCodeOutputFieldRequired, Message: "output field name is required"})
-		}
-		if len(value) > workflow.MaxOutputValueBytes {
-			issues = append(issues, CompletionValidationIssue{Code: CompletionCodeOutputTooLarge, Field: strings.TrimSpace(name), Message: "output field is too large"})
-		}
-	}
-	if len(issues) > 0 {
-		return CompleteRunRequest{}, CompletionValidationError{Issues: issues}
-	}
-	actor := strings.TrimSpace(req.Actor)
-	if actor == "" {
-		actor = "agent"
-	}
-	if actor != "agent" && actor != "script" && actor != "user" && actor != "system" {
-		return CompleteRunRequest{}, fmt.Errorf("unsupported transition actor %q", actor)
-	}
-	if _, idleSessionCompletion := req.Admission.idleSession(); idleSessionCompletion {
-		if actor != "agent" {
-			return CompleteRunRequest{}, errors.New("idle session completion requires an agent actor")
-		}
-		if !req.RequireGeneration {
-			return CompleteRunRequest{}, errors.New("idle session completion requires an exact run generation")
-		}
-	}
-	if req.OutputValues == nil {
-		req.OutputValues = map[string]string{}
-	}
-	req.Actor = actor
-	return req, nil
-}
-
-func (s *Store) prepareRunCompletion(ctx context.Context, req CompleteRunRequest) (preparedRunCompletion, error) {
-	run, err := s.queries.GetTaskRun(ctx, string(req.RunID))
-	if err != nil {
-		return preparedRunCompletion{}, err
-	}
-	task, err := s.queries.GetTask(ctx, run.TaskID)
-	if err != nil {
-		return preparedRunCompletion{}, err
-	}
-	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, task)
-	if err != nil {
-		return preparedRunCompletion{}, err
-	}
-	if run.CompletedAtUnixMs.Valid {
-		return preparedRunCompletion{}, ErrRunAlreadyCompleted
-	}
-	idleSessionID, idleSessionCompletion := req.Admission.idleSession()
-	if !idleSessionCompletion && run.InterruptedAtUnixMs.Valid {
-		return preparedRunCompletion{}, errors.New("run already interrupted")
-	}
-	if idleSessionCompletion && !run.InterruptedAtUnixMs.Valid {
-		return preparedRunCompletion{}, errors.New("idle session completion requires an interrupted run")
-	}
-	if req.RequireGeneration && run.RunGeneration != req.ExpectedGeneration {
-		return preparedRunCompletion{}, fmt.Errorf("%w: got %d want %d", ErrStaleRunGeneration, req.ExpectedGeneration, run.RunGeneration)
-	}
-	snapshot := runStartSnapshot{}
-	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
-		return preparedRunCompletion{}, err
-	}
-	if idleSessionCompletion {
-		if snapshot.Node.Kind != workflow.NodeKindAgent {
-			return preparedRunCompletion{}, errors.New("idle session completion requires an agent node")
-		}
-		if !run.SessionID.Valid || strings.TrimSpace(run.SessionID.String) != idleSessionID {
-			return preparedRunCompletion{}, errors.New("idle session completion requires the matching retained session")
-		}
-	}
-	if snapshot.Node.Kind == workflow.NodeKindScript {
-		refreshed, err := s.liveScriptRunStartSnapshot(ctx, task, snapshot.Node.ID)
-		if err != nil {
-			return preparedRunCompletion{}, err
-		}
-		snapshot = refreshed
-	}
-	selectedTransitionID := strings.TrimSpace(req.TransitionID)
-	availableGroups := snapshot.transitionGroupsForNode(snapshot.Node.ID)
-	if selectedTransitionID == "" {
-		if len(availableGroups) == 0 {
-			return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeNoOutgoingTransition, Field: "transition_id", Message: "no outgoing transition is available in run-start snapshot"}}}
-		}
-		if len(availableGroups) != 1 {
-			return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeTransitionIDRequired, Field: "transition_id", Message: "transition id is required when multiple transitions are available"}}}
-		}
-		selectedTransitionID = availableGroups[0].TransitionID
-	}
-	group, ok := snapshot.transitionByID(selectedTransitionID)
-	if !ok {
-		return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeInvalidTransitionID, Field: "transition_id", Message: fmt.Sprintf("transition %q is not available in run-start snapshot", selectedTransitionID)}}}
-	}
-	issues := []CompletionValidationIssue{}
-	issues = append(issues, knownOutputIssues(group, req.OutputValues)...)
-	issues = append(issues, requiredOutputIssues(group, req.OutputValues)...)
-	if len(issues) > 0 {
-		return preparedRunCompletion{}, CompletionValidationError{Issues: issues}
-	}
-	if supportIssues := group.unsupportedRuntimeIssues(); len(supportIssues) > 0 {
-		issues := make([]CompletionValidationIssue, 0, len(supportIssues))
-		for _, issue := range supportIssues {
-			issues = append(issues, CompletionValidationIssue{Code: string(issue.Code), Field: "transition_id", Message: issue.Message})
-		}
-		return preparedRunCompletion{}, CompletionValidationError{Issues: issues}
-	}
-	return preparedRunCompletion{
-		run:           run,
-		task:          task,
-		executionRoot: executionRoot,
-		snapshot:      snapshot,
-		group:         group,
-	}, nil
-}
-
-func completionHandoff(snapshot runStartSnapshot, group transitionContractSnapshot) (CompletionHandoff, error) {
-	source := strings.TrimSpace(snapshot.Node.DisplayName)
-	if source == "" {
-		return CompletionHandoff{}, fmt.Errorf("derive completion handoff: source node %q has a blank display name", snapshot.Node.ID)
-	}
-	switch len(group.Edges) {
-	case 0:
-		return CompletionHandoff{}, fmt.Errorf("derive completion handoff: transition %q has no target edges", group.TransitionID)
-	case 1:
-		destination := strings.TrimSpace(group.Edges[0].TargetNode.DisplayName)
-		if destination == "" {
-			return CompletionHandoff{}, fmt.Errorf("derive completion handoff: ordinary transition %q target node %q has a blank display name", group.TransitionID, group.Edges[0].TargetNode.ID)
-		}
-		return CompletionHandoff{SourceNodeDisplayName: source, DestinationDisplayName: destination}, nil
-	default:
-		destination := strings.TrimSpace(group.DisplayName)
-		if group.SharedTargetNodeGroupDisplayName != nil {
-			destination = strings.TrimSpace(*group.SharedTargetNodeGroupDisplayName)
-		}
-		if destination == "" {
-			return CompletionHandoff{}, fmt.Errorf("derive completion handoff: fanout transition %q has a blank destination display name", group.TransitionID)
-		}
-		return CompletionHandoff{SourceNodeDisplayName: source, DestinationDisplayName: destination}, nil
-	}
-}
-
-func (s *Store) completePreparedRun(ctx context.Context, req CompleteRunRequest, prepared preparedRunCompletion) (CompleteRunResult, error) {
-	run := prepared.run
-	executionRoot := prepared.executionRoot
-	snapshot := prepared.snapshot
-	group := prepared.group
-	outputValuesJSON, err := workflow.MarshalString(req.OutputValues)
-	if err != nil {
-		return CompleteRunResult{}, err
-	}
-	now := s.now().UnixMilli()
-	transitionState := "applied"
-	appliedAt := sql.NullInt64{Int64: now, Valid: true}
-	requiresApproval := transitionGroupRequiresApproval(group)
-	if requiresApproval {
-		transitionState = "pending_approval"
-		appliedAt = sql.NullInt64{}
-	}
-	transitionID := prefixedID("transition")
-	result := CompleteRunResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: requiresApproval}
-	if run.InterruptedAtUnixMs.Valid {
-		projection, present, err := pendingInterruptedRunAttentionProjection(ctx, s.queries, workflow.RunID(run.ID))
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		if present {
-			result.ResolvedInterruptedRunProjections = append(result.ResolvedInterruptedRunProjections, projection)
-		}
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CompleteRunResult{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	expectedSessionID := sql.NullString{}
-	if idleSessionID, idleSessionCompletion := req.Admission.idleSession(); idleSessionCompletion {
-		expectedSessionID = sql.NullString{String: idleSessionID, Valid: true}
-	}
-	updatedCount, err := q.CompleteRunUpdateRun(ctx, sqlitegen.CompleteRunUpdateRunParams{
-		UpdatedAtUnixMs:             now,
-		CompletedAtUnixMs:           sql.NullInt64{Int64: now, Valid: true},
-		RunID:                       run.ID,
-		RunGeneration:               run.RunGeneration,
-		ExpectedInterruptedAtUnixMs: run.InterruptedAtUnixMs,
-		ExpectedSessionID:           expectedSessionID,
-	})
-	if err != nil {
-		return CompleteRunResult{}, fmt.Errorf("complete run: %w", err)
-	}
-	if updatedCount != 1 {
-		return CompleteRunResult{}, sql.ErrNoRows
-	}
-	if updated, err := q.UpdateTaskNodePlacementState(ctx, sqlitegen.UpdateTaskNodePlacementStateParams{ID: run.PlacementID, State: "completed", UpdatedAtUnixMs: now}); err != nil {
-		return CompleteRunResult{}, fmt.Errorf("complete source placement: %w", err)
-	} else if updated != 1 {
-		return CompleteRunResult{}, sql.ErrNoRows
-	}
-	if err := touchTaskUpdatedAt(ctx, q, run.TaskID, now); err != nil {
-		return CompleteRunResult{}, err
-	}
-	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: run.TaskID, SourceRunID: sql.NullString{String: run.ID, Valid: true}, SourcePlacementID: sql.NullString{String: run.PlacementID, Valid: true}, SourceNodeKey: string(snapshot.Node.Key), SourceNodeDisplayName: snapshot.Node.DisplayName, TransitionID: group.TransitionID, TransitionDisplayName: group.DisplayName, WorkflowRevisionSeen: snapshot.WorkflowRevisionSeen, Actor: req.Actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
-		return CompleteRunResult{}, fmt.Errorf("insert completion transition: %w", err)
-	}
-	for _, edge := range group.Edges {
-		if requiresApproval {
-			resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
-			if err != nil {
-				return CompleteRunResult{}, err
-			}
-			edgeMetadata := resolution.runMetadata(edge)
-			if executableNodeKind(edge.TargetNode.Kind) {
-				targetSnapshot, foundSnapshot, err := snapshot.forNode(edge.TargetNode)
-				if err != nil {
-					return CompleteRunResult{}, err
-				}
-				if !foundSnapshot {
-					return CompleteRunResult{}, fmt.Errorf("target node %q missing from run-start snapshot", edge.TargetNode.ID)
-				}
-				priorParameterValues, err := s.resolvePromptPriorParameterValues(ctx, q, run.TaskID, now, run.PlacementID, edge)
-				if err != nil {
-					return CompleteRunResult{}, err
-				}
-				edgeMetadata.PriorParameterValues = priorParameterValues
-				edgeMetadata.TargetRunStartSnapshot = &targetSnapshot
-			}
-			if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, edge, "", "pending", edgeMetadata); err != nil {
-				return CompleteRunResult{}, err
-			}
-			continue
-		}
-		if edge.TargetNode.Kind == workflow.NodeKindJoin {
-			if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, edge, "", "applied", workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(edge.ContextSource)}); err != nil {
-				return CompleteRunResult{}, err
-			}
-			joined, err := s.applyJoinIfReady(ctx, tx, q, now, run.TaskID, run.PlacementID, snapshot, edge)
-			if err != nil {
-				return CompleteRunResult{}, err
-			}
-			result.PlacementIDs = append(result.PlacementIDs, joined.PlacementIDs...)
-			result.RunIDs = append(result.RunIDs, joined.RunIDs...)
-			result.InterruptedRunIDs = append(result.InterruptedRunIDs, joined.InterruptedRunIDs...)
-			continue
-		}
-		targetPlacementID := prefixedID("placement")
-		isFanoutBranch := len(group.Edges) > 1
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: run.TaskID, NodeID: nullableString(string(edge.TargetNode.ID)), State: placementStateForNode(edge.TargetNode), ParallelBatchTransitionID: sql.NullString{String: transitionID, Valid: isFanoutBranch}, ParallelBranchEdgeID: sql.NullString{String: string(edge.ID), Valid: isFanoutBranch}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
-			return CompleteRunResult{}, fmt.Errorf("insert target placement: %w", err)
-		}
-		result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))
-		if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, edge, targetPlacementID, "applied", workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(edge.ContextSource)}); err != nil {
-			return CompleteRunResult{}, err
-		}
-		if !executableNodeKind(edge.TargetNode.Kind) {
-			continue
-		}
-		targetSnapshot, foundSnapshot, err := snapshot.forNode(edge.TargetNode)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		if !foundSnapshot {
-			return CompleteRunResult{}, fmt.Errorf("target node %q missing from run-start snapshot", edge.TargetNode.ID)
-		}
-		resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		priorParameterValues, err := s.resolvePromptPriorParameterValues(ctx, q, run.TaskID, now, run.PlacementID, edge)
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		targetMetadata := resolution.runMetadata(edge)
-		targetMetadata.PromptTemplate = strings.TrimSpace(edge.PromptTemplate)
-		targetMetadata.Parameters = append([]workflow.Parameter(nil), edge.Parameters...)
-		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
-		createdRun, err := s.insertExecutableRun(ctx, q, executableRunRequest{
-			PlacementID:   targetPlacementID,
-			NodeID:        edge.TargetNode.ID,
-			Snapshot:      targetSnapshot,
-			Metadata:      targetMetadata,
-			ExecutionRoot: executionRoot,
-			Now:           now,
-		})
-		if err != nil {
-			return CompleteRunResult{}, err
-		}
-		result.RunIDs = append(result.RunIDs, createdRun.RunID)
-		if createdRun.Interrupted {
-			result.InterruptedRunIDs = append(result.InterruptedRunIDs, createdRun.RunID)
-		}
-	}
-	event, err := runCompletedWorkflowEvent(ctx, q, run.TaskID, transitionID, run.ID, now)
-	if err != nil {
-		return CompleteRunResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return CompleteRunResult{}, err
-	}
-	if err := s.PublishWorkflowEvent(ctx, event); err != nil {
-		return CompleteRunResult{}, err
-	}
-	return result, nil
-}
-
-func runCompletedWorkflowEvent(ctx context.Context, q *sqlitegen.Queries, taskID string, transitionID string, runID string, now int64) (WorkflowEventRecord, error) {
-	row, err := q.GetTaskProjectWorkflowIDs(ctx, taskID)
-	if err != nil {
-		return WorkflowEventRecord{}, fmt.Errorf("load completion event task identity: %w", err)
-	}
-	projectID := row.ProjectID
-	workflowID := row.WorkflowID
-	return WorkflowEventRecord{
-		ProjectID:        &projectID,
-		WorkflowID:       &workflowID,
-		Resource:         serverapi.WorkflowProjectEventResourceTask,
-		Action:           serverapi.WorkflowProjectEventActionCompleted,
-		PrimaryEntityID:  taskID,
-		RelatedIDs:       []string{transitionID, runID},
-		OccurredAtUnixMs: now,
-	}, nil
 }
 
 func touchTaskUpdatedAt(ctx context.Context, q *sqlitegen.Queries, taskID string, now int64) error {
@@ -1041,105 +466,85 @@ func touchTaskUpdatedAt(ctx context.Context, q *sqlitegen.Queries, taskID string
 	return nil
 }
 
-func transitionGroupRequiresApproval(group transitionContractSnapshot) bool {
-	for _, edge := range group.Edges {
-		if edge.RequiresApproval {
-			return true
-		}
+func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
+	target, err := executionTargetSnapshotFromTask(row)
+	if err != nil {
+		return TaskRecord{}, err
 	}
-	return false
+	return TaskRecord{
+		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: workflow.WorkflowID(row.WorkflowID),
+		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
+		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
+		ManagedWorktreeID: strings.TrimSpace(row.ManagedWorktreeID.String), ExecutionTarget: target,
+		Version: row.WorkflowRevisionSeen,
+	}, nil
 }
 
-func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason string) (CancelTaskResult, error) {
-	task, err := s.queries.GetTask(ctx, string(taskID))
-	if err != nil {
-		return CancelTaskResult{}, err
+func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID, workspaceID string) (string, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return "", errors.New("project id is required")
 	}
-	taskRecord, err := taskRecordFromTask(task)
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	def, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	terminal, err := terminalNode(def)
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	now := s.now().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	resolution, err := taskAttentionResolution(ctx, q, string(taskID))
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	if updated, err := q.CancelTask(ctx, sqlitegen.CancelTaskParams{ID: string(taskID), CanceledAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CancellationReason: nullableString(strings.TrimSpace(reason)), UpdatedAtUnixMs: now}); err != nil {
-		return CancelTaskResult{}, err
-	} else if updated != 1 {
-		return CancelTaskResult{}, sql.ErrNoRows
-	}
-	if _, err := q.InterruptActiveTaskRuns(ctx, sqlitegen.InterruptActiveTaskRunsParams{TaskID: string(taskID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: nullableString("task_canceled"), InterruptionDetailJson: "{}"}); err != nil {
-		return CancelTaskResult{}, err
-	}
-	placements, err := q.ListTaskNodePlacements(ctx, string(taskID))
-	if err != nil {
-		return CancelTaskResult{}, err
-	}
-	hasTerminalPlacement := false
-	for _, placement := range placements {
-		if placement.NodeID.Valid && placement.NodeID.String == string(workflow.NodeIDOf(terminal)) && placement.State == "active" {
-			hasTerminalPlacement = true
-			continue
+	if workspaceID = strings.TrimSpace(workspaceID); workspaceID != "" {
+		workspace, err := q.GetWorkspaceByID(ctx, workspaceID)
+		if err != nil {
+			return "", fmt.Errorf("source workspace %q: %w", workspaceID, err)
 		}
-		if placement.State != "active" && placement.State != "waiting_approval" {
-			continue
+		if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(projectID) {
+			return "", fmt.Errorf("source workspace %q does not belong to project %q: %w", workspaceID, projectID, ErrSourceWorkspaceNotInProject)
 		}
-		if _, err := q.UpdateTaskNodePlacementState(ctx, sqlitegen.UpdateTaskNodePlacementStateParams{ID: placement.ID, State: "completed", UpdatedAtUnixMs: now}); err != nil {
-			return CancelTaskResult{}, err
+		return workspaceID, nil
+	}
+	workspaces, err := q.ListProjectWorkspaces(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	for _, workspace := range workspaces {
+		if workspace.IsPrimary != 0 && strings.TrimSpace(workspace.ID) != "" {
+			return strings.TrimSpace(workspace.ID), nil
 		}
 	}
-	if !hasTerminalPlacement {
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(terminal))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
-			return CancelTaskResult{}, err
+	for _, workspace := range workspaces {
+		if strings.TrimSpace(workspace.ID) != "" {
+			return strings.TrimSpace(workspace.ID), nil
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return CancelTaskResult{}, err
-	}
-	return CancelTaskResult{TaskRecord: taskRecord, TaskAttentionResolution: resolution}, nil
+	return "", fmt.Errorf("project %q has no source workspace", projectID)
 }
 
-func (s *Store) ListPlacements(ctx context.Context, taskID workflow.TaskID) ([]PlacementRecord, error) {
-	rows, err := s.queries.ListTaskNodePlacements(ctx, string(taskID))
+func taskMetadataWithSourceWorkspaceSnapshot(ctx context.Context, q *sqlitegen.Queries, currentMetadata, sourceWorkspaceID string) (string, error) {
+	payload := map[string]any{}
+	if strings.TrimSpace(currentMetadata) != "" {
+		if err := workflow.UnmarshalString(currentMetadata, &payload); err != nil {
+			return "", fmt.Errorf("decode task metadata json: %w", err)
+		}
+	}
+	if sourceWorkspaceID = strings.TrimSpace(sourceWorkspaceID); sourceWorkspaceID == "" {
+		delete(payload, "source_workspace_snapshot")
+		return workflow.MarshalString(payload)
+	}
+	workspace, err := q.GetWorkspaceByID(ctx, sourceWorkspaceID)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("source workspace snapshot %q: %w", sourceWorkspaceID, err)
 	}
-	out := make([]PlacementRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, PlacementRecord{ID: workflow.PlacementID(row.ID), TaskID: workflow.TaskID(row.TaskID), NodeID: workflow.NodeID(row.NodeID.String), State: row.State})
+	payload["source_workspace_snapshot"] = map[string]string{
+		"workspace_id": workspace.ID, "display_name": workspaceSnapshotDisplayName(workspace.CanonicalRootPath), "root_path": workspace.CanonicalRootPath,
 	}
-	return out, nil
+	return workflow.MarshalString(payload)
 }
 
-func (s *Store) ListRuns(ctx context.Context, taskID workflow.TaskID) ([]RunRecord, error) {
-	rows, err := s.queries.ListTaskRuns(ctx, string(taskID))
-	if err != nil {
-		return nil, err
+func workspaceSnapshotDisplayName(rootPath string) string {
+	if rootPath = strings.TrimSpace(rootPath); rootPath == "" {
+		return ""
 	}
-	out := make([]RunRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, runRecordFromTaskRun(row))
+	base := filepath.Base(filepath.Clean(rootPath))
+	if base == "." || base == string(filepath.Separator) {
+		return ""
 	}
-	return out, nil
+	return base
 }
 
-func startNode(def workflow.Definition) (workflow.Node, error) {
-	for _, node := range def.Nodes {
+func startNode(definition workflow.Definition) (workflow.Node, error) {
+	for _, node := range definition.Nodes {
 		if node.Kind() == workflow.NodeKindStart {
 			return node, nil
 		}
@@ -1147,51 +552,9 @@ func startNode(def workflow.Definition) (workflow.Node, error) {
 	return nil, errors.New("workflow has no start node")
 }
 
-func terminalNode(def workflow.Definition) (workflow.Node, error) {
-	var fallback workflow.Node
-	for _, node := range def.Nodes {
-		if node.Kind() != workflow.NodeKindTerminal {
-			continue
-		}
-		if string(workflow.NodeKey(node)) == "done" {
-			return node, nil
-		}
-		if fallback == nil {
-			fallback = node
-		}
-	}
-	if fallback != nil {
-		return fallback, nil
-	}
-	return nil, errors.New("workflow has no terminal node")
-}
-
-func (s *Store) liveScriptRunStartSnapshot(ctx context.Context, task sqlitegen.TaskRecord, nodeID workflow.NodeID) (runStartSnapshot, error) {
-	def, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
-	if err != nil {
-		return runStartSnapshot{}, err
-	}
-	snapshot, err := newRunStartSnapshot(def, workflowRecord, nodeID)
-	if err != nil {
-		return runStartSnapshot{}, err
-	}
-	if snapshot.Node.Kind != workflow.NodeKindScript {
-		return runStartSnapshot{}, fmt.Errorf("live node %q is %q, want script", nodeID, snapshot.Node.Kind)
-	}
-	return snapshot, nil
-}
-
-func placementStateForNode(node nodeContractSnapshot) string {
-	return "active"
-}
-
-func placementStateForWorkflowNode(node workflow.Node) string {
-	return "active"
-}
-
-func startTransition(def workflow.Definition, startNodeID workflow.NodeID) (workflow.TransitionGroup, workflow.Edge, workflow.Node, error) {
+func startTransition(definition workflow.Definition, startNodeID workflow.NodeID) (workflow.TransitionGroup, workflow.Edge, workflow.Node, error) {
 	var groups []workflow.TransitionGroup
-	for _, group := range def.TransitionGroups {
+	for _, group := range definition.TransitionGroups {
 		if group.SourceNodeID == startNodeID {
 			groups = append(groups, group)
 		}
@@ -1200,7 +563,7 @@ func startTransition(def workflow.Definition, startNodeID workflow.NodeID) (work
 		return workflow.TransitionGroup{}, workflow.Edge{}, nil, errors.New("start node must have exactly one transition group")
 	}
 	var edges []workflow.Edge
-	for _, edge := range def.Edges {
+	for _, edge := range definition.Edges {
 		if edge.TransitionGroupID == groups[0].ID {
 			edges = append(edges, edge)
 		}
@@ -1208,7 +571,7 @@ func startTransition(def workflow.Definition, startNodeID workflow.NodeID) (work
 	if len(edges) != 1 {
 		return workflow.TransitionGroup{}, workflow.Edge{}, nil, errors.New("start transition group must have exactly one edge")
 	}
-	for _, node := range def.Nodes {
+	for _, node := range definition.Nodes {
 		if workflow.NodeIDOf(node) == edges[0].TargetNodeID {
 			return groups[0], edges[0], node, nil
 		}

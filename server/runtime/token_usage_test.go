@@ -14,6 +14,7 @@ import (
 )
 
 func TestPreciseRefreshCheckpointsFollowThresholdBands(t *testing.T) {
+	t.Parallel()
 	threshold := 300
 	if got := firstPreciseRefreshCheckpoint(threshold); got != 150 {
 		t.Fatalf("first checkpoint=%d, want 150", got)
@@ -39,6 +40,7 @@ func TestPreciseRefreshCheckpointsFollowThresholdBands(t *testing.T) {
 }
 
 func TestPreciseRefreshCheckpointsUseRecentSignificantGrowth(t *testing.T) {
+	t.Parallel()
 	threshold := 300
 	recentGrowth := []int{6, 6, 6, 6}
 	if got := nextPreciseRefreshCheckpoint(150, threshold, recentGrowth); got != 168 {
@@ -50,6 +52,7 @@ func TestPreciseRefreshCheckpointsUseRecentSignificantGrowth(t *testing.T) {
 }
 
 func TestTokenUsageTrackerUsesFallbackScheduleAcrossPlainInvalidation(t *testing.T) {
+	t.Parallel()
 	tracker := newTokenUsageTracker()
 	threshold := 300
 	if tracker.currentCheckpointDue(149, threshold, false) {
@@ -82,6 +85,7 @@ func TestTokenUsageTrackerUsesFallbackScheduleAcrossPlainInvalidation(t *testing
 }
 
 func TestTokenUsageTrackerForcesCriticalRefreshAfterSignificantMutation(t *testing.T) {
+	t.Parallel()
 	tracker := newTokenUsageTracker()
 	threshold := 300
 	tracker.store("req-1", 120, true)
@@ -102,6 +106,7 @@ func TestTokenUsageTrackerForcesCriticalRefreshAfterSignificantMutation(t *testi
 }
 
 func TestTokenUsageTrackerHardResetClearsAdaptiveGrowth(t *testing.T) {
+	t.Parallel()
 	tracker := newTokenUsageTracker()
 	tracker.storeUsageBaseline(120, 100)
 	tracker.store("req-1", 150, true)
@@ -123,6 +128,7 @@ func TestTokenUsageTrackerHardResetClearsAdaptiveGrowth(t *testing.T) {
 }
 
 func TestTokenUsageTrackerEstimatesCurrentInputTokensFromUsageBaselineDelta(t *testing.T) {
+	t.Parallel()
 	tracker := newTokenUsageTracker()
 	tracker.storeUsageBaseline(900, 180)
 
@@ -135,6 +141,7 @@ func TestTokenUsageTrackerEstimatesCurrentInputTokensFromUsageBaselineDelta(t *t
 }
 
 func TestCurrentInputTokensPreciselyRechecksAfterTranscriptMutation(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 240, contextWindow: 400000}
@@ -169,6 +176,7 @@ func TestCurrentInputTokensPreciselyRechecksAfterTranscriptMutation(t *testing.T
 }
 
 func TestContextUsagePrefersFreshPreciseCurrentTokens(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
@@ -188,6 +196,7 @@ func TestContextUsagePrefersFreshPreciseCurrentTokens(t *testing.T) {
 }
 
 func TestCurrentInputTokensPreciselyRechecksAfterFastModeToggle(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
@@ -218,6 +227,7 @@ func TestCurrentInputTokensPreciselyRechecksAfterFastModeToggle(t *testing.T) {
 }
 
 func TestCurrentInputTokensPreciselyIfDueSkipsBackendFarBelowCheckpoint(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 999, contextWindow: 400000}
@@ -235,6 +245,7 @@ func TestCurrentInputTokensPreciselyIfDueSkipsBackendFarBelowCheckpoint(t *testi
 }
 
 func TestCurrentInputTokensPreciselyIfCriticalForcesRefreshAfterSignificantMutation(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
@@ -264,6 +275,7 @@ func TestCurrentInputTokensPreciselyIfCriticalForcesRefreshAfterSignificantMutat
 }
 
 func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{countErr: errors.New("chatgpt-codex status 404"), contextWindow: 400000}
@@ -333,6 +345,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 // that would disable exact counting for the rest of the active list. The probe
 // falls back to an estimate transiently and keeps retrying the backend.
 func TestCurrentInputTokensPreciselyDoesNotPersistFailureForRepairable400(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{
@@ -373,6 +386,7 @@ func TestCurrentInputTokensPreciselyDoesNotPersistFailureForRepairable400(t *tes
 }
 
 func TestCurrentInputTokensPreciselySkipsUnsupportedCountClient(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	supported := false
@@ -405,6 +419,7 @@ func TestCurrentInputTokensPreciselySkipsUnsupportedCountClient(t *testing.T) {
 }
 
 func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnSupportProbeFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &preciseCompactionClient{inputTokenCount: 123, contextWindow: 400000, supportErr: errors.New("oauth metadata unavailable")}

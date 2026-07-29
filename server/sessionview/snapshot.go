@@ -230,7 +230,6 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		NavigationTargetSessionID:         session.NavigationTargetSessionID(meta),
 		LastCommittedAssistantFinalAnswer: segment.LastCommittedAssistantFinalAnswer,
 		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, false),
-		WorkflowSession:                   workflowSessionStatus(meta.WorkflowSession),
 	}
 	view := runtimeview.RuntimeMainViewFromActivity(
 		s.activity.Activity,
@@ -326,15 +325,4 @@ func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegment
 		runtimeview.ConversationFreshnessFromSession(freshness),
 		segment,
 	), nil
-}
-
-func workflowSessionStatus(state *session.WorkflowSessionState) *clientui.WorkflowSessionStatus {
-	if state == nil {
-		return nil
-	}
-	return &clientui.WorkflowSessionStatus{
-		RunID:      strings.TrimSpace(state.RunID),
-		TaskID:     strings.TrimSpace(state.TaskID),
-		WorkflowID: strings.TrimSpace(state.WorkflowID),
-	}
 }

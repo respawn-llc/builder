@@ -9,6 +9,7 @@ import (
 )
 
 func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -50,6 +51,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 }
 
 func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
@@ -94,6 +96,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 }
 
 func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",

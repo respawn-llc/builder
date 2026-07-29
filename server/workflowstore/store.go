@@ -14,6 +14,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/requestmemo"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -28,6 +29,7 @@ type Store struct {
 	roleResolver workflow.RoleResolver
 	now          func() time.Time
 	approvalGate chan struct{}
+	graphSaves   *requestmemo.MutationLaneRegistry[workflow.WorkflowID]
 	eventMu      sync.RWMutex
 	eventSink    WorkflowEventPublisher
 }
@@ -58,12 +60,32 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		queries:      metadataStore.Queries(),
 		now:          func() time.Time { return time.Now().UTC() },
 		approvalGate: make(chan struct{}, 1),
+		graphSaves:   requestmemo.NewMutationLaneRegistry[workflow.WorkflowID](),
 		eventSink:    noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {
 		opt(store)
 	}
 	return store, nil
+}
+
+func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID workflow.WorkflowID) ([]workflow.TaskID, error) {
+	if strings.TrimSpace(string(workflowID)) == "" {
+		return nil, errors.New("workflow id is required")
+	}
+	rows, err := s.queries.ListWorkflowTaskIDs(ctx, string(workflowID))
+	if err != nil {
+		return nil, err
+	}
+	taskIDs := make([]workflow.TaskID, 0, len(rows))
+	for _, row := range rows {
+		taskID := workflow.TaskID(strings.TrimSpace(row))
+		if taskID == "" {
+			return nil, errors.New("workflow task id is blank")
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs, nil
 }
 
 func (s *Store) incrementWorkflowVersion(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (int64, error) {
@@ -249,89 +271,29 @@ type TaskRecord struct {
 	SourceWorkspaceID string
 	ManagedWorktreeID string
 	ExecutionTarget   *ExecutionTargetSnapshot
-	CanceledAt        *int64
-	CancelReason      *string
 	Version           int64
 }
 
-type PlacementRecord struct {
-	ID     workflow.PlacementID
-	TaskID workflow.TaskID
-	NodeID workflow.NodeID
-	State  string
-}
-
-type RunRecord struct {
-	ID                      workflow.RunID
-	TaskID                  workflow.TaskID
-	PlacementID             workflow.PlacementID
-	NodeID                  workflow.NodeID
-	SessionID               string
-	Generation              int64
-	AutomationRequestedAt   *int64
-	StartedAt               *int64
-	CompletedAt             *int64
-	InterruptedAt           *int64
-	InterruptionReason      *string
-	WaitingAskID            *string
-	EffectiveCompletionMode *string
-	InvalidCompletions      int64
-}
-
-type ResolvedWaitingAsk struct {
-	Run        RunRecord
-	ProjectID  string
-	WorkflowID workflow.WorkflowID
-}
-
-type ActiveRunCompletionTargetSelector struct {
-	RunID     workflow.RunID
-	SessionID string
-	TaskID    workflow.TaskID
-	ProjectID string
-	ShortID   string
-}
-
-type RunCompletionTarget struct {
-	Run RunRecord
-}
-
-type RunnableRunRecord struct {
-	RunRecord
-	WorkflowRevisionSeen int64
-}
-
-type RunAdmission struct {
-	RunID                   workflow.RunID
-	ExpectedGeneration      int64
-	SessionID               *string
-	EffectiveCompletionMode *string
-}
-
-type RunStartContext struct {
-	Run                            RunRecord
+// CurrentNodeStartContext is the live execution contract derived from one
+// Current Node and the latest Workflow definition. It deliberately has no
+// historical execution identity or frozen execution snapshot.
+type CurrentNodeStartContext struct {
 	Task                           TaskRecord
 	Workflow                       WorkflowRecord
 	Node                           NodeRecord
+	CurrentNode                    workflow.CurrentNode
+	EnteringEdge                   workflow.Edge
 	ContextMode                    workflow.ContextMode
-	WorkflowHasContinueSessionEdge bool
-	SourceRunID                    workflow.RunID
-	SourceSessionID                string
-	SourceNode                     NodeRecord
+	SourceSessionID                *runtimeids.SessionID
+	IsFanoutBranch                 bool
 	AcceptedTransitionPath         AcceptedTransitionPath
-	// IsFanoutBranch is true when this run's placement is one branch of a
-	// parallel fan-out transition group. Continuation modes must isolate such
-	// runs (fork the source session) instead of sharing/mutating it.
-	IsFanoutBranch       bool
-	TransitionIDs        []string
-	TransitionOptions    []TransitionOption
-	PromptTemplate       string
-	Parameters           []workflow.Parameter
-	ParameterValues      map[string]string
-	PriorParameterValues map[string]map[string]string
-	InputValues          map[string]string
-	NodeOutputValues     map[string]map[string]string
-	ExecutionRoot        *ExecutionRoot
+	TransitionIDs                  []string
+	TransitionOptions              []TransitionOption
+	HasContinueSessionOutgoingEdge bool
+	PromptTemplate                 string
+	ParameterValues                map[string]string
+	PriorParameterValues           map[string]map[string]string
+	ExecutionRoot                  *ExecutionRoot
 }
 
 type AcceptedTransitionPath struct {
@@ -344,27 +306,6 @@ type TransitionOption struct {
 	DisplayName string
 	Description string
 	Parameters  []workflow.Parameter
-}
-
-type TransitionRecord struct {
-	ID           workflow.TransitionID
-	TaskID       workflow.TaskID
-	TransitionID string
-	State        string
-	Commentary   string
-	OutputValues map[string]string
-	CreatedAt    int64
-}
-
-type TransitionEdgeRecord struct {
-	ID                   string
-	TaskTransitionID     workflow.TransitionID
-	WorkflowEdgeID       workflow.EdgeID
-	EdgeKey              string
-	TargetNodeID         workflow.NodeID
-	TargetPlacementID    workflow.PlacementID
-	State                string
-	WorkflowRevisionSeen int64
 }
 
 type CommentRecord struct {
@@ -980,7 +921,7 @@ func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
 	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphNode(currentGraph, nodeID)); err != nil {
 		return err
 	}
-	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
+	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
 	if err != nil {
 		return err
 	}

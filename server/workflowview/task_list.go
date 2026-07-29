@@ -9,18 +9,20 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/shared/serverapi"
 )
 
 type TaskList struct {
-	metadata        *metadata.Store
-	queries         *sqlitegen.Queries
-	definitions     *DefinitionProjection
-	projector       *TaskProjector
-	statusSnapshots *TaskStatusSnapshotCoordinator
+	metadata    *metadata.Store
+	queries     *sqlitegen.Queries
+	definitions *DefinitionProjection
+	projector   *TaskProjector
+	authority   *sessionruntime.Authority
 }
 
-func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, statusSnapshots *TaskStatusSnapshotCoordinator) (*TaskList, error) {
+func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskList, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -30,19 +32,19 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
-	if statusSnapshots == nil {
-		return nil, errors.New("task status snapshot coordinator is required")
+	if authority == nil {
+		return nil, errors.New("session runtime authority is required")
 	}
 	return &TaskList{
-		metadata:        metadataStore,
-		queries:         metadataStore.Queries(),
-		definitions:     definitions,
-		projector:       projector,
-		statusSnapshots: statusSnapshots,
+		metadata:    metadataStore,
+		queries:     metadataStore.Queries(),
+		definitions: definitions,
+		projector:   projector,
+		authority:   authority,
 	}, nil
 }
 
-func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (response serverapi.WorkflowTaskListResponse, err error) {
+func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	if l == nil {
 		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
@@ -140,20 +142,21 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	var narrowedQuery *workflowTaskListNarrowedQueryFacts
 	if workflowID != nil {
 		narrowedQuery = &workflowTaskListNarrowedQueryFacts{
-			workflowID:             *workflowID,
-			canceledTerminalNodeID: canceledBoardTerminalNodeID(definition),
-			columns:                columns,
-			columnKeys:             req.ColumnKeys,
+			workflowID: *workflowID,
+			columns:    columns,
+			columnKeys: req.ColumnKeys,
 		}
 	}
-	statusSnapshot, err := l.statusSnapshots.Capture(ctx)
+	var liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	if workflowID == nil {
+		liveSnapshots, err = l.authority.CurrentProjectTaskExecutionSnapshots(projectID)
+	} else {
+		liveSnapshots, err = l.authority.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, workflow.WorkflowID(*workflowID))
+	}
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	defer func() {
-		err = errors.Join(err, statusSnapshot.Close())
-	}()
-	rows, err := l.queryRows(ctx, statusSnapshot, workflowTaskListQueryRequest{
+	rows, err := l.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:      projectID,
 		narrowed:       narrowedQuery,
 		statusKinds:    req.StatusKinds,
@@ -163,6 +166,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		cursor:         cursor,
 		cursorSet:      hasPageToken,
 		limit:          pageSize + 1,
+		liveSnapshots:  liveSnapshots,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
@@ -182,7 +186,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	for _, row := range pageItems {
 		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
 	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, statusSnapshot.queries, pageTaskIDs)
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}

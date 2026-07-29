@@ -31,7 +31,7 @@ Environment:
             Server test-runtime cap in seconds. Defaults to 180.
   KENT_TEST_GO_PACKAGE_PARALLELISM
             Maximum Go test packages to execute concurrently. Defaults to the detected CPU count,
-            capped at 18, and falls back to 4 when CPU detection is unavailable.
+            capped at 10, and falls back to 4 when CPU detection is unavailable.
   KENT_TEST_TUI_TIMEOUT_SECONDS
             TUI test wall-clock cap in seconds. Defaults to 600.
   -h, --help
@@ -145,8 +145,8 @@ case "$default_go_test_package_parallelism" in
     default_go_test_package_parallelism=4
     ;;
 esac
-if [ "$default_go_test_package_parallelism" -gt 18 ]; then
-    default_go_test_package_parallelism=18
+if [ "$default_go_test_package_parallelism" -gt 10 ]; then
+    default_go_test_package_parallelism=10
 fi
 go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-$default_go_test_package_parallelism}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"

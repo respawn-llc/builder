@@ -320,13 +320,6 @@ func (s *Core) Close() error {
 	return s.closeErr
 }
 
-func (s *Core) WorkflowExecutionFailures() <-chan error {
-	if s == nil || s.safeBundles().Workflows.fatal == nil {
-		return nil
-	}
-	return s.safeBundles().Workflows.fatal.Failures()
-}
-
 func (s *Core) Config() config.App {
 	if s == nil {
 		return config.App{}

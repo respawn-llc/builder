@@ -15,10 +15,8 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
-	servercore "core/server/core"
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/workflowexecution"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -142,55 +140,6 @@ func TestStartWithOptionsMissingConfigExposesBootstrapSurface(t *testing.T) {
 	_, err = remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
 	if !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
 		t.Fatalf("ListProjects error = %v, want onboarding_required", err)
-	}
-}
-
-func TestEmbeddedServerStopsAfterFatalWorkflowExecutionFailure(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-	configureServeTestServerPort(t)
-	fatalSignal := workflowexecution.NewFatalSignal()
-	server, err := StartWithOptions(
-		context.Background(),
-		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
-		startupEnvAuthHandler{},
-		startupNoopOnboarding,
-		Options{Core: servercore.Options{WorkflowExecutionFatal: fatalSignal}},
-	)
-	if err != nil {
-		t.Fatalf("StartWithOptions: %v", err)
-	}
-	releaseServeTestPortForConfig(server.Config())
-	if err := server.ServeBackground(); err != nil {
-		t.Fatalf("ServeBackground: %v", err)
-	}
-	remote := dialEmbeddedRemote(t, server.Config())
-	if err := remote.Close(); err != nil {
-		t.Fatalf("close readiness remote: %v", err)
-	}
-	cause := errors.New("automatic successor registration failed")
-	if err := fatalSignal.Report(cause); err != nil {
-		t.Fatalf("Report fatal failure: %v", err)
-	}
-	select {
-	case failure := <-server.Failures():
-		if !errors.Is(failure, cause) {
-			t.Fatalf("Failures error = %v, want fatal workflow execution cause", failure)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("embedded owner was not notified of fatal workflow execution failure")
-	}
-	healthURL := config.ServerHTTPBaseURL(server.Config()) + protocol.HealthPath
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		response, err := http.Get(healthURL)
-		if response != nil {
-			_ = response.Body.Close()
-		}
-		return err != nil
-	}) {
-		t.Fatal("embedded RPC remained reachable after fatal workflow execution failure")
-	}
-	if err := server.Close(); !errors.Is(err, cause) {
-		t.Fatalf("Close error = %v, want fatal workflow execution cause", err)
 	}
 }
 

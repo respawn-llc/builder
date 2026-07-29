@@ -176,21 +176,6 @@ func TestBackfillLockedContextBudgetWithoutLockedContractDoesNotPersistLazyStore
 	}
 }
 
-func TestSetWorkflowSessionStateNormalizesEmptyStateToNil(t *testing.T) {
-	store := newSessionTestStore(t)
-
-	if err := store.SetWorkflowSessionState(&WorkflowSessionState{
-		RunID:      "   ",
-		TaskID:     "\t",
-		WorkflowID: "\n",
-	}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	if store.Meta().WorkflowSession != nil {
-		t.Fatalf("workflow session = %+v, want nil", store.Meta().WorkflowSession)
-	}
-}
-
 func TestAppendTypedRecordMonotonicSequence(t *testing.T) {
 	store := newSessionTestStore(t)
 

@@ -56,7 +56,6 @@ func persistedMetaFromMetadata(metadata session.Meta) session.Meta {
 		WorktreeReminder:                metadata.WorktreeReminder,
 		UsageState:                      metadata.UsageState,
 		Goal:                            metadata.Goal,
-		WorkflowSession:                 metadata.WorkflowSession,
 		Locked:                          metadata.Locked,
 	}
 }
@@ -124,6 +123,7 @@ func (o *blockingOrderedSessionObserver) ObservePersistedStore(ctx context.Conte
 }
 
 func TestSessionPersistenceRejectsMissingAuthoritativeExecutionTarget(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		metadataJSON string
@@ -176,6 +176,7 @@ func TestSessionPersistenceRejectsMissingAuthoritativeExecutionTarget(t *testing
 }
 
 func TestReadOnlyOpenDoesNotRepublishResolvedSnapshot(t *testing.T) {
+	t.Parallel()
 	metadataStore, cfg, binding := newMetadataTestStore(t)
 	sessionStore := createMetadataTestSession(t, metadataStore, cfg, binding)
 	staleMeta := persistedMetaFromMetadata(sessionStore.Meta())
@@ -204,6 +205,7 @@ func TestReadOnlyOpenDoesNotRepublishResolvedSnapshot(t *testing.T) {
 }
 
 func TestEventUseReconciliationUpdatesOnlyEventLogState(t *testing.T) {
+	t.Parallel()
 	metadataStore, cfg, binding := newMetadataTestStore(t)
 	sessionStore := createMetadataTestSession(t, metadataStore, cfg, binding)
 	if err := sessionStore.SetListingMetadata("authoritative name", "authoritative preview"); err != nil {
@@ -250,6 +252,7 @@ func TestEventUseReconciliationUpdatesOnlyEventLogState(t *testing.T) {
 }
 
 func TestEventUseReconciliationAppliesHistoryReplacementUsageSemantics(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 	}{
@@ -321,6 +324,7 @@ func TestEventUseReconciliationAppliesHistoryReplacementUsageSemantics(t *testin
 }
 
 func TestEventUseReconciliationDoesNotEraseConcurrentlyPersistedCompactedUsage(t *testing.T) {
+	t.Parallel()
 	metadataStore, cfg, binding := newMetadataTestStore(t)
 	sessionStore := createMetadataTestSession(t, metadataStore, cfg, binding)
 	oldUsage := &session.UsageState{
@@ -406,6 +410,7 @@ func TestEventUseReconciliationDoesNotEraseConcurrentlyPersistedCompactedUsage(t
 }
 
 func TestConcurrentSessionPersistencePublishesSnapshotsInMutationOrder(t *testing.T) {
+	t.Parallel()
 	metadataStore, cfg, binding := newMetadataTestStore(t)
 	observer := newBlockingOrderedSessionObserver(metadataStore)
 	sessionStore, err := session.Create(

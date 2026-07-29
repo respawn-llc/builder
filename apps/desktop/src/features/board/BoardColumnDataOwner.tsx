@@ -9,7 +9,6 @@ import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useBoardNodeCards } from "./useBoardData";
-import { useObservedInterruptedRuns } from "./useObservedInterruptedRuns";
 
 export type BoardColumnUpdateCause = "hydration" | "pagination" | "domain";
 
@@ -48,7 +47,6 @@ export function BoardColumnDataOwner({
   onCardsLoadError,
   onDataViewChange,
   onDataViewRelease,
-  onInterruptedRunObserved,
   onReportColumnSnapshot,
 }: Readonly<{
   board: SelectedWorkflowBoard;
@@ -56,7 +54,6 @@ export function BoardColumnDataOwner({
   onCardsLoadError: (error: unknown) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
@@ -254,7 +251,6 @@ export function BoardColumnDataOwner({
     [column.id, onDataViewRelease, onReportColumnSnapshot],
   );
 
-  useObservedInterruptedRuns(cardVMs, onInterruptedRunObserved);
   return null;
 }
 

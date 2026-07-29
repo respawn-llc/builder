@@ -56,9 +56,8 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 }
 
 type Options struct {
-	RuntimeClientFactory   runtimewire.RuntimeClientFactory
-	RootLease              *RootLockLease
-	WorkflowExecutionFatal *workflowexecution.FatalSignal
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
+	RootLease            *RootLockLease
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
@@ -104,7 +103,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
-	var workflowScheduler *workflowexecution.SchedulerService
+	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
@@ -116,9 +115,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
-			if workflowScheduler != nil {
-				workflowScheduler.RuntimeFinished(ref.RunID, ref.Generation)
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			if workflowController != nil {
+				workflowController.ExecutionFinalized(scope)
 			}
 		}),
 	})
@@ -174,7 +173,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
-		WithWorkflowSessionResolver(sessionStoreResolver).
+		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore)
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
@@ -202,8 +201,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	cleanupNewFailure := func() {
 		sleepManager.Close()
 		_ = worktreeService.Close()
-		if workflowScheduler != nil {
-			_ = workflowScheduler.Close()
+		if workflowController != nil {
+			_ = workflowController.Close()
 		}
 		if workflowRuntimeStarter != nil {
 			_ = workflowRuntimeStarter.Close()
@@ -227,15 +226,20 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowDefinitions, workflowTaskProjector)
+	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
+	}
+	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowTaskProjector)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: activity: %w", err)
 	}
 	workflowAttention, err := workflowview.NewAttention(
-		metadataStore.Queries(),
-		workflowTaskProjector,
-		workflowViewActiveTranscriptSource{views: sessionViewService},
+		metadataStore,
+		workflowDefinitions,
+		runtimeAuthority,
 		workflowViewPendingPromptSource{prompts: runtimeRegistry},
 	)
 	if err != nil {
@@ -243,61 +247,53 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: attention: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
+	runtimeRegistry.WithWorkflowAttentionNotificationSnapshot(workflowAttentionNotificationSnapshotSource{
+		attention: workflowAttention,
+		finalizer: workflowAttentionFinalizer,
+	})
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
-	automaticIntents := workflowexecution.NewAutomaticIntents()
-	workflowExecutionFatal := opts.WorkflowExecutionFatal
-	if workflowExecutionFatal == nil {
-		workflowExecutionFatal = workflowexecution.NewFatalSignal()
-	}
-	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(automaticIntents, workflowExecutionFatal)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: automatic start registration: %w", err)
-	}
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer, AutomaticStarts: automaticStarts, MutationPermit: workflowMutationPermit})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
 	}
-	workflowScheduler, err = workflowexecution.NewSchedulerService(workflowStore, workflowRuntimeStarter, workflowMutationPermit, workflowexecution.SchedulerConfig{Concurrency: cfg.Settings.Workflow.Concurrency}, workflowexecution.WithSchedulerPendingAskResolver(runtimePendingAskResolver{prompts: runtimeRegistry}), workflowexecution.WithSchedulerAttentionFinalizer(workflowAttentionFinalizer), workflowexecution.WithAutomaticIntents(automaticIntents))
+	workflowController, err = workflowexecution.NewCurrentNodeController(
+		workflowStore,
+		workflowRuntimeStarter,
+		runtimeAuthority,
+		workflowMutationPermit,
+		workflowexecution.CurrentNodeControllerConfig{
+			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
+			Attention:            workflowAttentionFinalizer,
+		},
+	)
 	if err != nil {
 		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
+		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
-	workflowStatusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(metadataStore, workflowMutationPermit, runtimeAuthority, workflowScheduler)
-	if err != nil {
+	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task status snapshots: %w", err)
+		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
-	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, workflowStatusSnapshots)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
-	}
-	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, workflowStatusSnapshots)
+	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, runtimeAuthority, workflowController)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: board: %w", err)
 	}
-	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector, workflowStatusSnapshots)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
-	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowTaskProjector, workflowStatusSnapshots)
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
+	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions: workflowDefinitions,
 		Board:       workflowBoard,
 		TaskList:    workflowTaskList,
-		TaskSearch:  workflowTaskSearch,
 		TaskDetail:  workflowTaskDetail,
 		Activity:    workflowActivity,
 		Attention:   workflowAttention,
-	}, workflowRoleResolver, workflowMutationPermit, automaticStarts, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithWorkflowInterruptAuthority(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(authorityPromptResponder{authority: runtimeAuthority}), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -327,8 +323,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		sessionLifecycleService: sessionLifecycleService,
 		updateStatusService:     updateStatusService,
 		workflowService:         workflowService,
-		workflowScheduler:       workflowScheduler,
-		workflowFatal:           workflowExecutionFatal,
+		workflowController:      workflowController,
 		workflowRuntimeStarter:  workflowRuntimeStarter,
 		worktreeService:         worktreeService,
 		sleepManager:            sleepManager,
@@ -357,10 +352,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 				return nil, fmt.Errorf("sessions bundle: run prompt client: %w", err)
 			}
 		}
-	}
-	if err := workflowScheduler.Start(context.Background()); err != nil {
-		_ = core.Close()
-		return nil, fmt.Errorf("workflow bundle: scheduler start: %w", err)
 	}
 	return core, nil
 }
@@ -452,27 +443,15 @@ func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Co
 	return err
 }
 
-type runtimeTaskWorktreeRestorer struct {
-	service *worktree.Service
-}
-
-func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Context, req workflowrunner.LockedTaskWorktreeRestoreRequest) error {
-	if r.service == nil {
-		return errors.New("worktree service is required")
-	}
-	_, err := r.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
-	return err
-}
-
 type workflowApprovalProjection struct {
 	store *workflowstore.Store
 }
 
-func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, approvalID workflow.ApprovalID) (workflowattention.ApprovalProjection, bool, error) {
 	if p.store == nil {
 		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	projection, ok, err := p.store.PendingApprovalTransitionProjection(ctx, transitionID)
+	projection, ok, err := p.store.PendingApprovalAttentionProjection(ctx, approvalID)
 	if err != nil {
 		return workflowattention.ApprovalProjection{}, false, err
 	}
@@ -482,18 +461,18 @@ func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Contex
 	return workflowattention.ApprovalProjectionFromStore(projection), true, nil
 }
 
-func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
-	if p.store == nil || runID == "" {
-		return workflowattention.InterruptedRunProjection{}, false, nil
+func (p workflowApprovalProjection) PendingInterruptedCurrentNodeProjection(ctx context.Context, currentNode workflow.CurrentNodeReference) (workflowattention.InterruptedCurrentNodeProjection, bool, error) {
+	if p.store == nil {
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, nil
 	}
-	projection, ok, err := p.store.PendingInterruptedRunAttentionProjection(ctx, runID)
+	projection, ok, err := p.store.PendingInterruptedCurrentNodeAttentionProjection(ctx, currentNode)
 	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, err
 	}
 	if !ok {
-		return workflowattention.InterruptedRunProjection{}, false, nil
+		return workflowattention.InterruptedCurrentNodeProjection{}, false, nil
 	}
-	return workflowattention.InterruptedRunProjectionFromStore(projection), true, nil
+	return workflowattention.InterruptedCurrentNodeProjectionFromStore(projection), true, nil
 }
 
 type taskWorktreeDeleter struct {
@@ -537,12 +516,6 @@ func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionr
 
 func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
 	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
-}
-
-type runtimePendingAskResolver struct {
-	prompts interface {
-		ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
-	}
 }
 
 type workflowViewPendingPromptSource struct {
@@ -601,6 +574,7 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 		}
 		out = append(out, workflowview.PendingPromptSnapshot{
 			ID:                     item.Request.ID,
+			CreatedAt:              item.CreatedAt,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),
 			RecommendedOptionIndex: recommendedOptionIndex,
@@ -623,34 +597,4 @@ func legacyOptionalRecommendedOptionIndex(index int) (*int, error) {
 		}
 	}
 	return &index, nil
-}
-
-func (r runtimePendingAskResolver) CanRehydrate(_ context.Context, sessionID string, _ workflow.RunID, askID string) (bool, error) {
-	if r.prompts == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(askID) == "" {
-		return false, nil
-	}
-	for _, item := range r.prompts.ListPendingPrompts(sessionID) {
-		if strings.TrimSpace(item.Request.ID) != strings.TrimSpace(askID) {
-			continue
-		}
-		if !item.Request.Approval {
-			return true, nil
-		}
-		if taskScopedApprovalPendingAsk(item.Request, askID) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func taskScopedApprovalPendingAsk(req askquestion.AskQuestionRequest, askID string) bool {
-	if !req.IsTaskScopedApprovalQuestion() {
-		return false
-	}
-	for _, focusedAskID := range req.AttentionTarget.Focus.AskIDs {
-		if strings.TrimSpace(focusedAskID) == strings.TrimSpace(askID) {
-			return true
-		}
-	}
-	return false
 }

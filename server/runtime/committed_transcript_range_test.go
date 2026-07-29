@@ -15,6 +15,7 @@ import (
 )
 
 func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(
 		t,
@@ -97,6 +98,7 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 }
 
 func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(
 		t,
@@ -154,6 +156,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 }
 
 func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t *testing.T) {
+	t.Parallel()
 	toolCalls := []llm.ToolCall{
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
@@ -240,6 +243,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 }
 
 func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
@@ -304,6 +308,7 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 }
 
 func TestDeveloperContextTranscriptRowsRespectVisibilityMatrix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		messageType llm.MessageType
 		visibility  transcript.EntryVisibility
@@ -337,6 +342,7 @@ func TestDeveloperContextTranscriptRowsRespectVisibilityMatrix(t *testing.T) {
 }
 
 func TestAssistantTranscriptRowsRespectPhaseVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		phase      llm.MessagePhase
 		visibility transcript.EntryVisibility
@@ -365,6 +371,7 @@ func TestAssistantTranscriptRowsRespectPhaseVisibility(t *testing.T) {
 }
 
 func TestBackgroundNoticeTranscriptRowPreservesExitCode(t *testing.T) {
+	t.Parallel()
 	exitCode := 2
 	facts := TranscriptCommittedRowFactsFromEvent(Event{
 		Kind: EventConversationUpdated,
@@ -386,6 +393,7 @@ func TestBackgroundNoticeTranscriptRowPreservesExitCode(t *testing.T) {
 }
 
 func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *testing.T) {
+	t.Parallel()
 	const (
 		beforeStepID = "11111111-1111-4111-8111-111111111111"
 		emptyStepID  = "22222222-2222-4222-8222-222222222222"
@@ -434,6 +442,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 }
 
 func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, role := range []string{
@@ -449,7 +458,6 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		steerHistoryReplacementIntent(
 			"local",
 			compactionModeAuto,
-			"",
 			1,
 			"",
 			"",
@@ -504,6 +512,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 }
 
 func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *testing.T) {
+	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(
 		t,
@@ -524,7 +533,6 @@ func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *
 		steerHistoryReplacementIntent(
 			"local",
 			compactionModeManual,
-			"",
 			1,
 			"",
 			"",

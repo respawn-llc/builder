@@ -1,6 +1,5 @@
 import type {
   ApiService,
-  TaskApproveResponse,
   TaskMoveInput,
   TaskMoveResponse,
   TaskStartResponse,
@@ -20,11 +19,6 @@ export type ExecutionTargetContinuationAction =
       kind: "move";
       input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
     }>
-  | Readonly<{
-      kind: "approve";
-      taskTransitionID: string;
-      setupOperationID: SetupOperationID;
-    }>;
 
 export type ExecutionTargetActionResult =
   | Readonly<{
@@ -37,11 +31,6 @@ export type ExecutionTargetActionResult =
       action: Extract<ExecutionTargetContinuationAction, { kind: "move" }>;
       response: TaskMoveResponse;
     }>
-  | Readonly<{
-      kind: "approve";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "approve" }>;
-      response: TaskApproveResponse;
-    }>;
 
 export type ExecutionTargetSelectionDraft = Readonly<{
   mode: WorkflowExecutionTargetSelectionMode;
@@ -65,13 +54,6 @@ export function moveExecutionTargetAction(
       setupOperationID: input.setupOperationID ?? newSetupOperationID(),
     },
   };
-}
-
-export function approveExecutionTargetAction(
-  taskTransitionID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-): Extract<ExecutionTargetContinuationAction, { kind: "approve" }> {
-  return { kind: "approve", taskTransitionID, setupOperationID };
 }
 
 export function initialExecutionTargetSelectionDraft(
@@ -116,12 +98,6 @@ export async function executeExecutionTargetAction(
           ...action.input,
           executionTarget: selection,
         }),
-      };
-    case "approve":
-      return {
-        kind: action.kind,
-        action,
-        response: await api.approveTransition(action.taskTransitionID, action.setupOperationID, selection),
       };
   }
 }

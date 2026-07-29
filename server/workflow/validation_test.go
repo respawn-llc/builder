@@ -410,6 +410,15 @@ func TestFanoutJoinTopology(t *testing.T) {
 	}
 }
 
+func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
+	def := fanoutWorkflow()
+	edgeByIDForValidationTest(t, &def, "edge_join_done").RequiresApproval = true
+
+	result := validateForTask(def)
+
+	assertHasCodes(t, result, workflow.CodeUnsupportedApprovalExecution)
+}
+
 func TestContextSourceValidation(t *testing.T) {
 	t.Run("default immediate source preserves existing workflows", func(t *testing.T) {
 		def := validWorkflow()

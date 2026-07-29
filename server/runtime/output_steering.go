@@ -103,7 +103,6 @@ type steeringCompletedResponseResolution struct {
 type steeringHistoryReplacement struct {
 	payload          historyReplacementPayload
 	projectedEntries []ChatEntry
-	workflowRunID    string
 }
 
 type steeringStreamingOutput struct {
@@ -169,12 +168,11 @@ func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
 	}
 }
 
-func steerHistoryReplacementIntent(engine string, mode compactionMode, workflowRunID string, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer string, items []llm.ResponseItem) steeringIntent {
+func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer string, items []llm.ResponseItem) steeringIntent {
 	preparedItems := llm.PrepareOpenAIInputItems(items)
 	payload := historyReplacementPayload{
 		Engine:                            normalizeHistoryReplacementEngine(engine),
 		Mode:                              string(mode),
-		WorkflowRunID:                     textutil.OptionalExactString(workflowRunID),
 		CompactionNumber:                  textutil.Value(compactionNumber),
 		PendingHandoffFutureMessage:       textutil.OptionalExactString(pendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: textutil.OptionalExactString(lastCommittedAssistantFinalAnswer),
@@ -185,7 +183,6 @@ func steerHistoryReplacementIntent(engine string, mode compactionMode, workflowR
 		items: []steeringItem{{historyReplace: &steeringHistoryReplacement{
 			payload:          payload,
 			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items),
-			workflowRunID:    workflowRunID,
 		}}},
 	}
 }
@@ -554,10 +551,6 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	// into the same replacement payload. Mirror the restore-time length signal
 	// here rather than scanning individual items.
 	e.baseMetaInjected = len(preparedItems) > 0
-	// The committed event is the single durable record of this compaction's
-	// provenance; mirror it into runtime state so an in-process gate sees it
-	// without re-reading the transcript, matching what restore reconstructs.
-	e.compactionRuntimeState().SetLastWorkflowRunID(replacement.workflowRunID)
 	if replacement.payload.CompactionNumber != nil {
 		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
 	}

@@ -72,7 +72,6 @@ type SessionPlan struct {
 	WorktreeReminder                    *session.WorktreeReminderState
 	Continuation                        *session.ContinuationContext
 	Locked                              *session.LockedContract
-	WorkflowSession                     *session.WorkflowSessionState
 	PromptHistory                       []string
 	ModelContractLocked                 bool
 	SkipContinuationAgentRoleValidation bool
@@ -100,7 +99,6 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 	plan.WorktreeReminder = meta.WorktreeReminder
 	plan.Continuation = meta.Continuation
 	plan.Locked = meta.Locked
-	plan.WorkflowSession = meta.WorkflowSession
 	plan.ModelContractLocked = meta.Locked != nil
 	return plan
 }

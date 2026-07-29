@@ -22,11 +22,11 @@ func TestStreamIdleWatchdogFiresAfterIdleSilence(t *testing.T) {
 }
 
 func TestStreamIdleWatchdogPingResetsTimer(t *testing.T) {
-	w := newStreamIdleWatchdog(context.Background(), time.Second)
+	w := newStreamIdleWatchdog(context.Background(), 250*time.Millisecond)
 	defer w.stop()
 
-	deadline := time.After(1200 * time.Millisecond)
-	ticker := time.NewTicker(100 * time.Millisecond)
+	deadline := time.After(400 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {

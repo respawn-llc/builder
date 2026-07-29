@@ -2,8 +2,6 @@ package workflowrunner
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,36 +35,13 @@ import (
 )
 
 const (
-	ReasonRuntimeCanceled = "workflow_runtime_canceled"
-	ReasonRuntimeFailed   = "workflow_runtime_failed"
+	ReasonRuntimeFailed = "workflow_runtime_failed"
 )
 
-var errWorkflowShellCompletionRequiresShell = errors.New("workflow shell_command completion requires shell tool availability for this run")
-
 type RuntimeStore interface {
-	GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
-	ListRuns(context.Context, workflow.TaskID) ([]workflowstore.RunRecord, error)
-	GetRunStartContext(context.Context, workflow.RunID) (workflowstore.RunStartContext, error)
-	GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error)
-	AttachRunSession(context.Context, workflow.RunID, int64, string) error
-	SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error
-	SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
-	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
-	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error)
-	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
-	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
+	ResolveCurrentNodeStartContext(context.Context, workflow.CurrentNodeReference) (workflowstore.CurrentNodeStartContext, error)
+	BindSessionToCurrentNode(context.Context, workflowstore.TaskSessionAssociationRequest) (workflowstore.TaskSessionAssociation, error)
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
-	InterruptRun(context.Context, workflow.RunID, string, string) error
-	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error
-}
-
-type LockedTaskWorktreeRestorer interface {
-	RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest) error
-}
-
-type LockedTaskWorktreeRestoreRequest struct {
-	TaskID           workflow.TaskID
-	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
 type WorkflowAttentionRegistry interface {
@@ -82,55 +57,23 @@ type Starter struct {
 	attention            WorkflowAttentionRegistry
 	runtimeAuthority     *sessionruntime.Authority
 	storeOptions         []session.StoreOption
-	clientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	runtimeClientFactory runtimewire.RuntimeClientFactory
-	worktrees            LockedTaskWorktreeRestorer
-	attentionFinalizer   workflowAttentionFinalizer
-	automaticStarts      *workflowexecution.AutomaticStartRegistration
 	mutationPermit       *workflowexecution.MutationPermit
-
-	closed atomic.Bool
+	closed               atomic.Bool
 }
 
 type StarterOptions struct {
-	ClientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	Worktrees            LockedTaskWorktreeRestorer
 	RuntimeAuthority     *sessionruntime.Authority
-	AttentionFinalizer   workflowAttentionFinalizer
-	AutomaticStarts      *workflowexecution.AutomaticStartRegistration
 	MutationPermit       *workflowexecution.MutationPermit
-}
-
-type workflowAttentionFinalizer interface {
-	FinalizeTransition(context.Context, workflowattention.TransitionResult)
-}
-
-type workflowInterruptedRunFinalizer interface {
-	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
 	if strings.TrimSpace(cfg.PersistenceRoot) == "" {
 		return nil, errors.New("workflow runtime persistence root is required")
 	}
-	if metadataStore == nil {
-		return nil, errors.New("workflow runtime metadata store is required")
-	}
-	if store == nil {
-		return nil, errors.New("workflow runtime store is required")
-	}
-	if opts.RuntimeAuthority == nil {
-		return nil, errors.New("workflow runtime authority is required")
-	}
-	if opts.MutationPermit == nil {
-		return nil, errors.New("workflow mutation permit is required")
-	}
-	if opts.AutomaticStarts == nil {
-		return nil, errors.New("automatic workflow start registration is required")
-	}
-	if opts.ClientFactory != nil && opts.RuntimeClientFactory != nil {
-		return nil, runtimewire.ErrRuntimeClientFactoryConflict
+	if metadataStore == nil || store == nil || opts.RuntimeAuthority == nil || opts.MutationPermit == nil {
+		return nil, errors.New("workflow runtime dependencies are required")
 	}
 	return &Starter{
 		cfg:                  cfg,
@@ -140,264 +83,244 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		attention:            attention,
 		runtimeAuthority:     opts.RuntimeAuthority,
 		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
-		clientFactory:        opts.ClientFactory,
 		runtimeClientFactory: opts.RuntimeClientFactory,
-		worktrees:            opts.Worktrees,
-		attentionFinalizer:   opts.AttentionFinalizer,
-		automaticStarts:      opts.AutomaticStarts,
 		mutationPermit:       opts.MutationPermit,
 	}, nil
 }
 
-type preparedWorkflowRun struct {
-	admission workflowexecution.RunAdmission
-	prepared  *sessionruntime.PreparedAgentExecution
-	cleanup   func() error
-
-	committed atomic.Bool
-	activated atomic.Bool
+func (s *Starter) StartCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+	if s.closed.Load() {
+		return errors.New("workflow runtime starter closed")
+	}
+	if !lease.Workflow().CurrentNode.Equal(reference) {
+		return errors.New("workflow execution lease does not match current node")
+	}
+	input, err := s.store.ResolveCurrentNodeStartContext(ctx, reference)
+	if err != nil {
+		return err
+	}
+	switch input.Node.Kind {
+	case workflow.NodeKindScript:
+		return s.startCurrentNodeScript(ctx, input, lease, controller)
+	case workflow.NodeKindAgent:
+		if err := s.validateRole(input.Node.SubagentRole); err != nil {
+			return err
+		}
+		return s.startCurrentNodeAgent(ctx, input, lease, controller)
+	default:
+		return fmt.Errorf("current node %v is not executable", reference)
+	}
 }
 
-func (p *preparedWorkflowRun) Admission() workflowexecution.RunAdmission {
-	if p == nil {
-		panic("prepared workflow run is uninitialized")
+func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore.CurrentNodeStartContext, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+	root, err := requireCurrentNodeExecutionRoot(input)
+	if err != nil {
+		return err
 	}
-	return p.admission
-}
-
-func (p *preparedWorkflowRun) Commit() error {
-	if p == nil {
-		return errors.New("prepared workflow run is uninitialized")
+	plan, disposable, err := s.planCurrentNodeSession(ctx, input, root)
+	if err != nil {
+		return err
 	}
-	p.committed.Store(true)
+	cleanup := func(err error) error {
+		if !disposable {
+			return err
+		}
+		return errors.Join(err, s.cleanupSession(context.WithoutCancel(ctx), plan.Descriptor))
+	}
+	if err := s.applyCurrentNodeSessionMetadata(ctx, input, &plan); err != nil {
+		return cleanup(err)
+	}
+	client, err := s.newWorkflowProviderClient(ctx, plan)
+	if err != nil {
+		return cleanup(err)
+	}
+	mode, client, err := s.resolveCurrentNodeCompletionMode(ctx, input, plan, client)
+	if err != nil {
+		return cleanup(err)
+	}
+	if _, err := s.store.BindSessionToCurrentNode(ctx, workflowstore.TaskSessionAssociationRequest{
+		SessionID: plan.Descriptor.SessionID(), CurrentNode: input.CurrentNode.Reference, AssociatedAt: time.Now().UTC(),
+	}); err != nil {
+		return cleanup(err)
+	}
+	if err := s.applyCurrentNodeSessionExecutionTarget(ctx, input, plan.Descriptor); err != nil {
+		return cleanup(err)
+	}
+	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(input, lease, mode, s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts, plan.ActiveSettings.Workflow.UseRequiredToolCalls, controller, s.store)
+	if err != nil {
+		return cleanup(err)
+	}
+	pathContext, err := currentNodeManagedWorktreePathContext(plan, root)
+	if err != nil {
+		return cleanup(err)
+	}
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(plan.EnabledTools), Workdir: root.EffectiveRoot(),
+		ManagedWorktreePathContext: pathContext, Sources: plan.Source.Sources, Headless: true, Client: client,
+		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
+		SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny(),
+		StartLogLines:                       []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, plan.Descriptor.SessionID(), input.Node.ID, root.EffectiveRoot(), plan.ActiveSettings.Model)},
+		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
+			if s.attention == nil {
+				return
+			}
+			if err := workflowattention.PrepareSkippedTaskQuestionBatch(s.attention, currentNodeQuestionContext(input, plan.Descriptor.SessionID().String()), batch, time.Now().UTC()); err != nil {
+				slog.Warn("prepare skipped current-node workflow question batch failed", "task_id", input.Task.ID, "node_id", input.Node.ID, "error", err)
+			}
+		},
+	})
+	if err != nil {
+		return cleanup(err)
+	}
+	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: sessionruntime.ReplaceAgentResource{},
+		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, plan.Descriptor.SessionID().String(), askReq)
+		},
+		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+					if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+						return err
+					}
+				}
+				_, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+				return err
+			})
+			if turnErr == nil {
+				return nil
+			}
+			reason := ReasonRuntimeFailed
+			if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
+				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+			}
+			return errors.Join(turnErr, s.failCurrentNodeScope(context.WithoutCancel(runCtx), controller, scope, reason, turnErr))
+		},
+	})
+	if err != nil {
+		return cleanup(err)
+	}
 	return nil
 }
 
-func (p *preparedWorkflowRun) Activate() {
-	if p == nil {
-		panic("prepared workflow run is uninitialized")
-	}
-	if !p.committed.Load() {
-		panic("uncommitted workflow run preparation cannot be activated")
-	}
-	p.activated.Store(true)
-	p.prepared.Activate()
-}
-
-func (p *preparedWorkflowRun) Abort(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	if p.activated.Load() {
-		return errors.New("activated workflow run preparation cannot be aborted")
-	}
-	return errors.Join(p.prepared.Abort(ctx), p.cleanup())
-}
-
-func (s *Starter) PrepareWorkflowRun(ctx context.Context, req workflowexecution.SchedulerPrepareRunRequest) (workflowexecution.PreparedWorkflowRun, error) {
-	if strings.TrimSpace(string(req.RunID)) == "" {
-		return nil, errors.New("workflow run id is required")
-	}
-	if s.closed.Load() {
-		return nil, errors.New("workflow runtime starter closed")
-	}
-	if req.SourceGeneration < 0 || req.Generation != req.SourceGeneration+1 {
-		return nil, fmt.Errorf(
-			"workflow run preparation generation is invalid: source=%d target=%d",
-			req.SourceGeneration,
-			req.Generation,
-		)
-	}
-	input, err := s.store.GetRunStartContext(ctx, req.RunID)
+func (s *Starter) planCurrentNodeSession(ctx context.Context, input workflowstore.CurrentNodeStartContext, root workflowstore.ExecutionRoot) (launch.SessionPlan, bool, error) {
+	cfg := s.cfg
+	cfg.WorkspaceRoot = root.SourceWorkspaceRoot
+	containerDir := filepath.Join(cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions")
+	intent, disposable, err := s.currentNodeSessionIntent(input, containerDir)
 	if err != nil {
-		if s.worktrees == nil || !recoverableManagedExecutionRootError(err) {
-			return nil, err
+		return launch.SessionPlan{}, false, err
+	}
+	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
+	plan, err := planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: intent, SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny()})
+	if err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.EnsureDurable() }); err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+			return store.ResetLockedContractForCompactionBoundary()
+		}); err != nil {
+			return launch.SessionPlan{}, disposable, err
 		}
-		if restoreErr := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); restoreErr != nil {
-			return nil, restoreErr
-		}
-		input, err = s.store.GetRunStartContext(ctx, req.RunID)
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: serverapi.OpenExistingSessionLaunchIntent(plan.Descriptor.SessionID()), SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny()})
 		if err != nil {
-			return nil, err
-		}
-	} else if input.ExecutionRoot != nil && input.ExecutionRoot.Managed != nil && s.worktrees != nil {
-		if err := s.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: req.TaskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); err != nil {
-			return nil, err
-		}
-		input, err = s.store.GetRunStartContext(ctx, req.RunID)
-		if err != nil {
-			return nil, err
+			return launch.SessionPlan{}, disposable, err
 		}
 	}
-	executionRoot, err := requireRunExecutionRoot(input)
-	if err != nil {
-		return nil, err
-	}
-	if input.Run.TaskID != req.TaskID ||
-		input.Run.PlacementID != req.PlacementID ||
-		input.Run.NodeID != req.NodeID ||
-		input.Run.Generation != req.SourceGeneration {
-		return nil, sql.ErrNoRows
-	}
-	if input.Task.CanceledAt != nil ||
-		input.Run.StartedAt != nil ||
-		input.Run.CompletedAt != nil ||
-		input.Run.InterruptedAt != nil {
-		return nil, sql.ErrNoRows
-	}
-	startReq := workflowexecution.SchedulerStartRunRequest{
-		RunID:       req.RunID,
-		TaskID:      req.TaskID,
-		PlacementID: req.PlacementID,
-		NodeID:      req.NodeID,
-		Generation:  req.Generation,
-	}
-	runtimeInput := input
-	runtimeInput.Run.Generation = req.Generation
-	if input.Node.Kind == workflow.NodeKindScript {
-		return s.prepareScriptWorkflowRun(ctx, startReq, runtimeInput)
-	}
-	if input.Node.Kind != workflow.NodeKindAgent {
-		return nil, fmt.Errorf("workflow node %q is %q, want executable agent or script", input.Node.ID, input.Node.Kind)
-	}
-	if err := s.validateRole(input.Node.SubagentRole); err != nil {
-		return nil, err
-	}
-	plan, warnings, err := s.planSession(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	// When the plan reuses an existing session (resume, continue, or in-place
-	// compact-and-continue), it is the previous node's persisted session — never
-	// dispose of it on setup failure. Only freshly created run sessions
-	// (new-session and fan-out clones) are disposable.
-	//
-	// For reused sessions, snapshot previous listing/reminder metadata so setup
-	// mutations can be rolled back if any later setup step fails.
-	var prevReminderState *session.WorktreeReminderState
-	var prevListingMetadata *sessionListingMetadata
-	if reusesExistingSession(input) {
-		prevListingMetadata = &sessionListingMetadata{Name: plan.SessionName, FirstPromptPreview: plan.FirstPromptPreview}
-		if wr := plan.WorktreeReminder; wr != nil {
-			snap := *wr
-			prevReminderState = &snap
-		}
-	}
-	cleanupSession := func() error {
-		if reusesExistingSession(input) {
-			return s.withSessionStore(context.WithoutCancel(ctx), plan.Descriptor, func(_ context.Context, store *session.Store) error {
-				return errors.Join(restoreSessionListingMetadata(store, prevListingMetadata), store.SetWorktreeReminderState(prevReminderState))
-			})
-		}
-		return s.cleanupSession(ctx, plan.Descriptor)
-	}
-	if err := s.applyWorkflowSessionMetadata(ctx, input, &plan); err != nil {
-		return nil, errors.Join(err, cleanupSession())
-	}
-	client := llm.Client(nil)
-	if s.clientFactory != nil {
-		client = s.clientFactory(startReq)
-	}
-	if s.runtimeClientFactory != nil {
-		client, err = s.newWorkflowProviderClient(ctx, plan)
-		if err != nil {
-			return nil, errors.Join(err, cleanupSession())
-		}
-	}
-	effectiveMode, client, err := s.resolveWorkflowCompletionMode(ctx, input, plan, client)
-	if err != nil {
-		return nil, errors.Join(err, cleanupSession())
-	}
-	var reminder *session.WorktreeReminderState
-	if executionRoot.Managed != nil {
-		reminder = &session.WorktreeReminderState{
-			Mode: session.WorktreeReminderModeEnter,
-			WorktreeContext: session.WorktreeContext{
-				WorktreePath:  executionRoot.Managed.Root,
-				WorkspaceRoot: executionRoot.SourceWorkspaceRoot,
-				EffectiveCwd:  executionRoot.EffectiveRoot(),
-			},
-		}
-	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-		return store.SetWorktreeReminderState(reminder)
-	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
-	}
-	plan.WorktreeReminder = reminder
-	targetUpdate := metadata.SessionExecutionTargetUpdate{
-		SessionID:  plan.Descriptor.SessionID().String(),
-		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: executionRoot.SourceWorkspaceID},
-		CwdRelpath: ".",
-	}
-	if executionRoot.Managed != nil {
-		targetUpdate.Worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: executionRoot.Managed.WorktreeID}
-	}
-	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		return s.metadata.UpdateSessionExecutionTarget(ctx, targetUpdate)
-	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
-	}
-	var previousWorkflowSession *session.WorkflowSessionState
-	if workflowSession := plan.WorkflowSession; workflowSession != nil {
-		snap := *workflowSession
-		previousWorkflowSession = &snap
-	}
-	restoreWorkflowSession := func() error {
-		return s.withSessionStore(context.WithoutCancel(ctx), plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			return store.SetWorkflowSessionState(previousWorkflowSession)
-		})
-	}
-	workflowSession := &session.WorkflowSessionState{
-		RunID:      string(req.RunID),
-		TaskID:     string(input.Task.ID),
-		WorkflowID: string(input.Task.WorkflowID),
-	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-		return store.SetWorkflowSessionState(workflowSession)
-	}); err != nil {
-		return nil, errors.Join(err, cleanupSession())
-	}
-	plan.WorkflowSession = workflowSession
-	prepared, err := s.prepareAgentExecution(ctx, startReq, runtimeInput, plan, warnings, client, effectiveMode)
-	if err != nil {
-		return nil, errors.Join(err, restoreWorkflowSession(), cleanupSession())
-	}
-	sessionID := plan.Descriptor.SessionID().String()
-	mode := string(effectiveMode)
-	return &preparedWorkflowRun{
-		admission: workflowexecution.RunAdmission{
-			SessionID:               &sessionID,
-			EffectiveCompletionMode: &mode,
-		},
-		prepared: prepared,
-		cleanup: func() error {
-			return errors.Join(restoreWorkflowSession(), cleanupSession())
-		},
-	}, nil
+	plan, _, err = applyWorkflowSessionPromptOverridesForRole(plan, input.Node.SubagentRole)
+	return plan, disposable, err
 }
 
-func recoverableManagedExecutionRootError(err error) bool {
-	var rootErr *workflowstore.ExecutionRootError
-	if !errors.As(err, &rootErr) {
-		return false
+func (s *Starter) currentNodeSessionIntent(input workflowstore.CurrentNodeStartContext, containerDir string) (serverapi.SessionLaunchIntent, bool, error) {
+	if input.CurrentNode.SessionID == nil {
+		return serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), true, nil
 	}
-	return rootErr.Kind == workflowstore.ExecutionRootErrorManagedRelationMissing ||
-		rootErr.Kind == workflowstore.ExecutionRootErrorManagedRecordMissing
+	if input.IsFanoutBranch && (input.ContextMode == workflow.ContextModeContinueSession || input.ContextMode == workflow.ContextModeCompactAndContinueSession) {
+		id, err := s.cloneSourceSessionForFanout(containerDir, input.CurrentNode.SessionID.String())
+		if err != nil {
+			return serverapi.SessionLaunchIntent{}, false, err
+		}
+		sessionID, err := runtimeids.ParseSessionID(id)
+		if err != nil {
+			return serverapi.SessionLaunchIntent{}, false, err
+		}
+		return serverapi.OpenExistingSessionLaunchIntent(sessionID), true, nil
+	}
+	return serverapi.OpenExistingSessionLaunchIntent(*input.CurrentNode.SessionID), false, nil
 }
 
-func requireRunExecutionRoot(input workflowstore.RunStartContext) (workflowstore.ExecutionRoot, error) {
-	if input.ExecutionRoot == nil {
-		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has no execution root", input.Run.ID)
+func (s *Starter) applyCurrentNodeSessionMetadata(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan *launch.SessionPlan) error {
+	name, err := workflowSessionNameFromCurrentNode(input)
+	if err != nil {
+		return err
 	}
-	root := *input.ExecutionRoot
-	if err := root.Validate(); err != nil {
-		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has an invalid execution root: %w", input.Run.ID, err)
+	preview, err := renderCurrentNodePrompt(input.PromptTemplate, input)
+	if err != nil {
+		return err
 	}
-	if strings.TrimSpace(root.EffectiveRoot()) == "" {
-		return workflowstore.ExecutionRoot{}, fmt.Errorf("workflow run %q has no effective execution root", input.Run.ID)
+	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.SetListingMetadata(name, preview) }); err != nil {
+		return err
 	}
-	return root, nil
+	plan.SessionName, plan.FirstPromptPreview = &name, preview
+	return nil
+}
+
+func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, input workflowstore.CurrentNodeStartContext, descriptor session.SessionDescriptor) error {
+	root, err := requireCurrentNodeExecutionRoot(input)
+	if err != nil {
+		return err
+	}
+	update := metadata.SessionExecutionTargetUpdate{SessionID: descriptor.SessionID().String(), Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: root.SourceWorkspaceID}, CwdRelpath: "."}
+	if root.Managed != nil {
+		update.Worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: root.Managed.WorktreeID}
+	}
+	return s.mutationPermit.Run(ctx, func(ctx context.Context) error { return s.metadata.UpdateSessionExecutionTarget(ctx, update) })
+}
+
+func currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
+	if root.Managed == nil || strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) == "" {
+		return nil, nil
+	}
+	return askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, &root.Managed.Root)
+}
+
+func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {
+	taskID := input.Task.ShortID
+	if taskID == "" {
+		taskID = string(input.Task.ID)
+	}
+	if taskID == "" || input.AcceptedTransitionPath.SourceNodeDisplayName == "" || input.AcceptedTransitionPath.TargetNodeDisplayName == "" {
+		return "", errors.New("current workflow session metadata is incomplete")
+	}
+	return fmt.Sprintf("%s: %s -> %s", taskID, input.AcceptedTransitionPath.SourceNodeDisplayName, input.AcceptedTransitionPath.TargetNodeDisplayName), nil
+}
+
+func renderCurrentNodePrompt(text string, input workflowstore.CurrentNodeStartContext) (string, error) {
+	source := ""
+	if input.SourceSessionID != nil {
+		source = input.SourceSessionID.String()
+	}
+	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+}
+
+func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
+	configured := s.cfg.Settings.Workflow.CompletionMode
+	if input.Node.CompletionMode != "" {
+		configured = config.WorkflowCompletionMode(input.Node.CompletionMode)
+	}
+	selection := workflowruntime.CompletionModeSelection{ConfiguredMode: configured, HasContinueSessionEdge: input.HasContinueSessionOutgoingEdge, ShellAvailable: toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)}
+	if workflowCompletionModeNeedsProviderCapabilities(selection) {
+		caps, resolved, err := s.workflowProviderCapabilities(ctx, plan, client)
+		if err != nil {
+			return "", resolved, err
+		}
+		selection.ProviderCapabilities, client = caps, resolved
+	}
+	mode, err := workflowruntime.SelectCompletionMode(selection)
+	return mode, client, err
 }
 
 func (s *Starter) withSessionStore(ctx context.Context, descriptor session.SessionDescriptor, callback func(context.Context, *session.Store) error) error {
@@ -405,17 +328,7 @@ func (s *Starter) withSessionStore(ctx context.Context, descriptor session.Sessi
 }
 
 func (s *Starter) cleanupSession(ctx context.Context, descriptor session.SessionDescriptor) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	cleanupCtx := context.WithoutCancel(ctx)
-	sessionID := descriptor.SessionID().String()
-	return errors.Join(
-		s.withSessionStore(cleanupCtx, descriptor, func(_ context.Context, store *session.Store) error {
-			return store.RemoveDurable()
-		}),
-		s.metadata.DeleteSessionRecordByID(cleanupCtx, sessionID),
-	)
+	return errors.Join(s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error { return store.RemoveDurable() }), s.metadata.DeleteSessionRecordByID(ctx, descriptor.SessionID().String()))
 }
 
 func (s *Starter) Close() error {
@@ -425,671 +338,59 @@ func (s *Starter) Close() error {
 	return s.runtimeAuthority.StopWorkflowExecutions(context.Background())
 }
 
-func (s *Starter) CancelTaskRuns(ctx context.Context, taskID workflow.TaskID) error {
-	runs, err := s.store.ListRuns(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	var stopErrs []error
-	for _, run := range runs {
-		ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
-		if execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref); ok {
-			if err := execution.Stop(ctx); err != nil {
-				stopErrs = append(stopErrs, err)
-			}
-		}
-	}
-	return errors.Join(stopErrs...)
-}
-
-type preparedWorkflowInterrupt struct {
-	authority  *sessionruntime.Authority
-	executions []workflowexecution.ExactExecutionScope
-	stop       preparedExecutionStop
-}
-
-type preparedExecutionStop struct {
-	handles []sessionruntime.ExecutionHandle
-}
-
-func (p preparedExecutionStop) RequestStop() {
-	for _, handle := range p.handles {
-		handle.RequestStop()
-	}
-}
-
-func (p preparedExecutionStop) Wait(ctx context.Context) error {
-	errs := make([]error, 0, len(p.handles))
-	for _, handle := range p.handles {
-		if err := handle.Stop(ctx); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func (p preparedWorkflowInterrupt) Commit(operation func([]workflowexecution.ExactExecutionScope) error) error {
-	if p.authority == nil {
-		return errors.New("workflow interrupt authority is required")
-	}
-	err := p.authority.WithExactExecutions(p.stop.handles, func() error {
-		if err := operation(append([]workflowexecution.ExactExecutionScope(nil), p.executions...)); err != nil {
-			return err
-		}
-		p.stop.RequestStop()
-		return nil
-	})
-	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
-		return workflowexecution.ErrNoInterruptibleExecution
-	}
-	return err
-}
-
-func (p preparedWorkflowInterrupt) Wait(ctx context.Context) error {
-	return p.stop.Wait(ctx)
-}
-
-func (s *Starter) PrepareWorkflowInterrupt(selector workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
-	if err := selector.Validate(); err != nil {
-		return nil, err
-	}
-	snapshot, err := s.runtimeAuthority.CurrentTaskExecutionSnapshot(selector.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	prepared := preparedWorkflowInterrupt{
-		authority:  s.runtimeAuthority,
-		executions: make([]workflowexecution.ExactExecutionScope, 0, len(snapshot.Executions)),
-		stop: preparedExecutionStop{
-			handles: make([]sessionruntime.ExecutionHandle, 0, len(snapshot.Executions)),
-		},
-	}
-	for _, execution := range snapshot.Executions {
-		if execution.WaitingQuestion {
-			continue
-		}
-		if selector.SessionID != nil {
-			if execution.Agent == nil || execution.Agent.SessionID != *selector.SessionID {
-				continue
-			}
-		}
-		handle, ok := s.runtimeAuthority.ExecutionByWorkflow(execution.Ref)
-		if !ok {
-			continue
-		}
-		scope := handle.Scope()
-		ref, ok := scope.Workflow()
-		if !ok || ref != execution.Ref {
-			return nil, errors.New("interruptible workflow scope lost its exact workflow identity")
-		}
-		exact := workflowexecution.ExactExecutionScope{
-			ScopeID:    scope.ID(),
-			TaskID:     ref.TaskID,
-			RunID:      ref.RunID,
-			Generation: ref.Generation,
-		}
-		if err := exact.Validate(); err != nil {
-			return nil, err
-		}
-		prepared.executions = append(prepared.executions, exact)
-		prepared.stop.handles = append(prepared.stop.handles, handle)
-	}
-	if len(prepared.executions) == 0 {
-		return nil, workflowexecution.ErrNoInterruptibleExecution
-	}
-	return prepared, nil
-}
-
-func (s *Starter) PrepareWorkflowMove(taskID workflow.TaskID) (workflowexecution.PreparedMoveStop, error) {
-	if taskID == "" {
-		return nil, errors.New("workflow move task id is required")
-	}
-	snapshot, err := s.runtimeAuthority.CurrentTaskExecutionSnapshot(taskID)
-	if err != nil {
-		return nil, err
-	}
-	handles := make([]sessionruntime.ExecutionHandle, 0, len(snapshot.Executions))
-	for _, execution := range snapshot.Executions {
-		if !execution.WaitingQuestion {
-			return nil, workflowexecution.ErrTaskExecutionNotQuiescent
-		}
-		handle, ok := s.runtimeAuthority.ExecutionByWorkflow(execution.Ref)
-		if !ok {
-			continue
-		}
-		handles = append(handles, handle)
-	}
-	if len(handles) == 0 {
-		return nil, nil
-	}
-	return preparedExecutionStop{handles: handles}, nil
-}
-
-func (s *Starter) CancelRun(ctx context.Context, runID workflow.RunID) error {
-	run, err := s.store.GetRun(ctx, runID)
-	if err != nil {
-		return err
-	}
-	ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
-	if execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref); ok {
-		return execution.Stop(ctx)
-	}
-	return nil
-}
-
-func (s *Starter) RequestCancelRun(runID workflow.RunID) bool {
-	run, err := s.store.GetRun(context.Background(), runID)
-	if err != nil {
-		return false
-	}
-	ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
-	execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref)
-	return ok && execution.RequestStop()
-}
-
-// reusesExistingSession reports whether planSession reuses a pre-existing
-// session (resume of a started run, continue_session, or in-place
-// compact_and_continue_session) rather than creating a disposable one
-// (new_session or a fan-out clone). Reused sessions belong to a prior node and
-// must not be cleaned up on setup failure.
-func reusesExistingSession(input workflowstore.RunStartContext) bool {
-	if strings.TrimSpace(input.Run.SessionID) != "" {
-		return true
-	}
-	switch input.ContextMode {
-	case workflow.ContextModeContinueSession:
-		return true
-	case workflow.ContextModeCompactAndContinueSession:
-		return !input.IsFanoutBranch
-	default:
-		return false
-	}
-}
-
-func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
-	executionRoot, err := requireRunExecutionRoot(input)
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	cfg := s.cfg
-	cfg.WorkspaceRoot = executionRoot.SourceWorkspaceRoot
-	projectID := strings.TrimSpace(input.Task.ProjectID)
-	if projectID == "" {
-		return launch.SessionPlan{}, nil, errors.New("workflow task project id is required")
-	}
-	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), projectID, "sessions")
-	planner := launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      s.storeOptions,
-		PersistedSessions: s.metadata,
-		MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) {
-			return s.metadata, nil
-		},
-	}
-	// A fan-out branch creates a brand-new disposable clone before the rest of
-	// planning runs. If any later planning step fails, PrepareWorkflowRun's cleanup
-	// hook never sees it, so remove the clone here on failure to avoid orphaning
-	// an unattached session directory.
-	disposableCloneID := ""
-	planSucceeded := false
-	defer func() {
-		if !planSucceeded && disposableCloneID != "" {
-			s.removeFanoutClone(ctx, containerDir, disposableCloneID)
-		}
-	}()
-	var plan launch.SessionPlan
-	launchRequest, err := sessionLaunchRequestForWorkflowRun(input)
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	overrides := launchRequest.Overrides
-	skipPersistedRoleValidation := overrides.HasAny()
-	var warnings []string
-	if reusesExistingSession(input) {
-		plan, warnings, err = s.planExistingWorkflowSession(
-			ctx,
-			planner,
-			containerDir,
-			input,
-			launchRequest.Intent,
-			skipPersistedRoleValidation,
-		)
-		if err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-	} else {
-		switch input.ContextMode {
-		case "", workflow.ContextModeNewSession:
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
-		case workflow.ContextModeContinueSession:
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
-		case workflow.ContextModeCompactAndContinueSession:
-			// In-place continuation reuses the source session; the runtime runs a real
-			// compaction before the node turn. A fan-out branch instead continues in an
-			// isolated full clone of the source so parallel branches never compact or
-			// mutate the shared source session concurrently.
-			continuationSessionID := input.SourceSessionID
-			if input.IsFanoutBranch {
-				continuationSessionID, err = s.cloneSourceSessionForFanout(containerDir, input.SourceSessionID)
-				if err != nil {
-					return launch.SessionPlan{}, nil, err
-				}
-				disposableCloneID = continuationSessionID
-				clonedID, parseErr := runtimeids.ParseSessionID(continuationSessionID)
-				if parseErr != nil {
-					return launch.SessionPlan{}, nil, parseErr
-				}
-				launchRequest.Intent = serverapi.OpenExistingSessionLaunchIntent(clonedID)
-			}
-			plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: launchRequest.Intent, SkipContinuationAgentRoleValidation: skipPersistedRoleValidation})
-		default:
-			return launch.SessionPlan{}, nil, fmt.Errorf("unsupported workflow context mode %q", input.ContextMode)
-		}
-		if err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			plan, warnings, err = prepareWorkflowSessionPlanWithStore(
-				ctx,
-				planner,
-				store,
-				input,
-				mustOpenWorkflowSessionIntent(plan.Descriptor.SessionID().String()),
-				skipPersistedRoleValidation,
-				plan,
-			)
-			return err
-		}); err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-	}
-	planSucceeded = true
-	return plan, warnings, nil
-}
-
-func (s *Starter) planExistingWorkflowSession(
-	ctx context.Context,
-	planner launch.Planner,
-	containerDir string,
-	input workflowstore.RunStartContext,
-	intent serverapi.SessionLaunchIntent,
-	skipPersistedRoleValidation bool,
-) (plan launch.SessionPlan, warnings []string, resultErr error) {
-	sessionID, ok := intent.SessionID()
-	if !ok {
-		return launch.SessionPlan{}, nil, errors.New("existing workflow session intent is required")
-	}
-	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, containerDir)
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	err = s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
-		plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
-			Mode:                                launch.ModeHeadless,
-			Intent:                              intent,
-			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
-		}, store)
-		if err != nil {
-			return err
-		}
-		plan, warnings, err = prepareWorkflowSessionPlanWithStore(
-			ctx,
-			planner,
-			store,
-			input,
-			intent,
-			skipPersistedRoleValidation,
-			plan,
-		)
-		return err
-	})
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	return plan, warnings, nil
-}
-
-func prepareWorkflowSessionPlanWithStore(
-	ctx context.Context,
-	planner launch.Planner,
-	store *session.Store,
-	input workflowstore.RunStartContext,
-	replanIntent serverapi.SessionLaunchIntent,
-	skipPersistedRoleValidation bool,
-	plan launch.SessionPlan,
-) (launch.SessionPlan, []string, error) {
-	if err := store.EnsureDurable(); err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	if compactAndContinueRequiresFreshContract(input, plan) {
-		if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-		var err error
-		plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
-			Mode:                                launch.ModeHeadless,
-			Intent:                              replanIntent,
-			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
-		}, store)
-		if err != nil {
-			return launch.SessionPlan{}, nil, err
-		}
-	}
-	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
-	return planner.ApplyRunPromptOverridesWithStore(plan, store, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
-	})
-}
-
-type workflowSessionLaunchRequest struct {
-	Intent    serverapi.SessionLaunchIntent
-	Overrides serverapi.RunPromptOverrides
-}
-
-func sessionLaunchRequestForWorkflowRun(input workflowstore.RunStartContext) (workflowSessionLaunchRequest, error) {
-	request := workflowSessionLaunchRequest{Overrides: workflowRunPromptOverrides(input.Node.SubagentRole)}
-	if resumedID := strings.TrimSpace(input.Run.SessionID); resumedID != "" {
-		intent, err := openWorkflowSessionIntent(resumedID)
-		request.Intent = intent
-		return request, err
-	}
-	switch input.ContextMode {
-	case "", workflow.ContextModeNewSession:
-		request.Intent = serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
-	case workflow.ContextModeContinueSession:
-		intent, err := openWorkflowSessionIntent(input.SourceSessionID)
-		if err != nil {
-			return workflowSessionLaunchRequest{}, fmt.Errorf("continue_session requires a valid source session: %w", err)
-		}
-		request.Intent = intent
-	case workflow.ContextModeCompactAndContinueSession:
-		intent, err := openWorkflowSessionIntent(input.SourceSessionID)
-		if err != nil {
-			return workflowSessionLaunchRequest{}, fmt.Errorf("compact_and_continue_session requires a valid source session: %w", err)
-		}
-		request.Intent = intent
-	default:
-		return workflowSessionLaunchRequest{}, fmt.Errorf("unsupported workflow context mode %q", input.ContextMode)
-	}
-	return request, nil
-}
-
-func openWorkflowSessionIntent(raw string) (serverapi.SessionLaunchIntent, error) {
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
-	if err != nil {
-		return serverapi.SessionLaunchIntent{}, err
-	}
-	return serverapi.OpenExistingSessionLaunchIntent(sessionID), nil
-}
-
-func mustOpenWorkflowSessionIntent(raw string) serverapi.SessionLaunchIntent {
-	intent, err := openWorkflowSessionIntent(raw)
-	if err != nil {
-		panic(fmt.Sprintf("workflow planned invalid session ID %q: %v", raw, err))
-	}
-	return intent
-}
-
-func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
-	if input.ContextMode != workflow.ContextModeCompactAndContinueSession {
-		return false
-	}
-	activeWorkflowSession := plan.WorkflowSession
-	return activeWorkflowSession == nil || strings.TrimSpace(activeWorkflowSession.RunID) != strings.TrimSpace(string(input.Run.ID))
-}
-
-func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {
-	if !plan.ModelContractLocked {
-		return false
-	}
-	roleOverride, err := overrides.AgentRoleOverride()
-	if err != nil || !roleOverride.Present {
-		return false
-	}
-	var currentRole *string
-	if plan.Continuation != nil {
-		currentRole = plan.Continuation.AgentRole
-	}
-	if currentRole == nil {
-		return !roleOverride.Default
-	}
-	return roleOverride.Default || *currentRole != roleOverride.Role
-}
-
-func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
-	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
-	role, err := overrides.AgentRoleOverride()
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	baseSettings := plan.BaseSettings
-	if strings.TrimSpace(baseSettings.Model) == "" {
-		baseSettings = plan.ActiveSettings
-	}
-	baseSource := plan.BaseSource
-	if baseSource.Sources == nil {
-		baseSource = plan.Source
-	}
-	toolLock := plan.Locked
-	if allowLockedWorkflowContinuationRoleChange(plan, overrides) {
-		toolLock = nil
-	}
-	prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{
-		WorkspaceRoot: plan.WorkspaceRoot,
-		Settings:      baseSettings,
-		Source:        baseSource,
-	}, overrides, auth.EmptyState(), launch.RunPromptPreparationContext{
-		ModelLock: plan.Locked,
-		ToolLock:  toolLock,
-		OmittedTarget: &launch.PreparedBaseTarget{
-			Settings:     plan.ActiveSettings,
-			Source:       plan.Source,
-			EnabledTools: plan.EnabledTools,
-		},
-	})
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	var warnings []string
-	switch {
-	case !role.Present || role.Default:
-		if prepared.BaseTarget == nil {
-			return launch.SessionPlan{}, nil, errors.New("prepared workflow base target is required")
-		}
-		plan.ActiveSettings = prepared.BaseTarget.Settings
-		plan.Source = prepared.BaseTarget.Source
-		plan.EnabledTools = append([]toolspec.ID(nil), prepared.BaseTarget.EnabledTools...)
-	default:
-		if prepared.NamedTarget == nil {
-			return launch.SessionPlan{}, nil, errors.New("prepared workflow agent target is required")
-		}
-		plan.ActiveSettings = prepared.NamedTarget.Settings
-		plan.Source = prepared.NamedTarget.Source
-		plan.EnabledTools = append([]toolspec.ID(nil), prepared.NamedTarget.EnabledTools...)
-		if prepared.NamedTarget.Warning != nil {
-			warnings = append(warnings, *prepared.NamedTarget.Warning)
-		}
-	}
-	if !plan.ModelContractLocked {
-		plan.ConfiguredModelName = plan.ActiveSettings.Model
-	}
-	continuation := session.ContinuationContext{OpenAIBaseURL: plan.ActiveSettings.OpenAIBaseURL}
-	if plan.Continuation != nil {
-		continuation = *plan.Continuation
-		continuation.OpenAIBaseURL = plan.ActiveSettings.OpenAIBaseURL
-	}
-	if role.Present && !role.Default {
-		selected := role.Role
-		continuation.AgentRole = &selected
-	} else {
-		continuation.AgentRole = nil
-	}
-	plan.Continuation = &continuation
-	return plan, warnings, nil
-}
-
-type sessionListingMetadata struct {
-	Name               *string
-	FirstPromptPreview string
-}
-
-func restoreSessionListingMetadata(store *session.Store, metadata *sessionListingMetadata) error {
-	if store == nil || metadata == nil {
-		return nil
-	}
-	name := ""
-	if metadata.Name != nil {
-		name = *metadata.Name
-	}
-	return store.SetListingMetadata(name, metadata.FirstPromptPreview)
-}
-
-func (s *Starter) applyWorkflowSessionMetadata(ctx context.Context, input workflowstore.RunStartContext, plan *launch.SessionPlan) error {
-	if plan == nil {
-		return errors.New("workflow session plan is required")
-	}
-	name, err := workflowSessionName(input)
-	if err != nil {
-		return err
-	}
-	preview, err := renderTransitionPrompt(input.PromptTemplate, input)
-	if err != nil {
-		return err
-	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-		return store.SetListingMetadata(name, preview)
-	}); err != nil {
-		return err
-	}
-	plan.SessionName = &name
-	plan.FirstPromptPreview = preview
-	return nil
-}
-
-func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
-	taskDisplayID := strings.TrimSpace(input.Task.ShortID)
-	if taskDisplayID == "" {
-		taskDisplayID = strings.TrimSpace(string(input.Task.ID))
-	}
-	if taskDisplayID == "" {
-		return "", errors.New("workflow session metadata requires a task id")
-	}
-	sourceDisplayName := strings.TrimSpace(input.AcceptedTransitionPath.SourceNodeDisplayName)
-	if sourceDisplayName == "" {
-		return "", errors.New("workflow session metadata requires accepted transition source display name")
-	}
-	targetDisplayName := strings.TrimSpace(input.AcceptedTransitionPath.TargetNodeDisplayName)
-	if targetDisplayName == "" {
-		return "", errors.New("workflow session metadata requires accepted transition target display name")
-	}
-	return fmt.Sprintf("%s: %s -> %s", taskDisplayID, sourceDisplayName, targetDisplayName), nil
-}
-
-func (s *Starter) resolveWorkflowCompletionMode(ctx context.Context, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
-	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
-	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
-		mode, err := workflowruntime.ParseCompletionMode(stored)
-		if err != nil {
-			return "", client, err
-		}
-		if mode == workflowruntime.CompletionModeShellCommand && !shellAvailable {
-			return "", client, errWorkflowShellCompletionRequiresShell
-		}
-		return mode, client, nil
-	}
-	configuredMode := s.cfg.Settings.Workflow.CompletionMode
-	if nodeMode := strings.TrimSpace(input.Node.CompletionMode); nodeMode != "" {
-		configuredMode = config.WorkflowCompletionMode(nodeMode)
-	}
-	if configuredMode == config.WorkflowCompletionModeShellCommand && !shellAvailable {
-		return "", client, errWorkflowShellCompletionRequiresShell
-	}
-	selection := workflowruntime.CompletionModeSelection{
-		ConfiguredMode:         configuredMode,
-		HasContinueSessionEdge: input.WorkflowHasContinueSessionEdge,
-		ShellAvailable:         shellAvailable,
-	}
-	resolvedClient := client
-	if workflowCompletionModeNeedsProviderCapabilities(selection) {
-		caps, nextClient, err := s.workflowProviderCapabilities(ctx, plan, client)
-		if err != nil {
-			return "", nextClient, fmt.Errorf("resolve provider capabilities for workflow completion: %w", err)
-		}
-		selection.ProviderCapabilities = caps
-		resolvedClient = nextClient
-	}
-	mode, err := workflowruntime.SelectCompletionMode(selection)
-	if err != nil {
-		return "", resolvedClient, err
-	}
-	return mode, resolvedClient, nil
-}
-
 func workflowCompletionModeNeedsProviderCapabilities(selection workflowruntime.CompletionModeSelection) bool {
-	switch selection.ConfiguredMode {
-	case config.WorkflowCompletionModeStructuredOutput:
-		return true
-	case config.WorkflowCompletionModeAuto, "":
-		return selection.ShellAvailable && !selection.HasContinueSessionEdge
-	default:
-		return false
-	}
+	return selection.ConfiguredMode == config.WorkflowCompletionModeStructuredOutput || ((selection.ConfiguredMode == config.WorkflowCompletionModeAuto || selection.ConfiguredMode == "") && selection.ShellAvailable && !selection.HasContinueSessionEdge)
 }
 
 func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.SessionPlan, client llm.Client) (llm.ProviderCapabilities, llm.Client, error) {
-	if caps, ok := llm.ProviderCapabilitiesFromLocked(plan.Locked); ok {
-		return caps, client, nil
-	}
-	if caps, ok := llm.ProviderCapabilitiesFromOverride(plan.ActiveSettings.ProviderCapabilities); ok {
+	if caps, ok := llm.ProviderCapabilitiesFromLockedOrOverride(plan.Locked, plan.ActiveSettings.ProviderCapabilities); ok {
 		return caps, client, nil
 	}
 	if client == nil {
-		created, err := s.newWorkflowProviderClient(ctx, plan)
+		next, err := s.newWorkflowProviderClient(ctx, plan)
 		if err != nil {
 			return llm.ProviderCapabilities{}, nil, err
 		}
-		client = created
+		client = next
 	}
 	provider, ok := client.(llm.ProviderCapabilitiesClient)
 	if !ok {
 		return llm.ProviderCapabilities{}, client, fmt.Errorf("provider capabilities are unavailable for client %T", client)
 	}
 	caps, err := provider.ProviderCapabilities(ctx)
-	if err != nil {
-		return llm.ProviderCapabilities{}, client, err
-	}
-	return caps, client, nil
+	return caps, client, err
 }
 
 func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.SessionPlan) (llm.Client, error) {
 	active := plan.ActiveSettings
-	providerCapabilitiesOverride := workflowProviderCapabilitiesOverride(plan)
 	if s.runtimeClientFactory != nil {
+		providerSettings := runtimewire.RuntimeClientProviderSettings{
+			Model:               active.Model,
+			ProviderOverride:    active.ProviderOverride,
+			OpenAIBaseURL:       active.OpenAIBaseURL,
+			ModelVerbosity:      active.ModelVerbosity,
+			ProviderIdentifier:  active.ProviderIdentifier,
+			Store:               active.Store,
+			ContextWindowTokens: active.ModelContextWindow,
+			Auth:                "inherit",
+		}
+		if caps, configured := llm.ProviderCapabilitiesFromLockedOrOverride(plan.Locked, active.ProviderCapabilities); configured {
+			providerSettings.ProviderCapabilitiesOverride = &caps
+		}
 		client, err := s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
-			Purpose:        runtimewire.RuntimeClientPurposeWorkflow,
-			SessionID:      plan.Descriptor.SessionID().String(),
-			ActiveSettings: plan.ActiveSettings,
-			EnabledTools:   append([]toolspec.ID(nil), plan.EnabledTools...),
-			WorkspaceRoot:  plan.WorkspaceRoot,
-			Sources:        cloneStringMap(plan.Source.Sources),
-			ProviderSettings: runtimewire.RuntimeClientProviderSettings{
-				Model:                        active.Model,
-				ProviderOverride:             active.ProviderOverride,
-				OpenAIBaseURL:                active.OpenAIBaseURL,
-				ModelVerbosity:               active.ModelVerbosity,
-				ProviderIdentifier:           active.ProviderIdentifier,
-				Store:                        active.Store,
-				ContextWindowTokens:          active.ModelContextWindow,
-				Auth:                         "inherit",
-				ProviderCapabilitiesOverride: providerCapabilitiesOverride,
-			},
+			Purpose:          runtimewire.RuntimeClientPurposeWorkflow,
+			SessionID:        plan.Descriptor.SessionID().String(),
+			ActiveSettings:   active,
+			EnabledTools:     append([]toolspec.ID(nil), plan.EnabledTools...),
+			WorkspaceRoot:    plan.WorkspaceRoot,
+			Sources:          maps.Clone(plan.Source.Sources),
+			ProviderSettings: providerSettings,
 		})
 		if err != nil {
 			return nil, err
 		}
 		if client == nil {
-			return nil, fmt.Errorf("runtime client factory returned nil client for workflow purpose")
+			return nil, errors.New("runtime client factory returned nil workflow client")
 		}
 		return client, nil
 	}
@@ -1097,217 +398,76 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 	if s.authManager != nil {
 		authProvider = s.authManager
 	}
-	return llm.NewProviderClient(llm.ProviderClientOptions{
-		Provider:                     llm.Provider(strings.TrimSpace(active.ProviderOverride)),
-		Model:                        active.Model,
-		Auth:                         authProvider,
-		HTTPClient:                   llm.NewHTTPClient(time.Duration(active.Timeouts.ModelRequestSeconds) * time.Second),
-		OpenAIBaseURL:                active.OpenAIBaseURL,
-		ModelVerbosity:               string(active.ModelVerbosity),
-		ProviderIdentifier:           &active.ProviderIdentifier,
-		Store:                        active.Store,
-		ContextWindowTokens:          active.ModelContextWindow,
-		ProviderCapabilitiesOverride: providerCapabilitiesOverride,
-	})
+	return llm.NewProviderClient(llm.ProviderClientOptions{Provider: llm.Provider(active.ProviderOverride), Model: active.Model, Auth: authProvider, HTTPClient: llm.NewHTTPClient(time.Duration(active.Timeouts.ModelRequestSeconds) * time.Second), OpenAIBaseURL: active.OpenAIBaseURL, ModelVerbosity: string(active.ModelVerbosity), ProviderIdentifier: &active.ProviderIdentifier, Store: active.Store, ContextWindowTokens: active.ModelContextWindow})
 }
 
-func workflowProviderCapabilitiesOverride(plan launch.SessionPlan) *llm.ProviderCapabilities {
-	caps, ok := llm.ProviderCapabilitiesFromLockedOrOverride(plan.Locked, plan.ActiveSettings.ProviderCapabilities)
-	if !ok {
-		return nil
+func workflowPromptOverrides(role string) serverapi.RunPromptOverrides {
+	if workflow.IsDefaultAgentRole(role) {
+		role = workflow.DefaultAgentRole
 	}
-	return &caps
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	return maps.Clone(values)
-}
-
-func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
-	for _, id := range enabled {
-		if id == want {
-			return true
-		}
-	}
-	return false
-}
-
-func workflowRunPromptOverrides(role string) serverapi.RunPromptOverrides {
-	normalized := strings.TrimSpace(role)
-	if normalized == "" {
+	if strings.TrimSpace(role) == "" {
 		return serverapi.RunPromptOverrides{}
 	}
-	if workflow.IsDefaultAgentRole(normalized) {
-		normalized = workflow.DefaultAgentRole
-	}
-	return serverapi.RunPromptOverrides{AgentRole: &normalized}
+	return serverapi.RunPromptOverrides{AgentRole: &role}
 }
 
-// cloneSourceSessionForFanout creates an isolated full clone of the source
-// session for a fan-out compact-and-continue branch and returns its session ID,
-// so the branch can be compacted/continued without touching the shared source.
+func applyWorkflowSessionPromptOverridesForRole(plan launch.SessionPlan, roleName string) (launch.SessionPlan, []string, error) {
+	overrides := workflowPromptOverrides(roleName)
+	prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{WorkspaceRoot: plan.WorkspaceRoot, Settings: plan.BaseSettings, Source: plan.BaseSource}, overrides, auth.EmptyState(), launch.RunPromptPreparationContext{ModelLock: plan.Locked, ToolLock: plan.Locked, OmittedTarget: &launch.PreparedBaseTarget{Settings: plan.ActiveSettings, Source: plan.Source, EnabledTools: plan.EnabledTools}})
+	if err != nil {
+		return launch.SessionPlan{}, nil, err
+	}
+	role, err := overrides.AgentRoleOverride()
+	if err != nil {
+		return launch.SessionPlan{}, nil, err
+	}
+	if !role.Present || role.Default {
+		if prepared.BaseTarget == nil {
+			return launch.SessionPlan{}, nil, errors.New("prepared workflow base target is required")
+		}
+		plan.ActiveSettings, plan.Source, plan.EnabledTools = prepared.BaseTarget.Settings, prepared.BaseTarget.Source, append([]toolspec.ID(nil), prepared.BaseTarget.EnabledTools...)
+		return plan, nil, nil
+	}
+	if prepared.NamedTarget == nil {
+		return launch.SessionPlan{}, nil, errors.New("prepared workflow role target is required")
+	}
+	plan.ActiveSettings, plan.Source, plan.EnabledTools = prepared.NamedTarget.Settings, prepared.NamedTarget.Source, append([]toolspec.ID(nil), prepared.NamedTarget.EnabledTools...)
+	if prepared.NamedTarget.Warning == nil {
+		return plan, nil, nil
+	}
+	return plan, []string{*prepared.NamedTarget.Warning}, nil
+}
+
 func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID string) (string, error) {
-	descriptor, err := workflowSessionDescriptor(containerDir, sourceSessionID)
+	id, err := runtimeids.ParseSessionID(sourceSessionID)
+	if err != nil {
+		return "", err
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(id, containerDir)
 	if err != nil {
 		return "", err
 	}
 	var cloneID string
-	err = s.withSessionStore(context.Background(), descriptor, func(_ context.Context, sourceStore *session.Store) error {
-		eventLog, materializationErr := sourceStore.MaterializeEventLog()
-		if materializationErr != nil {
-			return fmt.Errorf("materialize source session event log: %w", materializationErr)
+	err = s.withSessionStore(context.Background(), descriptor, func(_ context.Context, source *session.Store) error {
+		log, err := source.MaterializeEventLog()
+		if err != nil {
+			return err
 		}
-		cloned, cloneErr := session.CloneSession(eventLog, "", sessioncontract.SessionCategorySubagent)
-		if cloneErr != nil {
-			return fmt.Errorf("clone source session: %w", cloneErr)
+		clone, err := session.CloneSession(log, "", sessioncontract.SessionCategorySubagent)
+		if err != nil {
+			return err
 		}
-		cloneID = cloned.Meta().SessionID
+		cloneID = clone.Meta().SessionID
 		return nil
 	})
-	if err != nil {
-		return "", err
-	}
-	return cloneID, nil
-}
-
-// removeFanoutClone deletes a disposable fan-out clone that was created but never
-// attached to a started run because planning failed afterward. Best-effort: it
-// removes the on-disk session and any metadata record, leaving nothing orphaned.
-func (s *Starter) removeFanoutClone(ctx context.Context, containerDir, sessionID string) {
-	if strings.TrimSpace(sessionID) == "" {
-		return
-	}
-	cleanupCtx := context.WithoutCancel(ctx)
-	if descriptor, err := workflowSessionDescriptor(containerDir, sessionID); err == nil {
-		_ = s.withSessionStore(cleanupCtx, descriptor, func(_ context.Context, store *session.Store) error {
-			return store.RemoveDurable()
-		})
-	}
-	_ = s.metadata.DeleteSessionRecordByID(cleanupCtx, sessionID)
-}
-
-func workflowSessionDescriptor(containerDir string, rawSessionID string) (session.SessionDescriptor, error) {
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(rawSessionID))
-	if err != nil {
-		return session.SessionDescriptor{}, err
-	}
-	return session.NewScopedOpenSessionDescriptor(sessionID, containerDir)
+	return cloneID, err
 }
 
 func (s *Starter) validateRole(role string) error {
-	trimmed := strings.TrimSpace(role)
-	if workflow.IsDefaultAgentRole(trimmed) {
-		return nil
-	}
-	if config.LookupSubagentRole(s.cfg.Settings, trimmed).Status == config.SubagentRoleLookupPresent {
+	if workflow.IsDefaultAgentRole(role) || config.LookupSubagentRole(s.cfg.Settings, strings.TrimSpace(role)).Status == config.SubagentRoleLookupPresent {
 		return nil
 	}
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
-}
-
-func (s *Starter) prepareAgentExecution(
-	ctx context.Context,
-	req workflowexecution.SchedulerStartRunRequest,
-	input workflowstore.RunStartContext,
-	plan launch.SessionPlan,
-	warnings []string,
-	client llm.Client,
-	effectiveMode workflowruntime.CompletionMode,
-) (*sessionruntime.PreparedAgentExecution, error) {
-	executionRoot, err := requireRunExecutionRoot(input)
-	if err != nil {
-		return nil, err
-	}
-	sessionID := plan.Descriptor.SessionID().String()
-	startLogLines := []string{fmt.Sprintf(
-		"workflow.runtime.start run_id=%s task_id=%s session_id=%s node_id=%s execution_root=%s model=%s",
-		req.RunID,
-		req.TaskID,
-		sessionID,
-		req.NodeID,
-		executionRoot.EffectiveRoot(),
-		plan.ActiveSettings.Model,
-	)}
-	for _, warning := range warnings {
-		startLogLines = append(startLogLines, "workflow.runtime.warning "+warning)
-	}
-	workflowConfig, err := BuildWorkflowRuntimeConfig(
-		input,
-		effectiveMode,
-		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-		plan.ActiveSettings.Workflow.UseRequiredToolCalls,
-		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer, AutomaticStarts: s.automaticStarts, MutationPermit: s.mutationPermit},
-		s.store,
-	)
-	if err != nil {
-		return nil, err
-	}
-	var currentWorktreeRoot *string
-	if executionRoot.Managed != nil {
-		root := executionRoot.Managed.Root
-		currentWorktreeRoot = &root
-	}
-	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
-	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
-		if err != nil {
-			return nil, err
-		}
-	}
-	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:                            plan.ActiveSettings,
-		EnabledTools:                        workflowRuntimeEnabledTools(plan.EnabledTools),
-		Workdir:                             executionRoot.EffectiveRoot(),
-		ManagedWorktreePathContext:          managedWorktreePathContext,
-		Sources:                             plan.Source.Sources,
-		Headless:                            true,
-		Client:                              client,
-		ReviewerClientFactory:               s.runtimeClientFactory,
-		WorkflowRun:                         workflowConfig,
-		SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
-		StartLogLines:                       startLogLines,
-		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
-			if s.attention != nil {
-				if err := workflowattention.PrepareSkippedTaskQuestionBatch(s.attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
-					slog.Warn("prepare skipped workflow question batch failed", "run_id", req.RunID, "task_id", req.TaskID, "batch_id", batch.BatchID, "prompt_id", batch.PromptID, "error", err)
-				}
-			}
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: req.TaskID, RunID: req.RunID, Generation: req.Generation}
-	return s.runtimeAuthority.PrepareAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: plan.Descriptor,
-		Runtime:    &runtimePlan,
-		Workflow:   &workflowRef,
-		Resource:   sessionruntime.ReplaceAgentResource{},
-		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-			return s.handleWorkflowAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, sessionID, req, input, askReq)
-		},
-		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
-				engineCtx = metadata.WithQueryFailureDiagnostics(engineCtx)
-				if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
-					engine.LastCompactionWorkflowRunID() != string(req.RunID) {
-					if err := engine.CompactContextForWorkflowContinuation(engineCtx); err != nil {
-						return err
-					}
-				}
-				_, submitErr := engine.SubmitWorkflowTurn(engineCtx)
-				return submitErr
-			})
-			if turnErr != nil {
-				reason := ReasonRuntimeFailed
-				if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
-					reason = ReasonRuntimeCanceled
-				}
-				turnErr = errors.Join(turnErr, s.interrupt(context.Background(), req.RunID, req.Generation, reason, turnErr))
-			}
-			return turnErr
-		},
-	})
 }
 
 type executionPromptAwaiter struct {
@@ -1319,140 +479,85 @@ func (a executionPromptAwaiter) AwaitPromptResponse(ctx context.Context, _ strin
 	return a.authority.AwaitPromptResponse(ctx, a.scope.ID(), req)
 }
 
-type permittedWorkflowQuestionStore struct {
-	store  workflowattention.QuestionStore
-	permit *workflowexecution.MutationPermit
+func currentNodeQuestionContext(input workflowstore.CurrentNodeStartContext, sessionID string) workflowattention.TaskQuestionContext {
+	return workflowattention.TaskQuestionContext{Task: input.Task, CurrentNode: input.CurrentNode.Reference, SessionID: sessionID}
 }
 
-func (s permittedWorkflowQuestionStore) GetRun(ctx context.Context, runID workflow.RunID) (workflowstore.RunRecord, error) {
-	return s.store.GetRun(ctx, runID)
-}
-
-func (s permittedWorkflowQuestionStore) SetRunWaitingAsk(ctx context.Context, runID workflow.RunID, generation int64, askID string) error {
-	return s.permit.Run(ctx, func(ctx context.Context) error {
-		return s.store.SetRunWaitingAsk(ctx, runID, generation, askID)
-	})
-}
-
-func (s permittedWorkflowQuestionStore) ClearRunWaitingAsk(ctx context.Context, runID workflow.RunID, generation int64, askID string) error {
-	return s.permit.Run(ctx, func(ctx context.Context) error {
-		return s.store.ClearRunWaitingAsk(ctx, runID, generation, askID)
-	})
-}
-
-func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	store := permittedWorkflowQuestionStore{store: s.store, permit: s.mutationPermit}
+func (s *Starter) handleCurrentNodeAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, input workflowstore.CurrentNodeStartContext, sessionID string, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	context := currentNodeQuestionContext(input, sessionID)
 	if askReq.Approval {
-		return workflowattention.HandleTaskApprovalQuestion(ctx, store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
-			SessionID:  sessionID,
-			RunID:      req.RunID,
-			Generation: req.Generation,
-			Input:      input,
-			Question:   askReq,
-		})
+		return workflowattention.HandleTaskApprovalQuestion(ctx, awaiter, s.attention, workflowattention.TaskQuestionRequest{Context: context, Question: askReq})
 	}
-	return workflowattention.HandleTaskQuestion(ctx, store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
-		SessionID:  sessionID,
-		RunID:      req.RunID,
-		Generation: req.Generation,
-		Input:      input,
-		Question:   askReq,
-	})
+	return workflowattention.HandleTaskQuestion(ctx, awaiter, s.attention, workflowattention.TaskQuestionRequest{Context: context, Question: askReq})
 }
 
 func workflowRuntimeEnabledTools(enabled []toolspec.ID) []toolspec.ID {
-	out := make([]toolspec.ID, 0, len(enabled))
+	return append([]toolspec.ID(nil), enabled...)
+}
+
+func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
 	for _, id := range enabled {
-		out = append(out, id)
-	}
-	return out
-}
-
-func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) error {
-	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		return s.interruptWithPermit(ctx, runID, generation, reason, cause)
-	})
-}
-
-func (s *Starter) interruptWithPermit(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) error {
-	detail := "{}"
-	if cause != nil {
-		if detailed, ok := cause.(interface{ InterruptionDetailJSON() string }); ok && strings.TrimSpace(detailed.InterruptionDetailJSON()) != "" {
-			detail = detailed.InterruptionDetailJSON()
-		} else if raw, err := json.Marshal(map[string]string{"error": cause.Error()}); err == nil {
-			detail = string(raw)
+		if id == want {
+			return true
 		}
 	}
-	if err := s.store.InterruptRunGeneration(ctx, runID, generation, reason, detail); err != nil {
-		return err
-	}
-	if !workflowattention.ShouldNotifyInterruptedRun(reason) {
-		return nil
-	}
-	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
-		finalizer.PublishPendingInterruptedRun(ctx, runID)
-	}
-	return nil
+	return false
 }
 
-func BuildWorkflowTaskInstructions(input workflowstore.RunStartContext) (workflowruntime.TaskInstructions, error) {
-	nodePrompt, err := renderTransitionPrompt(input.PromptTemplate, input)
+func BuildCurrentSessionTaskInstructions(input workflowstore.CurrentNodeStartContext) (workflowruntime.TaskInstructions, error) {
+	source := ""
+	if input.SourceSessionID != nil {
+		source = input.SourceSessionID.String()
+	}
+	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+}
+
+type workflowPromptInput struct {
+	Task                 workflowstore.TaskRecord
+	Workflow             workflowstore.WorkflowRecord
+	Node                 workflowstore.NodeRecord
+	CurrentNode          workflow.CurrentNodeReference
+	ContextMode          workflow.ContextMode
+	SourceSessionID      string
+	TransitionOptions    []workflowstore.TransitionOption
+	TransitionIDs        []string
+	PromptTemplate       string
+	ParameterValues      map[string]string
+	PriorParameterValues map[string]map[string]string
+}
+
+func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.TaskInstructions, error) {
+	prompt, err := renderWorkflowPrompt(input.PromptTemplate, input)
 	if err != nil {
 		return workflowruntime.TaskInstructions{}, err
 	}
-	taskShortID := strings.TrimSpace(input.Task.ShortID)
-	if taskShortID == "" {
-		taskShortID = string(input.Task.ID)
+	shortID := input.Task.ShortID
+	if shortID == "" {
+		shortID = string(input.Task.ID)
 	}
-	workflowShortID := strings.TrimSpace(string(input.Workflow.ID))
-	if workflowShortID == "" {
-		workflowShortID = string(input.Task.WorkflowID)
-	}
-	return workflowruntime.TaskInstructions{
-		TaskID:          string(input.Task.ID),
-		TaskShortID:     taskShortID,
-		TaskTitle:       strings.TrimSpace(input.Task.Title),
-		TaskBody:        strings.TrimSpace(input.Task.Body),
-		WorkflowID:      string(input.Task.WorkflowID),
-		WorkflowShortID: workflowShortID,
-		WorkflowName:    strings.TrimSpace(input.Workflow.Name),
-		NodeID:          string(input.Node.ID),
-		NodeKey:         string(input.Node.Key),
-		NodeDisplayName: strings.TrimSpace(input.Node.DisplayName),
-		ContextMode:     string(input.ContextMode),
-		SourceSessionID: strings.TrimSpace(input.SourceSessionID),
-		Transitions:     workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs),
-		NodePrompt:      nodePrompt,
-	}, nil
+	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: string(input.Task.WorkflowID), WorkflowShortID: string(input.Workflow.ID), WorkflowName: strings.TrimSpace(input.Workflow.Name), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
 }
 
-func workflowTransitions(options []workflowstore.TransitionOption, transitionIDs []string) []prompts.WorkflowTransition {
-	capacity := len(options)
-	if len(transitionIDs) > capacity {
-		capacity = len(transitionIDs)
-	}
-	out := make([]prompts.WorkflowTransition, 0, capacity)
-	if len(options) > 0 {
-		for _, option := range options {
-			id := strings.TrimSpace(option.ID)
-			if id == "" {
-				continue
-			}
-			out = append(out, prompts.WorkflowTransition{ID: id, DisplayName: strings.TrimSpace(option.DisplayName), Description: strings.TrimSpace(option.Description)})
+func workflowTransitions(options []workflowstore.TransitionOption, ids []string) []prompts.WorkflowTransition {
+	out := make([]prompts.WorkflowTransition, 0, len(options))
+	for _, option := range options {
+		if strings.TrimSpace(option.ID) != "" {
+			out = append(out, prompts.WorkflowTransition{ID: option.ID, DisplayName: option.DisplayName, Description: option.Description})
 		}
+	}
+	if len(out) != 0 {
 		return out
 	}
-	for _, id := range transitionIDs {
-		trimmed := strings.TrimSpace(id)
-		if trimmed != "" {
-			out = append(out, prompts.WorkflowTransition{ID: trimmed})
+	for _, id := range ids {
+		if strings.TrimSpace(id) != "" {
+			out = append(out, prompts.WorkflowTransition{ID: id})
 		}
 	}
 	return out
 }
 
-func workflowInstructionTransitions(options []workflowstore.TransitionOption, transitionIDs []string) []workflowruntime.TransitionInstruction {
-	transitions := workflowTransitions(options, transitionIDs)
+func workflowInstructionTransitions(options []workflowstore.TransitionOption, ids []string) []workflowruntime.TransitionInstruction {
+	transitions := workflowTransitions(options, ids)
 	out := make([]workflowruntime.TransitionInstruction, 0, len(transitions))
 	for _, transition := range transitions {
 		out = append(out, workflowruntime.TransitionInstruction{ID: transition.ID, DisplayName: transition.DisplayName, Description: transition.Description})
@@ -1460,110 +565,61 @@ func workflowInstructionTransitions(options []workflowstore.TransitionOption, tr
 	return out
 }
 
-func workflowCompletionContractForRun(run workflowstore.RunRecord, input workflowstore.RunStartContext) workflowruntime.CompletionContract {
-	return workflowruntime.CompletionContract{
-		RunID:              run.ID,
-		ExpectedGeneration: run.Generation,
-		RequireGeneration:  true,
-		Transitions:        workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
-	}
-}
-
-func workflowCompletionTransitions(options []workflowstore.TransitionOption, transitionIDs []string) []workflowruntime.CompletionTransition {
+func workflowCompletionTransitions(options []workflowstore.TransitionOption, ids []string) []workflowruntime.CompletionTransition {
 	out := make([]workflowruntime.CompletionTransition, 0, len(options))
-	if len(options) > 0 {
-		for _, option := range options {
-			id := strings.TrimSpace(option.ID)
-			if id == "" {
-				continue
-			}
-			out = append(out, workflowruntime.CompletionTransition{
-				ID:          id,
-				DisplayName: strings.TrimSpace(option.DisplayName),
-				Description: strings.TrimSpace(option.Description),
-				Parameters:  append([]workflow.Parameter(nil), option.Parameters...),
-			})
+	for _, option := range options {
+		if strings.TrimSpace(option.ID) != "" {
+			out = append(out, workflowruntime.CompletionTransition{ID: option.ID, DisplayName: option.DisplayName, Description: option.Description, Parameters: append([]workflow.Parameter(nil), option.Parameters...)})
 		}
+	}
+	if len(out) != 0 {
 		return out
 	}
-	for _, id := range transitionIDs {
-		trimmed := strings.TrimSpace(id)
-		if trimmed != "" {
-			out = append(out, workflowruntime.CompletionTransition{ID: trimmed})
+	for _, id := range ids {
+		if strings.TrimSpace(id) != "" {
+			out = append(out, workflowruntime.CompletionTransition{ID: id})
 		}
 	}
 	return out
 }
 
 type nodePromptTemplateData struct {
-	TaskId          string
-	TaskShortId     string
-	TaskTitle       string
-	TaskBody        string
-	NodeId          string
-	NodeKey         string
-	NodeDisplayName string
-	Params          map[string]promptParameterNamespace
+	TaskId, TaskShortId, TaskTitle, TaskBody, NodeId, NodeKey, NodeDisplayName string
+	Params                                                                     map[string]promptParameterNamespace
 }
 
 const currentParameterValueKey = "\x00current"
 
 type promptParameterNamespace map[string]string
 
-func (n promptParameterNamespace) String() string {
-	return n[currentParameterValueKey]
-}
+func (n promptParameterNamespace) String() string { return n[currentParameterValueKey] }
 
-func renderTransitionPrompt(templateText string, input workflowstore.RunStartContext) (string, error) {
-	prompt := strings.TrimSpace(templateText)
-	if prompt == "" {
+func renderWorkflowPrompt(text string, input workflowPromptInput) (string, error) {
+	if strings.TrimSpace(text) == "" {
 		return "", nil
 	}
-	tmpl, err := template.New("workflow transition prompt").Option("missingkey=error").Parse(prompt)
+	tmpl, err := template.New("workflow transition prompt").Option("missingkey=error").Parse(text)
 	if err != nil {
 		return "", fmt.Errorf("parse workflow transition prompt template: %w", err)
 	}
-	var b strings.Builder
-	if err := tmpl.Execute(&b, nodePromptTemplateData{
-		TaskId:          string(input.Task.ID),
-		TaskShortId:     strings.TrimSpace(input.Task.ShortID),
-		TaskTitle:       strings.TrimSpace(input.Task.Title),
-		TaskBody:        strings.TrimSpace(input.Task.Body),
-		NodeId:          string(input.Node.ID),
-		NodeKey:         string(input.Node.Key),
-		NodeDisplayName: strings.TrimSpace(input.Node.DisplayName),
-		Params:          promptParameterData(input.ParameterValues, input.PriorParameterValues),
-	}); err != nil {
-		return "", fmt.Errorf("render workflow transition prompt template: %w", err)
-	}
-	return b.String(), nil
+	var out strings.Builder
+	err = tmpl.Execute(&out, nodePromptTemplateData{TaskId: string(input.Task.ID), TaskShortId: input.Task.ShortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, NodeId: string(input.Node.ID), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, Params: promptParameterData(input.ParameterValues, input.PriorParameterValues)})
+	return out.String(), err
 }
 
 func promptParameterData(current map[string]string, prior map[string]map[string]string) map[string]promptParameterNamespace {
-	out := map[string]promptParameterNamespace{}
-	out[workflow.RuntimePromptParameterCommentary] = promptParameterNamespace{currentParameterValueKey: ""}
-	for transitionKey, values := range prior {
-		key := strings.TrimSpace(transitionKey)
-		if key == "" {
-			continue
-		}
-		namespace := out[key]
+	out := map[string]promptParameterNamespace{workflow.RuntimePromptParameterCommentary: {currentParameterValueKey: ""}}
+	for transition, values := range prior {
+		namespace := out[transition]
 		if namespace == nil {
 			namespace = promptParameterNamespace{}
 		}
-		for parameterKey, value := range values {
-			trimmedParameterKey := strings.TrimSpace(parameterKey)
-			if trimmedParameterKey != "" {
-				namespace[trimmedParameterKey] = value
-			}
+		for key, value := range values {
+			namespace[key] = value
 		}
-		out[key] = namespace
+		out[transition] = namespace
 	}
-	for parameterKey, value := range current {
-		key := strings.TrimSpace(parameterKey)
-		if key == "" {
-			continue
-		}
+	for key, value := range current {
 		namespace := out[key]
 		if namespace == nil {
 			namespace = promptParameterNamespace{}
@@ -1574,6 +630,4 @@ func promptParameterData(current map[string]string, prior map[string]map[string]
 	return out
 }
 
-var _ workflowexecution.SchedulerRuntimeStarter = (*Starter)(nil)
-var _ workflowexecution.InterruptAuthority = (*Starter)(nil)
-var _ workflowexecution.MoveAuthority = (*Starter)(nil)
+var _ workflowexecution.CurrentNodeRunner = (*Starter)(nil)

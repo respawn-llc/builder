@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunStepLoopCancellationPreventsModelDispatch(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unused")},
 	}}}

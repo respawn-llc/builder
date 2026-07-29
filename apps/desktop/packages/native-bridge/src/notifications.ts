@@ -18,19 +18,20 @@ export type NativeNotificationQuestionFocus = Readonly<{
 
 export type NativeNotificationApprovalFocus = Readonly<{
   kind: "approval";
-  taskTransitionID: string;
+  approvalID: string;
 }>;
 
-export type NativeNotificationInterruptedRunFocus = Readonly<{
-  kind: "interrupted_run";
-  runID: string;
+export type NativeNotificationInterruptedCurrentNodeFocus = Readonly<{
+  kind: "interrupted_current_node";
 }>;
 
 export type NativeNotificationTaskDetailTarget = Readonly<{
   kind: "task_detail";
   taskID: string;
   focus:
-    NativeNotificationQuestionFocus | NativeNotificationApprovalFocus | NativeNotificationInterruptedRunFocus;
+    | NativeNotificationQuestionFocus
+    | NativeNotificationApprovalFocus
+    | NativeNotificationInterruptedCurrentNodeFocus;
 }>;
 
 export type NativeNotificationTarget = NativeNotificationTaskDetailTarget;
@@ -272,11 +273,10 @@ const nativeNotificationActivationSchema = z.object({
       }),
       z.object({
         kind: z.literal("approval"),
-        taskTransitionID: nonEmptyID,
+        approvalID: nonEmptyID,
       }),
       z.object({
-        kind: z.literal("interrupted_run"),
-        runID: nonEmptyID,
+        kind: z.literal("interrupted_current_node"),
       }),
     ]),
   }),

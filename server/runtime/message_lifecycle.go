@@ -110,9 +110,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			} else {
 				e.compactionRuntimeState().IncrementCount()
 			}
-			if replacement.WorkflowRunID != nil {
-				e.compactionRuntimeState().SetLastWorkflowRunID(*replacement.WorkflowRunID)
-			}
 			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()
 			if replacement.PendingHandoffFutureMessage != nil {

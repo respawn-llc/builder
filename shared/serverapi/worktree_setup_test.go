@@ -54,13 +54,11 @@ func TestWorktreeSetupOperationIDJSONRejectsNonV4(t *testing.T) {
 	}
 }
 
-func TestForegroundSetupRequestsRequireSetupOperationID(t *testing.T) {
+func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	valid := []interface{ Validate() error }{
 		WorktreeCreateRequest{ClientRequestID: "req", SetupOperationID: id, SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: id},
-		WorkflowTaskApproveRequest{TransitionID: "transition", SetupOperationID: id},
-		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", SetupOperationID: id},
 	}
 	for _, req := range valid {
 		if err := req.Validate(); err != nil {
@@ -70,8 +68,6 @@ func TestForegroundSetupRequestsRequireSetupOperationID(t *testing.T) {
 	invalid := []interface{ Validate() error }{
 		WorktreeCreateRequest{ClientRequestID: "req", SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task"},
-		WorkflowTaskApproveRequest{TransitionID: "transition"},
-		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node"},
 	}
 	for _, req := range invalid {
 		if err := req.Validate(); err == nil {

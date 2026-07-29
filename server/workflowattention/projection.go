@@ -2,53 +2,54 @@ package workflowattention
 
 import "core/server/workflowstore"
 
-func ApprovalProjectionFromStore(projection workflowstore.ApprovalTransitionProjection) ApprovalProjection {
+func ApprovalProjectionFromStore(projection workflowstore.ApprovalAttentionProjection) ApprovalProjection {
 	return ApprovalProjection{
-		TransitionID:     projection.TransitionID,
+		ApprovalID:       projection.ApprovalID,
+		Source:           projection.Source,
 		ProjectID:        projection.ProjectID,
 		WorkflowID:       projection.WorkflowID,
-		TaskID:           projection.TaskID,
 		TaskShortID:      projection.TaskShortID,
 		TaskTitle:        projection.TaskTitle,
-		RunID:            string(projection.SourceRunID),
 		SessionID:        projection.SessionID,
 		Message:          ApprovalRequiredMessage,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}
 }
 
-func ApprovalProjections(projections []workflowstore.ApprovalTransitionProjection) []ApprovalProjection {
-	resolved := make([]ApprovalProjection, 0, len(projections))
+func ApprovalProjections(projections []workflowstore.ApprovalAttentionProjection) []ApprovalProjection {
+	out := make([]ApprovalProjection, 0, len(projections))
 	for _, projection := range projections {
-		resolved = append(resolved, ApprovalProjectionFromStore(projection))
+		out = append(out, ApprovalProjectionFromStore(projection))
 	}
-	return resolved
+	return out
 }
 
-func InterruptedRunProjectionFromStore(projection workflowstore.InterruptedRunAttentionProjection) InterruptedRunProjection {
-	detailJSON := ""
-	if projection.InterruptionDetailJSON != nil {
-		detailJSON = *projection.InterruptionDetailJSON
-	}
-	return InterruptedRunProjection{
+func InterruptedCurrentNodeProjectionFromStore(projection workflowstore.InterruptedCurrentNodeAttentionProjection) InterruptedCurrentNodeProjection {
+	return InterruptedCurrentNodeProjection{
+		CurrentNode:      projection.CurrentNode,
 		ProjectID:        projection.ProjectID,
 		WorkflowID:       projection.WorkflowID,
-		TaskID:           projection.TaskID,
 		TaskShortID:      projection.TaskShortID,
 		TaskTitle:        projection.TaskTitle,
-		RunID:            projection.RunID,
 		SessionID:        projection.SessionID,
-		Message:          InterruptedRunMessage(&projection.InterruptionReason, projection.InterruptionDetailJSON),
+		Message:          InterruptedCurrentNodeMessage(projection.InterruptionReason, projection.InterruptionDetailJSON),
 		Reason:           projection.InterruptionReason,
-		DetailJSON:       detailJSON,
+		DetailJSON:       projection.InterruptionDetailJSON,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}
 }
 
-func InterruptedRunProjections(projections []workflowstore.InterruptedRunAttentionProjection) []InterruptedRunProjection {
-	resolved := make([]InterruptedRunProjection, 0, len(projections))
+func InterruptedCurrentNodeProjections(projections []workflowstore.InterruptedCurrentNodeAttentionProjection) []InterruptedCurrentNodeProjection {
+	out := make([]InterruptedCurrentNodeProjection, 0, len(projections))
 	for _, projection := range projections {
-		resolved = append(resolved, InterruptedRunProjectionFromStore(projection))
+		out = append(out, InterruptedCurrentNodeProjectionFromStore(projection))
 	}
-	return resolved
+	return out
+}
+
+func (f *Finalizer) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
+	f.FinalizeResolution(Resolution{
+		Approvals:               ApprovalProjections(resolution.Approvals),
+		InterruptedCurrentNodes: InterruptedCurrentNodeProjections(resolution.InterruptedCurrentNodes),
+	})
 }

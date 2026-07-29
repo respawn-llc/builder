@@ -13,7 +13,10 @@ describe("task detail execution target contract", () => {
       provenance: "resolved",
     });
     expect(detail.worktreePath).toBe("/tmp/worktree");
-    expect(detail.currentSessionIDs).toEqual(["session-1"]);
+    expect(detail.currentNodes).toEqual([
+      { nodeID: "node-1", transitionBranchKey: null, sessionID: "session-1" },
+    ]);
+    expect(detail.liveSessionIDs).toEqual(["session-1"]);
     expect(detail.currentScripts).toEqual([]);
   });
 
@@ -50,7 +53,7 @@ describe("task detail execution target contract", () => {
     ).toThrow();
 
     const withoutSessions = { ...taskDetailResponse.task };
-    Reflect.deleteProperty(withoutSessions, "current_session_ids");
+    Reflect.deleteProperty(withoutSessions, "current_nodes");
     expect(() => taskDetailSchema.parse({ task: withoutSessions })).toThrow();
 
     expect(() =>
@@ -63,29 +66,67 @@ describe("task detail execution target contract", () => {
     ).toThrow();
   });
 
-  it("accepts every current execution the server contract permits", () => {
+  it("accepts session-backed Current Nodes and sessionless Current Scripts", () => {
     const executionIDs = Array.from({ length: 201 }, (_, index) => index.toString());
-    const currentSessionIDs = executionIDs.map((executionID) => `session-${executionID}`);
+    const currentNodes = executionIDs.map((executionID) => ({
+      node_id: `node-${executionID}`,
+      transition_branch_key: null,
+      session_id: `session-${executionID}`,
+    }));
     const currentScripts = executionIDs.map((executionID) => ({
-      run_id: `run-${executionID}`,
+      current_node: {
+        node_id: `script-node-${executionID}`,
+        transition_branch_key: null,
+        session_id: null,
+      },
       path: "script",
     }));
 
     const detail = taskDetailSchema.parse({
       task: {
         ...taskDetailResponse.task,
-        current_session_ids: currentSessionIDs,
+        current_nodes: currentNodes,
         current_scripts: currentScripts,
       },
     });
 
-    expect(detail.currentSessionIDs).toEqual(currentSessionIDs);
+    expect(detail.currentNodes).toEqual(
+      currentNodes.map((node) => ({
+        nodeID: node.node_id,
+        transitionBranchKey: node.transition_branch_key,
+        sessionID: node.session_id,
+      })),
+    );
     expect(detail.currentScripts).toEqual(
       currentScripts.map((script) => ({
-        runID: script.run_id,
+        currentNode: {
+          nodeID: script.current_node.node_id,
+          transitionBranchKey: script.current_node.transition_branch_key,
+          sessionID: script.current_node.session_id,
+        },
         path: script.path,
       })),
     );
+  });
+
+  it("rejects a Current Script with a Session", () => {
+    expect(() =>
+      taskDetailSchema.parse({
+        task: {
+          ...taskDetailResponse.task,
+          current_scripts: [
+            {
+              current_node: {
+                node_id: "node-script",
+                transition_branch_key: null,
+                session_id: "session-1",
+              },
+              path: "scripts/run",
+            },
+          ],
+        },
+      }),
+    ).toThrow();
   });
 });
 
