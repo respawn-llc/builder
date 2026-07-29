@@ -323,6 +323,27 @@ kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
 
+### Search Tasks
+
+Task search spans every Project unless `--project` narrows it. Project selectors accept a Project ID or registered workspace path and can repeat. `--status` accepts repeatable or comma-separated primary Task-status filters.
+
+```bash
+kent task search "retry policy"
+kent task search "retry policy" --project . --status backlog,running
+```
+
+Literal search is the default. It ignores search operators and requires at least one searchable trigram. `--case-sensitive` requires exact original case and diacritics. `--include-comments` adds Task Comments.
+
+```bash
+kent task search "RetryPolicy" --case-sensitive --include-comments
+```
+
+`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget, and use the opaque `--page-token` reported for the next breadth-first result page. `--json` returns grouped structured results.
+
+```bash
+kent task search 'title:"retry policy"' --fts5 --page-size 20 --json
+```
+
 ### Complete Work From The CLI
 
 An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.

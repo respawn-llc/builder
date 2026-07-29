@@ -3344,49 +3344,6 @@ WHERE task_source_rank = 1
 ORDER BY weighted_rank DESC, task_id ASC
 LIMIT sqlc.arg(page_size);
 
--- name: ListTaskSearchSchemaObjects :many
-SELECT
-    type AS object_kind,
-    name AS object_name
-FROM sqlite_schema
-WHERE
-    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
-    OR (type = 'view' AND name = 'task_search_content')
-    OR (
-        type = 'trigger'
-        AND name IN (
-            'task_search_document_insert',
-            'task_search_document_delete',
-            'task_search_task_insert',
-            'task_search_comment_insert',
-            'task_search_task_title_before_update',
-            'task_search_task_title_after_update',
-            'task_search_task_body_before_update',
-            'task_search_task_body_after_update',
-            'task_search_comment_body_before_update',
-            'task_search_comment_body_after_update',
-            'task_search_comment_delete',
-            'task_search_task_delete'
-        )
-    )
-ORDER BY type ASC, name ASC;
-
--- name: CheckTaskSearchSchemaContract :one
-SELECT
-    COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
-        FROM task_search_documents
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
-        FROM task_search_content
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(title, body, comment)))
-        FROM task_search_fts
-        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
-    ), 0) AS contract_read;
-
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (
     SELECT CAST(value AS TEXT) AS project_id
@@ -3420,6 +3377,256 @@ JOIN task_search_documents document
   ON document.document_id = task_search_fts.rowid
 WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
 LIMIT 1;
+
+{{define "taskSearchSchemaContract"}}
+WITH
+required_objects(object_kind, object_name, owner_name) AS (
+    VALUES
+        ('table', 'task_search_documents', 'task_search_documents'),
+        ('table', 'task_search_fts', 'task_search_fts'),
+        ('view', 'task_search_content', 'task_search_content'),
+        ('index', 'task_search_documents_task_title_unique', 'task_search_documents'),
+        ('index', 'task_search_documents_task_body_unique', 'task_search_documents'),
+        ('index', 'task_search_documents_comment_unique', 'task_search_documents'),
+        ('trigger', 'task_search_document_insert', 'task_search_documents'),
+        ('trigger', 'task_search_document_delete', 'task_search_documents'),
+        ('trigger', 'task_search_task_insert', 'tasks'),
+        ('trigger', 'task_search_comment_insert', 'task_comments'),
+        ('trigger', 'task_search_task_title_before_update', 'tasks'),
+        ('trigger', 'task_search_task_title_after_update', 'tasks'),
+        ('trigger', 'task_search_task_body_before_update', 'tasks'),
+        ('trigger', 'task_search_task_body_after_update', 'tasks'),
+        ('trigger', 'task_search_comment_body_before_update', 'task_comments'),
+        ('trigger', 'task_search_comment_body_after_update', 'task_comments'),
+        ('trigger', 'task_search_comment_delete', 'task_comments'),
+        ('trigger', 'task_search_task_delete', 'tasks')
+),
+object_contract_failures AS (
+    SELECT 'objects' AS failure
+    WHERE EXISTS (
+        SELECT 1
+        FROM required_objects required
+        LEFT JOIN sqlite_schema actual
+          ON actual.type = required.object_kind
+         AND actual.name = required.object_name
+         AND actual.tbl_name = required.owner_name
+        WHERE actual.name IS NULL
+    )
+),
+expected_mapping_columns(position, column_name, column_type, not_null, primary_key) AS (
+    VALUES
+        (0, 'document_id', 'INTEGER', 0, 1),
+        (1, 'source_kind', 'TEXT', 1, 0),
+        (2, 'task_id', 'TEXT', 0, 0),
+        (3, 'comment_id', 'TEXT', 0, 0)
+),
+mapping_columns AS (
+    SELECT cid AS position, name AS column_name, type AS column_type, "notnull" AS not_null, pk AS primary_key
+    FROM pragma_table_info('task_search_documents')
+),
+mapping_column_contract_failures AS (
+    SELECT 'mapping_columns' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_columns) != 4
+       OR EXISTS (
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM expected_mapping_columns
+            EXCEPT
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM mapping_columns
+       )
+       OR EXISTS (
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM mapping_columns
+            EXCEPT
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM expected_mapping_columns
+       )
+),
+expected_mapping_foreign_keys(parent_table, child_column, parent_column, on_delete) AS (
+    VALUES
+        ('tasks', 'task_id', 'id', 'CASCADE'),
+        ('task_comments', 'comment_id', 'id', 'CASCADE')
+),
+mapping_foreign_keys AS (
+    SELECT "table" AS parent_table, "from" AS child_column, "to" AS parent_column, on_delete
+    FROM pragma_foreign_key_list('task_search_documents')
+),
+mapping_foreign_key_contract_failures AS (
+    SELECT 'mapping_foreign_keys' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_foreign_keys) != 2
+       OR EXISTS (
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM expected_mapping_foreign_keys
+            EXCEPT
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM mapping_foreign_keys
+       )
+       OR EXISTS (
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM mapping_foreign_keys
+            EXCEPT
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM expected_mapping_foreign_keys
+       )
+),
+expected_mapping_indexes(index_name, column_name) AS (
+    VALUES
+        ('task_search_documents_task_title_unique', 'task_id'),
+        ('task_search_documents_task_body_unique', 'task_id'),
+        ('task_search_documents_comment_unique', 'comment_id')
+),
+mapping_indexes AS (
+    SELECT index_list.name AS index_name, index_list."unique" AS is_unique, index_list.partial AS is_partial
+    FROM pragma_index_list('task_search_documents') index_list
+),
+mapping_index_columns AS (
+    SELECT index_list.name AS index_name, index_columns.name AS column_name
+    FROM pragma_index_list('task_search_documents') index_list
+    JOIN pragma_index_xinfo(index_list.name) index_columns
+      ON index_columns.key = 1
+),
+mapping_index_contract_failures AS (
+    SELECT 'mapping_indexes' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_indexes) != 3
+       OR EXISTS (
+            SELECT 1
+            FROM mapping_indexes
+            WHERE is_unique != 1
+               OR is_partial != 1
+       )
+       OR EXISTS (
+            SELECT index_name, column_name
+            FROM expected_mapping_indexes
+            EXCEPT
+            SELECT index_name, column_name
+            FROM mapping_index_columns
+       )
+       OR EXISTS (
+            SELECT index_name, column_name
+            FROM mapping_index_columns
+            EXCEPT
+            SELECT index_name, column_name
+            FROM expected_mapping_indexes
+       )
+),
+expected_fts_columns(position, column_name, hidden) AS (
+    VALUES
+        (0, 'title', 0),
+        (1, 'body', 0),
+        (2, 'comment', 0),
+        (3, 'task_search_fts', 1),
+        (4, 'rank', 1)
+),
+fts_columns AS (
+    SELECT cid AS position, name AS column_name, hidden
+    FROM pragma_table_xinfo('task_search_fts')
+),
+fts_virtual_table_contract_failures AS (
+    SELECT 'fts_table' AS failure
+    WHERE (SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = 'task_search_fts') != 'virtual'
+       OR (SELECT COUNT(*) FROM fts_columns) != 5
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM expected_fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM fts_columns
+       )
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM expected_fts_columns
+       )
+),
+canonical_sources AS (
+    SELECT 'title' AS source_kind, id AS source_id, title AS source_text
+    FROM tasks
+    UNION ALL
+    SELECT 'body' AS source_kind, id AS source_id, body AS source_text
+    FROM tasks
+    UNION ALL
+    SELECT 'comment' AS source_kind, id AS source_id, body AS source_text
+    FROM task_comments
+),
+mapped_sources AS (
+    SELECT
+        document.document_id,
+        document.source_kind,
+        COALESCE(document.task_id, document.comment_id) AS source_id,
+        content.title,
+        content.body,
+        content.comment
+    FROM task_search_documents document
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+),
+mapping_contract AS (
+    SELECT source_kind, source_id, source_text
+    FROM canonical_sources
+    EXCEPT
+    SELECT
+        source_kind,
+        source_id,
+        CASE source_kind
+            WHEN 'title' THEN title
+            WHEN 'body' THEN body
+            WHEN 'comment' THEN comment
+        END AS source_text
+    FROM mapped_sources
+),
+reverse_mapping_contract AS (
+    SELECT
+        source_kind,
+        source_id,
+        CASE source_kind
+            WHEN 'title' THEN title
+            WHEN 'body' THEN body
+            WHEN 'comment' THEN comment
+        END AS source_text
+    FROM mapped_sources
+    EXCEPT
+    SELECT source_kind, source_id, source_text
+    FROM canonical_sources
+),
+fts_contract AS (
+    SELECT document.document_id
+    FROM task_search_documents document
+    LEFT JOIN task_search_fts
+      ON task_search_fts.rowid = document.document_id
+    WHERE task_search_fts.rowid IS NULL
+),
+functional_contract_failures AS (
+    SELECT 'canonical_mapping_content_fts' AS failure
+    WHERE EXISTS (SELECT 1 FROM mapping_contract)
+       OR EXISTS (SELECT 1 FROM reverse_mapping_contract)
+       OR EXISTS (SELECT 1 FROM fts_contract)
+),
+fts_match_probe AS (
+    SELECT COUNT(*) AS match_count
+    FROM task_search_fts
+    WHERE task_search_fts MATCH 'tasksearchcontractprobe'
+),
+fts_match_contract_failures AS (
+    SELECT 'fts_match' AS failure
+    WHERE (SELECT match_count FROM fts_match_probe) < 0
+)
+SELECT failure FROM object_contract_failures
+UNION ALL
+SELECT failure FROM mapping_column_contract_failures
+UNION ALL
+SELECT failure FROM mapping_foreign_key_contract_failures
+UNION ALL
+SELECT failure FROM mapping_index_contract_failures
+UNION ALL
+SELECT failure FROM fts_virtual_table_contract_failures
+UNION ALL
+SELECT failure FROM functional_contract_failures
+UNION ALL
+SELECT failure FROM fts_match_contract_failures
+ORDER BY failure ASC;
+{{end}}
 
 {{define "taskSearchPageDescriptors"}}
 WITH RECURSIVE

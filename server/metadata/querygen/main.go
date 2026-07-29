@@ -35,7 +35,7 @@ func main() {
 
 func runCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("command is required: render, annotate-sqlc, generate-normalization, check-normalization, or generate-task-search-page-descriptors")
+		return errors.New("command is required: render, annotate-sqlc, generate-normalization, check-normalization, generate-task-search-page-descriptors, or generate-task-search-schema-contract")
 	}
 	switch args[0] {
 	case "render":
@@ -48,8 +48,10 @@ func runCommand(args []string) error {
 		return runNormalizationCommand("check", args[1:])
 	case "generate-task-search-page-descriptors":
 		return generateTaskSearchPageDescriptorsCommand(args[1:])
+	case "generate-task-search-schema-contract":
+		return generateTaskSearchSchemaContractCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q: expected render, annotate-sqlc, generate-normalization, check-normalization, or generate-task-search-page-descriptors", args[0])
+		return fmt.Errorf("unknown command %q: expected render, annotate-sqlc, generate-normalization, check-normalization, generate-task-search-page-descriptors, or generate-task-search-schema-contract", args[0])
 	}
 }
 
@@ -141,17 +143,25 @@ type metadataQueryRenderData struct {
 }
 
 func renderTaskSearchPageDescriptors(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
+	return renderTaskSearchQueryTemplate("taskSearchPageDescriptors", source, filterSource, statusSource, true)
+}
+
+func renderTaskSearchSchemaContract(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
+	return renderTaskSearchQueryTemplate("taskSearchSchemaContract", source, filterSource, statusSource, false)
+}
+
+func renderTaskSearchQueryTemplate(templateName string, source []byte, filterSource []byte, statusSource []byte, includePageDescriptors bool) ([]byte, error) {
 	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, statusSource)
 	if err != nil {
 		return nil, err
 	}
-	descriptorTemplate := queryTemplate.Lookup("taskSearchPageDescriptors")
-	if descriptorTemplate == nil {
-		return nil, errors.New("task-search page descriptor template is absent")
+	query := queryTemplate.Lookup(templateName)
+	if query == nil {
+		return nil, fmt.Errorf("task-search query template %q is absent", templateName)
 	}
 	var rendered bytes.Buffer
-	if err := descriptorTemplate.Execute(&rendered, metadataQueryRenderData{IncludeTaskSearchPageDescriptors: true}); err != nil {
-		return nil, fmt.Errorf("render task-search page descriptor template: %w", err)
+	if err := query.Execute(&rendered, metadataQueryRenderData{IncludeTaskSearchPageDescriptors: includePageDescriptors}); err != nil {
+		return nil, fmt.Errorf("render task-search query template %q: %w", templateName, err)
 	}
 	return rendered.Bytes(), nil
 }

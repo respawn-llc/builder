@@ -25,6 +25,7 @@ import (
 const taskSearchPageTokenVersion = 1
 
 type TaskSearch struct {
+	metadata  *metadata.Store
 	queries   *sqlitegen.Queries
 	projector *TaskProjector
 	authority *sessionruntime.Authority
@@ -48,6 +49,7 @@ func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, auth
 		return nil, errors.New("session runtime authority is required")
 	default:
 		return &TaskSearch{
+			metadata:  metadataStore,
 			queries:   metadataStore.Queries(),
 			projector: projector,
 			authority: authority,
@@ -56,7 +58,7 @@ func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, auth
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.queries == nil || s.projector == nil || s.authority == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -77,18 +79,29 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	if err := s.validateSchemaAndScope(ctx, s.queries, req); err != nil {
+	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return serverapi.TaskSearchResponse{}, fmt.Errorf("begin task search read transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && err == nil {
+			response = serverapi.TaskSearchResponse{}
+			err = fmt.Errorf("rollback task search read transaction: %w", rollbackErr)
+		}
+	}()
+	queries := s.queries.WithTx(tx)
+	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := s.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			if taskSearchSQLiteMalformedExpression(validationErr) {
 				return serverapi.TaskSearchResponse{}, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonMalformedFTS5}
 			}
 			return serverapi.TaskSearchResponse{}, validationErr
 		}
 	}
-	rows, err := s.queryPage(ctx, liveSnapshots, req, cursor, hasCursor)
+	rows, err := s.queryPage(ctx, queries, liveSnapshots, req, cursor, hasCursor)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -96,7 +109,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, s.queries, req, rows)
+	groups, err := s.materializeGroups(ctx, queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -123,35 +136,12 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 }
 
 func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest) error {
-	objects, err := queries.ListTaskSearchSchemaObjects(ctx)
+	schemaFailures, err := queries.ListTaskSearchSchemaContractFailures(ctx)
 	if err != nil {
 		return err
 	}
-	required := map[string]struct{}{
-		"table\x00task_search_documents":                    {},
-		"table\x00task_search_fts":                          {},
-		"view\x00task_search_content":                       {},
-		"trigger\x00task_search_document_insert":            {},
-		"trigger\x00task_search_document_delete":            {},
-		"trigger\x00task_search_task_insert":                {},
-		"trigger\x00task_search_comment_insert":             {},
-		"trigger\x00task_search_task_title_before_update":   {},
-		"trigger\x00task_search_task_title_after_update":    {},
-		"trigger\x00task_search_task_body_before_update":    {},
-		"trigger\x00task_search_task_body_after_update":     {},
-		"trigger\x00task_search_comment_body_before_update": {},
-		"trigger\x00task_search_comment_body_after_update":  {},
-		"trigger\x00task_search_comment_delete":             {},
-		"trigger\x00task_search_task_delete":                {},
-	}
-	for _, object := range objects {
-		delete(required, object.ObjectKind+"\x00"+object.ObjectName)
-	}
-	if len(required) != 0 {
+	if len(schemaFailures) != 0 {
 		return errors.New("task search schema is incomplete")
-	}
-	if _, err := queries.CheckTaskSearchSchemaContract(ctx); err != nil {
-		return err
 	}
 	projectIDsJSON, err := json.Marshal(taskSearchProjectIDs(req))
 	if err != nil {
@@ -167,7 +157,7 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
+func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
 	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(liveSnapshots)
 	if err != nil {
 		return nil, err
@@ -202,7 +192,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, liveSnapshots map[workflow.T
 	if hasCursor {
 		cursorRank = sql.NullFloat64{Float64: math.Float64frombits(cursor.RankBits), Valid: true}
 	}
-	return s.queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
+	return queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
 		Mode:                string(req.Mode),
 		CandidateExpression: candidateExpression,
 		LiteralQuery:        req.Query,

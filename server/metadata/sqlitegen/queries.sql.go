@@ -275,31 +275,6 @@ func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskPa
 	return result.RowsAffected()
 }
 
-const checkTaskSearchSchemaContract = `-- name: CheckTaskSearchSchemaContract :one
-SELECT
-    COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
-        FROM task_search_documents
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
-        FROM task_search_content
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(title, body, comment)))
-        FROM task_search_fts
-        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
-    ), 0) AS contract_read
-`
-
-func (q *Queries) CheckTaskSearchSchemaContract(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, checkTaskSearchSchemaContract)
-	var contract_read int64
-	err := recordQueryError(ctx, row.Scan(&contract_read), checkTaskSearchSchemaContract, 0)
-
-	return contract_read, err
-}
-
 const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
@@ -5534,63 +5509,6 @@ func (q *Queries) ListTaskSearchCandidateFeasibility(ctx context.Context, arg Li
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listTaskSearchCandidateFeasibility, 6); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskSearchSchemaObjects = `-- name: ListTaskSearchSchemaObjects :many
-SELECT
-    type AS object_kind,
-    name AS object_name
-FROM sqlite_schema
-WHERE
-    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
-    OR (type = 'view' AND name = 'task_search_content')
-    OR (
-        type = 'trigger'
-        AND name IN (
-            'task_search_document_insert',
-            'task_search_document_delete',
-            'task_search_task_insert',
-            'task_search_comment_insert',
-            'task_search_task_title_before_update',
-            'task_search_task_title_after_update',
-            'task_search_task_body_before_update',
-            'task_search_task_body_after_update',
-            'task_search_comment_body_before_update',
-            'task_search_comment_body_after_update',
-            'task_search_comment_delete',
-            'task_search_task_delete'
-        )
-    )
-ORDER BY type ASC, name ASC
-`
-
-type ListTaskSearchSchemaObjectsRow struct {
-	ObjectKind string
-	ObjectName string
-}
-
-func (q *Queries) ListTaskSearchSchemaObjects(ctx context.Context) ([]ListTaskSearchSchemaObjectsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskSearchSchemaObjects)
-	err = recordQueryError(ctx, err, listTaskSearchSchemaObjects, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListTaskSearchSchemaObjectsRow
-	for rows.Next() {
-		var i ListTaskSearchSchemaObjectsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ObjectKind, &i.ObjectName), listTaskSearchSchemaObjects, 0); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchSchemaObjects, 0); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchSchemaObjects, 0); err != nil {
 		return nil, err
 	}
 	return items, nil

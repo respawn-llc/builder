@@ -152,6 +152,40 @@ func TestGeneratedTaskSearchPageDescriptorAdapterIsFresh(t *testing.T) {
 	}
 }
 
+func TestGeneratedTaskSearchSchemaContractAdapterIsFresh(t *testing.T) {
+	const inputPath = "../querysrc/queries.sql.tmpl"
+	const fragmentPath = "../querysrc/task_label_filter.sql.tmpl"
+	const statusFragmentPath = "../querysrc/task_status_projection.sql.tmpl"
+	const generatedPath = "../sqlitegen/task_search_schema_contract_generated.go"
+	input, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatalf("read query template: %v", err)
+	}
+	fragment, err := os.ReadFile(fragmentPath)
+	if err != nil {
+		t.Fatalf("read task label filter template: %v", err)
+	}
+	statusFragment, err := os.ReadFile(statusFragmentPath)
+	if err != nil {
+		t.Fatalf("read task status projection template: %v", err)
+	}
+	query, err := renderTaskSearchSchemaContract(input, fragment, statusFragment)
+	if err != nil {
+		t.Fatalf("render task-search schema contract query: %v", err)
+	}
+	want, err := generateTaskSearchSchemaContract(query)
+	if err != nil {
+		t.Fatalf("generate task-search schema contract adapter: %v", err)
+	}
+	got, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatalf("read generated task-search schema contract adapter: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("generated task-search schema contract adapter is stale; run go generate ./server/metadata/sqlitegen")
+	}
+}
+
 func countDiagnosticCalls(t *testing.T, source []byte) int {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "queries.sql.go", source, 0)

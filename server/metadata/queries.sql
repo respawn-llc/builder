@@ -3547,49 +3547,6 @@ WHERE task_source_rank = 1
 ORDER BY weighted_rank DESC, task_id ASC
 LIMIT sqlc.arg(page_size);
 
--- name: ListTaskSearchSchemaObjects :many
-SELECT
-    type AS object_kind,
-    name AS object_name
-FROM sqlite_schema
-WHERE
-    (type = 'table' AND name IN ('task_search_documents', 'task_search_fts'))
-    OR (type = 'view' AND name = 'task_search_content')
-    OR (
-        type = 'trigger'
-        AND name IN (
-            'task_search_document_insert',
-            'task_search_document_delete',
-            'task_search_task_insert',
-            'task_search_comment_insert',
-            'task_search_task_title_before_update',
-            'task_search_task_title_after_update',
-            'task_search_task_body_before_update',
-            'task_search_task_body_after_update',
-            'task_search_comment_body_before_update',
-            'task_search_comment_body_after_update',
-            'task_search_comment_delete',
-            'task_search_task_delete'
-        )
-    )
-ORDER BY type ASC, name ASC;
-
--- name: CheckTaskSearchSchemaContract :one
-SELECT
-    COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, task_id, comment_id, source_kind)))
-        FROM task_search_documents
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(document_id, title, body, comment)))
-        FROM task_search_content
-    ), 0)
-    + COALESCE((
-        SELECT SUM(LENGTH(json_array(title, body, comment)))
-        FROM task_search_fts
-        WHERE task_search_fts MATCH 'tasksearchcontractprobe'
-    ), 0) AS contract_read;
-
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (
     SELECT CAST(value AS TEXT) AS project_id
