@@ -21,9 +21,10 @@ type defaultBackgroundNoticeScheduler struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
 
-	mu        sync.Mutex
-	pending   []queuedBackgroundNotice
-	scheduled bool
+	mu       sync.Mutex
+	pending  []queuedBackgroundNotice
+	task     backgroundLifecycleTask
+	nextTask uint64
 }
 
 type queuedBackgroundNotice struct {
@@ -134,7 +135,7 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	b.admitNotice(notice, true, &shouldSchedule)
 	if shouldSchedule {
 		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduled()
+			b.clearScheduledTask()
 		}
 	}
 }
@@ -151,7 +152,7 @@ func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt Backgr
 	}, schedule, &shouldSchedule)
 	if shouldSchedule {
 		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduled()
+			b.clearScheduledTask()
 		}
 	}
 }
@@ -159,8 +160,9 @@ func (b *defaultBackgroundNoticeScheduler) queueBackgroundShellNotice(evt Backgr
 func (b *defaultBackgroundNoticeScheduler) admitNotice(notice queuedBackgroundNotice, schedule bool, shouldSchedule *bool) {
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
-	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
-		b.scheduled = true
+	if schedule && b.task == nil && (b.steps == nil || !b.steps.IsBusy()) {
+		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
+		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
 		*shouldSchedule = true
 	}
 	b.mu.Unlock()
@@ -170,12 +172,10 @@ func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []queuedBackgro
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.pending) == 0 {
-		b.scheduled = false
 		return nil
 	}
 	pending := append([]queuedBackgroundNotice(nil), b.pending...)
 	b.pending = nil
-	b.scheduled = false
 	return pending
 }
 
@@ -203,9 +203,6 @@ func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessio
 		filtered = append(filtered, notice)
 	}
 	b.pending = filtered
-	if len(b.pending) == 0 {
-		b.scheduled = false
-	}
 	return removed
 }
 
@@ -215,14 +212,15 @@ func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
 	}
 	shouldSchedule := false
 	b.mu.Lock()
-	if len(b.pending) > 0 && !b.scheduled {
-		b.scheduled = true
+	if len(b.pending) > 0 && b.task == nil {
+		b.nextTask = nextBackgroundLifecycleAttempt(b.nextTask)
+		b.task = scheduledBackgroundLifecycleTask{attempt: b.nextTask}
 		shouldSchedule = true
 	}
 	b.mu.Unlock()
 	if shouldSchedule {
 		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduled()
+			b.clearScheduledTask()
 		}
 	}
 }
@@ -248,6 +246,11 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 }
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) {
+	attempt, started := b.beginTask()
+	if !started {
+		return
+	}
+	defer b.finishTask(attempt)
 	if _, err := b.runQueuedNotices(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -258,7 +261,6 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
 	if len(b.pendingSnapshot()) == 0 {
-		b.clearScheduled()
 		return llm.Message{}, nil
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
@@ -297,7 +299,6 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return runErr
 	})
 	if errors.Is(err, ErrAgentBusy) {
-		b.clearScheduled()
 		return llm.Message{}, nil
 	}
 	return assistant, err
@@ -356,12 +357,10 @@ func (b *defaultBackgroundNoticeScheduler) drainPending() []queuedBackgroundNoti
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.pending) == 0 {
-		b.scheduled = false
 		return nil
 	}
 	pending := append([]queuedBackgroundNotice(nil), b.pending...)
 	b.pending = nil
-	b.scheduled = false
 	return pending
 }
 
@@ -375,11 +374,34 @@ func (b *defaultBackgroundNoticeScheduler) restorePendingFront(notices []queuedB
 	restored = append(restored, notices...)
 	restored = append(restored, b.pending...)
 	b.pending = restored
-	b.scheduled = false
 }
 
-func (b *defaultBackgroundNoticeScheduler) clearScheduled() {
+func (b *defaultBackgroundNoticeScheduler) clearScheduledTask() {
 	b.mu.Lock()
-	b.scheduled = false
+	if _, scheduled := b.task.(scheduledBackgroundLifecycleTask); scheduled {
+		b.task = nil
+	}
 	b.mu.Unlock()
+}
+
+func (b *defaultBackgroundNoticeScheduler) beginTask() (uint64, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	scheduled, ok := b.task.(scheduledBackgroundLifecycleTask)
+	if !ok {
+		return 0, false
+	}
+	attempt := backgroundLifecycleTaskAttempt(scheduled)
+	b.task = runningBackgroundLifecycleTask{attempt: attempt}
+	return attempt, true
+}
+
+func (b *defaultBackgroundNoticeScheduler) finishTask(attempt uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	running, ok := b.task.(runningBackgroundLifecycleTask)
+	if !ok || backgroundLifecycleTaskAttempt(running) != attempt {
+		return
+	}
+	b.task = nil
 }
