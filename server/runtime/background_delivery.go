@@ -1,0 +1,126 @@
+package runtime
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
+	"core/server/session"
+	"core/shared/transcript"
+
+	"github.com/google/uuid"
+)
+
+const maxPendingBackgroundDeliveryDiagnosticBytes = 4 << 10
+
+type backgroundDeliveryStage string
+
+const backgroundDeliveryStageAutomaticSteering backgroundDeliveryStage = "automatic_steering"
+
+// PendingBackgroundDeliveryDiagnostic is the bounded recovery record for one
+// failed automatic completion delivery. It deliberately owns no error or
+// completion payload: those values can retain arbitrary process output.
+type PendingBackgroundDeliveryDiagnostic struct {
+	processID string
+	activity  uuid.UUID
+	stage     backgroundDeliveryStage
+	attempt   uint64
+	detail    string
+}
+
+func newPendingBackgroundDeliveryDiagnostic(
+	processID string,
+	activity uuid.UUID,
+	stage backgroundDeliveryStage,
+	attempt uint64,
+	cause error,
+) PendingBackgroundDeliveryDiagnostic {
+	processID = strings.TrimSpace(processID)
+	if processID == "" {
+		panic("background delivery diagnostic requires process id")
+	}
+	if activity.Version() != 4 {
+		panic(fmt.Sprintf("background delivery diagnostic requires UUIDv4 activity id: %q", activity))
+	}
+	if stage != backgroundDeliveryStageAutomaticSteering {
+		panic(fmt.Sprintf("background delivery diagnostic has unsupported stage %q", stage))
+	}
+	if attempt == 0 {
+		panic("background delivery diagnostic requires attempt")
+	}
+	detail := "background delivery failed"
+	if cause != nil {
+		detail = cause.Error()
+	}
+	return PendingBackgroundDeliveryDiagnostic{
+		processID: processID,
+		activity:  activity,
+		stage:     stage,
+		attempt:   attempt,
+		detail:    boundedUTF8DiagnosticDetail(detail),
+	}
+}
+
+func boundedUTF8DiagnosticDetail(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	if len(value) <= maxPendingBackgroundDeliveryDiagnosticBytes {
+		return value
+	}
+	value = value[:maxPendingBackgroundDeliveryDiagnosticBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
+}
+
+func (d PendingBackgroundDeliveryDiagnostic) message() string {
+	return fmt.Sprintf(
+		"Background completion delivery for process %s failed during %s (attempt %d): %s",
+		d.processID,
+		d.stage,
+		d.attempt,
+		d.detail,
+	)
+}
+
+// BackgroundDeliveryError is an ephemeral operation error. The original cause
+// is intentionally never copied into retained scheduler or Authority state.
+type BackgroundDeliveryError struct {
+	ProcessID string
+	Activity  uuid.UUID
+	Stage     backgroundDeliveryStage
+	Attempt   uint64
+	Cause     error
+}
+
+func (e *BackgroundDeliveryError) Error() string {
+	if e == nil {
+		return "background delivery failed"
+	}
+	return fmt.Sprintf(
+		"background delivery failed: process_id=%s activity_id=%s stage=%s attempt=%d: %v",
+		e.ProcessID,
+		e.Activity,
+		e.Stage,
+		e.Attempt,
+		e.Cause,
+	)
+}
+
+func (e *BackgroundDeliveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func (e *Engine) commitBackgroundDeliveryDiagnostic(diagnostic PendingBackgroundDeliveryDiagnostic) (session.CommitReceipt, error) {
+	text := diagnostic.message()
+	receipt, err := e.steerWithCommitReceipt("", steerLocalEntryIntent(storedLocalEntry{
+		Visibility: transcript.EntryVisibilityAuto,
+		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text:       text,
+	}))
+	e.SetStreamingError(text)
+	return receipt, err
+}

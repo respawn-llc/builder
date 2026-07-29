@@ -27,9 +27,10 @@ type defaultBackgroundNoticeScheduler struct {
 }
 
 type queuedBackgroundNotice struct {
-	processID string
-	activity  uuid.UUID
-	intent    steeringIntent
+	processID  string
+	activity   uuid.UUID
+	intent     steeringIntent
+	diagnostic *PendingBackgroundDeliveryDiagnostic
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
@@ -251,7 +252,7 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		b.engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed: %v", err))
+		b.commitPendingDeliveryDiagnostics()
 	}
 }
 
@@ -273,6 +274,16 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
 			b.FinalizeCommittedBackgroundNotice(notice, receipt)
 			if steerErr != nil {
+				if !receipt.Committed && notice.processID != "" {
+					diagnostic := newPendingBackgroundDeliveryDiagnostic(
+						notice.processID,
+						notice.activity,
+						backgroundDeliveryStageAutomaticSteering,
+						nextBackgroundDeliveryAttempt(notice.diagnostic),
+						steerErr,
+					)
+					pending[index].diagnostic = &diagnostic
+				}
 				if !receipt.Committed {
 					b.restorePendingFront(pending[index:])
 				} else {
@@ -290,6 +301,39 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	return assistant, err
+}
+
+func nextBackgroundDeliveryAttempt(previous *PendingBackgroundDeliveryDiagnostic) uint64 {
+	if previous == nil {
+		return 1
+	}
+	return previous.attempt + 1
+}
+
+func (b *defaultBackgroundNoticeScheduler) commitPendingDeliveryDiagnostics() {
+	for _, notice := range b.pendingSnapshot() {
+		if notice.diagnostic == nil {
+			continue
+		}
+		receipt, err := b.engine.commitBackgroundDeliveryDiagnostic(*notice.diagnostic)
+		if receipt.Committed {
+			b.clearCommittedDeliveryDiagnostic(notice.processID, notice.activity)
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(processID string, activity uuid.UUID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for index := range b.pending {
+		notice := &b.pending[index]
+		if notice.processID == processID && notice.activity == activity {
+			notice.diagnostic = nil
+		}
+	}
 }
 
 func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(notice queuedBackgroundNotice, receipt session.CommitReceipt) {
