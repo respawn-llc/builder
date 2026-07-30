@@ -174,13 +174,7 @@ func SummarizeBackgroundEvent(evt Event, opts BackgroundNoticeOptions) (Backgrou
 	if evt.Snapshot.ExitCode != nil {
 		detail = append(detail, fmt.Sprintf("Exit code: %d", *evt.Snapshot.ExitCode))
 	}
-	if strings.TrimSpace(evt.Snapshot.LogPath) != "" && output.logLineCount != nil {
-		lineCountText := fmt.Sprintf("%d lines", *output.logLineCount)
-		if *output.logLineCount == 1 {
-			lineCountText = "1 line"
-		}
-		detail = append(detail, fmt.Sprintf("Output file (%s): %s", lineCountText, evt.Snapshot.LogPath))
-	}
+	detail = appendBackgroundLogLocation(detail, evt.Snapshot.LogPath, output.logLineCount)
 	if warning := output.visible.Warning(); warning != nil {
 		detail = append(detail, warning.Text())
 	}
@@ -288,6 +282,7 @@ func InvariantFailureBackgroundNotice(evt Event, cause error) BackgroundNoticeSu
 	if evt.Snapshot.ExitCode != nil {
 		detail = append(detail, fmt.Sprintf("Exit code: %d", *evt.Snapshot.ExitCode))
 	}
+	detail = appendBackgroundLogLocation(detail, evt.Snapshot.LogPath, nil)
 	detail = append(detail, message)
 	summary := fmt.Sprintf("Background shell %s %s", evt.Snapshot.ID, state)
 	if evt.Snapshot.ExitCode != nil {
@@ -304,6 +299,21 @@ func InvariantFailureBackgroundNotice(evt Event, cause error) BackgroundNoticeSu
 			},
 		},
 	}
+}
+
+func appendBackgroundLogLocation(detail []string, rawPath string, lineCount *int) []string {
+	logPath := strings.TrimSpace(rawPath)
+	if logPath == "" {
+		return detail
+	}
+	if lineCount == nil {
+		return append(detail, fmt.Sprintf("Output file: %s", logPath))
+	}
+	lineCountText := fmt.Sprintf("%d lines", *lineCount)
+	if *lineCount == 1 {
+		lineCountText = "1 line"
+	}
+	return append(detail, fmt.Sprintf("Output file (%s): %s", lineCountText, logPath))
 }
 
 func valueOrZero(value *int) int {
