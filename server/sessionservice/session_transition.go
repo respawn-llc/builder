@@ -148,11 +148,15 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}
+	draftDisposition := serverapi.RestoreStoredDraftSessionDraftDisposition()
+	if req.Transition.InitialInput != "" {
+		draftDisposition = serverapi.OverrideStoredDraftSessionDraftDisposition(req.Transition.InitialInput)
+	}
 	return serverapi.LaunchSessionDirective(
 		serverapi.OpenExistingSessionLaunchIntent(forkID),
 		serverapi.NewSessionLaunchPreparation(
 			prompt,
-			serverapi.RestoreStoredDraftSessionDraftDisposition(),
+			draftDisposition,
 			serverapi.SessionAuthPreparationKeepCurrent,
 		),
 	), nil

@@ -74,3 +74,40 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 		t.Fatalf("forked session name = %q", got)
 	}
 }
+
+func TestResolveForkRollbackRestoresSelectedMessageAsForkDraft(t *testing.T) {
+	root := t.TempDir()
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(root, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
+	if err != nil {
+		t.Fatalf("create session store: %v", err)
+	}
+	appendSessionMessage(t, store, "s1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "s1", session.MessageRoleAssistant, "a1")
+	u2Evt := appendSessionMessage(t, store, "s2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "s2", session.MessageRoleAssistant, "a2")
+
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Store: store,
+		Transition: sessionTransition{
+			Action:             serverapi.SessionTransitionActionForkRollback,
+			InitialInput:       "u2",
+			ForkUserMessageSeq: u2Evt.Seq(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve fork rollback: %v", err)
+	}
+	_, preparation := requireSessionLifecycleLaunch(t, resolved)
+	if _, present := preparation.InitialPrompt(); present {
+		t.Fatal("rollback fork must not submit the selected user message")
+	}
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
+		t.Fatalf("rollback fork draft disposition = %q, want override stored draft", disposition.Kind())
+	}
+	text, present := disposition.OverrideText()
+	if !present || text != "u2" {
+		t.Fatalf("rollback fork draft = %q/%t, want selected user message", text, present)
+	}
+}

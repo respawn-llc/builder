@@ -46,15 +46,22 @@ func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *test
 		t.Fatalf("rollback picker surface = %q mode = %q, want rollback detail overlay", model.surface(), model.view.Mode())
 	}
 
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if !model.rollback.isEditing() {
-		t.Fatal("Enter did not begin editing the selected rollback candidate")
+	next, forkCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if model.exitAction != UIActionForkRollback {
+		t.Fatalf("rollback action = %q, want %q", model.exitAction, UIActionForkRollback)
 	}
-	if testMainInput(model) != "newest user message" {
-		t.Fatalf("rollback edit input = %q, want newest candidate text", testMainInput(model))
+	if model.nextForkRollbackTargetID != newestTarget {
+		t.Fatalf("fork rollback target = %q, want %q", model.nextForkRollbackTargetID, newestTarget)
 	}
-	if model.rollback.editingCandidate == nil || model.rollback.editingCandidate.RollbackTargetID != newestTarget {
-		t.Fatalf("editing candidate = %#v, want newest rollback target %q", model.rollback.editingCandidate, newestTarget)
+	if model.nextSessionInitialInput != "newest user message" {
+		t.Fatalf("fork initial input = %q, want selected candidate text", model.nextSessionInitialInput)
+	}
+	if model.nextSessionInitialPrompt != "" {
+		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
+	}
+	if forkCmd == nil {
+		t.Fatal("Enter did not start the rollback fork transition")
 	}
 }
 
@@ -573,10 +580,17 @@ func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 	}
 	assertRollbackSelection(t, model, oldestTarget)
 
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if testMainInput(model) != "oldest" || model.rollback.editingCandidate == nil ||
-		model.rollback.editingCandidate.RollbackTargetID != oldestTarget {
-		t.Fatalf("PgUp edit target drifted: input=%q candidate=%#v", testMainInput(model), model.rollback.editingCandidate)
+	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if model.nextForkRollbackTargetID != oldestTarget || model.nextSessionInitialInput != "oldest" {
+		t.Fatalf(
+			"PgUp fork target drifted: target=%q input=%q",
+			model.nextForkRollbackTargetID,
+			model.nextSessionInitialInput,
+		)
+	}
+	if cmd == nil {
+		t.Fatal("Enter did not start the selected rollback fork")
 	}
 }
 
@@ -627,52 +641,12 @@ func TestRollbackPageKeyPropagatesAdjacentWindowRequest(t *testing.T) {
 	assertRollbackSelection(t, model, olderTarget)
 }
 
-func TestRollbackEditingEscChainRestoresPriorTranscriptSurface(t *testing.T) {
-	targetID := rollbacktarget.EncodeUserMessageSeq(42)
-	model, _ := newRollbackTestModel(clientui.TranscriptPage{
-		SessionID: detailTestSessionID,
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestRollbackUserRow("message to revise", targetID),
-		},
-	})
-	model = openRollbackPicker(t, model)
-
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if !model.rollback.isEditing() || testMainInput(model) != "message to revise" {
-		t.Fatalf("rollback edit state = %#v input = %q", model.rollback, testMainInput(model))
-	}
-
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
-	if !model.rollback.isSelecting() || testMainInput(model) != "" {
-		t.Fatalf("first Esc state = %#v input = %q, want selection with empty composer", model.rollback, testMainInput(model))
-	}
-	assertRollbackSelection(t, model, targetID)
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	model = next.(*uiModel)
-	if model.rollback.isActive() || model.surface() != uiSurfaceOngoingTranscript ||
-		model.view.Mode() != tui.ModeOngoing || model.inputMode() != uiInputModeMain {
-		t.Fatalf(
-			"second Esc did not restore ongoing transcript: rollback=%#v surface=%q mode=%q inputMode=%q",
-			model.rollback,
-			model.surface(),
-			model.view.Mode(),
-			model.inputMode(),
-		)
-	}
-	if cmd == nil {
-		t.Fatal("second Esc did not schedule the alt-screen exit")
-	}
-}
-
 func TestRollbackCtrlCClosesPickerBeforeGlobalAction(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		editing bool
-		busy    bool
+		name string
+		busy bool
 	}{
 		{name: "busy selection", busy: true},
-		{name: "busy editing", editing: true, busy: true},
 		{name: "idle exit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -684,9 +658,6 @@ func TestRollbackCtrlCClosesPickerBeforeGlobalAction(t *testing.T) {
 				},
 			})
 			model = openRollbackPicker(t, model)
-			if tc.editing {
-				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-			}
 			if tc.busy {
 				model.setRuntimeActivityBusyForTest(true)
 				model.activity = uiActivityRunning
@@ -720,51 +691,40 @@ func TestRollbackCtrlCClosesPickerBeforeGlobalAction(t *testing.T) {
 }
 
 func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t *testing.T) {
-	for _, editing := range []bool{false, true} {
-		name := "selection"
-		if editing {
-			name = "editing"
-		}
-		t.Run(name, func(t *testing.T) {
-			targetID := rollbacktarget.EncodeUserMessageSeq(46)
-			model, _ := newRollbackTestModel(clientui.TranscriptPage{
-				SessionID: detailTestSessionID,
-				Entries: []clientui.TranscriptCommittedRow{
-					detailTestRollbackUserRow("old session rollback target", targetID),
-				},
-			})
-			model = openRollbackPicker(t, model)
-			if editing {
-				model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-			}
+	targetID := rollbacktarget.EncodeUserMessageSeq(46)
+	model, _ := newRollbackTestModel(clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestRollbackUserRow("old session rollback target", targetID),
+		},
+	})
+	model = openRollbackPicker(t, model)
 
-			cmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
+	cmd := applyDetailTestSessionReplacement(t, model, detailTestReplacementSessionID)
 
-			if model.rollback.isActive() || model.rollback.isAwaitingActivation() ||
-				model.rollback.restoreDetailTranscript != nil {
-				t.Fatalf("session replacement retained rollback state: %#v", model.rollback)
-			}
-			if model.surface() == uiSurfaceRollbackSelection || model.inputMode() != uiInputModeMain {
-				t.Fatalf("session replacement retained rollback surface/input mode: surface=%q inputMode=%q", model.surface(), model.inputMode())
-			}
-			if model.detailTranscript.loaded {
-				t.Fatalf("session replacement restored old transcript page: %#v", model.detailTranscript.page())
-			}
-			if testMainInput(model) != "" {
-				t.Fatalf("session replacement retained old rollback composer %q", testMainInput(model))
-			}
-			model.resetRollbackState()
-			if model.detailTranscript.loaded {
-				t.Fatal("inactive rollback reset resurrected the old session transcript")
-			}
-			if cmd == nil {
-				t.Fatal("session replacement did not schedule new-session transcript hydration")
-			}
-		})
+	if model.rollback.isActive() || model.rollback.isAwaitingActivation() ||
+		model.rollback.restoreDetailTranscript != nil {
+		t.Fatalf("session replacement retained rollback state: %#v", model.rollback)
+	}
+	if model.surface() == uiSurfaceRollbackSelection || model.inputMode() != uiInputModeMain {
+		t.Fatalf("session replacement retained rollback surface/input mode: surface=%q inputMode=%q", model.surface(), model.inputMode())
+	}
+	if model.detailTranscript.loaded {
+		t.Fatalf("session replacement restored old transcript page: %#v", model.detailTranscript.page())
+	}
+	if testMainInput(model) != "" {
+		t.Fatalf("session replacement retained old rollback composer %q", testMainInput(model))
+	}
+	model.resetRollbackState()
+	if model.detailTranscript.loaded {
+		t.Fatal("inactive rollback reset resurrected the old session transcript")
+	}
+	if cmd == nil {
+		t.Fatal("session replacement did not schedule new-session transcript hydration")
 	}
 }
 
-func TestRollbackEditingSubmissionPreservesExactSelectedTarget(t *testing.T) {
+func TestRollbackSelectionStartsForkWithSelectedMessageAsDraft(t *testing.T) {
 	targetID := rollbacktarget.EncodeUserMessageSeq(73)
 	model, _ := newRollbackTestModel(clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
@@ -773,24 +733,24 @@ func TestRollbackEditingSubmissionPreservesExactSelectedTarget(t *testing.T) {
 		},
 	})
 	model = openRollbackPicker(t, model)
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	editedPrompt := "edited rollback prompt"
-	model.replaceMainInputAtEnd(editedPrompt)
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
 
 	if model.exitAction != UIActionForkRollback {
-		t.Fatalf("rollback submit action = %q, want %q", model.exitAction, UIActionForkRollback)
+		t.Fatalf("rollback action = %q, want %q", model.exitAction, UIActionForkRollback)
 	}
 	if model.nextForkRollbackTargetID != targetID {
 		t.Fatalf("fork rollback target = %q, want exact selected target %q", model.nextForkRollbackTargetID, targetID)
 	}
-	if model.nextSessionInitialPrompt != "edited rollback prompt" {
-		t.Fatalf("fork initial prompt = %q, want edited composer text", model.nextSessionInitialPrompt)
+	if model.nextSessionInitialInput != "original prompt" {
+		t.Fatalf("fork initial input = %q, want selected message text", model.nextSessionInitialInput)
+	}
+	if model.nextSessionInitialPrompt != "" {
+		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
 	}
 	if cmd == nil {
-		t.Fatal("rollback submit did not quit into session transition")
+		t.Fatal("rollback selection did not quit into session transition")
 	}
 }
 
@@ -851,15 +811,16 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	if !model.rollback.isSelecting() {
 		t.Fatal("Esc-Esc did not open rollback selection after runtime/TUI restart")
 	}
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if testMainInput(model) != "interrupted prompt survives restart" {
-		t.Fatalf("restored rollback edit input = %q", testMainInput(model))
+	next, forkCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if model.nextSessionInitialInput != "interrupted prompt survives restart" {
+		t.Fatalf("fork initial input = %q", model.nextSessionInitialInput)
 	}
-	if model.rollback.editingCandidate == nil {
-		t.Fatal("restored rollback candidate lost its target identity")
+	if _, err := rollbacktarget.DecodeUserMessageSeq(model.nextForkRollbackTargetID); err != nil {
+		t.Fatalf("fork target is invalid: %v", err)
 	}
-	if _, err := rollbacktarget.DecodeUserMessageSeq(model.rollback.editingCandidate.RollbackTargetID); err != nil {
-		t.Fatalf("restored rollback target is invalid: %v", err)
+	if forkCmd == nil {
+		t.Fatal("rollback selection did not start a fork transition")
 	}
 }
 
