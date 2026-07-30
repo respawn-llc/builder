@@ -92,11 +92,19 @@ func newBacklogCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (work
 }
 
 func newNonExecutableCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.CurrentNode, error) {
+	return newNonExecutableCurrentNodeWithPriorNodeValues(taskID, nodeID, nil)
+}
+
+func newNonExecutableCurrentNodeWithPriorNodeValues(
+	taskID workflow.TaskID,
+	nodeID workflow.NodeID,
+	priorNodeValues map[string]map[string]string,
+) (workflow.CurrentNode, error) {
 	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNode(reference, nil, nil)
+	return workflow.NewCurrentNodeWithMaterializedValues(reference, nil, priorNodeValues, nil, nil)
 }
 
 func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, enteredByEdgeID workflow.EdgeID) (workflow.CurrentNode, error) {

@@ -75,7 +75,7 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	}
 }
 
-func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(t *testing.T) {
+func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
@@ -92,6 +92,11 @@ func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(
 			SubagentRole:   "coder",
 			PromptTemplate: "Audit.",
 		})
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-join-synth-"+string(workflowID)),
+		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}}."
 		for index := range req.TransitionGroups {
 			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(synth) {
 				req.TransitionGroups[index].TransitionID = "audit"
@@ -104,7 +109,7 @@ func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(
 			}
 			req.Edges[index].Key = "audit"
 			req.Edges[index].TargetNodeID = auditID
-			req.Edges[index].PromptTemplate = "Audit {{.Params.done.joined}}."
+			req.Edges[index].PromptTemplate = "Audit {{.Params.done.joined}} from {{.Params.split.summary}}."
 		}
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           auditGroupID,
@@ -160,6 +165,9 @@ func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(
 		t.Fatalf("join completion mutation = %+v, want synth current node", joined.Mutation)
 	}
 	synth := joined.Mutation.Created[0]
+	if synth.PriorNodeValues["split"]["summary"] != "approved plan" {
+		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split output retained across join", synth.PriorNodeValues)
+	}
 	if synth.PriorNodeValues["done"]["joined"] != "joined implementation" {
 		t.Fatalf("synth prior parameter values = %+v, want join transition output under done namespace", synth.PriorNodeValues)
 	}
@@ -172,8 +180,9 @@ func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(
 		t.Fatalf("CompleteCurrentNode synth: %v", err)
 	}
 	if len(auditResult.Mutation.Created) != 1 ||
+		auditResult.Mutation.Created[0].PriorNodeValues["split"]["summary"] != "approved plan" ||
 		auditResult.Mutation.Created[0].PriorNodeValues["done"]["joined"] != "joined implementation" {
-		t.Fatalf("audit current node = %+v, want propagated join transition output", auditResult.Mutation.Created)
+		t.Fatalf("audit current node = %+v, want propagated pre-fanout and join transition outputs", auditResult.Mutation.Created)
 	}
 }
 
