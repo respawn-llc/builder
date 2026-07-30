@@ -465,7 +465,7 @@ func TestAutomaticFinalizationRequiresAcknowledgedTerminalHandoff(t *testing.T) 
 	}
 }
 
-func TestAutomaticReservationBlocksOwnerPollUntilRollback(t *testing.T) {
+func TestAutomaticReservationPreservesCommittedOwnerPollThroughRollback(t *testing.T) {
 	manager := newShellTestManager(t, 50*time.Millisecond)
 	terminal := make(chan Event, 1)
 	manager.SetEventHandler(func(evt Event) {
@@ -515,18 +515,21 @@ func TestAutomaticReservationBlocksOwnerPollUntilRollback(t *testing.T) {
 	}()
 	select {
 	case finalization := <-ownerPoll:
-		if finalization.Finalized {
-			t.Fatal("owner poll finalized a completion reserved for automatic persistence")
+		if !finalization.Finalized {
+			t.Fatal("committed owner poll did not claim a completion reserved for automatic persistence")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("owner poll did not observe the automatic-persistence reservation")
+		t.Fatal("owner poll did not claim the automatic-persistence reservation")
 	}
 	close(releasePersistence)
 	if restored := <-rolledBack; !restored {
-		t.Fatal("rollback automatic terminal reservation")
+		t.Fatal("release automatic terminal reservation after owner-poll claim")
 	}
-	if !manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID).Finalized {
-		t.Fatal("owner poll did not finalize completion after automatic rollback")
+	if manager.FinalizeAutomaticTerminal(event.Snapshot.ID, event.Snapshot.ActivityID) {
+		t.Fatal("automatic finalization replaced a committed owner-poll claim")
+	}
+	if manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID).Finalized {
+		t.Fatal("owner poll claim finalized more than once")
 	}
 }
 

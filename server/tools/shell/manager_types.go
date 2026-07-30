@@ -624,6 +624,13 @@ func (p *processEntry) finalizeOwnerPoll(callerSessionID string) TerminalOwnerPo
 		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
 	case queuedTerminalDisposition:
 		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
+	case automaticReservedTerminalDisposition:
+		// write_stdin has already committed before it reaches this Manager
+		// finalizer. Its durable owner claim wins the reservation, so an
+		// uncommitted automatic receipt must not restore the completion to the
+		// automatic queue.
+		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
 	default:
 		return TerminalOwnerPollFinalization{}
 	}
@@ -673,12 +680,16 @@ func (p *processEntry) restoreAutomaticTerminal(activityID uuid.UUID) bool {
 	p.interactMu.Lock()
 	defer p.interactMu.Unlock()
 	reserved, ok := p.terminal.(automaticReservedTerminalDisposition)
-	if !ok || reserved.facts.snapshot.ActivityID != activityID {
-		return false
+	if ok {
+		if reserved.facts.snapshot.ActivityID != activityID {
+			return false
+		}
+		p.terminal = queuedTerminalDisposition{facts: reserved.facts}
+		p.signalTerminalChangedLocked()
+		return true
 	}
-	p.terminal = queuedTerminalDisposition{facts: reserved.facts}
-	p.signalTerminalChangedLocked()
-	return true
+	ownerPoll, ok := p.terminal.(finalizedByOwnerPollTerminalDisposition)
+	return ok && ownerPoll.facts.snapshot.ActivityID == activityID
 }
 
 func (p *processEntry) withdrawTerminalHandoff(activityID uuid.UUID) bool {
