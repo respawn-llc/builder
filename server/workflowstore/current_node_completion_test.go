@@ -706,7 +706,11 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			TargetNodeID:      workflow.NodeIDOf(review),
 			ContextMode:       workflow.ContextModeContinueSession,
 			ContextSource:     workflow.ContextSource{Kind: contextSource},
-			PromptTemplate:    "Review {{.Inputs.summary}}.",
+			PromptTemplate:    "Review {{.Params.summary}}.",
+			Parameters: []workflow.Parameter{{
+				Key:         "summary",
+				Description: "Rework summary.",
+			}},
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)

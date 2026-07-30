@@ -239,7 +239,7 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 	}
 	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorValueRequirement, len(nodesByID))
 	for _, edge := range def.Edges {
-		target, targetExists := nodesByID[edge.TargetNodeID]
+		_, targetExists := nodesByID[edge.TargetNodeID]
 		if !targetExists {
 			continue
 		}
@@ -247,20 +247,19 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 		if err != nil {
 			continue
 		}
-		for _, inputField := range NodeInputFields(target) {
-			name := strings.TrimSpace(inputField.Name)
-			if name == "" {
-				continue
+		consumerGroup, consumerGroupExists := groupsByID[edge.TransitionGroupID]
+		if consumerGroupExists {
+			source, sourceExists := nodesByID[consumerGroup.SourceNodeID]
+			if sourceExists {
+				currentFields := w.TransitionOutputFieldsForEdge(edge, source)
+				w.currentNodeInputBindingsByEdge[edge.ID] = appendUniqueInputBindings(
+					w.currentNodeInputBindingsByEdge[edge.ID],
+					inputBindingsForFields(currentFields),
+				)
+				for _, field := range currentFields {
+					w.addCurrentNodeOutputField(consumerGroup.ID, field)
+				}
 			}
-			w.currentNodeInputBindingsByEdge[edge.ID] = appendUniqueInputBindings(
-				w.currentNodeInputBindingsByEdge[edge.ID],
-				[]InputBinding{{Name: name, Source: BindingSourceTransitionOutput, Field: name}},
-			)
-			group, groupExists := groupsByID[edge.TransitionGroupID]
-			if !groupExists {
-				continue
-			}
-			w.addCurrentNodeOutputField(group.ID, OutputField{Name: name, Description: inputField.Description})
 		}
 		for _, priorNode := range refs.PriorNodes {
 			nodeKey := ModelKey(strings.TrimSpace(string(priorNode.NodeKey)))
@@ -284,7 +283,6 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 				}},
 			)
 		}
-		consumerGroup, consumerGroupExists := groupsByID[edge.TransitionGroupID]
 		if !consumerGroupExists {
 			continue
 		}

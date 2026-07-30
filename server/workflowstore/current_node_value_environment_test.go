@@ -75,6 +75,46 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	}
 }
 
+func TestCompleteCurrentNodeUsesTransitionParametersInsteadOfTargetInputFields(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		review := nodeByKey(t, def, "review")
+		reviewRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(review))
+		reviewRecord.InputFields = []workflow.InputField{{
+			Name:        "changes",
+			Description: "Legacy target input.",
+		}}
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-review-"+string(workflowID)),
+		).PromptTemplate = "Review {{.Params.summary}}."
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode with transition parameter contract: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("completion mutation = %+v, want review current node", completed.Mutation)
+	}
+	review := completed.Mutation.Created[0]
+	if review.CurrentInputValues["summary"] != "approved plan" {
+		t.Fatalf("review current inputs = %+v, want transition parameter materialized", review.CurrentInputValues)
+	}
+	if _, exists := review.CurrentInputValues["changes"]; exists {
+		t.Fatalf("review current inputs = %+v, do not want target input field to replace transition contract", review.CurrentInputValues)
+	}
+}
+
 func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
@@ -194,10 +234,7 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 		branchCGroupID := workflow.TransitionGroupID("group-join-c-" + string(workflowID))
 		synth := nodeByKey(t, def, "synth")
 		synthRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(synth))
-		synthRecord.InputFields = append(synthRecord.InputFields, workflow.InputField{
-			Name:        "compliance_findings",
-			Description: "Compliance findings.",
-		})
+		synthRecord.InputFields = nil
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
@@ -287,7 +324,7 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 	if len(joined.Mutation.Created) != 1 ||
 		joined.Mutation.Created[0].CurrentInputValues["joined"] != "joined implementation" ||
 		joined.Mutation.Created[0].CurrentInputValues["compliance_findings"] != "approved" {
-		t.Fatalf("joined Current Node = %+v, want derived incoming provider value", joined.Mutation.Created)
+		t.Fatalf("joined Current Node = %+v, want Join aggregate materialized without target input fields", joined.Mutation.Created)
 	}
 }
 
