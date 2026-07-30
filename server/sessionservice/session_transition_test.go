@@ -9,6 +9,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestInitialInputPrefersPersistedDraft(t *testing.T) {
@@ -75,7 +76,7 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	}
 }
 
-func TestResolveForkRollbackRestoresSelectedMessageAsForkDraft(t *testing.T) {
+func TestResolveForkRollbackPreservesIntentionalEmptyDraftOverride(t *testing.T) {
 	root := t.TempDir()
 	persistence := sessiontest.NewPersistence()
 	store, err := session.Create(root, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
@@ -91,7 +92,7 @@ func TestResolveForkRollbackRestoresSelectedMessageAsForkDraft(t *testing.T) {
 		Store: store,
 		Transition: sessionTransition{
 			Action:             serverapi.SessionTransitionActionForkRollback,
-			InitialInput:       "u2",
+			InitialInput:       textutil.Value(""),
 			ForkUserMessageSeq: u2Evt.Seq(),
 		},
 	})
@@ -107,7 +108,7 @@ func TestResolveForkRollbackRestoresSelectedMessageAsForkDraft(t *testing.T) {
 		t.Fatalf("rollback fork draft disposition = %q, want override stored draft", disposition.Kind())
 	}
 	text, present := disposition.OverrideText()
-	if !present || text != "u2" {
-		t.Fatalf("rollback fork draft = %q/%t, want selected user message", text, present)
+	if !present || text != "" {
+		t.Fatalf("rollback fork draft = %q/%t, want intentional empty override", text, present)
 	}
 }
