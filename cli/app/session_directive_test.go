@@ -14,6 +14,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func requireSessionLifecycleResult(t *testing.T, result serverapi.SessionDirective) serverapi.SessionDirective {
@@ -335,7 +336,7 @@ func TestInitialInputPolicyComesFromLifecycleResultNotTransitionAction(t *testin
 		UITransition{
 			Action:          UIActionOpenSession,
 			TargetSessionID: target.String(),
-			InitialInput:    "transition input must not choose policy",
+			InitialInput:    textutil.Value("transition input must not choose policy"),
 		},
 	)
 	if err != nil {
@@ -347,6 +348,12 @@ func TestInitialInputPolicyComesFromLifecycleResultNotTransitionAction(t *testin
 	}
 	if preparation.DraftDisposition().Kind() != serverapi.SessionDraftDispositionRestoreStoredDraft {
 		t.Fatalf("input policy = %q, want restore stored draft", preparation.DraftDisposition().Kind())
+	}
+}
+
+func TestSessionTransitionInitialInputPreservesOpenSessionOmission(t *testing.T) {
+	if input := sessionTransitionInitialInput(UITransition{Action: UIActionOpenSession}); input != nil {
+		t.Fatalf("open Session omitted input = %q, want absent", *input)
 	}
 }
 

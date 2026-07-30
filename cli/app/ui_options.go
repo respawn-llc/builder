@@ -22,7 +22,7 @@ type UITransition struct {
 	Exit                         bool
 	InitialPrompt                string
 	InitialPromptHistoryRecorded bool
-	InitialInput                 string
+	InitialInput                 *string
 	TargetSessionID              string
 	ForkRollbackTargetID         string
 	PreviousSessionID            *runtimeids.SessionID

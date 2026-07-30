@@ -54,8 +54,8 @@ func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *test
 	if model.nextForkRollbackTargetID != newestTarget {
 		t.Fatalf("fork rollback target = %q, want %q", model.nextForkRollbackTargetID, newestTarget)
 	}
-	if model.nextSessionInitialInput != "newest user message" {
-		t.Fatalf("fork initial input = %q, want selected candidate text", model.nextSessionInitialInput)
+	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "newest user message" {
+		t.Fatalf("fork initial input = %v, want selected candidate text", model.nextSessionInitialInput)
 	}
 	if model.nextSessionInitialPrompt != "" {
 		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
@@ -582,9 +582,11 @@ func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 
 	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if model.nextForkRollbackTargetID != oldestTarget || model.nextSessionInitialInput != "oldest" {
+	if model.nextForkRollbackTargetID != oldestTarget ||
+		model.nextSessionInitialInput == nil ||
+		*model.nextSessionInitialInput != "oldest" {
 		t.Fatalf(
-			"PgUp fork target drifted: target=%q input=%q",
+			"PgUp fork target drifted: target=%q input=%v",
 			model.nextForkRollbackTargetID,
 			model.nextSessionInitialInput,
 		)
@@ -743,8 +745,8 @@ func TestRollbackSelectionStartsForkWithSelectedMessageAsDraft(t *testing.T) {
 	if model.nextForkRollbackTargetID != targetID {
 		t.Fatalf("fork rollback target = %q, want exact selected target %q", model.nextForkRollbackTargetID, targetID)
 	}
-	if model.nextSessionInitialInput != "original prompt" {
-		t.Fatalf("fork initial input = %q, want selected message text", model.nextSessionInitialInput)
+	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "original prompt" {
+		t.Fatalf("fork initial input = %v, want selected message text", model.nextSessionInitialInput)
 	}
 	if model.nextSessionInitialPrompt != "" {
 		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
@@ -813,8 +815,8 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	}
 	next, forkCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if model.nextSessionInitialInput != "interrupted prompt survives restart" {
-		t.Fatalf("fork initial input = %q", model.nextSessionInitialInput)
+	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "interrupted prompt survives restart" {
+		t.Fatalf("fork initial input = %v", model.nextSessionInitialInput)
 	}
 	if _, err := rollbacktarget.DecodeUserMessageSeq(model.nextForkRollbackTargetID); err != nil {
 		t.Fatalf("fork target is invalid: %v", err)

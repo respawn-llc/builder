@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/textutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -34,7 +36,7 @@ func (c uiInputController) startRollbackFork() (tea.Model, tea.Cmd) {
 	m.nextForkRollbackTargetID = candidate.RollbackTargetID
 	m.nextSessionInitialPrompt = ""
 	m.nextSessionInitialPromptHistoryRecorded = false
-	m.nextSessionInitialInput = candidate.Text
+	m.nextSessionInitialInput = textutil.Value(candidate.Text)
 	m.clearInput()
 	m.exitAction = UIActionForkRollback
 	m.resetRollbackState()

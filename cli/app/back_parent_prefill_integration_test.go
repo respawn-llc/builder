@@ -16,6 +16,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -545,12 +546,12 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if transition.Action != UIActionOpenSession || transition.TargetSessionID != parent.Meta().SessionID {
 				t.Fatalf("/back transition = %+v, want open parent", transition)
 			}
-			wantInput := ""
+			wantInput := "conflicting parent draft"
 			if tt.finalAnswer != nil {
 				wantInput = *tt.finalAnswer
 			}
-			if transition.InitialInput != wantInput {
-				t.Fatalf("/back transition input = %q, want %q", transition.InitialInput, wantInput)
+			if !textutil.EqualOptional(transition.InitialInput, tt.finalAnswer) {
+				t.Fatalf("/back transition input = %v, want %v", transition.InitialInput, tt.finalAnswer)
 			}
 
 			originReleased := false

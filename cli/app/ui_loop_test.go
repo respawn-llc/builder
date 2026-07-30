@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"core/shared/textutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -14,7 +16,7 @@ func TestExtractUITransitionIncludesInitialPrompt(t *testing.T) {
 		uiSessionTransitionFeatureState: uiSessionTransitionFeatureState{
 			exitAction:               UIActionNewSession,
 			nextSessionInitialPrompt: "review prompt payload",
-			nextSessionInitialInput:  "draft payload",
+			nextSessionInitialInput:  textutil.Value("draft payload"),
 		},
 	}
 	transition := extractUITransition(model)
@@ -24,8 +26,8 @@ func TestExtractUITransitionIncludesInitialPrompt(t *testing.T) {
 	if transition.InitialPrompt != "review prompt payload" {
 		t.Fatalf("expected initial prompt payload, got %q", transition.InitialPrompt)
 	}
-	if transition.InitialInput != "draft payload" {
-		t.Fatalf("expected initial input payload, got %q", transition.InitialInput)
+	if input, present := textutil.OptionalValue(transition.InitialInput); !present || input != "draft payload" {
+		t.Fatalf("expected initial input payload, got %q/%t", input, present)
 	}
 }
 
