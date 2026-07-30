@@ -29,8 +29,8 @@ import type {
   QuestionAttentionItem,
 } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
-export { workflowIDSchema } from "../composition";
-import { workflowIDSchema } from "../composition";
+export { workflowIDSchema } from "../composition/workflowID";
+import { workflowIDSchema } from "../composition/workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
