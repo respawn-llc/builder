@@ -151,6 +151,19 @@ describe("attentionItemSchema", () => {
     expect(item.suggestions).toEqual([]);
   });
 
+  it("accepts omitted client-owned fallback messages", () => {
+    const approval = { ...approvalAttentionItem };
+    const interrupted = { ...interruptedCurrentNodeAttentionItem };
+    Reflect.deleteProperty(approval, "message");
+    Reflect.deleteProperty(interrupted, "message");
+
+    const parsedApproval = attentionItemSchema.parse(approval);
+    const parsedInterrupted = attentionItemSchema.parse(interrupted);
+
+    expect(parsedApproval.message).toBeNull();
+    expect(parsedInterrupted.message).toBeNull();
+  });
+
   it("rejects malformed runtime approval question prompt metadata", () => {
     expect(() =>
       attentionItemSchema.parse({

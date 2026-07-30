@@ -982,7 +982,7 @@ type WorkflowAttentionItem struct {
 	TaskID                 string                             `json:"task_id"`
 	TaskShortID            string                             `json:"task_short_id"`
 	TaskTitle              string                             `json:"task_title"`
-	Message                string                             `json:"message"`
+	Message                *string                            `json:"message,omitempty"`
 	ApprovalID             *string                            `json:"approval_id,omitempty"`
 	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
 	SessionID              *string                            `json:"session_id,omitempty"`
@@ -2259,11 +2259,11 @@ func (r WorkflowAttentionItem) Validate() error {
 	if err := validateRequired("workflow_id", r.WorkflowID); err != nil {
 		return err
 	}
-	if err := validateRequired("message", r.Message); err != nil {
-		return err
-	}
 	switch r.Kind {
 	case "question":
+		if err := validateRequiredAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("question_id", r.QuestionID); err != nil {
 			return err
 		}
@@ -2290,6 +2290,9 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "approval":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("approval_id", r.ApprovalID); err != nil {
 			return err
 		}
@@ -2309,6 +2312,9 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "interrupted_current_node":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if r.CurrentNode == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "current_node", "current_node is required")
 		}

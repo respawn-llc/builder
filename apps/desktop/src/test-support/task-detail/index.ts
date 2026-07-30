@@ -108,14 +108,13 @@ export const taskAttentionResponse = {
       },
       session_id: "session-1",
       question_id: "ask-1",
-      message: "",
+      message: "Approve protected path?",
     },
     {
       ...attentionBase,
       id: "attention-approval",
       kind: "approval",
       approval_id: "approval-1",
-      message: "Approve transition",
       approval_snapshot: {
         source_node_display_name: "Implement",
         targets: [{ display_name: "Ship" }],
@@ -185,7 +184,6 @@ export const interruptedTaskAttentionResponse = {
       kind: "interrupted_current_node",
       current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
       session_id: null,
-      message: "Script failed",
       detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
     },
   ],

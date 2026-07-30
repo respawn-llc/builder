@@ -597,7 +597,6 @@ func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttent
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
 		WorkflowID:  "workflow-1",
-		Message:     "Current Node interrupted",
 		DetailJSON:  &detailJSON,
 		CurrentNode: &serverapi.WorkflowTaskCurrentNode{NodeID: "review"},
 	}
@@ -611,7 +610,6 @@ func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
 		WorkflowID:  "workflow-1",
-		Message:     "Approval required",
 		ApprovalID:  workflowRemoteString("approval-1"),
 		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
 			SourceNodeDisplayName: "Review",

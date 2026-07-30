@@ -15,8 +15,8 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type Attention struct {
@@ -175,7 +175,6 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			TaskID:           row.TaskID,
 			TaskShortID:      row.ShortID,
 			TaskTitle:        row.Title,
-			Message:          workflowattention.ApprovalRequiredMessage,
 			ApprovalID:       &approvalID,
 			ApprovalSnapshot: &snapshot,
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
@@ -201,7 +200,6 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			TaskID:           row.TaskID,
 			TaskShortID:      row.ShortID,
 			TaskTitle:        row.Title,
-			Message:          workflowattention.InterruptedCurrentNodeMessage(row.InterruptionReason.String, row.InterruptionDetailJson.String),
 			CurrentNode:      &currentNode,
 			SessionID:        currentNode.SessionID,
 			DetailJSON:       detailJSON,
@@ -342,7 +340,7 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 					TaskID:                 task.ID,
 					TaskShortID:            task.ShortID,
 					TaskTitle:              task.Title,
-					Message:                question.message,
+					Message:                textutil.Value(question.message),
 					CurrentNode:            &currentNode,
 					SessionID:              &sessionID,
 					QuestionID:             &questionID,
