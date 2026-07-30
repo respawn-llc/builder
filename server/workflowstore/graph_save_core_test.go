@@ -316,6 +316,55 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 	}
 }
 
+func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBlocked(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	spareAgentID := workflow.NodeID("node-spare-agent-" + string(workflowID))
+	spareDoneID := workflow.NodeID("node-spare-done-" + string(workflowID))
+	spareRouteGroupID := workflow.TransitionGroupID("group-spare-route-" + string(workflowID))
+	spareKeepGroupID := workflow.TransitionGroupID("group-spare-keep-" + string(workflowID))
+	reassignedGroupID := workflow.TransitionGroupID("group-spare-reassigned-" + string(workflowID))
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.Nodes = append(req.Nodes,
+			NodeRecord{ID: spareAgentID, WorkflowID: workflowID, Key: "spare_agent", Kind: workflow.NodeKindAgent, DisplayName: "Spare Agent", SubagentRole: "coder", PromptTemplate: "Do spare work."},
+			NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"},
+		)
+		req.TransitionGroups = append(req.TransitionGroups,
+			TransitionGroupRecord{ID: spareRouteGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare", DisplayName: "Spare"},
+			TransitionGroupRecord{ID: spareKeepGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "done", DisplayName: "Done"},
+			TransitionGroupRecord{ID: reassignedGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "spare_done", DisplayName: "Spare Done"},
+		)
+		req.Edges = append(req.Edges,
+			EdgeRecord{ID: workflow.EdgeID("edge-spare-route-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareAgentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare work."},
+			EdgeRecord{ID: workflow.EdgeID("edge-spare-keep-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: spareKeepGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-spare-reassigned-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reassignedGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession},
+		)
+	})
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	for index := range req.TransitionGroups {
+		if req.TransitionGroups[index].ID == reassignedGroupID {
+			req.TransitionGroups[index].SourceNodeID = agentID
+		}
+	}
+
+	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+	}
+}
+
 func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testing.T) {
 	ctx, store, _, cfg := newTestStoreWithConfigContext(t)
 	remote, _ := openConcurrentWorkflowStores(t, cfg)

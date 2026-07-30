@@ -142,6 +142,12 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			SourceNodeID: currentGroup.SourceNodeID,
 			EdgeIDs:      workflowGraphEdgeIDsSlice(currentEdgesByGroupID[currentGroup.ID]),
 		})
+		if exists && nextGroup.SourceNodeID != currentGroup.SourceNodeID {
+			descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
+				SourceNodeID: nextGroup.SourceNodeID,
+				EdgeIDs:      workflowGraphEdgeIDsSlice(nextEdgesByGroupID[nextGroup.ID]),
+			})
+		}
 	}
 	for _, nextGroup := range next.transitionGroups {
 		if _, exists := currentGroups[nextGroup.ID]; exists {
