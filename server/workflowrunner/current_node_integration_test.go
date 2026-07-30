@@ -22,6 +22,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -59,6 +60,23 @@ func (s currentNodeStartContextStore) ResolveCurrentNodeStartContext(
 		return workflowstore.CurrentNodeStartContext{}, err
 	}
 	return s.transform(input), nil
+}
+
+type currentNodeRestoreFailureStore struct {
+	RuntimeStore
+	sourceSessionID runtimeids.SessionID
+}
+
+func (s currentNodeRestoreFailureStore) BindSessionToCurrentNode(
+	ctx context.Context,
+	req workflowstore.CurrentNodeSessionBindingRequest,
+) (workflowstore.TaskSessionAssociation, error) {
+	if req.Association.SessionID == s.sourceSessionID &&
+		req.ExpectedCurrentSessionID != nil &&
+		*req.ExpectedCurrentSessionID != s.sourceSessionID {
+		return workflowstore.TaskSessionAssociation{}, errors.New("restore source Session unavailable")
+	}
+	return s.RuntimeStore.BindSessionToCurrentNode(ctx, req)
 }
 
 func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *currentNodeRunnerFixture {
@@ -390,87 +408,122 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 	}
 }
 
-func TestCurrentNodeFanoutPreparationFailureRestoresSourceSessionBeforeCloneCleanup(t *testing.T) {
-	sourceResponseStarted := make(chan struct{})
-	sourceResponseRelease := make(chan struct{})
-	var releaseSource sync.Once
-	t.Cleanup(func() {
-		releaseSource.Do(func() { close(sourceResponseRelease) })
-	})
-	f := newCurrentNodeRunnerFixture(
-		t,
-		ScriptedRuntimeStep{
-			BeforeResponse: func(ctx context.Context) error {
-				close(sourceResponseStarted)
-				select {
-				case <-sourceResponseRelease:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-			Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
-		},
-	)
-	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
-	task := f.createTask(t, workflowID)
-	source := f.startTask(t, task)
-	select {
-	case <-sourceResponseStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("source Current Node did not start")
-	}
-	sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Reference.Equal(source) &&
-			nodes[0].SessionID != nil
-	})
-	sourceSessionID := *sourceNodes[0].SessionID
-	f.starter.store = currentNodeStartContextStore{
-		RuntimeStore: f.store,
-		transform: func(input workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext {
-			if !input.IsFanoutBranch {
-				return input
-			}
-			root := *input.ExecutionRoot
-			root.SourceWorkspaceID = "workspace-missing"
-			input.ExecutionRoot = &root
-			return input
-		},
-	}
-
-	releaseSource.Do(func() { close(sourceResponseRelease) })
-	branches := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		if len(nodes) != len(branchNodeIDs) {
-			return false
-		}
-		for _, node := range nodes {
-			if node.Scheduling == nil ||
-				node.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
-				return false
-			}
-		}
-		return true
-	})
-	for _, branch := range branches {
-		if branch.SessionID == nil || *branch.SessionID != sourceSessionID {
-			t.Fatalf(
-				"branch %v Session = %v, want restored source Session %q",
-				branch.Reference,
-				branch.SessionID,
-				sourceSessionID,
+func TestCurrentNodeFanoutPreparationFailureKeepsEachBranchResumable(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		restoreFails     bool
+		wantTaskSessions int64
+	}{
+		{name: "source restoration succeeds", wantTaskSessions: 1},
+		{name: "source restoration fails", restoreFails: true, wantTaskSessions: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceResponseStarted := make(chan struct{})
+			sourceResponseRelease := make(chan struct{})
+			var releaseSource sync.Once
+			t.Cleanup(func() {
+				releaseSource.Do(func() { close(sourceResponseRelease) })
+			})
+			f := newCurrentNodeRunnerFixture(
+				t,
+				ScriptedRuntimeStep{
+					BeforeResponse: func(ctx context.Context) error {
+						close(sourceResponseStarted)
+						select {
+						case <-sourceResponseRelease:
+							return nil
+						case <-ctx.Done():
+							return context.Cause(ctx)
+						}
+					},
+					Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
+				},
 			)
-		}
-		if err := f.store.ValidateCurrentNodeSessionBinding(
-			context.Background(),
-			sourceSessionID,
-			branch.Reference,
-		); err != nil {
-			t.Fatalf("validate restored branch Session binding %v: %v", branch.Reference, err)
-		}
-	}
-	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
-		t.Fatalf("retained Session count after branch preparation failures = %d, %v; want source only", count, err)
+			workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+			task := f.createTask(t, workflowID)
+			source := f.startTask(t, task)
+			select {
+			case <-sourceResponseStarted:
+			case <-time.After(currentNodeRunnerWait):
+				t.Fatal("source Current Node did not start")
+			}
+			sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+				return len(nodes) == 1 &&
+					nodes[0].Reference.Equal(source) &&
+					nodes[0].SessionID != nil
+			})
+			sourceSessionID := *sourceNodes[0].SessionID
+			var runtimeStore RuntimeStore = f.store
+			if test.restoreFails {
+				runtimeStore = currentNodeRestoreFailureStore{
+					RuntimeStore:    runtimeStore,
+					sourceSessionID: sourceSessionID,
+				}
+			}
+			f.starter.store = currentNodeStartContextStore{
+				RuntimeStore: runtimeStore,
+				transform: func(input workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext {
+					if !input.IsFanoutBranch {
+						return input
+					}
+					root := *input.ExecutionRoot
+					root.SourceWorkspaceID = "workspace-missing"
+					input.ExecutionRoot = &root
+					return input
+				},
+			}
+
+			releaseSource.Do(func() { close(sourceResponseRelease) })
+			branches := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+				if len(nodes) != len(branchNodeIDs) {
+					return false
+				}
+				for _, node := range nodes {
+					if node.Scheduling == nil ||
+						node.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+						return false
+					}
+				}
+				return true
+			})
+			branchSessionIDs := map[runtimeids.SessionID]struct{}{}
+			for _, branch := range branches {
+				if branch.SessionID == nil {
+					t.Fatalf("branch %v has no resumable Session", branch.Reference)
+				}
+				if test.restoreFails {
+					if *branch.SessionID == sourceSessionID {
+						t.Fatalf("branch %v retained source Session after forced restoration failure", branch.Reference)
+					}
+					branchSessionIDs[*branch.SessionID] = struct{}{}
+				} else if *branch.SessionID != sourceSessionID {
+					t.Fatalf(
+						"branch %v Session = %v, want restored source Session %q",
+						branch.Reference,
+						branch.SessionID,
+						sourceSessionID,
+					)
+				}
+				if err := f.store.ValidateCurrentNodeSessionBinding(
+					context.Background(),
+					*branch.SessionID,
+					branch.Reference,
+				); err != nil {
+					t.Fatalf("validate resumable branch Session binding %v: %v", branch.Reference, err)
+				}
+			}
+			if test.restoreFails && len(branchSessionIDs) != len(branchNodeIDs) {
+				t.Fatalf("retained clone Sessions = %d, want one per branch", len(branchSessionIDs))
+			}
+			if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != test.wantTaskSessions {
+				t.Fatalf(
+					"retained Session count after branch preparation failures = %d, %v; want %d",
+					count,
+					err,
+					test.wantTaskSessions,
+				)
+			}
+		})
 	}
 }
 

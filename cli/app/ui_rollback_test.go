@@ -48,17 +48,12 @@ func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *test
 
 	next, forkCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if model.exitAction != UIActionForkRollback {
-		t.Fatalf("rollback action = %q, want %q", model.exitAction, UIActionForkRollback)
+	transition := requireRollbackForkTransition(t, model)
+	if transition.ForkRollbackTargetID != newestTarget {
+		t.Fatalf("fork rollback target = %q, want %q", transition.ForkRollbackTargetID, newestTarget)
 	}
-	if model.nextForkRollbackTargetID != newestTarget {
-		t.Fatalf("fork rollback target = %q, want %q", model.nextForkRollbackTargetID, newestTarget)
-	}
-	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "newest user message" {
-		t.Fatalf("fork initial input = %v, want selected candidate text", model.nextSessionInitialInput)
-	}
-	if model.nextSessionInitialPrompt != "" {
-		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
+	if *transition.InitialInput != "newest user message" {
+		t.Fatalf("fork initial input = %q, want selected candidate text", *transition.InitialInput)
 	}
 	if forkCmd == nil {
 		t.Fatal("Enter did not start the rollback fork transition")
@@ -582,13 +577,13 @@ func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 
 	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if model.nextForkRollbackTargetID != oldestTarget ||
-		model.nextSessionInitialInput == nil ||
-		*model.nextSessionInitialInput != "oldest" {
+	transition := requireRollbackForkTransition(t, model)
+	if transition.ForkRollbackTargetID != oldestTarget ||
+		*transition.InitialInput != "oldest" {
 		t.Fatalf(
 			"PgUp fork target drifted: target=%q input=%v",
-			model.nextForkRollbackTargetID,
-			model.nextSessionInitialInput,
+			transition.ForkRollbackTargetID,
+			transition.InitialInput,
 		)
 	}
 	if cmd == nil {
@@ -739,17 +734,12 @@ func TestRollbackSelectionStartsForkWithSelectedMessageAsDraft(t *testing.T) {
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
 
-	if model.exitAction != UIActionForkRollback {
-		t.Fatalf("rollback action = %q, want %q", model.exitAction, UIActionForkRollback)
+	transition := requireRollbackForkTransition(t, model)
+	if transition.ForkRollbackTargetID != targetID {
+		t.Fatalf("fork rollback target = %q, want exact selected target %q", transition.ForkRollbackTargetID, targetID)
 	}
-	if model.nextForkRollbackTargetID != targetID {
-		t.Fatalf("fork rollback target = %q, want exact selected target %q", model.nextForkRollbackTargetID, targetID)
-	}
-	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "original prompt" {
-		t.Fatalf("fork initial input = %v, want selected message text", model.nextSessionInitialInput)
-	}
-	if model.nextSessionInitialPrompt != "" {
-		t.Fatalf("fork initial prompt = %q, want no automatic submission", model.nextSessionInitialPrompt)
+	if *transition.InitialInput != "original prompt" {
+		t.Fatalf("fork initial input = %q, want selected message text", *transition.InitialInput)
 	}
 	if cmd == nil {
 		t.Fatal("rollback selection did not quit into session transition")
@@ -815,10 +805,11 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	}
 	next, forkCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if model.nextSessionInitialInput == nil || *model.nextSessionInitialInput != "interrupted prompt survives restart" {
-		t.Fatalf("fork initial input = %v", model.nextSessionInitialInput)
+	transition := requireRollbackForkTransition(t, model)
+	if *transition.InitialInput != "interrupted prompt survives restart" {
+		t.Fatalf("fork initial input = %q", *transition.InitialInput)
 	}
-	if _, err := rollbacktarget.DecodeUserMessageSeq(model.nextForkRollbackTargetID); err != nil {
+	if _, err := rollbacktarget.DecodeUserMessageSeq(transition.ForkRollbackTargetID); err != nil {
 		t.Fatalf("fork target is invalid: %v", err)
 	}
 	if forkCmd == nil {
@@ -932,6 +923,21 @@ func assertRollbackSelection(t *testing.T, model *uiModel, wantTargetID string) 
 	if selected.RollbackTargetID != wantTargetID {
 		t.Fatalf("selected rollback target = %q, want %q", selected.RollbackTargetID, wantTargetID)
 	}
+}
+
+func requireRollbackForkTransition(t *testing.T, model *uiModel) UITransition {
+	t.Helper()
+	transition := model.Transition()
+	if transition.Action != UIActionForkRollback {
+		t.Fatalf("rollback action = %q, want %q", transition.Action, UIActionForkRollback)
+	}
+	if transition.InitialInput == nil {
+		t.Fatal("rollback transition omitted selected message input")
+	}
+	if transition.InitialPrompt != "" {
+		t.Fatalf("fork initial prompt = %q, want no automatic submission", transition.InitialPrompt)
+	}
+	return transition
 }
 
 func rollbackDetailLoadCompletion(t *testing.T, cmd tea.Cmd) detailTranscriptLoadMsg {

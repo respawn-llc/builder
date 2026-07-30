@@ -352,8 +352,28 @@ func TestInitialInputPolicyComesFromLifecycleResultNotTransitionAction(t *testin
 }
 
 func TestSessionTransitionInitialInputPreservesOpenSessionOmission(t *testing.T) {
-	if input := sessionTransitionInitialInput(UITransition{Action: UIActionOpenSession}); input != nil {
-		t.Fatalf("open Session omitted input = %q, want absent", *input)
+	target := sessionLifecycleSessionID(t, "target-session")
+	var recorded serverapi.SessionResolveTransitionRequest
+	_, err := resolveSessionAction(
+		context.Background(),
+		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
+			resolveTransition: func(_ context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionDirective, error) {
+				recorded = req
+				return serverapi.StopSessionDirective(), nil
+			},
+		}},
+		nil,
+		"current-session",
+		UITransition{
+			Action:          UIActionOpenSession,
+			TargetSessionID: target.String(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolveSessionAction: %v", err)
+	}
+	if recorded.Transition.InitialInput != nil {
+		t.Fatalf("open Session emitted initial input = %q, want absent", *recorded.Transition.InitialInput)
 	}
 }
 

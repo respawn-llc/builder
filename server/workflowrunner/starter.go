@@ -137,6 +137,8 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 				},
 				ExpectedCurrentSessionID: &cloneSessionID,
 			}); restoreErr != nil {
+				// The clone is still this Current Node's retained Session. Keep
+				// it durable so the interrupted continuation remains resumable.
 				return errors.Join(err, fmt.Errorf(
 					"restore current node %v source Session %q before clone cleanup: %w",
 					input.CurrentNode.Reference,
