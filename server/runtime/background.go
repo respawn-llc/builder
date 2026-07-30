@@ -12,6 +12,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 
@@ -647,9 +648,14 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 			if !receipt.Committed {
 				b.restoreAutomaticDisposition(notice)
 			}
-			b.FinalizeCommittedBackgroundNotice(notice, receipt)
-			if receipt.Committed {
+			settlement := b.FinalizeCommittedBackgroundNotice(notice, receipt)
+			switch settlement {
+			case shelltool.TerminalAutomaticallyFinalized:
 				accepted = true
+			case shelltool.TerminalAlreadyFinalizedByOwnerPoll:
+			case shelltool.TerminalAutomaticFinalizationRejected:
+			default:
+				panic(fmt.Sprintf("unknown automatic terminal settlement %d", settlement))
 			}
 			if steerErr != nil {
 				if !receipt.Committed && notice.hasIdentity() {
@@ -845,20 +851,22 @@ func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(proc
 
 // FinalizeCommittedBackgroundNotice applies a durable steering receipt to its
 // exact reservation. The Manager finalizer remains the authority for terminal
-// disposition; the scheduler then either removes the notice or retains only a
-// diagnostic obligation.
-func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(notice queuedBackgroundNotice, receipt session.CommitReceipt) {
+// disposition; an accepted automatic outcome removes the notice or retains
+// only its diagnostic obligation. An owner-poll outcome was already consumed
+// by the owner finalizer and must not start an automatic continuation.
+func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(
+	notice queuedBackgroundNotice,
+	receipt session.CommitReceipt,
+) shelltool.TerminalAutomaticFinalization {
 	if !receipt.Committed {
-		return
+		return shelltool.TerminalAutomaticFinalizationRejected
 	}
-	settled := false
+	settlement := shelltool.TerminalAutomaticallyFinalized
 	if notice.hasIdentity() && b.engine.cfg.BackgroundAutomaticFinalizer != nil {
-		settled = b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID(), notice.activityID())
-	} else {
-		settled = true
+		settlement = b.engine.cfg.BackgroundAutomaticFinalizer(notice.processID(), notice.activityID())
 	}
-	if !settled {
-		return
+	if !settlement.AutomaticallyFinalized() {
+		return settlement
 	}
 	notify := ""
 	b.mu.Lock()
@@ -894,6 +902,7 @@ func (b *defaultBackgroundNoticeScheduler) FinalizeCommittedBackgroundNotice(not
 	if notify != "" {
 		b.notifyCompletionSettled(notify)
 	}
+	return settlement
 }
 
 func sameBackgroundNotice(left queuedBackgroundNotice, right queuedBackgroundNotice) bool {

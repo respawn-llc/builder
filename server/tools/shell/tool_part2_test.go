@@ -422,7 +422,7 @@ func TestTerminalOwnerPollFinalizationIsOwnerRelativeAndCommitGated(t *testing.T
 	if manager.ReplayPendingTerminal("1000") {
 		t.Fatal("finalized owner-poll completion became replayable")
 	}
-	if manager.FinalizeAutomaticTerminal("1000", uuid.New()) {
+	if outcome := manager.FinalizeAutomaticTerminal("1000", uuid.New()); outcome.AutomaticallyFinalized() {
 		t.Fatal("automatic finalizer settled an owner-poll completion")
 	}
 }
@@ -454,7 +454,7 @@ func TestAutomaticFinalizationRequiresAcknowledgedTerminalHandoff(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for acknowledged terminal handoff")
 	}
-	if !manager.FinalizeAutomaticTerminal(evt.Snapshot.ID, evt.Snapshot.ActivityID) {
+	if outcome := manager.FinalizeAutomaticTerminal(evt.Snapshot.ID, evt.Snapshot.ActivityID); !outcome.AutomaticallyFinalized() {
 		t.Fatal("automatic finalizer did not settle acknowledged handoff")
 	}
 	if manager.FinalizeTerminalOwnerPoll("owner-session", evt.Snapshot.ID).Finalized {
@@ -525,8 +525,8 @@ func TestAutomaticReservationPreservesCommittedOwnerPollThroughRollback(t *testi
 	if restored := <-rolledBack; !restored {
 		t.Fatal("release automatic terminal reservation after owner-poll claim")
 	}
-	if manager.FinalizeAutomaticTerminal(event.Snapshot.ID, event.Snapshot.ActivityID) {
-		t.Fatal("automatic finalization replaced a committed owner-poll claim")
+	if outcome := manager.FinalizeAutomaticTerminal(event.Snapshot.ID, event.Snapshot.ActivityID); outcome != TerminalAlreadyFinalizedByOwnerPoll {
+		t.Fatalf("automatic finalization outcome = %v, want owner-poll settlement", outcome)
 	}
 	if manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID).Finalized {
 		t.Fatal("owner poll claim finalized more than once")

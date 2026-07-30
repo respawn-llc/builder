@@ -1,13 +1,16 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"core/server/llm"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -191,4 +194,118 @@ func TestDiagnosticOnlyBackgroundWorkPersistsWithoutModelContinuation(t *testing
 	if engine.BackgroundDeliveryRetirementSnapshot().Active {
 		t.Fatal("committed diagnostic-only work retained the runtime")
 	}
+}
+
+func TestCommittedOwnerPollSettlementDoesNotStartAutomaticContinuation(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{}
+	activity := uuid.New()
+	var (
+		engine       *Engine
+		reserved     bool
+		ownerClaimed bool
+	)
+	engine = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		BackgroundAutomaticReservation: func(processID string, gotActivity uuid.UUID) bool {
+			if processID != "owner-claim" || gotActivity != activity {
+				t.Fatalf("automatic reservation identity = %q %s", processID, gotActivity)
+			}
+			reserved = true
+			return true
+		},
+		BackgroundAutomaticFinalizer: func(processID string, gotActivity uuid.UUID) shelltool.TerminalAutomaticFinalization {
+			if processID != "owner-claim" || gotActivity != activity {
+				t.Fatalf("automatic finalization identity = %q %s", processID, gotActivity)
+			}
+			ownerClaimed = engine.FinalizeBackgroundOwnerPoll(processID, nil).removed
+			return shelltool.TerminalAlreadyFinalizedByOwnerPoll
+		},
+	})
+	engine.AdmitBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "owner-claim",
+		ActivityID: activity,
+		State:      "completed",
+		NoticeText: "terminal notice",
+	})
+	scheduler, ok := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
+	if !ok {
+		t.Fatalf("background scheduler = %T", engine.backgroundFlow)
+	}
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err != nil {
+		t.Fatalf("run automatic notice: %v", err)
+	}
+	if !reserved || !ownerClaimed {
+		t.Fatalf("reservation=%t owner_claimed=%t", reserved, ownerClaimed)
+	}
+	if countBackgroundNoticeMessages(engine) != 1 {
+		t.Fatalf("persisted automatic notices = %d, want 1", countBackgroundNoticeMessages(engine))
+	}
+	client.mu.Lock()
+	calls := len(client.calls)
+	client.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("owner-poll settlement started automatic continuation calls=%d", calls)
+	}
+	if scheduler.HasPendingNotices() {
+		t.Fatal("owner-poll settlement retained an automatic notice")
+	}
+}
+
+func TestCommittedOwnerPollSettlementDoesNotCountCombinedAutomaticFlush(t *testing.T) {
+	store := mustCreateTestSession(t)
+	activity := uuid.New()
+	var engine *Engine
+	engine = mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		BackgroundAutomaticReservation: func(string, uuid.UUID) bool {
+			return true
+		},
+		BackgroundAutomaticFinalizer: func(processID string, gotActivity uuid.UUID) shelltool.TerminalAutomaticFinalization {
+			if processID != "owner-claim-combined" || gotActivity != activity {
+				t.Fatalf("automatic finalization identity = %q %s", processID, gotActivity)
+			}
+			if !engine.FinalizeBackgroundOwnerPoll(processID, nil).removed {
+				t.Fatal("owner claim did not remove the provisional automatic notice")
+			}
+			return shelltool.TerminalAlreadyFinalizedByOwnerPoll
+		},
+	})
+	engine.AdmitBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "owner-claim-combined",
+		ActivityID: activity,
+		State:      "completed",
+		NoticeText: "terminal notice",
+	})
+	lifecycle, ok := engine.messageFlow.(*defaultMessageLifecycle)
+	if !ok {
+		t.Fatalf("message lifecycle = %T", engine.messageFlow)
+	}
+
+	result, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	if err != nil {
+		t.Fatalf("flush combined automatic notice: %v", err)
+	}
+	if result.flushed != 0 {
+		t.Fatalf("owner-poll settlement counted as an automatic flush: %d", result.flushed)
+	}
+	if countBackgroundNoticeMessages(engine) != 1 {
+		t.Fatalf("persisted automatic notices = %d, want 1", countBackgroundNoticeMessages(engine))
+	}
+	if engine.BackgroundDeliveryRetirementSnapshot().Active {
+		t.Fatal("owner-poll settlement retained background delivery work")
+	}
+}
+
+func countBackgroundNoticeMessages(engine *Engine) int {
+	count := 0
+	for _, message := range engine.transcriptRuntimeState().SnapshotMessages() {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeBackgroundNotice {
+			count++
+		}
+	}
+	return count
 }

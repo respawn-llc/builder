@@ -12,6 +12,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -139,7 +140,7 @@ type Config struct {
 	BackgroundOwnerPollFinalizer func(callerSessionID string, processID string) BackgroundOwnerPollFinalization
 	// BackgroundAutomaticFinalizer records durable automatic acceptance for one
 	// admitted terminal notice after that notice's steering receipt commits.
-	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) bool
+	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization
 	// BackgroundAutomaticReservation reserves the Manager's automatic
 	// disposition before steering persists the notice. A failed persistence
 	// receipt must release that reservation through BackgroundAutomaticRollback.

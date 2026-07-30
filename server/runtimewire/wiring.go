@@ -276,9 +276,9 @@ func NewRuntimeWiringWithBackground(
 			}
 			return result
 		},
-		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
+		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization {
 			if background == nil {
-				return false
+				return shelltool.TerminalAutomaticFinalizationRejected
 			}
 			return background.FinalizeAutomaticTerminal(processID, activityID)
 		},

@@ -329,6 +329,21 @@ type TerminalOwnerPollFinalization struct {
 	Diagnostic *TerminalDeliveryDiagnostic
 }
 
+// TerminalAutomaticFinalization is the Manager-owned outcome of settling one
+// durable automatic notice. It distinguishes an accepted automatic notice from
+// a reservation already claimed by the owner poll.
+type TerminalAutomaticFinalization uint8
+
+const (
+	TerminalAutomaticFinalizationRejected TerminalAutomaticFinalization = iota
+	TerminalAutomaticallyFinalized
+	TerminalAlreadyFinalizedByOwnerPoll
+)
+
+func (f TerminalAutomaticFinalization) AutomaticallyFinalized() bool {
+	return f == TerminalAutomaticallyFinalized
+}
+
 type terminalDisposition interface {
 	terminalFacts() terminalFacts
 	terminalDisposition()
@@ -643,25 +658,30 @@ func (p *processEntry) finalizeOwnerPoll(callerSessionID string) TerminalOwnerPo
 	return result
 }
 
-func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) bool {
+func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) TerminalAutomaticFinalization {
 	p.interactMu.Lock()
 	defer p.interactMu.Unlock()
 	switch current := p.terminal.(type) {
 	case automaticReservedTerminalDisposition:
 		if current.facts.snapshot.ActivityID != activityID {
-			return false
+			return TerminalAutomaticFinalizationRejected
 		}
 		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
 	case queuedTerminalDisposition:
 		if current.facts.snapshot.ActivityID != activityID {
-			return false
+			return TerminalAutomaticFinalizationRejected
 		}
 		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
+	case finalizedByOwnerPollTerminalDisposition:
+		if current.facts.snapshot.ActivityID != activityID {
+			return TerminalAutomaticFinalizationRejected
+		}
+		return TerminalAlreadyFinalizedByOwnerPoll
 	default:
-		return false
+		return TerminalAutomaticFinalizationRejected
 	}
 	p.signalTerminalChangedLocked()
-	return true
+	return TerminalAutomaticallyFinalized
 }
 
 func (p *processEntry) reserveAutomaticTerminal(activityID uuid.UUID) bool {

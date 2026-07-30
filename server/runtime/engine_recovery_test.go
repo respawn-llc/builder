@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 
@@ -513,7 +514,8 @@ func (s *recoverySchedulingObserver) ReserveAutomaticDisposition(queuedBackgroun
 	return nil
 }
 func (s *recoverySchedulingObserver) RestoreAutomaticDisposition(queuedBackgroundNotice) {}
-func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) {
+func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) shelltool.TerminalAutomaticFinalization {
+	return shelltool.TerminalAutomaticFinalizationRejected
 }
 func (s *recoverySchedulingObserver) RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice) {}
 func (s *recoverySchedulingObserver) HasPendingNotices() bool                                      { return false }

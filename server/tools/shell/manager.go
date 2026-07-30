@@ -143,10 +143,10 @@ func (m *Manager) FinalizeTerminalOwnerPoll(callerSessionID string, processID st
 // FinalizeAutomaticTerminal records the automatic path's durable acceptance.
 // It can only settle a completion that was previously acknowledged by the
 // runtime queue.
-func (m *Manager) FinalizeAutomaticTerminal(processID string, activityID uuid.UUID) bool {
+func (m *Manager) FinalizeAutomaticTerminal(processID string, activityID uuid.UUID) TerminalAutomaticFinalization {
 	entry, err := m.entry(strings.TrimSpace(processID))
 	if err != nil {
-		return false
+		return TerminalAutomaticFinalizationRejected
 	}
 	return entry.finalizeAutomatic(activityID)
 }

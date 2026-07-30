@@ -51,11 +51,11 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 			events = append(events, evt)
 			mu.Unlock()
 		},
-		BackgroundAutomaticFinalizer: func(processID string, _ uuid.UUID) bool {
+		BackgroundAutomaticFinalizer: func(processID string, _ uuid.UUID) shelltool.TerminalAutomaticFinalization {
 			mu.Lock()
 			finalized = append(finalized, processID)
 			mu.Unlock()
-			return true
+			return shelltool.TerminalAutomaticallyFinalized
 		},
 	})
 
@@ -206,7 +206,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			finalization := manager.FinalizeTerminalOwnerPoll(callerSessionID, processID)
 			return BackgroundOwnerPollFinalization{Finalized: finalization.Finalized}
 		},
-		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) bool {
+		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization {
 			return manager.FinalizeAutomaticTerminal(processID, activityID)
 		},
 	})

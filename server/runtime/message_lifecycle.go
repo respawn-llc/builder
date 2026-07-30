@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -334,9 +335,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 		if !receipt.Committed {
 			m.background.RestoreAutomaticDisposition(notice)
 		}
-		if m.background != nil {
-			m.background.FinalizeCommittedBackgroundNotice(notice, receipt)
-		}
+		settlement := m.background.FinalizeCommittedBackgroundNotice(notice, receipt)
 		if err != nil {
 			if m.background != nil {
 				if receipt.Committed {
@@ -347,7 +346,14 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 			}
 			return result, err
 		}
-		result.flushed++
+		switch settlement {
+		case shelltool.TerminalAutomaticallyFinalized:
+			result.flushed++
+		case shelltool.TerminalAlreadyFinalizedByOwnerPoll:
+		case shelltool.TerminalAutomaticFinalizationRejected:
+		default:
+			panic(fmt.Sprintf("unknown automatic terminal settlement %d", settlement))
+		}
 	}
 	return result, nil
 }

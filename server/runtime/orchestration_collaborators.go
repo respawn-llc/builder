@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 
 	"github.com/google/uuid"
 )
@@ -42,7 +43,7 @@ type backgroundNoticeScheduler interface {
 	DrainPendingNotices() []queuedBackgroundNotice
 	ReserveAutomaticDisposition(queuedBackgroundNotice) error
 	RestoreAutomaticDisposition(queuedBackgroundNotice)
-	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt)
+	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) shelltool.TerminalAutomaticFinalization
 	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) backgroundNoticeConsumption
