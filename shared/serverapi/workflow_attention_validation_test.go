@@ -79,6 +79,20 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 	}
 }
 
+func TestWorkflowAttentionItemValidateRejectsMalformedInterruptedDetailJSON(t *testing.T) {
+	for name, detail := range map[string]string{
+		"malformed": "{",
+		"array":     "[]",
+		"null":      "null",
+	} {
+		t.Run(name, func(t *testing.T) {
+			item := validWorkflowAttentionInterrupted()
+			item.DetailJSON = textutil.Value(detail)
+			requireWorkflowAttentionValidationError(t, item.Validate(), "detail_json")
+		})
+	}
+}
+
 func TestWorkflowAttentionApprovalSnapshotValidateRejectsMalformedContents(t *testing.T) {
 	tests := []struct {
 		name      string

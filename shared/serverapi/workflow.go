@@ -2340,7 +2340,7 @@ func (r WorkflowAttentionItem) Validate() error {
 		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
 			return err
 		}
-		if err := validateOptionalAttentionString("detail_json", r.DetailJSON); err != nil {
+		if err := validateOptionalAttentionJSONObject("detail_json", r.DetailJSON); err != nil {
 			return err
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
@@ -2422,6 +2422,17 @@ func validateOptionalAttentionString(field string, value *string) error {
 	}
 	if strings.TrimSpace(*value) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be non-blank when present")
+	}
+	return nil
+}
+
+func validateOptionalAttentionJSONObject(field string, value *string) error {
+	if err := validateOptionalAttentionString(field, value); err != nil || value == nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*value), &object); err != nil || object == nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be a JSON object")
 	}
 	return nil
 }
