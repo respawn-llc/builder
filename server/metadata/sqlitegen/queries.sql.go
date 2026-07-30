@@ -191,16 +191,21 @@ WHERE task_id = ?2
   AND node_id = ?3
   AND transition_branch_key = ?4
   AND (
-      session_id IS NULL
-      OR session_id = ?1
+      session_id = ?1
+      OR (
+          CAST(?5 AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
+      OR session_id = CAST(?5 AS TEXT)
   )
 `
 
 type BindSessionToBranchCurrentNodeParams struct {
-	SessionID           sql.NullString
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey sql.NullString
+	SessionID                sql.NullString
+	TaskID                   string
+	NodeID                   string
+	TransitionBranchKey      sql.NullString
+	ExpectedCurrentSessionID sql.NullString
 }
 
 func (q *Queries) BindSessionToBranchCurrentNode(ctx context.Context, arg BindSessionToBranchCurrentNodeParams) (int64, error) {
@@ -209,8 +214,9 @@ func (q *Queries) BindSessionToBranchCurrentNode(ctx context.Context, arg BindSe
 		arg.TaskID,
 		arg.NodeID,
 		arg.TransitionBranchKey,
+		arg.ExpectedCurrentSessionID,
 	)
-	err = recordQueryError(ctx, err, bindSessionToBranchCurrentNode, 4)
+	err = recordQueryError(ctx, err, bindSessionToBranchCurrentNode, 5)
 
 	if err != nil {
 		return 0, err
@@ -225,20 +231,31 @@ WHERE task_id = ?2
   AND node_id = ?3
   AND transition_branch_key IS NULL
   AND (
-      session_id IS NULL
-      OR session_id = ?1
+      session_id = ?1
+      OR (
+          CAST(?4 AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
+      OR session_id = CAST(?4 AS TEXT)
   )
 `
 
 type BindSessionToSerialCurrentNodeParams struct {
-	SessionID sql.NullString
-	TaskID    string
-	NodeID    string
+	SessionID                sql.NullString
+	TaskID                   string
+	NodeID                   string
+	ExpectedCurrentSessionID sql.NullString
 }
 
 func (q *Queries) BindSessionToSerialCurrentNode(ctx context.Context, arg BindSessionToSerialCurrentNodeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindSessionToSerialCurrentNode, arg.SessionID, arg.TaskID, arg.NodeID)
-	err = recordQueryError(ctx, err, bindSessionToSerialCurrentNode, 3)
+	result, err := q.db.ExecContext(ctx, bindSessionToSerialCurrentNode,
+		arg.SessionID,
+		arg.TaskID,
+		arg.NodeID,
+		arg.ExpectedCurrentSessionID,
+	)
+	err = recordQueryError(ctx, err, bindSessionToSerialCurrentNode, 4)
+
 	if err != nil {
 		return 0, err
 	}

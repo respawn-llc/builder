@@ -2573,8 +2573,12 @@ WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
   AND (
-      session_id IS NULL
-      OR session_id = sqlc.arg(session_id)
+      session_id = sqlc.arg(session_id)
+      OR (
+          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
+      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
 -- name: BindSessionToBranchCurrentNode :execrows
@@ -2584,8 +2588,12 @@ WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND (
-      session_id IS NULL
-      OR session_id = sqlc.arg(session_id)
+      session_id = sqlc.arg(session_id)
+      OR (
+          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
+      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
 -- name: UpsertSerialSessionWorkflowNodeAssociation :exec

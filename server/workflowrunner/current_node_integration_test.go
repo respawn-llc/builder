@@ -333,6 +333,47 @@ func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch"}`),
+	)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.IsBranchScoped() && nodes[0].Scheduling == nil
+	})
+	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	if err != nil {
+		t.Fatalf("resolve source Session association: %v", err)
+	}
+	branchAssociations := make([]workflowstore.TaskSessionAssociation, 0, len(branchNodeIDs))
+	for branchKey, nodeID := range branchNodeIDs {
+		reference, err := workflow.NewCurrentNodeReference(task.ID, nodeID, &branchKey)
+		if err != nil {
+			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
+		}
+		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
+		if err != nil {
+			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
+		}
+		if association.SessionID == sourceAssociation.SessionID {
+			t.Fatalf("branch %q reused source Session %q, want fan-out clone", branchKey, association.SessionID)
+		}
+		branchAssociations = append(branchAssociations, association)
+	}
+	if len(branchAssociations) != 2 || branchAssociations[0].SessionID == branchAssociations[1].SessionID {
+		t.Fatalf("branch Session associations = %+v, want two distinct clones", branchAssociations)
+	}
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 3 {
+		t.Fatalf("retained Session count = %d, %v; want source plus two fan-out clones", count, err)
+	}
+}
+
 func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX shell scripts")
@@ -491,6 +532,112 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "First."},
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Second."},
 	)
+}
+
+func createCurrentNodeFanoutContinuationWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+) (workflow.WorkflowID, map[workflow.TransitionBranchKey]workflow.NodeID) {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node fan-out continuation"})
+	if err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get workflow: %v", err)
+	}
+	var startID, doneID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			doneID = workflow.NodeIDOf(node)
+		}
+	}
+	sourceID := workflow.NodeID("node-source-" + string(created.ID))
+	branchNodeIDs := map[workflow.TransitionBranchKey]workflow.NodeID{
+		"branch_a": workflow.NodeID("node-branch-a-" + string(created.ID)),
+		"branch_b": workflow.NodeID("node-branch-b-" + string(created.ID)),
+	}
+	joinID := workflow.NodeID("node-join-" + string(created.ID))
+	for _, node := range []workflowstore.NodeRecord{
+		{
+			ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent,
+			DisplayName: "Source", SubagentRole: "coder", PromptTemplate: "Source.",
+		},
+		{
+			ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent,
+			DisplayName: "Branch A", SubagentRole: "coder", PromptTemplate: "Branch A.",
+		},
+		{
+			ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent,
+			DisplayName: "Branch B", SubagentRole: "coder", PromptTemplate: "Branch B.",
+		},
+		{
+			ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin,
+			DisplayName: "Join",
+		},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("add node: %v", err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
+	splitGroup := workflow.TransitionGroupID("group-split-" + string(created.ID))
+	branchAGroup := workflow.TransitionGroupID("group-branch-a-" + string(created.ID))
+	branchBGroup := workflow.TransitionGroupID("group-branch-b-" + string(created.ID))
+	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
+		{ID: branchAGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_a"], TransitionID: "join", DisplayName: "Join"},
+		{ID: branchBGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_b"], TransitionID: "join", DisplayName: "Join"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("add transition group: %v", err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{
+			ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID,
+			ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source.",
+		},
+		{
+			ID: workflow.EdgeID("edge-branch-a-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"],
+			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch A.",
+		},
+		{
+			ID: workflow.EdgeID("edge-branch-b-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"],
+			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch B.",
+		},
+		{
+			ID: workflow.EdgeID("edge-join-a-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+		{
+			ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+		{
+			ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("add edge: %v", err)
+		}
+	}
+	return created.ID, branchNodeIDs
 }
 
 func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) workflow.WorkflowID {

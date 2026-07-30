@@ -63,10 +63,12 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 		t.Fatalf("ParseSessionID: %v", err)
 	}
 
-	association, err := store.BindSessionToCurrentNode(ctx, TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  started.Mutation.Created[0].Reference,
-		AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+	association, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  started.Mutation.Created[0].Reference,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
 	})
 	if err != nil {
 		t.Fatalf("BindSessionToCurrentNode: %v", err)
@@ -94,6 +96,120 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 	}
 	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, started.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("ValidateCurrentNodeSessionBinding: %v", err)
+	}
+}
+
+func TestBindSessionToBranchCurrentNodeReplacesExpectedFanoutSourceSession(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sourceSessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("parse source Session ID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sourceSessionID,
+			CurrentNode:  started.Reference,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("bind source Session: %v", err)
+	}
+
+	branchKey := workflow.TransitionBranchKey("qa")
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_current_nodes WHERE task_id = ?`, string(task.ID)); err != nil {
+		t.Fatalf("delete serial Current Node: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO task_active_fanouts (task_id) VALUES (?)`, string(task.ID)); err != nil {
+		t.Fatalf("insert active fan-out: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_active_fanout_branches (
+    task_id, transition_branch_key, arrival_state, arrival_values_json
+) VALUES (?, ?, 'pending', NULL)`, string(task.ID), string(branchKey)); err != nil {
+		t.Fatalf("insert active fan-out branch: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id
+) VALUES (?, ?, ?, '{}', '{}', ?, 'ready', ?)`,
+		string(task.ID),
+		string(started.Reference.NodeID),
+		string(branchKey),
+		sourceSessionID.String(),
+		string(*started.EnteredByEdgeID),
+	); err != nil {
+		t.Fatalf("insert retained fan-out Current Node: %v", err)
+	}
+	branchReference, err := workflow.NewCurrentNodeReference(task.ID, started.Reference.NodeID, &branchKey)
+	if err != nil {
+		t.Fatalf("create branch Current Node reference: %v", err)
+	}
+	cloneSessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("parse clone Session ID: %v", err)
+	}
+
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    cloneSessionID,
+			CurrentNode:  branchReference,
+			AssociatedAt: time.UnixMilli(1_700_000_001_000).UTC(),
+		},
+		ExpectedCurrentSessionID: &sourceSessionID,
+	}); err != nil {
+		t.Fatalf("replace fan-out source Session with clone: %v", err)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("list branch Current Node: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].SessionID == nil ||
+		*currentNodes[0].SessionID != cloneSessionID {
+		t.Fatalf("branch Current Nodes = %+v, want clone Session %q", currentNodes, cloneSessionID)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, cloneSessionID, branchReference); err != nil {
+		t.Fatalf("validate clone Session binding: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    cloneSessionID,
+			CurrentNode:  branchReference,
+			AssociatedAt: time.UnixMilli(1_700_000_002_000).UTC(),
+		},
+		ExpectedCurrentSessionID: &sourceSessionID,
+	}); err != nil {
+		t.Fatalf("repeat fan-out clone binding: %v", err)
+	}
+
+	staleCloneSessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("parse stale clone Session ID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    staleCloneSessionID,
+			CurrentNode:  branchReference,
+			AssociatedAt: time.UnixMilli(1_700_000_003_000).UTC(),
+		},
+		ExpectedCurrentSessionID: &sourceSessionID,
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("stale fan-out replacement error = %v, want sql.ErrNoRows", err)
+	}
+	currentNodes, err = store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("list branch Current Node after stale replacement: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].SessionID == nil ||
+		*currentNodes[0].SessionID != cloneSessionID {
+		t.Fatalf("branch Current Nodes after stale replacement = %+v, want clone Session %q", currentNodes, cloneSessionID)
 	}
 }
 

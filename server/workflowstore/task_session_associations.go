@@ -19,6 +19,13 @@ type TaskSessionAssociationRequest struct {
 	AssociatedAt time.Time
 }
 
+// CurrentNodeSessionBindingRequest compare-and-swaps the exact Current Node's
+// retained Session while recording the resulting Task Session association.
+type CurrentNodeSessionBindingRequest struct {
+	Association              TaskSessionAssociationRequest
+	ExpectedCurrentSessionID *runtimeids.SessionID
+}
+
 type TaskSessionAssociation struct {
 	SessionID    runtimeids.SessionID
 	CurrentNode  workflow.CurrentNodeReference
@@ -33,10 +40,13 @@ var ErrSessionNotCurrentWorkflowNode = errors.New("session is not bound to a cur
 // BindSessionToCurrentNode atomically establishes the live agent-session
 // binding for an exact Current Node and records its retained provenance.
 // AssociateTaskSession intentionally does not make a Current Node live.
-func (s *Store) BindSessionToCurrentNode(ctx context.Context, req TaskSessionAssociationRequest) (TaskSessionAssociation, error) {
-	normalized, err := normalizeTaskSessionAssociationRequest(req)
+func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSessionBindingRequest) (TaskSessionAssociation, error) {
+	normalized, err := normalizeTaskSessionAssociationRequest(req.Association)
 	if err != nil {
 		return TaskSessionAssociation{}, err
+	}
+	if req.ExpectedCurrentSessionID != nil && req.ExpectedCurrentSessionID.IsZero() {
+		return TaskSessionAssociation{}, errors.New("expected current Session id is invalid")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -47,7 +57,7 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req TaskSessionAss
 	if err := bindSessionToTask(ctx, q, normalized); err != nil {
 		return TaskSessionAssociation{}, err
 	}
-	if err := bindSessionToExactCurrentNode(ctx, q, normalized); err != nil {
+	if err := bindSessionToExactCurrentNode(ctx, q, normalized, req.ExpectedCurrentSessionID); err != nil {
 		return TaskSessionAssociation{}, err
 	}
 	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
@@ -96,23 +106,37 @@ func bindSessionToTask(ctx context.Context, q *sqlitegen.Queries, req TaskSessio
 	return nil
 }
 
-func bindSessionToExactCurrentNode(ctx context.Context, q *sqlitegen.Queries, req TaskSessionAssociationRequest) error {
+func bindSessionToExactCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	req TaskSessionAssociationRequest,
+	expectedCurrentSessionIDValue *runtimeids.SessionID,
+) error {
 	var (
-		bound int64
-		err   error
+		expectedCurrentSessionID sql.NullString
+		bound                    int64
+		err                      error
 	)
+	if expectedCurrentSessionIDValue != nil {
+		expectedCurrentSessionID = sql.NullString{
+			String: expectedCurrentSessionIDValue.String(),
+			Valid:  true,
+		}
+	}
 	if branchKey, branchScoped := req.CurrentNode.TransitionBranchKey(); branchScoped {
 		bound, err = q.BindSessionToBranchCurrentNode(ctx, sqlitegen.BindSessionToBranchCurrentNodeParams{
-			TaskID:              string(req.CurrentNode.TaskID),
-			NodeID:              string(req.CurrentNode.NodeID),
-			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
-			SessionID:           sql.NullString{String: req.SessionID.String(), Valid: true},
+			SessionID:                sql.NullString{String: req.SessionID.String(), Valid: true},
+			TaskID:                   string(req.CurrentNode.TaskID),
+			NodeID:                   string(req.CurrentNode.NodeID),
+			TransitionBranchKey:      sql.NullString{String: string(branchKey), Valid: true},
+			ExpectedCurrentSessionID: expectedCurrentSessionID,
 		})
 	} else {
 		bound, err = q.BindSessionToSerialCurrentNode(ctx, sqlitegen.BindSessionToSerialCurrentNodeParams{
-			TaskID:    string(req.CurrentNode.TaskID),
-			NodeID:    string(req.CurrentNode.NodeID),
-			SessionID: sql.NullString{String: req.SessionID.String(), Valid: true},
+			SessionID:                sql.NullString{String: req.SessionID.String(), Valid: true},
+			TaskID:                   string(req.CurrentNode.TaskID),
+			NodeID:                   string(req.CurrentNode.NodeID),
+			ExpectedCurrentSessionID: expectedCurrentSessionID,
 		})
 	}
 	if err != nil {

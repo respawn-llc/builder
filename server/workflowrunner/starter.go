@@ -40,7 +40,7 @@ const (
 
 type RuntimeStore interface {
 	ResolveCurrentNodeStartContext(context.Context, workflow.CurrentNodeReference) (workflowstore.CurrentNodeStartContext, error)
-	BindSessionToCurrentNode(context.Context, workflowstore.TaskSessionAssociationRequest) (workflowstore.TaskSessionAssociation, error)
+	BindSessionToCurrentNode(context.Context, workflowstore.CurrentNodeSessionBindingRequest) (workflowstore.TaskSessionAssociation, error)
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 }
 
@@ -138,8 +138,13 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 	if err != nil {
 		return cleanup(err)
 	}
-	if _, err := s.store.BindSessionToCurrentNode(ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID: plan.Descriptor.SessionID(), CurrentNode: input.CurrentNode.Reference, AssociatedAt: time.Now().UTC(),
+	if _, err := s.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    plan.Descriptor.SessionID(),
+			CurrentNode:  input.CurrentNode.Reference,
+			AssociatedAt: time.Now().UTC(),
+		},
+		ExpectedCurrentSessionID: input.SourceSessionID,
 	}); err != nil {
 		return cleanup(err)
 	}
