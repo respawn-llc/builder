@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/shared/serverapi"
 )
 
@@ -174,6 +175,7 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			TaskID:           row.TaskID,
 			TaskShortID:      row.ShortID,
 			TaskTitle:        row.Title,
+			Message:          workflowattention.ApprovalRequiredMessage,
 			ApprovalID:       &approvalID,
 			ApprovalSnapshot: &snapshot,
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
@@ -183,15 +185,26 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, err
 		}
+		var detailJSON *string
+		if row.InterruptionDetailJson.Valid {
+			value := strings.TrimSpace(row.InterruptionDetailJson.String)
+			if value == "" {
+				return serverapi.WorkflowAttentionItem{}, fmt.Errorf("interrupted attention candidate %q has blank interruption detail", row.ID)
+			}
+			detailJSON = &value
+		}
 		return serverapi.WorkflowAttentionItem{
 			ID:               row.ID,
-			Kind:             "interrupted",
+			Kind:             "interrupted_current_node",
 			ProjectID:        row.ProjectID,
 			WorkflowID:       row.WorkflowID,
 			TaskID:           row.TaskID,
 			TaskShortID:      row.ShortID,
 			TaskTitle:        row.Title,
+			Message:          workflowattention.InterruptedCurrentNodeMessage(row.InterruptionReason.String, row.InterruptionDetailJson.String),
 			CurrentNode:      &currentNode,
+			SessionID:        currentNode.SessionID,
+			DetailJSON:       detailJSON,
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
 		}, nil
 	default:
@@ -329,6 +342,7 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 					TaskID:                 task.ID,
 					TaskShortID:            task.ShortID,
 					TaskTitle:              task.Title,
+					Message:                question.message,
 					CurrentNode:            &currentNode,
 					SessionID:              &sessionID,
 					QuestionID:             &questionID,

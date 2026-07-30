@@ -599,12 +599,13 @@ func TestCompleteCurrentNodePreviousTargetOrNewContextUsesLatestAssociatedSessio
 }
 
 type reworkContextCompletionFixture struct {
-	ctx     context.Context
-	store   *Store
-	binding metadata.Binding
-	cfg     config.App
-	review  workflow.CurrentNode
-	audit   workflow.CurrentNode
+	ctx        context.Context
+	store      *Store
+	binding    metadata.Binding
+	cfg        config.App
+	workflowID workflow.WorkflowID
+	review     workflow.CurrentNode
+	audit      workflow.CurrentNode
 }
 
 func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.ContextSourceKind) reworkContextCompletionFixture {
@@ -658,12 +659,13 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 		t.Fatalf("CompleteCurrentNode review: %v", err)
 	}
 	return reworkContextCompletionFixture{
-		ctx:     ctx,
-		store:   store,
-		binding: binding,
-		cfg:     cfg,
-		review:  reviewResult.Mutation.Created[0],
-		audit:   auditResult.Mutation.Created[0],
+		ctx:        ctx,
+		store:      store,
+		binding:    binding,
+		cfg:        cfg,
+		workflowID: workflowID,
+		review:     reviewResult.Mutation.Created[0],
+		audit:      auditResult.Mutation.Created[0],
 	}
 }
 

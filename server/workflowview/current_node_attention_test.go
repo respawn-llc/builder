@@ -3,6 +3,7 @@ package workflowview
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 
 	interruptedFixture := newCurrentNodeViewFixture(t, false)
 	interruptedStarted := interruptedFixture.startTask(t, "Interrupted task")
+	interruptedSessionID := interruptedFixture.bindCurrentNodeSession(t, interruptedStarted)
 	if err := interruptedFixture.store.InterruptCurrentNode(
 		interruptedFixture.ctx,
 		interruptedStarted.currentNode,
@@ -54,6 +56,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		approval.ApprovalID == nil ||
 		*approval.ApprovalID != completed.PendingApproval.ID.String() ||
 		approval.ApprovalSnapshot == nil ||
+		strings.TrimSpace(approval.Message) == "" ||
 		approval.CurrentNode != nil {
 		t.Fatalf("approval attention item = %+v, want pending Approval identity", approval)
 	}
@@ -67,10 +70,17 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		t.Fatalf("interrupted attention = %+v, want one interrupted Current Node", interruptions.Items)
 	}
 	interrupted := interruptions.Items[0]
-	if interrupted.Kind != "interrupted" ||
+	if interrupted.Kind != "interrupted_current_node" ||
 		interrupted.TaskID != string(interruptedStarted.task.ID) ||
 		interrupted.CurrentNode == nil ||
 		interrupted.CurrentNode.NodeID != string(interruptedFixture.agentNodeID) ||
+		interrupted.CurrentNode.SessionID == nil ||
+		*interrupted.CurrentNode.SessionID != interruptedSessionID.String() ||
+		interrupted.SessionID == nil ||
+		*interrupted.SessionID != interruptedSessionID.String() ||
+		strings.TrimSpace(interrupted.Message) == "" ||
+		interrupted.DetailJSON == nil ||
+		strings.TrimSpace(*interrupted.DetailJSON) == "" ||
 		interrupted.ApprovalID != nil ||
 		interrupted.QuestionID != nil {
 		t.Fatalf("interrupted attention item = %+v, want Current Node identity", interrupted)
@@ -221,6 +231,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		taskAttention.Items[0].Kind != "question" ||
 		taskAttention.Items[0].QuestionID == nil ||
 		*taskAttention.Items[0].QuestionID != askID ||
+		taskAttention.Items[0].Message != request.Question ||
 		taskAttention.Items[0].SessionID == nil ||
 		*taskAttention.Items[0].SessionID != sessionID.String() ||
 		taskAttention.Items[0].CurrentNode == nil ||

@@ -472,30 +472,50 @@ HAVING COUNT(current_edge.id) != 1;
 
 CREATE TEMP TABLE migration_workflow_graph_edges (
     workflow_id TEXT NOT NULL,
-    source_node_id TEXT NOT NULL,
-    target_node_id TEXT NOT NULL,
     edge_id TEXT NOT NULL,
-    prompt_template TEXT NOT NULL
+    transition_key TEXT NOT NULL,
+    source_node_id TEXT NOT NULL,
+    source_node_key TEXT NOT NULL,
+    source_node_kind TEXT NOT NULL,
+    target_node_id TEXT NOT NULL,
+    target_node_key TEXT NOT NULL,
+    target_node_kind TEXT NOT NULL,
+    prompt_template TEXT NOT NULL,
+    parameters_json TEXT NOT NULL
 );
 
 INSERT INTO migration_workflow_graph_edges (
     workflow_id,
-    source_node_id,
-    target_node_id,
     edge_id,
-    prompt_template
+    transition_key,
+    source_node_id,
+    source_node_key,
+    source_node_kind,
+    target_node_id,
+    target_node_key,
+    target_node_kind,
+    prompt_template,
+    parameters_json
 )
 SELECT
     source_node.workflow_id,
-    transition_group.source_node_id,
-    edge.target_node_id,
     edge.id,
-    edge.prompt_template
+    transition_group.transition_id,
+    transition_group.source_node_id,
+    source_node.node_key,
+    source_node.kind,
+    edge.target_node_id,
+    target_node.node_key,
+    target_node.kind,
+    edge.prompt_template,
+    edge.parameters_json
 FROM workflow_edges edge
 JOIN workflow_transition_groups transition_group
     ON transition_group.id = edge.transition_group_id
 JOIN workflow_nodes source_node
-    ON source_node.id = transition_group.source_node_id;
+    ON source_node.id = transition_group.source_node_id
+JOIN workflow_nodes target_node
+    ON target_node.id = edge.target_node_id;
 
 CREATE INDEX migration_workflow_graph_edges_workflow_idx
     ON migration_workflow_graph_edges(workflow_id, edge_id);
@@ -505,10 +525,11 @@ CREATE TEMP TABLE migration_prior_value_candidates (
     parallel_batch_transition_id TEXT,
     transition_branch_key TEXT,
     node_key TEXT NOT NULL,
+    transition_key TEXT NOT NULL,
     output_values_json TEXT NOT NULL,
     applied_at_unix_ms INTEGER NOT NULL,
     created_at_unix_ms INTEGER NOT NULL,
-    transition_id TEXT NOT NULL
+    transition_record_id TEXT NOT NULL
 );
 
 INSERT INTO migration_prior_value_candidates (
@@ -516,16 +537,18 @@ INSERT INTO migration_prior_value_candidates (
     parallel_batch_transition_id,
     transition_branch_key,
     node_key,
+    transition_key,
     output_values_json,
     applied_at_unix_ms,
     created_at_unix_ms,
-    transition_id
+    transition_record_id
 )
 SELECT
     transition.task_id,
     source_placement.parallel_batch_transition_id,
     source_branch.edge_key,
     transition.source_node_key,
+    transition.transition_id,
     transition.output_values_json,
     transition.applied_at_unix_ms,
     transition.created_at_unix_ms,
@@ -535,7 +558,7 @@ LEFT JOIN task_node_placements source_placement
     ON source_placement.id = transition.source_placement_id
 LEFT JOIN workflow_edges source_branch
     ON source_branch.id = source_placement.parallel_branch_edge_id
-WHERE transition.state = 'applied'
+WHERE transition.state IN ('approved', 'applied')
   AND transition.applied_at_unix_ms IS NOT NULL;
 
 CREATE INDEX migration_prior_value_candidates_task_time_idx
@@ -575,26 +598,47 @@ SELECT
         placement.node_id,
         (
             SELECT COALESCE(json_group_array(json_object(
+                'edge_id', graph.edge_id,
+                'snapshot_priority', graph.snapshot_priority,
+                'transition_key', graph.transition_key,
                 'source_node_id', graph.source_node_id,
+                'source_node_key', graph.source_node_key,
+                'source_node_kind', graph.source_node_kind,
                 'target_node_id', graph.target_node_id,
-                'prompt_template', graph.prompt_template
+                'target_node_key', graph.target_node_key,
+                'target_node_kind', graph.target_node_kind,
+                'prompt_template', graph.prompt_template,
+                'parameters_json', graph.parameters_json
             )), '[]')
             FROM (
-                SELECT source_node_id, target_node_id, prompt_template
+                SELECT
+                    edge_id,
+                    transition_key,
+                    source_node_id,
+                    source_node_key,
+                    source_node_kind,
+                    target_node_id,
+                    target_node_key,
+                    target_node_kind,
+                    prompt_template,
+                    parameters_json,
+                    0 AS snapshot_priority
                 FROM migration_workflow_graph_edges
                 WHERE workflow_id = task.workflow_id
                 ORDER BY edge_id
             ) graph
         ),
         COALESCE(json_extract(value_run.metadata_json, '$.node_output_values'), '{}'),
+        COALESCE(json_extract(value_run.metadata_json, '$.prior_parameter_values'), '{}'),
         (
             SELECT COALESCE(json_group_array(json_object(
                 'scope', candidate.scope,
                 'node_key', candidate.node_key,
+                'transition_key', candidate.transition_key,
                 'output_values_json', candidate.output_values_json,
                 'applied_at_unix_ms', candidate.applied_at_unix_ms,
                 'created_at_unix_ms', candidate.created_at_unix_ms,
-                'transition_id', candidate.transition_id
+                'transition_record_id', candidate.transition_record_id
             )), '[]')
             FROM (
                 SELECT
@@ -606,10 +650,11 @@ SELECT
                         ELSE 'task'
                     END AS scope,
                     prior_transition.node_key,
+                    prior_transition.transition_key,
                     prior_transition.output_values_json,
                     prior_transition.applied_at_unix_ms,
                     prior_transition.created_at_unix_ms,
-                    prior_transition.transition_id
+                    prior_transition.transition_record_id
                 FROM migration_prior_value_candidates prior_transition
                 WHERE prior_transition.task_id = placement.task_id
                   AND prior_transition.applied_at_unix_ms <= COALESCE(
@@ -1432,32 +1477,65 @@ SELECT
         edge.target_node_id,
         (
             SELECT COALESCE(json_group_array(json_object(
+                'edge_id', graph.edge_id,
+                'snapshot_priority', graph.snapshot_priority,
+                'transition_key', graph.transition_key,
                 'source_node_id', graph.source_node_id,
+                'source_node_key', graph.source_node_key,
+                'source_node_kind', graph.source_node_kind,
                 'target_node_id', graph.target_node_id,
-                'prompt_template', graph.prompt_template
+                'target_node_key', graph.target_node_key,
+                'target_node_kind', graph.target_node_kind,
+                'prompt_template', graph.prompt_template,
+                'parameters_json', graph.parameters_json
             )), '[]')
             FROM (
-                SELECT source_node_id, target_node_id, prompt_template, edge_id
+                SELECT
+                    edge_id,
+                    transition_key,
+                    source_node_id,
+                    source_node_key,
+                    source_node_kind,
+                    target_node_id,
+                    target_node_key,
+                    target_node_kind,
+                    prompt_template,
+                    parameters_json,
+                    0 AS snapshot_priority
                 FROM migration_workflow_graph_edges
                 WHERE workflow_id = task.workflow_id
                 UNION ALL
                 SELECT
+                    COALESCE(NULLIF(edge.workflow_edge_id, ''), edge.id),
+                    transition.transition_id,
                     placement.node_id,
+                    transition.source_node_key,
+                    source_node.kind,
                     edge.target_node_id,
+                    edge.target_node_key,
+                    edge.target_node_kind,
                     COALESCE(json_extract(edge.metadata_json, '$.prompt_template'), ''),
-                    edge.id
-                ORDER BY edge_id
+                    COALESCE(json_extract(edge.metadata_json, '$.parameters'), '[]'),
+                    1
+                ORDER BY
+                    source_node_id,
+                    transition_key,
+                    target_node_id,
+                    snapshot_priority,
+                    edge_id
             ) graph
         ),
         COALESCE(json_extract(edge.metadata_json, '$.node_output_values'), '{}'),
+        COALESCE(json_extract(edge.metadata_json, '$.prior_parameter_values'), '{}'),
         (
             SELECT COALESCE(json_group_array(json_object(
                 'scope', candidate.scope,
                 'node_key', candidate.node_key,
+                'transition_key', candidate.transition_key,
                 'output_values_json', candidate.output_values_json,
                 'applied_at_unix_ms', candidate.applied_at_unix_ms,
                 'created_at_unix_ms', candidate.created_at_unix_ms,
-                'transition_id', candidate.transition_id
+                'transition_record_id', candidate.transition_record_id
             )), '[]')
             FROM (
                 SELECT
@@ -1469,13 +1547,26 @@ SELECT
                         ELSE 'task'
                     END AS scope,
                     prior_transition.node_key,
+                    prior_transition.transition_key,
                     prior_transition.output_values_json,
                     prior_transition.applied_at_unix_ms,
                     prior_transition.created_at_unix_ms,
-                    prior_transition.transition_id
+                    prior_transition.transition_record_id
                 FROM migration_prior_value_candidates prior_transition
                 WHERE prior_transition.task_id = transition.task_id
                   AND prior_transition.applied_at_unix_ms <= transition.created_at_unix_ms
+                UNION ALL
+                SELECT
+                    CASE
+                        WHEN source_branch.edge_key IS NOT NULL THEN 'branch'
+                        ELSE 'task'
+                    END,
+                    transition.source_node_key,
+                    transition.transition_id,
+                    transition.output_values_json,
+                    transition.created_at_unix_ms,
+                    transition.created_at_unix_ms,
+                    transition.id
             ) candidate
         )
     ),
@@ -1484,6 +1575,7 @@ FROM migration_pending_approval_ids migration
 JOIN task_transitions transition ON transition.id = migration.transition_id
 JOIN task_node_placements placement ON placement.id = transition.source_placement_id
 JOIN task_records task ON task.id = transition.task_id
+JOIN workflow_nodes source_node ON source_node.id = placement.node_id
 LEFT JOIN workflow_edges source_branch ON source_branch.id = placement.parallel_branch_edge_id
 JOIN task_transition_edges edge ON edge.task_transition_id = transition.id
 WHERE edge.state = 'pending';
@@ -1505,7 +1597,10 @@ SELECT
         'display_name', edge.target_node_display_name,
         'current_input_values', json(value_environment.current_input_values_json),
         'prior_node_values', json(value_environment.prior_node_values_json),
-        'session_id', json_extract(edge.metadata_json, '$.source_session_id'),
+        'session_id', CASE
+            WHEN edge.context_mode = 'new_session' THEN NULL
+            ELSE json_extract(edge.metadata_json, '$.source_session_id')
+        END,
         'scheduling_state', CASE
             WHEN edge.target_node_kind IN ('agent', 'script') THEN 'ready'
             ELSE NULL
@@ -1535,7 +1630,10 @@ SELECT
         'output_requirements', json(edge.output_requirements_json)
     ),
     json_object(
-        'session_id', json_extract(edge.metadata_json, '$.source_session_id')
+        'session_id', CASE
+            WHEN edge.context_mode = 'new_session' THEN NULL
+            ELSE json_extract(edge.metadata_json, '$.source_session_id')
+        END
     )
 FROM migration_pending_approval_ids migration
 JOIN task_transitions transition ON transition.id = migration.transition_id

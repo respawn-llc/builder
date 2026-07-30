@@ -589,13 +589,16 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 }
 
 func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
+	detailJSON := "{}"
 	return &serverapi.WorkflowAttentionItem{
 		ProjectID:   "project-1",
-		Kind:        "interrupted",
+		Kind:        "interrupted_current_node",
 		TaskID:      taskID,
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
 		WorkflowID:  "workflow-1",
+		Message:     "Current Node interrupted",
+		DetailJSON:  &detailJSON,
 		CurrentNode: &serverapi.WorkflowTaskCurrentNode{NodeID: "review"},
 	}
 }
@@ -608,6 +611,7 @@ func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
 		WorkflowID:  "workflow-1",
+		Message:     "Approval required",
 		ApprovalID:  workflowRemoteString("approval-1"),
 		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
 			SourceNodeDisplayName: "Review",

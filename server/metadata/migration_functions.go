@@ -32,7 +32,7 @@ func registerMetadataSQLiteFunctions() error {
 		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
 			migrationPriorNodeValuesFunction,
-			7,
+			8,
 			migrationPriorNodeValues,
 		)
 	})
@@ -43,23 +43,32 @@ func registerMetadataSQLiteFunctions() error {
 }
 
 type migrationGraphEdge struct {
-	SourceNodeID   string `json:"source_node_id"`
-	TargetNodeID   string `json:"target_node_id"`
-	PromptTemplate string `json:"prompt_template"`
+	EdgeID           string `json:"edge_id"`
+	SnapshotPriority int    `json:"snapshot_priority"`
+	TransitionKey    string `json:"transition_key"`
+	SourceNodeID     string `json:"source_node_id"`
+	SourceNodeKey    string `json:"source_node_key"`
+	SourceNodeKind   string `json:"source_node_kind"`
+	TargetNodeID     string `json:"target_node_id"`
+	TargetNodeKey    string `json:"target_node_key"`
+	TargetNodeKind   string `json:"target_node_kind"`
+	PromptTemplate   string `json:"prompt_template"`
+	ParametersJSON   string `json:"parameters_json"`
 }
 
 type migrationPriorValueCandidate struct {
-	Scope            string `json:"scope"`
-	NodeKey          string `json:"node_key"`
-	OutputValuesJSON string `json:"output_values_json"`
-	AppliedAtUnixMs  int64  `json:"applied_at_unix_ms"`
-	CreatedAtUnixMs  int64  `json:"created_at_unix_ms"`
-	TransitionID     string `json:"transition_id"`
+	Scope              string `json:"scope"`
+	NodeKey            string `json:"node_key"`
+	TransitionKey      string `json:"transition_key"`
+	OutputValuesJSON   string `json:"output_values_json"`
+	AppliedAtUnixMs    int64  `json:"applied_at_unix_ms"`
+	CreatedAtUnixMs    int64  `json:"created_at_unix_ms"`
+	TransitionRecordID string `json:"transition_record_id"`
 }
 
 func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
-	if len(args) != 7 {
-		return nil, fmt.Errorf("%s requires 7 arguments", migrationPriorNodeValuesFunction)
+	if len(args) != 8 {
+		return nil, fmt.Errorf("%s requires 8 arguments", migrationPriorNodeValuesFunction)
 	}
 	taskID, err := migrationStringArgument(args[0], "task id")
 	if err != nil {
@@ -91,15 +100,19 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	if err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
-	frozenJSON, err := migrationStringArgument(args[5], "frozen prior-node values")
+	frozenNodeJSON, err := migrationStringArgument(args[5], "frozen prior-node values")
 	if err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
-	frozen := map[string]map[string]string{}
-	if err := json.Unmarshal([]byte(frozenJSON), &frozen); err != nil {
-		return nil, fmt.Errorf("prior-node migration failure: %s: decode frozen values: %w", context, err)
+	frozenParameterJSON, err := migrationStringArgument(args[6], "frozen prior-parameter values")
+	if err != nil {
+		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
-	candidatesJSON, err := migrationStringArgument(args[6], "prior-node candidates")
+	frozen, err := migrationFrozenPriorValues(context, frozenNodeJSON, frozenParameterJSON)
+	if err != nil {
+		return nil, err
+	}
+	candidatesJSON, err := migrationStringArgument(args[7], "prior-node candidates")
 	if err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
@@ -107,33 +120,17 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	if err := json.Unmarshal([]byte(candidatesJSON), &candidates); err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: decode candidates: %w", context, err)
 	}
-	values := make(map[string]map[string]string, len(frozen))
-	for nodeKey, outputValues := range frozen {
-		trimmedNodeKey := strings.TrimSpace(nodeKey)
-		if trimmedNodeKey == "" {
-			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=<blank>: frozen node key is required", context)
-		}
-		if len(outputValues) == 0 {
-			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: frozen node values are empty", context, trimmedNodeKey)
-		}
-		values[trimmedNodeKey] = make(map[string]string, len(outputValues))
-		for outputName, value := range outputValues {
-			trimmedOutputName := strings.TrimSpace(outputName)
-			if trimmedOutputName == "" {
-				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s.<blank>: frozen output name is required", context, trimmedNodeKey)
-			}
-			values[trimmedNodeKey][trimmedOutputName] = value
-		}
-	}
+	values := frozen
 	for _, requirement := range requirements {
-		nodeKey := strings.TrimSpace(string(requirement.NodeKey))
+		namespace := strings.TrimSpace(string(requirement.Namespace))
+		providerNodeKey := strings.TrimSpace(string(requirement.ProviderNodeKey))
 		outputName := strings.TrimSpace(requirement.OutputName)
-		valueKey := nodeKey + "." + outputName
-		candidate, candidateFound, candidateErr := migrationLatestPriorNodeCandidate(branch != "", nodeKey, outputName, candidates)
+		valueKey := namespace + "." + outputName
+		candidate, candidateFound, candidateErr := migrationLatestPriorNodeCandidate(branch != "", requirement, candidates)
 		if candidateErr != nil {
 			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: %w", context, valueKey, candidateErr)
 		}
-		frozenValue, frozenFound := frozen[nodeKey][outputName]
+		frozenValue, frozenFound := frozen[namespace][outputName]
 		if frozenFound {
 			if candidateFound && candidate != frozenValue {
 				return nil, fmt.Errorf(
@@ -142,19 +139,29 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 					valueKey,
 				)
 			}
-			if values[nodeKey] == nil {
-				values[nodeKey] = make(map[string]string)
+			if values[namespace] == nil {
+				values[namespace] = make(map[string]string)
 			}
-			values[nodeKey][outputName] = frozenValue
+			values[namespace][outputName] = frozenValue
 			continue
 		}
 		if !candidateFound {
-			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: required value is missing", context, valueKey)
+			providerTransitionKey := ""
+			if requirement.ProviderTransitionKey != nil {
+				providerTransitionKey = string(*requirement.ProviderTransitionKey)
+			}
+			return nil, fmt.Errorf(
+				"prior-node migration failure: %s, value_key=%s, provider_node_key=%s, provider_transition_key=%s: required value is missing",
+				context,
+				valueKey,
+				providerNodeKey,
+				providerTransitionKey,
+			)
 		}
-		if values[nodeKey] == nil {
-			values[nodeKey] = make(map[string]string)
+		if values[namespace] == nil {
+			values[namespace] = make(map[string]string)
 		}
-		values[nodeKey][outputName] = candidate
+		values[namespace][outputName] = candidate
 	}
 	encoded, err := json.Marshal(values)
 	if err != nil {
@@ -163,90 +170,195 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	return string(encoded), nil
 }
 
-func migrationPriorNodeRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorNodeValueRequirement, error) {
-	outgoing := make(map[string][]string)
-	requirementsByTarget := make(map[string][]workflow.PriorNodeValueRequirement)
-	for _, edge := range graph {
-		sourceNodeID := strings.TrimSpace(edge.SourceNodeID)
-		targetNodeID := strings.TrimSpace(edge.TargetNodeID)
-		if sourceNodeID == "" || targetNodeID == "" {
-			return nil, errors.New("workflow graph edge has a blank node id")
+func migrationFrozenPriorValues(context string, frozenSources ...string) (map[string]map[string]string, error) {
+	values := map[string]map[string]string{}
+	for _, frozenJSON := range frozenSources {
+		frozen := map[string]map[string]string{}
+		if err := json.Unmarshal([]byte(frozenJSON), &frozen); err != nil {
+			return nil, fmt.Errorf("prior-node migration failure: %s: decode frozen values: %w", context, err)
 		}
-		outgoing[sourceNodeID] = append(outgoing[sourceNodeID], targetNodeID)
+		for namespace, outputValues := range frozen {
+			trimmedNamespace := strings.TrimSpace(namespace)
+			if trimmedNamespace == "" {
+				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=<blank>: frozen node key is required", context)
+			}
+			if len(outputValues) == 0 {
+				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: frozen node values are empty", context, trimmedNamespace)
+			}
+			if values[trimmedNamespace] == nil {
+				values[trimmedNamespace] = make(map[string]string, len(outputValues))
+			}
+			for outputName, value := range outputValues {
+				trimmedOutputName := strings.TrimSpace(outputName)
+				if trimmedOutputName == "" {
+					return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s.<blank>: frozen output name is required", context, trimmedNamespace)
+				}
+				if existing, exists := values[trimmedNamespace][trimmedOutputName]; exists && existing != value {
+					return nil, fmt.Errorf(
+						"prior-node migration failure: %s, value_key=%s.%s: frozen value sources conflict",
+						context,
+						trimmedNamespace,
+						trimmedOutputName,
+					)
+				}
+				values[trimmedNamespace][trimmedOutputName] = value
+			}
+		}
+	}
+	return values, nil
+}
+
+func migrationPriorNodeRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorNodeValueRequirement, error) {
+	definition, err := migrationWorkflowDefinition(graph)
+	if err != nil {
+		return nil, err
+	}
+	return workflow.DeriveWiring(definition).PriorNodeValueRequirementsForNode(workflow.NodeID(currentNodeID)), nil
+}
+
+func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
+	const migrationWorkflowID workflow.WorkflowID = "migration-workflow"
+	graphByEdgeID := make(map[string]migrationGraphEdge, len(graph))
+	for _, edge := range graph {
+		edgeID := strings.TrimSpace(edge.EdgeID)
+		if edgeID == "" {
+			return workflow.Definition{}, errors.New("workflow graph edge id is blank")
+		}
+		existing, exists := graphByEdgeID[edgeID]
+		if !exists || edge.SnapshotPriority > existing.SnapshotPriority {
+			graphByEdgeID[edgeID] = edge
+			continue
+		}
+		if edge.SnapshotPriority == existing.SnapshotPriority && edge != existing {
+			return workflow.Definition{}, fmt.Errorf("workflow graph edge %q has conflicting snapshots", edgeID)
+		}
+	}
+	edgeIDs := make([]string, 0, len(graphByEdgeID))
+	for edgeID := range graphByEdgeID {
+		edgeIDs = append(edgeIDs, edgeID)
+	}
+	sort.Strings(edgeIDs)
+	nodesByID := make(map[workflow.NodeID]workflow.Node)
+	groupsBySemanticKey := make(map[string]workflow.TransitionGroup)
+	edges := make([]workflow.Edge, 0, len(edgeIDs))
+	for _, selectedEdgeID := range edgeIDs {
+		edge := graphByEdgeID[selectedEdgeID]
+		sourceNodeID := strings.TrimSpace(edge.SourceNodeID)
+		sourceNodeKey := strings.TrimSpace(edge.SourceNodeKey)
+		sourceNodeKind := workflow.NodeKind(strings.TrimSpace(edge.SourceNodeKind))
+		targetNodeID := strings.TrimSpace(edge.TargetNodeID)
+		targetNodeKey := strings.TrimSpace(edge.TargetNodeKey)
+		targetNodeKind := workflow.NodeKind(strings.TrimSpace(edge.TargetNodeKind))
+		transitionKey := strings.TrimSpace(edge.TransitionKey)
+		edgeID := strings.TrimSpace(edge.EdgeID)
+		if sourceNodeID == "" || sourceNodeKey == "" || targetNodeID == "" || targetNodeKey == "" {
+			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete node")
+		}
+		if transitionKey == "" || edgeID == "" {
+			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete transition")
+		}
+		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, sourceNodeID, sourceNodeKey, sourceNodeKind); err != nil {
+			return workflow.Definition{}, err
+		}
+		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, targetNodeID, targetNodeKey, targetNodeKind); err != nil {
+			return workflow.Definition{}, err
+		}
 		refs, err := workflow.ExtractPromptTemplateReferences(edge.PromptTemplate)
 		if err != nil {
-			return nil, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
+			return workflow.Definition{}, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
 		}
 		if len(refs.Invalid) != 0 {
-			return nil, fmt.Errorf("prompt for edge %s -> %s has invalid reference %q", sourceNodeID, targetNodeID, refs.Invalid[0].Placeholder)
+			return workflow.Definition{}, fmt.Errorf("prompt for edge %s -> %s has invalid reference %q", sourceNodeID, targetNodeID, refs.Invalid[0].Placeholder)
 		}
-		for _, ref := range refs.PriorNodes {
-			requirement := workflow.PriorNodeValueRequirement{
-				NodeKey:    workflow.ModelKey(strings.TrimSpace(string(ref.NodeKey))),
-				OutputName: strings.TrimSpace(ref.OutputName),
+		parameters := []workflow.Parameter{}
+		if err := json.Unmarshal([]byte(edge.ParametersJSON), &parameters); err != nil {
+			return workflow.Definition{}, fmt.Errorf("decode parameters for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
+		}
+		groupSemanticKey := sourceNodeID + "\x00" + transitionKey
+		group, exists := groupsBySemanticKey[groupSemanticKey]
+		if !exists {
+			group = workflow.TransitionGroup{
+				WorkflowID:   migrationWorkflowID,
+				ID:           workflow.TransitionGroupID(groupSemanticKey),
+				SourceNodeID: workflow.NodeID(sourceNodeID),
+				TransitionID: workflow.TransitionID(transitionKey),
 			}
-			if requirement.NodeKey == "" || requirement.OutputName == "" {
-				return nil, fmt.Errorf("prompt for edge %s -> %s has an incomplete prior-node reference", sourceNodeID, targetNodeID)
-			}
-			requirementsByTarget[targetNodeID] = append(requirementsByTarget[targetNodeID], requirement)
+			groupsBySemanticKey[groupSemanticKey] = group
 		}
+		edges = append(edges, workflow.Edge{
+			WorkflowID:        migrationWorkflowID,
+			ID:                workflow.EdgeID(edgeID),
+			TransitionGroupID: group.ID,
+			TargetNodeID:      workflow.NodeID(targetNodeID),
+			PromptTemplate:    edge.PromptTemplate,
+			Parameters:        parameters,
+		})
 	}
-	reachable := make(map[string]struct{})
-	stack := []string{strings.TrimSpace(currentNodeID)}
-	for len(stack) != 0 {
-		nodeID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if nodeID == "" {
-			return nil, errors.New("current node id is blank")
-		}
-		if _, seen := reachable[nodeID]; seen {
-			continue
-		}
-		reachable[nodeID] = struct{}{}
-		stack = append(stack, outgoing[nodeID]...)
+	nodeIDs := make([]string, 0, len(nodesByID))
+	for nodeID := range nodesByID {
+		nodeIDs = append(nodeIDs, string(nodeID))
 	}
-	seen := make(map[workflow.PriorNodeValueRequirement]struct{})
-	requirements := make([]workflow.PriorNodeValueRequirement, 0)
-	for targetNodeID, targetRequirements := range requirementsByTarget {
-		if _, required := reachable[targetNodeID]; !required {
-			continue
-		}
-		for _, requirement := range targetRequirements {
-			if _, duplicate := seen[requirement]; duplicate {
-				continue
-			}
-			seen[requirement] = struct{}{}
-			requirements = append(requirements, requirement)
-		}
+	sort.Strings(nodeIDs)
+	nodes := make([]workflow.Node, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		nodes = append(nodes, nodesByID[workflow.NodeID(nodeID)])
 	}
-	sort.Slice(requirements, func(left, right int) bool {
-		leftNodeKey := string(requirements[left].NodeKey)
-		rightNodeKey := string(requirements[right].NodeKey)
-		if leftNodeKey != rightNodeKey {
-			return leftNodeKey < rightNodeKey
+	groups := make([]workflow.TransitionGroup, 0, len(groupsBySemanticKey))
+	for _, group := range groupsBySemanticKey {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(left, right int) bool { return groups[left].ID < groups[right].ID })
+	return workflow.Definition{
+		ID:               migrationWorkflowID,
+		Nodes:            nodes,
+		TransitionGroups: groups,
+		Edges:            edges,
+	}, nil
+}
+
+func addMigrationWorkflowNode(
+	nodesByID map[workflow.NodeID]workflow.Node,
+	workflowID workflow.WorkflowID,
+	nodeID string,
+	nodeKey string,
+	kind workflow.NodeKind,
+) error {
+	id := workflow.NodeID(nodeID)
+	if existing, exists := nodesByID[id]; exists {
+		if workflow.NodeKey(existing) != workflow.ModelKey(nodeKey) || existing.Kind() != kind {
+			return fmt.Errorf("workflow graph node %q has conflicting identity", nodeID)
 		}
-		return requirements[left].OutputName < requirements[right].OutputName
-	})
-	return requirements, nil
+		return nil
+	}
+	node, err := workflow.NewNode(
+		workflow.NodeIdentity{WorkflowID: workflowID, ID: id, Key: workflow.ModelKey(nodeKey), DisplayName: nodeKey},
+		kind,
+		workflow.NodeFields{},
+	)
+	if err != nil {
+		return fmt.Errorf("decode workflow graph node %q: %w", nodeID, err)
+	}
+	nodesByID[id] = node
+	return nil
 }
 
 func migrationLatestPriorNodeCandidate(
 	branchScoped bool,
-	nodeKey string,
-	outputName string,
+	requirement workflow.PriorNodeValueRequirement,
 	candidates []migrationPriorValueCandidate,
 ) (string, bool, error) {
+	outputName := strings.TrimSpace(requirement.OutputName)
 	for _, scope := range migrationPriorCandidateScopes(branchScoped) {
 		var selected *migrationPriorValueCandidate
 		var selectedValue string
 		for index := range candidates {
 			candidate := &candidates[index]
-			if candidate.Scope != scope || strings.TrimSpace(candidate.NodeKey) != nodeKey {
+			if candidate.Scope != scope || !migrationCandidateProvidesRequirement(*candidate, requirement) {
 				continue
 			}
 			outputs := map[string]string{}
 			if err := json.Unmarshal([]byte(candidate.OutputValuesJSON), &outputs); err != nil {
-				return "", false, fmt.Errorf("transition %q has malformed output values: %w", candidate.TransitionID, err)
+				return "", false, fmt.Errorf("transition %q has malformed output values: %w", candidate.TransitionRecordID, err)
 			}
 			value, exists := outputs[outputName]
 			if !exists {
@@ -263,8 +375,8 @@ func migrationLatestPriorNodeCandidate(
 				candidate.CreatedAtUnixMs == selected.CreatedAtUnixMs {
 				return "", false, fmt.Errorf(
 					"transitions %q and %q have an ordering tie",
-					selected.TransitionID,
-					candidate.TransitionID,
+					selected.TransitionRecordID,
+					candidate.TransitionRecordID,
 				)
 			}
 		}
@@ -273,6 +385,13 @@ func migrationLatestPriorNodeCandidate(
 		}
 	}
 	return "", false, nil
+}
+
+func migrationCandidateProvidesRequirement(candidate migrationPriorValueCandidate, requirement workflow.PriorNodeValueRequirement) bool {
+	if requirement.ProviderTransitionKey != nil {
+		return strings.TrimSpace(candidate.TransitionKey) == strings.TrimSpace(string(*requirement.ProviderTransitionKey))
+	}
+	return strings.TrimSpace(candidate.NodeKey) == strings.TrimSpace(string(requirement.ProviderNodeKey))
 }
 
 func migrationPriorCandidateScopes(branchScoped bool) []string {

@@ -865,31 +865,27 @@ func (s *validationState) validatePriorParameterReference(edge Edge, param Promp
 		return
 	}
 	consumer := s.priorParameterConsumerName(edge)
-	matchedAny := false
-	guaranteed := []TransitionGroup{}
-	for _, group := range s.def.TransitionGroups {
-		if strings.TrimSpace(string(group.TransitionID)) != transitionKey {
-			continue
-		}
-		matchedAny = true
-		if s.transitionGroupDominates(group.ID, NodeIDOf(source)) {
-			guaranteed = append(guaranteed, group)
-		}
-	}
+	resolution := resolvePriorParameterTransitionGroups(
+		s.def.TransitionGroups,
+		ModelKey(transitionKey),
+		NodeIDOf(source),
+		NodeIDOf(s.startNodes[0]),
+		s.outgoingByNode,
+	)
 	switch {
-	case !matchedAny:
+	case resolution.matched == 0:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but no %q transition exists in this workflow. Check the transition key for a typo, or define the transition that produces it.",
 			consumer, parameterKey, transitionKey, transitionKey), ref)
-	case len(guaranteed) == 0:
+	case len(resolution.guaranteed) == 0:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but %q is not guaranteed to run before %s: another branch can reach %s without it. Reference a parameter that every incoming branch provides, or remove the bypassing branch.",
 			consumer, parameterKey, transitionKey, transitionKey, consumer, consumer), ref)
-	case len(guaranteed) > 1:
+	case len(resolution.guaranteed) > 1:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but more than one %q transition can run before %s. Give the producing transitions distinct keys and reference one.",
 			consumer, parameterKey, transitionKey, transitionKey, consumer), ref)
-	case !s.transitionGroupParameterSet(guaranteed[0].ID, derived)[parameterKey]:
+	case !s.transitionGroupParameterSet(resolution.guaranteed[0].ID, derived)[parameterKey]:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but transition %q does not declare a %q parameter.",
 			consumer, parameterKey, transitionKey, transitionKey, parameterKey), ref)
@@ -932,68 +928,11 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 	return out
 }
 
-func (s *validationState) transitionGroupDominates(groupID TransitionGroupID, target NodeID) bool {
-	if len(s.startNodes) != 1 {
-		return false
-	}
-	if !s.reachableFrom(NodeIDOf(s.startNodes[0]))[target] {
-		return false
-	}
-	visited := map[NodeID]bool{}
-	stack := []NodeID{NodeIDOf(s.startNodes[0])}
-	for len(stack) > 0 {
-		nodeID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if visited[nodeID] {
-			continue
-		}
-		if nodeID == target {
-			return false
-		}
-		visited[nodeID] = true
-		for _, edge := range s.outgoingByNode[nodeID] {
-			if edge.TransitionGroupID == groupID {
-				continue
-			}
-			if !visited[edge.TargetNodeID] {
-				stack = append(stack, edge.TargetNodeID)
-			}
-		}
-	}
-	return true
-}
-
 func (s *validationState) nodeDominates(candidate NodeID, target NodeID) bool {
-	if candidate == target {
-		return true
-	}
 	if len(s.startNodes) != 1 {
 		return false
 	}
-	reachableWithoutCandidate := s.reachableFromSkipping(NodeIDOf(s.startNodes[0]), candidate)
-	return !reachableWithoutCandidate[target]
-}
-
-func (s *validationState) reachableFromSkipping(start NodeID, skip NodeID) map[NodeID]bool {
-	visited := map[NodeID]bool{}
-	if start == skip {
-		return visited
-	}
-	stack := []NodeID{start}
-	for len(stack) > 0 {
-		nodeID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if visited[nodeID] || nodeID == skip {
-			continue
-		}
-		visited[nodeID] = true
-		for _, edge := range s.outgoingByNode[nodeID] {
-			if !visited[edge.TargetNodeID] && edge.TargetNodeID != skip {
-				stack = append(stack, edge.TargetNodeID)
-			}
-		}
-	}
-	return visited
+	return nodeDominatesFromStart(NodeIDOf(s.startNodes[0]), candidate, target, s.outgoingByNode)
 }
 
 func (s *validationState) reachableFrom(start NodeID) map[NodeID]bool {

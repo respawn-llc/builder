@@ -302,7 +302,7 @@ INSERT INTO task_transition_edges (
     1,
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]',
-    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"node_output_values":{"plan":{"summary":"frozen plan"}}}'
+    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"source_session_id":"550e8400-e29b-41d4-a716-446655440002","node_output_values":{"plan":{"summary":"frozen plan"}}}'
 )`)
 	execSeed(t, db, "conflicting active terminal placement", workflowSeedPlacementSQL,
 		"placement-pending-approval-terminal",

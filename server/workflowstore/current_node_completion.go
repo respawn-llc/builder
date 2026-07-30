@@ -461,13 +461,14 @@ func materializeCompletionTargetCurrentNode(
 	priorNodeValues := make(map[string]map[string]string)
 	sourceKey := string(workflow.NodeKey(source))
 	for _, requirement := range wiring.PriorNodeValueRequirementsForNode(workflow.NodeIDOf(target)) {
-		nodeKey := string(requirement.NodeKey)
+		namespace := string(requirement.Namespace)
+		providerNodeKey := string(requirement.ProviderNodeKey)
 		var value string
 		var exists bool
-		if nodeKey == sourceKey {
+		if providerNodeKey == sourceKey {
 			value, exists = outputValues[requirement.OutputName]
 		} else {
-			value, exists = currentSource.PriorNodeValues[nodeKey][requirement.OutputName]
+			value, exists = currentSource.PriorNodeValues[namespace][requirement.OutputName]
 		}
 		if !exists {
 			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
@@ -476,10 +477,10 @@ func materializeCompletionTargetCurrentNode(
 				Message: "required prior-node output is missing",
 			}}}
 		}
-		if priorNodeValues[nodeKey] == nil {
-			priorNodeValues[nodeKey] = make(map[string]string)
+		if priorNodeValues[namespace] == nil {
+			priorNodeValues[namespace] = make(map[string]string)
 		}
-		priorNodeValues[nodeKey][requirement.OutputName] = value
+		priorNodeValues[namespace][requirement.OutputName] = value
 	}
 	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource)
 	if err != nil {

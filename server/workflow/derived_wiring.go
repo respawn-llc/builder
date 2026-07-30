@@ -20,8 +20,21 @@ type DerivedWiring struct {
 }
 
 type PriorNodeValueRequirement struct {
-	NodeKey    ModelKey
-	OutputName string
+	Namespace             ModelKey
+	ProviderNodeKey       ModelKey
+	ProviderTransitionKey *ModelKey
+	OutputName            string
+}
+
+type priorParameterTransitionResolution struct {
+	matched    int
+	guaranteed []TransitionGroup
+}
+
+type derivedPriorValueRequirement struct {
+	value                     PriorNodeValueRequirement
+	providerNodeID            NodeID
+	providerTransitionGroupID *TransitionGroupID
 }
 
 func DeriveWiring(def Definition) DerivedWiring {
@@ -219,7 +232,12 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 	groupsByID map[TransitionGroupID]TransitionGroup,
 	outgoingByNode map[NodeID][]Edge,
 ) {
-	priorRequirementsByPromptNode := make(map[NodeID][]PriorNodeValueRequirement, len(nodesByID))
+	startNodeID, hasSingleStart := singleStartNodeID(def.Nodes)
+	nodeIDsByKey := make(map[ModelKey]NodeID, len(nodesByID))
+	for nodeID, node := range nodesByID {
+		nodeIDsByKey[NodeKey(node)] = nodeID
+	}
+	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorValueRequirement, len(nodesByID))
 	for _, edge := range def.Edges {
 		target, targetExists := nodesByID[edge.TargetNodeID]
 		if !targetExists {
@@ -250,16 +268,79 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 			if nodeKey == "" || outputName == "" {
 				continue
 			}
-			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniquePriorNodeValueRequirements(
+			providerNodeID, providerExists := nodeIDsByKey[nodeKey]
+			if !providerExists {
+				continue
+			}
+			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniqueDerivedPriorValueRequirements(
 				priorRequirementsByPromptNode[edge.TargetNodeID],
-				[]PriorNodeValueRequirement{{NodeKey: nodeKey, OutputName: outputName}},
+				[]derivedPriorValueRequirement{{
+					value: PriorNodeValueRequirement{
+						Namespace:       nodeKey,
+						ProviderNodeKey: nodeKey,
+						OutputName:      outputName,
+					},
+					providerNodeID: providerNodeID,
+				}},
+			)
+		}
+		consumerGroup, consumerGroupExists := groupsByID[edge.TransitionGroupID]
+		if !consumerGroupExists {
+			continue
+		}
+		if !hasSingleStart {
+			continue
+		}
+		for _, priorParam := range refs.PriorParams {
+			transitionKey := ModelKey(strings.TrimSpace(string(priorParam.TransitionKey)))
+			outputName := strings.TrimSpace(priorParam.ParameterKey)
+			if transitionKey == "" || outputName == "" {
+				continue
+			}
+			resolution := resolvePriorParameterTransitionGroups(
+				def.TransitionGroups,
+				transitionKey,
+				consumerGroup.SourceNodeID,
+				startNodeID,
+				outgoingByNode,
+			)
+			if len(resolution.guaranteed) != 1 {
+				continue
+			}
+			provider, providerExists := nodesByID[resolution.guaranteed[0].SourceNodeID]
+			if !providerExists {
+				continue
+			}
+			providerNodeKey := NodeKey(provider)
+			if providerNodeKey == "" {
+				continue
+			}
+			providerTransitionGroupID := resolution.guaranteed[0].ID
+			providerTransitionKey := transitionKey
+			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniqueDerivedPriorValueRequirements(
+				priorRequirementsByPromptNode[edge.TargetNodeID],
+				[]derivedPriorValueRequirement{{
+					value: PriorNodeValueRequirement{
+						Namespace:             transitionKey,
+						ProviderNodeKey:       providerNodeKey,
+						ProviderTransitionKey: &providerTransitionKey,
+						OutputName:            outputName,
+					},
+					providerNodeID:            resolution.guaranteed[0].SourceNodeID,
+					providerTransitionGroupID: &providerTransitionGroupID,
+				}},
 			)
 		}
 	}
 	for nodeID := range nodesByID {
 		requirements := []PriorNodeValueRequirement{}
 		for reachableNodeID := range reachableNodeIDs(nodeID, outgoingByNode) {
-			requirements = appendUniquePriorNodeValueRequirements(requirements, priorRequirementsByPromptNode[reachableNodeID])
+			for _, requirement := range priorRequirementsByPromptNode[reachableNodeID] {
+				if !priorValueAvailableAtNode(requirement, nodeID, startNodeID, outgoingByNode) {
+					continue
+				}
+				requirements = appendUniquePriorNodeValueRequirements(requirements, []PriorNodeValueRequirement{requirement.value})
+			}
 		}
 		w.priorNodeValueRequirementsByNode[nodeID] = requirements
 	}
@@ -274,7 +355,7 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 				continue
 			}
 			for _, requirement := range w.priorNodeValueRequirementsByNode[edge.TargetNodeID] {
-				if requirement.NodeKey != sourceKey {
+				if requirement.ProviderNodeKey != sourceKey {
 					continue
 				}
 				field, exists := outputFieldByName(NodeOutputFields(source), requirement.OutputName)
@@ -285,6 +366,125 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 			}
 		}
 	}
+}
+
+func priorValueAvailableAtNode(
+	requirement derivedPriorValueRequirement,
+	nodeID NodeID,
+	startNodeID NodeID,
+	outgoingByNode map[NodeID][]Edge,
+) bool {
+	if requirement.providerTransitionGroupID != nil {
+		return transitionGroupDominates(startNodeID, *requirement.providerTransitionGroupID, nodeID, outgoingByNode)
+	}
+	return nodeID != requirement.providerNodeID &&
+		nodeDominatesFromStart(startNodeID, requirement.providerNodeID, nodeID, outgoingByNode)
+}
+
+func singleStartNodeID(nodes []Node) (NodeID, bool) {
+	var start NodeID
+	for _, node := range nodes {
+		if node.Kind() != NodeKindStart {
+			continue
+		}
+		if start != "" {
+			return "", false
+		}
+		start = NodeIDOf(node)
+	}
+	return start, start != ""
+}
+
+func resolvePriorParameterTransitionGroups(
+	groups []TransitionGroup,
+	transitionKey ModelKey,
+	consumerSourceNodeID NodeID,
+	startNodeID NodeID,
+	outgoingByNode map[NodeID][]Edge,
+) priorParameterTransitionResolution {
+	resolution := priorParameterTransitionResolution{}
+	for _, group := range groups {
+		if strings.TrimSpace(string(group.TransitionID)) != strings.TrimSpace(string(transitionKey)) {
+			continue
+		}
+		resolution.matched++
+		if transitionGroupDominates(startNodeID, group.ID, consumerSourceNodeID, outgoingByNode) {
+			resolution.guaranteed = append(resolution.guaranteed, group)
+		}
+	}
+	return resolution
+}
+
+func transitionGroupDominates(
+	startNodeID NodeID,
+	groupID TransitionGroupID,
+	targetNodeID NodeID,
+	outgoingByNode map[NodeID][]Edge,
+) bool {
+	if startNodeID == "" {
+		return false
+	}
+	if _, reachable := reachableNodeIDs(startNodeID, outgoingByNode)[targetNodeID]; !reachable {
+		return false
+	}
+	visited := map[NodeID]bool{}
+	stack := []NodeID{startNodeID}
+	for len(stack) > 0 {
+		nodeID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[nodeID] {
+			continue
+		}
+		if nodeID == targetNodeID {
+			return false
+		}
+		visited[nodeID] = true
+		for _, edge := range outgoingByNode[nodeID] {
+			if edge.TransitionGroupID == groupID {
+				continue
+			}
+			if !visited[edge.TargetNodeID] {
+				stack = append(stack, edge.TargetNodeID)
+			}
+		}
+	}
+	return true
+}
+
+func nodeDominatesFromStart(
+	startNodeID NodeID,
+	candidateNodeID NodeID,
+	targetNodeID NodeID,
+	outgoingByNode map[NodeID][]Edge,
+) bool {
+	if candidateNodeID == targetNodeID {
+		return true
+	}
+	if startNodeID == "" {
+		return false
+	}
+	if _, reachable := reachableNodeIDs(startNodeID, outgoingByNode)[targetNodeID]; !reachable {
+		return false
+	}
+	visited := map[NodeID]bool{}
+	if startNodeID == candidateNodeID {
+		return true
+	}
+	stack := []NodeID{startNodeID}
+	for len(stack) > 0 {
+		nodeID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[nodeID] || nodeID == candidateNodeID {
+			continue
+		}
+		visited[nodeID] = true
+		for _, edge := range outgoingByNode[nodeID] {
+			if !visited[edge.TargetNodeID] && edge.TargetNodeID != candidateNodeID {
+				stack = append(stack, edge.TargetNodeID)
+			}
+		}
+	}
+	return !visited[targetNodeID]
 }
 
 func (w *DerivedWiring) addCurrentNodeOutputField(groupID TransitionGroupID, field OutputField) {
@@ -352,6 +552,33 @@ func appendUniquePriorNodeValueRequirements(existing []PriorNodeValueRequirement
 		out = append(out, requirement)
 	}
 	return out
+}
+
+func appendUniqueDerivedPriorValueRequirements(existing []derivedPriorValueRequirement, additions []derivedPriorValueRequirement) []derivedPriorValueRequirement {
+	out := append([]derivedPriorValueRequirement(nil), existing...)
+	for _, addition := range additions {
+		duplicate := false
+		for _, current := range out {
+			if current.value != addition.value ||
+				current.providerNodeID != addition.providerNodeID ||
+				!optionalTransitionGroupIDsEqual(current.providerTransitionGroupID, addition.providerTransitionGroupID) {
+				continue
+			}
+			duplicate = true
+			break
+		}
+		if !duplicate {
+			out = append(out, addition)
+		}
+	}
+	return out
+}
+
+func optionalTransitionGroupIDsEqual(left *TransitionGroupID, right *TransitionGroupID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (w *DerivedWiring) addDiagnostic(code ValidationErrorCode, message string, ref ValidationError) {

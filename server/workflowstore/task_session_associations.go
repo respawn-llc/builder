@@ -315,13 +315,19 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if _, ok := values[workflow.RuntimePromptParameterCommentary]; !ok {
 		values[workflow.RuntimePromptParameterCommentary] = ""
 	}
+	effectiveContextMode := enteringEdge.ContextMode
 	var sourceSessionID *runtimeids.SessionID
 	if enteringEdge.ContextMode != workflow.ContextModeNewSession {
 		if currentNode.SessionID == nil {
-			return CurrentNodeStartContext{}, fmt.Errorf("continuation current node %v has no retained session", currentNode.Reference)
+			if workflow.CanonicalContextSource(enteringEdge.ContextSource).Kind == workflow.ContextSourcePreviousTargetOrNew {
+				effectiveContextMode = workflow.ContextModeNewSession
+			} else {
+				return CurrentNodeStartContext{}, fmt.Errorf("continuation current node %v has no retained session", currentNode.Reference)
+			}
+		} else {
+			value := *currentNode.SessionID
+			sourceSessionID = &value
 		}
-		value := *currentNode.SessionID
-		sourceSessionID = &value
 	}
 	sourceNode, err := currentNodeDefinitionNode(definition, transitionGroupSourceNodeID(definition, enteringEdge.TransitionGroupID))
 	if err != nil {
@@ -333,7 +339,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 		Node:            nodeRecordFromCurrentDefinition(node),
 		CurrentNode:     currentNode,
 		EnteringEdge:    *enteringEdge,
-		ContextMode:     enteringEdge.ContextMode,
+		ContextMode:     effectiveContextMode,
 		SourceSessionID: sourceSessionID,
 		IsFanoutBranch:  currentNode.Reference.IsBranchScoped(),
 		AcceptedTransitionPath: AcceptedTransitionPath{
