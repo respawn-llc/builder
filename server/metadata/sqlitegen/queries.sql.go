@@ -184,6 +184,21 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	return i, err
 }
 
+const anchorWorkflowTaskStatusSnapshot = `-- name: AnchorWorkflowTaskStatusSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM workflow_task_status_records
+) AS anchored
+`
+
+func (q *Queries) AnchorWorkflowTaskStatusSnapshot(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, anchorWorkflowTaskStatusSnapshot)
+	var anchored bool
+	err := recordQueryError(ctx, row.Scan(&anchored), anchorWorkflowTaskStatusSnapshot, 0)
+
+	return anchored, err
+}
+
 const bindSessionToBranchCurrentNode = `-- name: BindSessionToBranchCurrentNode :execrows
 UPDATE task_current_nodes
 SET session_id = ?1

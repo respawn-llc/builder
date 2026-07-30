@@ -1274,6 +1274,12 @@ FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id ASC;
 
+-- name: AnchorWorkflowTaskStatusSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM workflow_task_status_records
+) AS anchored;
+
 -- name: GetTaskByProjectShortID :one
 SELECT
     id,

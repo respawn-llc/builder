@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,26 +14,28 @@ import (
 	"core/server/metadata"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
-func TestNewTaskSearchRequiresCurrentNodeAuthority(t *testing.T) {
-	if _, err := NewTaskSearch(nil, NewTaskProjector(), nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent metadata and authority")
-	}
+func TestNewTaskSearchRequiresTaskStatusSnapshotCoordinator(t *testing.T) {
 	store, err := metadata.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open metadata: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := NewTaskSearch(store, nil, nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent projector and authority")
+	if _, err := NewTaskSearch(nil, nil); err == nil {
+		t.Fatal("NewTaskSearch accepted absent projector and status snapshots")
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	t.Cleanup(func() { _ = authority.Close(context.Background()) })
-	if _, err := NewTaskSearch(store, NewTaskProjector(), authority); err != nil {
-		t.Fatalf("NewTaskSearch with Current Node authority: %v", err)
+	snapshots, err := NewTaskStatusSnapshotCoordinator(store, workflowexecution.NewMutationPermit(), authority)
+	if err != nil {
+		t.Fatalf("NewTaskStatusSnapshotCoordinator: %v", err)
+	}
+	if _, err := NewTaskSearch(NewTaskProjector(), snapshots); err != nil {
+		t.Fatalf("NewTaskSearch with task status snapshots: %v", err)
 	}
 }
 
@@ -178,64 +179,21 @@ func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *
 	}
 }
 
-func TestTaskSearchStableReadCaptureRetriesLiveGenerationInterleaving(t *testing.T) {
-	var captureCalls int
-	events := []string{}
-	captureLive := func() (taskSearchLiveSnapshot, error) {
-		captureCalls++
-		events = append(events, fmt.Sprintf("capture-%d", captureCalls))
-		revision := uint64(3)
-		if captureCalls == 1 {
-			revision = 1
-		}
-		if captureCalls == 2 {
-			revision = 2
-		}
-		return taskSearchLiveSnapshot{revision: revision}, nil
-	}
-	var anchored int
-	var closed int
-	openRead := func(context.Context) (*taskSearchReadSnapshot, error) {
-		events = append(events, fmt.Sprintf("open-%d", anchored+1))
-		return &taskSearchReadSnapshot{
-			anchor: func(context.Context) error {
-				anchored++
-				events = append(events, fmt.Sprintf("anchor-%d", anchored))
-				return nil
-			},
+func TestTaskSearchJoinsStatusSnapshotCloseFailureWithSearchFailure(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	closeErr := errors.New("status snapshot close failed")
+	ctx, cancel := context.WithCancel(fixture.ctx)
+	_, err := search.searchWithSnapshotCapture(ctx, taskSearchRequest("needle"), func(context.Context) (*TaskStatusSnapshot, error) {
+		cancel()
+		return &TaskStatusSnapshot{
+			queries: fixture.metadata.Queries(),
 			close: func() error {
-				closed++
-				events = append(events, fmt.Sprintf("close-%d", closed))
-				return nil
+				return closeErr
 			},
 		}, nil
-	}
-
-	snapshot, err := taskSearchStableReadCapture(t.Context(), captureLive, openRead)
-	if err != nil {
-		t.Fatalf("taskSearchStableReadCapture: %v", err)
-	}
-	if captureCalls != 4 || anchored != 2 || closed != 1 || snapshot.live.revision != 3 {
-		t.Fatalf(
-			"stable capture calls/candidates = captures:%d anchors:%d closed:%d revision:%d, want 4/2/1/3",
-			captureCalls,
-			anchored,
-			closed,
-			snapshot.live.revision,
-		)
-	}
-	wantEvents := []string{
-		"open-1", "capture-1", "anchor-1", "capture-2", "close-1",
-		"open-2", "capture-3", "anchor-2", "capture-4",
-	}
-	if !slices.Equal(events, wantEvents) {
-		t.Fatalf("stable capture event order = %v, want %v", events, wantEvents)
-	}
-	if err := snapshot.Close(); err != nil {
-		t.Fatalf("close stable snapshot: %v", err)
-	}
-	if closed != 2 {
-		t.Fatalf("closed snapshots = %d, want unstable and returned snapshots closed", closed)
+	})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, closeErr) {
+		t.Fatalf("Search error = %v, want both %v and %v", err, context.Canceled, closeErr)
 	}
 }
 
@@ -547,7 +505,15 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
-	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), question.authority)
+	snapshots, err := NewTaskStatusSnapshotCoordinator(
+		fixture.metadata,
+		workflowexecution.NewMutationPermit(),
+		question.authority,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusSnapshotCoordinator: %v", err)
+	}
+	search, err := NewTaskSearch(NewTaskProjector(), snapshots)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
@@ -584,7 +550,15 @@ func TestTaskSearchRanksEquivalentBodyBeforeComment(t *testing.T) {
 func newTaskSearchFixture(t *testing.T, requiresApproval bool) (currentNodeViewFixture, *TaskSearch) {
 	t.Helper()
 	fixture := newCurrentNodeViewFixture(t, requiresApproval)
-	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), fixture.authority)
+	snapshots, err := NewTaskStatusSnapshotCoordinator(
+		fixture.metadata,
+		workflowexecution.NewMutationPermit(),
+		fixture.authority,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusSnapshotCoordinator: %v", err)
+	}
+	search, err := NewTaskSearch(NewTaskProjector(), snapshots)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}

@@ -172,9 +172,10 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	controller := index.named["core/server/workflowexecution.CurrentNodeController"]
 	starter := index.named["core/server/workflowrunner.Starter"]
 	authority := index.named["core/server/sessionruntime.Authority"]
+	statusSnapshots := index.named["core/server/workflowview.TaskStatusSnapshotCoordinator"]
 	projectService := index.named["core/server/projectview.Service"]
 	workflowService := index.named["core/server/workflowsvc.Service"]
-	if permit == nil || controller == nil || starter == nil || authority == nil || projectService == nil || workflowService == nil {
+	if permit == nil || controller == nil || starter == nil || authority == nil || statusSnapshots == nil || projectService == nil || workflowService == nil {
 		return nil
 	}
 
@@ -202,6 +203,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowsvc.New",
+		"core/server/workflowview.NewTaskStatusSnapshotCoordinator",
 		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
 		"core/server/workflowsvc.WithCurrentNodeExecution",
@@ -224,15 +226,18 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 
 	permitType := types.NewPointer(permit)
 	authorityType := types.NewPointer(authority)
+	statusSnapshotsType := types.NewPointer(statusSnapshots)
 	starterType := types.NewPointer(starter)
 	controllerType := types.NewPointer(controller)
 	permitObject := assignedVariableOfType(calls["core/server/workflowexecution.NewMutationPermit"][0], permitType)
 	authorityObject := assignedVariableOfType(calls["core/server/sessionruntime.NewAuthority"][0], authorityType)
+	statusSnapshotsObject := assignedVariableOfType(calls["core/server/workflowview.NewTaskStatusSnapshotCoordinator"][0], statusSnapshotsType)
 	starterObject := assignedVariableOfType(calls["core/server/workflowrunner.NewStarter"][0], starterType)
 	controllerObject := assignedVariableOfType(controllerCalls[0], controllerType)
 	for name, object := range map[string]*types.Var{
 		"workflow mutation permit":      permitObject,
 		"session runtime authority":     authorityObject,
+		"task status snapshots":         statusSnapshotsObject,
 		"workflow runtime starter":      starterObject,
 		"workflow execution controller": controllerObject,
 	} {
@@ -252,6 +257,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowexecution.NewCurrentNodeController",
 		"core/server/workflowsvc.New",
 		"core/server/projectview.WithWorkflowExecution",
+		"core/server/workflowview.NewTaskStatusSnapshotCoordinator",
 	} {
 		if !callReferencesExactly(calls[key][0], permitType, permitObject) {
 			findings = append(findings, currentNodeStructureFinding{
@@ -263,7 +269,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	for _, key := range []string{
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowexecution.NewCurrentNodeController",
-		"core/server/workflowview.NewTaskSearch",
+		"core/server/workflowview.NewTaskStatusSnapshotCoordinator",
 	} {
 		if !callReferencesExactly(calls[key][0], authorityType, authorityObject) {
 			findings = append(findings, currentNodeStructureFinding{
@@ -271,6 +277,12 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 				position: key + " must receive the one production Session runtime Authority",
 			})
 		}
+	}
+	if !callReferencesExactly(calls["core/server/workflowview.NewTaskSearch"][0], statusSnapshotsType, statusSnapshotsObject) {
+		findings = append(findings, currentNodeStructureFinding{
+			kind:     findingControllerComposition,
+			position: "NewTaskSearch must receive the one production Task Status Snapshot coordinator",
+		})
 	}
 	if !callReferencesExactly(controllerCalls[0], starterType, starterObject) {
 		findings = append(findings, currentNodeStructureFinding{
