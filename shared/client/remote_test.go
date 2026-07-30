@@ -639,7 +639,7 @@ func newRemoteWorkflowProjectSubscriptionServer(t *testing.T, event protocol.Wor
 func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
 	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
 		ProjectID:        remoteTestStringPointer("project-1"),
-		WorkflowID:       remoteTestStringPointer("11111111-1111-4111-8111-111111111111"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
 		Resource:         protocol.WorkflowProjectEventResourceTask,
 		Action:           protocol.WorkflowProjectEventActionQuestionWaiting,
 		PrimaryEntityID:  "task-1",
@@ -673,7 +673,7 @@ func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
 func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombination(t *testing.T) {
 	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
 		ProjectID:        remoteTestStringPointer("project-1"),
-		WorkflowID:       remoteTestStringPointer("11111111-1111-4111-8111-111111111111"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
 		Resource:         protocol.WorkflowProjectEventResourceTask,
 		Action:           protocol.WorkflowProjectEventActionLinked,
 		PrimaryEntityID:  "task-1",
@@ -1467,6 +1467,14 @@ func remoteTestIntPointer(value int) *int {
 
 func remoteTestStringPointer(value string) *string {
 	return &value
+}
+
+func remoteTestWorkflowIDPointer(value string) *runtimeids.WorkflowID {
+	id, err := runtimeids.ParseWorkflowID(value)
+	if err != nil {
+		panic(err)
+	}
+	return &id
 }
 
 func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T) {

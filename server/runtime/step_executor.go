@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -749,9 +750,9 @@ func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (str
 	if err != nil {
 		return "", err
 	}
-	workflowID := ""
+	workflowID := runtimeids.WorkflowID{}
 	if e.cfg.CurrentNodeExecution != nil {
-		workflowID = e.cfg.CurrentNodeExecution.Instructions.WorkflowID.String()
+		workflowID = e.cfg.CurrentNodeExecution.Instructions.WorkflowID
 	}
 	return workflowCompletionInstructionsFragment(mode, workflowID, e.cfg.CurrentNodeExecution.Contract)
 }

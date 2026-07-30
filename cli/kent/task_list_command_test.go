@@ -375,34 +375,18 @@ func TestTaskListRetryCommandRetainsBothSelectorPolarities(t *testing.T) {
 	}
 }
 
-func TestTaskListScopeRecoveryRestartsAtBeginning(t *testing.T) {
-	recovery, err := taskWorkflowRecoveryForFailure(
-		taskWorkflowRecoveryFailure{
-			kind:      taskWorkflowRecoveryWorkflowRequiredColumns,
-			projectID: taskListCommandTestProjectID,
-		},
-		taskWorkflowRecoveryContext{
-			projectRef:        "project-ref",
-			resolvedProjectID: taskListCommandTestProjectID,
-			list: &taskListCommandContext{
-				ProjectRef: "project-ref",
-				Offset:     50,
-				Limit:      100,
-			},
-		},
+func TestTaskListRetryCommandRendersWorkflowPlaceholderAtSelectorBoundary(t *testing.T) {
+	args := taskListRetryCommandArgsForSelector(
+		taskListCommandContext{ProjectRef: "project-ref", PageSize: 100},
+		taskWorkflowRetryWorkflowPlaceholder{},
+		false,
 	)
-	if err != nil {
-		t.Fatalf("task workflow recovery: %v", err)
-	}
-	if len(recovery.Commands) != 2 {
-		t.Fatalf("recovery commands = %+v", recovery.Commands)
-	}
 	want := []string{
 		config.Command, "task", "list", "--project", "project-ref",
 		"--workflow", "<uuid>",
-		"--limit", "100",
+		"--page-size", "100",
 	}
-	if !slices.Equal(recovery.Commands[1].Args, want) {
-		t.Fatalf("scope recovery args = %v, want %v", recovery.Commands[1].Args, want)
+	if !slices.Equal(args, want) {
+		t.Fatalf("retry args = %v, want %v", args, want)
 	}
 }

@@ -70,7 +70,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	workflowProvided := flagWasProvided(fs, "workflow")
 	var selectedWorkflowID *runtimeids.WorkflowID
-	var selectedWorkflowSelector *string
+	var selectedWorkflowSelector *runtimeids.WorkflowID
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)
 		err = parseErr
@@ -79,7 +79,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 		selectedWorkflowID = &selector.value
-		selectorValue := selector.String()
+		selectorValue := selector.value
 		selectedWorkflowSelector = &selectorValue
 	}
 	var recoveryLabelMatch *serverapi.WorkflowTaskNamedLabelFilterMode

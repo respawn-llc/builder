@@ -1,7 +1,6 @@
 package main
 
 import (
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"errors"
 )
@@ -26,15 +25,15 @@ func workflowRecordsForCLI(records []serverapi.WorkflowRecord) ([]serverapi.Work
 }
 
 func workflowDeleteResponseForCLI(response serverapi.WorkflowDeleteResponse) (serverapi.WorkflowDeleteResponse, error) {
-	if _, err := workflowIDForCLI(response.Impact.WorkflowID); err != nil {
-		return serverapi.WorkflowDeleteResponse{}, err
+	if response.Impact.WorkflowID.IsZero() {
+		return serverapi.WorkflowDeleteResponse{}, errors.New("workflow_id is required")
 	}
 	return response, nil
 }
 
 func workflowTaskSummaryForCLI(summary serverapi.WorkflowTaskSummary) (serverapi.WorkflowTaskSummary, error) {
-	if _, err := workflowIDForCLI(summary.WorkflowID); err != nil {
-		return serverapi.WorkflowTaskSummary{}, err
+	if summary.WorkflowID.IsZero() {
+		return serverapi.WorkflowTaskSummary{}, errors.New("workflow_id is required")
 	}
 	return summary, nil
 }
@@ -53,16 +52,9 @@ func workflowDefinitionForCLI(definition serverapi.WorkflowDefinition) (serverap
 	return projected, nil
 }
 
-func workflowIDForCLI(workflowID runtimeids.WorkflowID) (string, error) {
-	if workflowID.IsZero() {
-		return "", errors.New("workflow_id is required")
-	}
-	return workflowID.String(), nil
-}
-
 func projectWorkflowLinkForCLI(link serverapi.ProjectWorkflowLink) (serverapi.ProjectWorkflowLink, error) {
-	if _, err := workflowIDForCLI(link.WorkflowID); err != nil {
-		return serverapi.ProjectWorkflowLink{}, err
+	if link.WorkflowID.IsZero() {
+		return serverapi.ProjectWorkflowLink{}, errors.New("workflow_id is required")
 	}
 	return link, nil
 }

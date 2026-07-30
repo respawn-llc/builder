@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -327,8 +328,10 @@ func testSessionPromptNotification(id string) clientui.AttentionNotification {
 }
 
 func testQuestionTarget() clientui.AttentionNotificationTarget {
+	workflowID := runtimeids.NewWorkflowID()
 	return clientui.AttentionNotificationTarget{
 		Kind:        clientui.AttentionNotificationTargetWorkflowTask,
+		WorkflowID:  &workflowID,
 		TaskID:      "task-1",
 		TaskShortID: "KT-1",
 		Focus: &clientui.AttentionNotificationTaskDetailFocus{

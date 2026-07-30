@@ -93,7 +93,7 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 			GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
 		}, nil
 	}
-	snapshot := definitions[selected.WorkflowID.String()]
+	snapshot := definitions[selected.WorkflowID]
 	selectedWorkflowID := selected.WorkflowID
 	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
@@ -145,7 +145,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if pageSize == 0 {
 		pageSize = serverapi.WorkflowBoardNodeCardsMaxPageSize
 	}
-	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowID.String(), nodeID, labelFilter)
+	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowID, nodeID, labelFilter)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -220,7 +220,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		)
 		cards = append(cards, card)
 	}
-	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowID.String(), nodeID, labelFilter, cursor, tasks, hasExtra)
+	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowID, nodeID, labelFilter, cursor, tasks, hasExtra)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -358,7 +358,7 @@ const (
 type boardNodeCardsPageTokenPayload struct {
 	Version         int                          `json:"version"`
 	ProjectID       string                       `json:"project_id"`
-	WorkflowID      string                       `json:"workflow_id"`
+	WorkflowID      runtimeids.WorkflowID        `json:"workflow_id"`
 	NodeID          string                       `json:"node_id"`
 	LabelFilter     workflowTaskLabelFilterFacts `json:"label_filter"`
 	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
@@ -366,7 +366,7 @@ type boardNodeCardsPageTokenPayload struct {
 	Direction       boardNodeCardsPageDirection  `json:"direction"`
 }
 
-func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts) (boardNodeCardsPageCursor, error) {
+func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts) (boardNodeCardsPageCursor, error) {
 	if token == nil {
 		return boardNodeCardsPageCursor{direction: boardNodeCardsPageDirectionOlder}, nil
 	}
@@ -388,7 +388,7 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID st
 		!payload.LabelFilter.validCanonical() ||
 		!payload.LabelFilter.equal(labelFilter) ||
 		strings.TrimSpace(payload.ProjectID) == "" ||
-		strings.TrimSpace(payload.WorkflowID) == "" ||
+		payload.WorkflowID.IsZero() ||
 		strings.TrimSpace(payload.NodeID) == "" ||
 		strings.TrimSpace(payload.TaskID) == "" ||
 		payload.TaskID != strings.TrimSpace(payload.TaskID) ||
@@ -406,7 +406,7 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID st
 	}, nil
 }
 
-func boardNodeCardsPageTokens(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, cursor boardNodeCardsPageCursor, tasks []sqlitegen.TaskRecord, hasExtra bool) (*string, *string, error) {
+func boardNodeCardsPageTokens(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, cursor boardNodeCardsPageCursor, tasks []sqlitegen.TaskRecord, hasExtra bool) (*string, *string, error) {
 	if len(tasks) == 0 {
 		return nil, nil, nil
 	}
@@ -446,7 +446,7 @@ func boardNodeCardsPageTokens(projectID string, workflowID string, nodeID string
 	return previousPageToken, nextPageToken, nil
 }
 
-func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
+func boardNodeCardsPageToken(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
 	payload := boardNodeCardsPageTokenPayload{
 		Version:         boardNodeCardsPageTokenVersion,
 		ProjectID:       projectID,
@@ -465,7 +465,7 @@ func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string,
 	return &token, nil
 }
 
-func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[string]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
+func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runtimeids.WorkflowID]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
 	links, err := b.queries.ListProjectWorkflowLinks(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
@@ -474,29 +474,25 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	workflowIDs := make([]string, 0, len(links))
-	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
+	workflowIDs := make([]runtimeids.WorkflowID, 0, len(links))
+	linkByWorkflowID := map[runtimeids.WorkflowID]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
-		if _, exists := linkByWorkflowID[link.WorkflowID.String()]; exists {
+		if _, exists := linkByWorkflowID[link.WorkflowID]; exists {
 			continue
 		}
-		linkByWorkflowID[link.WorkflowID.String()] = link
-		workflowIDs = append(workflowIDs, link.WorkflowID.String())
+		linkByWorkflowID[link.WorkflowID] = link
+		workflowIDs = append(workflowIDs, link.WorkflowID)
 	}
-	activityByWorkflowID := map[string]int64{}
+	activityByWorkflowID := map[runtimeids.WorkflowID]int64{}
 	for _, activity := range taskActivityRows {
-		if _, linked := linkByWorkflowID[activity.WorkflowID.String()]; linked {
-			activityByWorkflowID[activity.WorkflowID.String()] = activity.LatestUpdatedAtUnixMs
+		if _, linked := linkByWorkflowID[activity.WorkflowID]; linked {
+			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
-	definitions := make(map[string]definitionSnapshot, len(workflowIDs))
+	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot, len(workflowIDs))
 	picker := make([]serverapi.WorkflowPickerItem, 0, len(workflowIDs))
 	for _, workflowID := range workflowIDs {
-		parsedWorkflowID, err := runtimeids.ParseWorkflowID(workflowID)
-		if err != nil {
-			return nil, nil, err
-		}
-		snapshot, err := b.definitions.snapshot(ctx, parsedWorkflowID)
+		snapshot, err := b.definitions.snapshot(ctx, workflowID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -507,7 +503,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 		}
 		validation := definitionExecutionValidation(snapshot.domain, b.roleResolver)
 		picker = append(picker, serverapi.WorkflowPickerItem{
-			WorkflowID:           parsedWorkflowID,
+			WorkflowID:           workflowID,
 			DisplayName:          snapshot.api.Workflow.Name,
 			Description:          snapshot.api.Workflow.Description,
 			Version:              snapshot.api.Workflow.Version,
@@ -520,8 +516,8 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 		if picker[i].IsProjectDefault != picker[j].IsProjectDefault {
 			return picker[i].IsProjectDefault
 		}
-		if activityByWorkflowID[picker[i].WorkflowID.String()] != activityByWorkflowID[picker[j].WorkflowID.String()] {
-			return activityByWorkflowID[picker[i].WorkflowID.String()] > activityByWorkflowID[picker[j].WorkflowID.String()]
+		if activityByWorkflowID[picker[i].WorkflowID] != activityByWorkflowID[picker[j].WorkflowID] {
+			return activityByWorkflowID[picker[i].WorkflowID] > activityByWorkflowID[picker[j].WorkflowID]
 		}
 		return strings.ToLower(picker[i].DisplayName) < strings.ToLower(picker[j].DisplayName)
 	})

@@ -13,7 +13,7 @@ import (
 type taskListCommandContext struct {
 	ProjectRef             string
 	ResolvedProjectID      string
-	SelectedWorkflowID     *string
+	SelectedWorkflowID     *runtimeids.WorkflowID
 	ColumnKeys             []string
 	StatusKinds            []serverapi.WorkflowTaskStatusKind
 	AttentionKinds         []serverapi.WorkflowTaskAttentionKind
@@ -30,7 +30,7 @@ type taskListCommandContext struct {
 type taskCreateCommandContext struct {
 	ProjectRef         string
 	ResolvedProjectID  string
-	SelectedWorkflowID *string
+	SelectedWorkflowID *runtimeids.WorkflowID
 	Title              string
 	Body               string
 	BodyFile           string
@@ -71,7 +71,7 @@ type taskWorkflowRecoveryCommand struct {
 type taskWorkflowRecovery struct {
 	Kind               taskWorkflowRecoveryKind
 	ProjectRef         string
-	SelectedWorkflowID *string
+	SelectedWorkflowID *runtimeids.WorkflowID
 	Commands           []taskWorkflowRecoveryCommand
 }
 
@@ -84,7 +84,7 @@ type taskWorkflowRecoveryFailure struct {
 type taskWorkflowRecoveryContext struct {
 	projectRef         string
 	resolvedProjectID  string
-	selectedWorkflowID *string
+	selectedWorkflowID *runtimeids.WorkflowID
 	list               *taskListCommandContext
 	create             *taskCreateCommandContext
 }
@@ -167,7 +167,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 	if failure.projectID != commandContext.resolvedProjectID {
 		return taskWorkflowRecovery{}, fmt.Errorf("task workflow recovery project %q does not match resolved project %q", failure.projectID, commandContext.resolvedProjectID)
 	}
-	var selectedWorkflowID *string
+	var selectedWorkflowID *runtimeids.WorkflowID
 	if commandContext.selectedWorkflowID != nil {
 		value := *commandContext.selectedWorkflowID
 		selectedWorkflowID = &value
@@ -191,36 +191,29 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		if selectedWorkflowID == nil || failure.workflowID == nil {
 			return taskWorkflowRecovery{}, errors.New("workflow-not-linked recovery requires a selected workflow")
 		}
-		selected, err := workflowIDForCLI(*failure.workflowID)
-		if err != nil {
-			return taskWorkflowRecovery{}, err
+		if *failure.workflowID != *selectedWorkflowID {
+			return taskWorkflowRecovery{}, fmt.Errorf("task workflow recovery workflow %q does not match selected workflow %q", failure.workflowID, selectedWorkflowID)
 		}
-		if selected != *selectedWorkflowID {
-			return taskWorkflowRecovery{}, fmt.Errorf("task workflow recovery workflow %q does not match selected workflow %q", selected, *selectedWorkflowID)
-		}
-		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder),
-			{Kind: taskWorkflowRecoveryCommandLinkSelectedWorkflow, Args: []string{config.Command, "workflow", "link", commandContext.projectRef, selected}},
+			commandContext.retryCommandForWorkflowPlaceholder(false),
+			{Kind: taskWorkflowRecoveryCommandLinkSelectedWorkflow, Args: []string{config.Command, "workflow", "link", commandContext.projectRef, failure.workflowID.String()}},
 		}
 	case taskWorkflowRecoveryWorkflowRequiredColumns:
 		if commandContext.list == nil || failure.workflowID != nil || selectedWorkflowID != nil {
 			return taskWorkflowRecovery{}, errors.New("workflow-required-for-columns recovery requires project-wide task list context")
 		}
-		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder),
+			commandContext.retryCommandForWorkflowPlaceholder(false),
 		}
 	case taskWorkflowRecoveryAmbiguousWithoutDefault:
 		if commandContext.create == nil || failure.workflowID != nil || selectedWorkflowID != nil {
 			return taskWorkflowRecovery{}, errors.New("ambiguous recovery requires task create context without a selected workflow")
 		}
-		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder),
+			commandContext.retryCommandForWorkflowPlaceholder(false),
 			{Kind: taskWorkflowRecoveryCommandSetDefaultWorkflow, Args: []string{config.Command, "workflow", "default", commandContext.projectRef, "<uuid>"}},
 		}
 	default:
@@ -229,16 +222,49 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 	return recovery, nil
 }
 
-func (c taskWorkflowRecoveryContext) retryCommand(workflowID *string) taskWorkflowRecoveryCommand {
+type taskWorkflowRetrySelector interface {
+	appendCLIArgs([]string) []string
+}
+
+type taskWorkflowRetryWorkflowID struct {
+	value runtimeids.WorkflowID
+}
+
+func (s taskWorkflowRetryWorkflowID) appendCLIArgs(args []string) []string {
+	return append(args, "--workflow", s.value.String())
+}
+
+type taskWorkflowRetryWorkflowPlaceholder struct{}
+
+func (taskWorkflowRetryWorkflowPlaceholder) appendCLIArgs(args []string) []string {
+	return append(args, "--workflow", "<uuid>")
+}
+
+func taskWorkflowRetrySelectorForWorkflowID(workflowID *runtimeids.WorkflowID) taskWorkflowRetrySelector {
+	if workflowID == nil {
+		return nil
+	}
+	return taskWorkflowRetryWorkflowID{value: *workflowID}
+}
+
+func (c taskWorkflowRecoveryContext) retryCommandForWorkflowPlaceholder(preservePageToken bool) taskWorkflowRecoveryCommand {
+	return c.retryCommandForWorkflowSelector(taskWorkflowRetryWorkflowPlaceholder{}, preservePageToken)
+}
+
+func (c taskWorkflowRecoveryContext) retryCommand(workflowID *runtimeids.WorkflowID, preservePageToken bool) taskWorkflowRecoveryCommand {
+	return c.retryCommandForWorkflowSelector(taskWorkflowRetrySelectorForWorkflowID(workflowID), preservePageToken)
+}
+
+func (c taskWorkflowRecoveryContext) retryCommandForWorkflowSelector(selector taskWorkflowRetrySelector, preservePageToken bool) taskWorkflowRecoveryCommand {
 	if c.list != nil {
 		return taskWorkflowRecoveryCommand{
 			Kind: taskWorkflowRecoveryCommandRetryTaskList,
-			Args: taskListRetryCommandArgs(*c.list, workflowID),
+			Args: taskListRetryCommandArgsForSelector(*c.list, selector, preservePageToken),
 		}
 	}
 	return taskWorkflowRecoveryCommand{
 		Kind: taskWorkflowRecoveryCommandRetryTaskCreate,
-		Args: taskCreateRetryCommandArgs(*c.create, workflowID),
+		Args: taskCreateRetryCommandArgsForSelector(*c.create, selector),
 	}
 }
 
@@ -258,10 +284,14 @@ func taskWorkflowListProjectCommand(projectRef string) taskWorkflowRecoveryComma
 	}
 }
 
-func taskCreateRetryCommandArgs(commandContext taskCreateCommandContext, workflowID *string) []string {
+func taskCreateRetryCommandArgs(commandContext taskCreateCommandContext, workflowID *runtimeids.WorkflowID) []string {
+	return taskCreateRetryCommandArgsForSelector(commandContext, taskWorkflowRetrySelectorForWorkflowID(workflowID))
+}
+
+func taskCreateRetryCommandArgsForSelector(commandContext taskCreateCommandContext, selector taskWorkflowRetrySelector) []string {
 	args := []string{config.Command, "task", "create", "--project", commandContext.ProjectRef}
-	if workflowID != nil {
-		args = append(args, "--workflow", *workflowID)
+	if selector != nil {
+		args = selector.appendCLIArgs(args)
 	}
 	args = append(args, "--title", commandContext.Title)
 	if strings.TrimSpace(commandContext.BodyFile) != "" {
@@ -284,10 +314,14 @@ func taskCreateRetryCommandArgs(commandContext taskCreateCommandContext, workflo
 	return args
 }
 
-func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *string) []string {
+func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *runtimeids.WorkflowID, preservePageToken bool) []string {
+	return taskListRetryCommandArgsForSelector(commandContext, taskWorkflowRetrySelectorForWorkflowID(workflowID), preservePageToken)
+}
+
+func taskListRetryCommandArgsForSelector(commandContext taskListCommandContext, selector taskWorkflowRetrySelector, preservePageToken bool) []string {
 	args := []string{config.Command, "task", "list", "--project", commandContext.ProjectRef}
-	if workflowID != nil {
-		args = append(args, "--workflow", *workflowID)
+	if selector != nil {
+		args = selector.appendCLIArgs(args)
 	}
 	for _, status := range commandContext.StatusKinds {
 		args = append(args, "--status", string(status))

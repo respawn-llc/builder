@@ -13,6 +13,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/workflowkey"
 
@@ -33,22 +34,22 @@ type workflowListOutput struct {
 
 // workflowNodeOutput is the machine-readable shape of `workflow node add/update --json`.
 type workflowNodeOutput struct {
-	WorkflowID string  `json:"workflow_id"`
-	NodeID     string  `json:"node_id"`
-	Key        string  `json:"key"`
-	Kind       string  `json:"kind,omitempty"`
-	ScriptPath *string `json:"script_path,omitempty"`
-	Version    int64   `json:"version"`
+	WorkflowID runtimeids.WorkflowID `json:"workflow_id"`
+	NodeID     string                `json:"node_id"`
+	Key        string                `json:"key"`
+	Kind       string                `json:"kind,omitempty"`
+	ScriptPath *string               `json:"script_path,omitempty"`
+	Version    int64                 `json:"version"`
 }
 
 // workflowEdgeOutput is the machine-readable shape of `workflow edge add/update --json`.
 type workflowEdgeOutput struct {
-	WorkflowID        string `json:"workflow_id"`
-	EdgeID            string `json:"edge_id"`
-	TransitionGroupID string `json:"transition_group_id"`
-	Key               string `json:"key,omitempty"`
-	TransitionID      string `json:"transition_id,omitempty"`
-	Version           int64  `json:"version"`
+	WorkflowID        runtimeids.WorkflowID `json:"workflow_id"`
+	EdgeID            string                `json:"edge_id"`
+	TransitionGroupID string                `json:"transition_group_id"`
+	Key               string                `json:"key,omitempty"`
+	TransitionID      string                `json:"transition_id,omitempty"`
+	Version           int64                 `json:"version"`
 }
 
 type workflowCommandRemote interface {
@@ -387,7 +388,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.String(), NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.value, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", *kind, *key, nodeID)
 		return 0
@@ -467,7 +468,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.String(), NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.value, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Updated node `%s`.\n", updated.Key)
 		return 0
@@ -612,7 +613,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.String(), EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.value, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Added edge `%s` (%s) on transition `%s`: `%s` → `%s` (%s).\n", *edgeKey, edgeID, *transitionID, *fromKey, *toKey, workflowEdgeContextDetail(*contextMode, *requiresApproval, parsedContextSource))
 		return 0
@@ -744,7 +745,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.String(), EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.value, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Updated edge `%s`: `%s` → `%s` (%s).\n", updatedEdge.Key, updatedGroup.TransitionID, workflowNodeKeyOrID(workflowNodeKeyByID(def), updatedEdge.TargetNodeID), workflowEdgeContextDetail(updatedEdge.ContextMode, updatedEdge.RequiresApproval, updatedEdge.ContextSource))
 		return 0

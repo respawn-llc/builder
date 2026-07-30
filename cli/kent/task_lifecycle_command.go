@@ -96,9 +96,9 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			LabelIDs:          labelIDs,
 		})
 		if err != nil {
-			var selectedWorkflowID *string
+			var selectedWorkflowID *runtimeids.WorkflowID
 			if selectedWorkflow != nil {
-				value := selectedWorkflow.String()
+				value := selectedWorkflow.value
 				selectedWorkflowID = &value
 			}
 			writeTaskCreateError(stderr, err, taskCreateCommandContext{
