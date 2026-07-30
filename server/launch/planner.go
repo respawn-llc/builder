@@ -32,10 +32,14 @@ const (
 	SubagentSessionSuffix = "subagent"
 )
 
+type SessionExecutionTargetResolver interface {
+	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
+}
+
 // MetadataExecutionTargetStore is the metadata subset needed to copy a parent
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
-	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
+	SessionExecutionTargetResolver
 	UpdateSessionExecutionTarget(ctx context.Context, update metadata.SessionExecutionTargetUpdate) error
 	DeleteSessionRecordByID(ctx context.Context, sessionID string) error
 	Close() error
@@ -50,6 +54,7 @@ type Planner struct {
 	StoreOptions        []session.StoreOption
 	ReloadConfig        func() (config.App, error)
 	PersistedSessions   session.PersistedSessionResolver
+	ExecutionTargets    SessionExecutionTargetResolver
 	MetadataStoreOpener MetadataExecutionTargetStoreOpener
 }
 
@@ -76,6 +81,7 @@ type SessionPlan struct {
 	ModelContractLocked                 bool
 	SkipContinuationAgentRoleValidation bool
 	WorkspaceRoot                       string
+	ExecutionTarget                     clientui.SessionExecutionTarget
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
 }
@@ -395,6 +401,10 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	executionTarget, err := p.resolvePlannedExecutionTarget(ctx, meta.SessionID)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
@@ -404,9 +414,29 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
+		ExecutionTarget:                     executionTarget,
 		Source:                              source,
 		BaseSource:                          baseSource,
 	}, store), nil
+}
+
+func (p Planner) resolvePlannedExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
+	resolver := p.ExecutionTargets
+	if resolver == nil {
+		resolver, _ = p.PersistedSessions.(SessionExecutionTargetResolver)
+	}
+	if resolver == nil {
+		return clientui.SessionExecutionTarget{}, nil
+	}
+	target, err := resolver.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		return clientui.SessionExecutionTarget{}, err
+	}
+	target = clientui.NormalizeSessionExecutionTarget(target)
+	if clientui.SessionExecutionTargetIsZero(target) {
+		return clientui.SessionExecutionTarget{}, fmt.Errorf("session %q execution target is empty", sessionID)
+	}
+	return target, nil
 }
 
 func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName *string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {

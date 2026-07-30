@@ -237,7 +237,7 @@ func (s *Starter) planCurrentNodeSession(ctx context.Context, input workflowstor
 	if err != nil {
 		return launch.SessionPlan{}, false, err
 	}
-	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
+	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
 	plan, err := planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: intent, SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny()})
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err

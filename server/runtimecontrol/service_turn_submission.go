@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/runtimeops"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -119,7 +120,7 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
 			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, req.OperationRef.ClientRequestID, nil)
 			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				if !activeExecutionAllowsUserTurnAutoDrain(engine.ActiveStepSnapshot()) {
+				if !activeExecutionAllowsUserTurnAutoDrain(runtimeactivity.ActiveStepFromProvider(engine)) {
 					return serverapi.ErrSessionRunStarting
 				}
 				item = engine.QueueUserMessageForAutoDrain(memoReq.Text, req.OperationRef.ClientRequestID.String())
@@ -151,12 +152,12 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 	return resp, steered, nil
 }
 
-func activeExecutionAllowsUserTurnAutoDrain(snapshot *runtime.RunSnapshot) bool {
+func activeExecutionAllowsUserTurnAutoDrain(snapshot *runtimeactivity.ActiveStepSnapshot) bool {
 	if snapshot == nil {
 		return false
 	}
 	switch snapshot.ActiveKind {
-	case runtime.ActiveKindCompaction, runtime.ActiveKindPreSubmitCompaction:
+	case clientui.RuntimeActivityActiveKindCompaction, clientui.RuntimeActivityActiveKindPreSubmitCompaction:
 		return true
 	default:
 		return false
