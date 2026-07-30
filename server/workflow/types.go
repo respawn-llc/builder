@@ -3,9 +3,11 @@ package workflow
 import (
 	"fmt"
 	"strings"
+
+	"core/shared/runtimeids"
 )
 
-type WorkflowID string
+type WorkflowID = runtimeids.WorkflowID
 type NodeID string
 type TransitionGroupID string
 type EdgeID string
@@ -224,7 +226,7 @@ func (TerminalNode) Kind() NodeKind {
 
 func NodeWorkflowID(node Node) WorkflowID {
 	if node == nil {
-		return ""
+		return WorkflowID{}
 	}
 	return node.Identity().WorkflowID
 }

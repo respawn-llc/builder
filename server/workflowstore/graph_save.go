@@ -109,14 +109,14 @@ func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphS
 }
 
 func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
-	workflowID := workflow.WorkflowID(strings.TrimSpace(string(req.WorkflowID)))
-	if workflowID == "" {
+	workflowID := req.WorkflowID
+	if workflowID.IsZero() {
 		return WorkflowGraphSavePlan{}, errors.New("workflow id is required")
 	}
 	if req.ExpectedVersion < 0 {
 		return WorkflowGraphSavePlan{}, errors.New("expected version must be non-negative")
 	}
-	current, err := q.GetWorkflow(ctx, string(workflowID))
+	current, err := q.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
@@ -196,8 +196,8 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 }
 
 func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
-	workflowID := workflow.WorkflowID(strings.TrimSpace(string(req.WorkflowID)))
-	if workflowID == "" {
+	workflowID := req.WorkflowID
+	if workflowID.IsZero() {
 		return WorkflowGraphSaveResult{}, errors.New("workflow id is required")
 	}
 	if s.graphSaves == nil {
@@ -229,14 +229,14 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		return WorkflowGraphSaveResult{}, err
 	}
 	q := s.queries.WithTx(tx)
-	locked, err := q.AcquireWorkflowGraphSaveWriteLock(ctx, string(workflowID))
+	locked, err := q.AcquireWorkflowGraphSaveWriteLock(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
 	if locked != 1 {
 		return WorkflowGraphSaveResult{}, sql.ErrNoRows
 	}
-	current, err := q.GetWorkflow(ctx, string(workflowID))
+	current, err := q.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
@@ -277,7 +277,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		customRef := workflowCustomRefForQuery(plan.Metadata.ExecutionTargetPolicy.CustomRef)
 		if plan.GraphChanged {
 			updated, err := q.UpdateWorkflowMetadataWithoutVersion(ctx, sqlitegen.UpdateWorkflowMetadataWithoutVersionParams{
-				ID:                       string(plan.WorkflowID),
+				ID:                       plan.WorkflowID,
 				Name:                     plan.Metadata.Name,
 				Description:              plan.Metadata.Description,
 				ExecutionTargetPolicy:    string(plan.Metadata.ExecutionTargetPolicy.Mode),
@@ -292,7 +292,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 			}
 		} else {
 			updated, err := q.UpdateWorkflowMetadata(ctx, sqlitegen.UpdateWorkflowMetadataParams{
-				ID:                       string(plan.WorkflowID),
+				ID:                       plan.WorkflowID,
 				Name:                     plan.Metadata.Name,
 				Description:              plan.Metadata.Description,
 				ExecutionTargetPolicy:    string(plan.Metadata.ExecutionTargetPolicy.Mode),
@@ -413,7 +413,7 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 	groupsByKey := map[workflow.ModelKey]string{}
 	groupsByID := map[string]bool{}
 	for i, group := range prepared.nodeGroups {
-		if strings.TrimSpace(string(group.WorkflowID)) == "" {
+		if group.WorkflowID.IsZero() {
 			group.WorkflowID = workflowID
 		}
 		group.ID = strings.TrimSpace(group.ID)
@@ -445,7 +445,7 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: executionTargetPolicy}
 	groupNodeIDs := map[string][]workflow.NodeID{}
 	for i, node := range prepared.nodes {
-		if strings.TrimSpace(string(node.WorkflowID)) == "" {
+		if node.WorkflowID.IsZero() {
 			node.WorkflowID = workflowID
 		}
 		node.GroupID = strings.TrimSpace(node.GroupID)
@@ -478,14 +478,14 @@ func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: group.Key, DisplayName: group.DisplayName, MemberNodeIDs: groupNodeIDs[group.ID]})
 	}
 	for i, group := range prepared.transitionGroups {
-		if strings.TrimSpace(string(group.WorkflowID)) == "" {
+		if group.WorkflowID.IsZero() {
 			group.WorkflowID = workflowID
 		}
 		prepared.transitionGroups[i] = group
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: group.WorkflowID, ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for i, edge := range prepared.edges {
-		if strings.TrimSpace(string(edge.WorkflowID)) == "" {
+		if edge.WorkflowID.IsZero() {
 			edge.WorkflowID = workflowID
 		}
 		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
@@ -706,7 +706,7 @@ func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowI
 		}
 	}
 	for _, groupID := range removed.nodeGroups {
-		if deleted, err := q.DeleteWorkflowNodeGroup(ctx, sqlitegen.DeleteWorkflowNodeGroupParams{ID: groupID, WorkflowID: string(workflowID)}); err != nil {
+		if deleted, err := q.DeleteWorkflowNodeGroup(ctx, sqlitegen.DeleteWorkflowNodeGroupParams{ID: groupID, WorkflowID: workflowID}); err != nil {
 			return fmt.Errorf("delete removed workflow node group: %w", err)
 		} else if deleted != 1 {
 			return sql.ErrNoRows
@@ -738,7 +738,7 @@ func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowI
 func upsertWorkflowNodeGroup(ctx context.Context, q *sqlitegen.Queries, group NodeGroupRecord, op string) error {
 	updated, err := q.UpsertWorkflowNodeGroup(ctx, sqlitegen.UpsertWorkflowNodeGroupParams{
 		ID:          group.ID,
-		WorkflowID:  string(group.WorkflowID),
+		WorkflowID:  group.WorkflowID,
 		GroupKey:    string(group.Key),
 		DisplayName: strings.TrimSpace(group.DisplayName),
 		SortOrder:   group.SortOrder,
@@ -764,7 +764,7 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 	}
 	updated, err := q.UpsertWorkflowNode(ctx, sqlitegen.UpsertWorkflowNodeParams{
 		ID:                     string(node.ID),
-		WorkflowID:             string(node.WorkflowID),
+		WorkflowID:             node.WorkflowID,
 		NodeKey:                string(node.Key),
 		Kind:                   string(node.Kind),
 		DisplayName:            strings.TrimSpace(node.DisplayName),
@@ -789,7 +789,7 @@ func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, gr
 		DisplayName:  strings.TrimSpace(group.DisplayName),
 		Description:  strings.TrimSpace(group.Description),
 		SortOrder:    sortOrder,
-		WorkflowID:   string(group.WorkflowID),
+		WorkflowID:   group.WorkflowID,
 	})
 	return expectAffectedRowCount(updated, err, op)
 }
@@ -826,7 +826,7 @@ func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeReco
 		InputBindingsJson:      inputs,
 		OutputRequirementsJson: requirements,
 		SortOrder:              sortOrder,
-		WorkflowID:             string(edge.WorkflowID),
+		WorkflowID:             edge.WorkflowID,
 	})
 	return expectAffectedRowCount(updated, err, op)
 }

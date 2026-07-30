@@ -1012,8 +1012,8 @@ func createCurrentNodeTwoStepWorkflow(
 			doneID = workflow.NodeIDOf(node)
 		}
 	}
-	firstID := workflow.NodeID("node-first-" + string(created.ID))
-	secondID := workflow.NodeID("node-second-" + string(created.ID))
+	firstID := workflow.NodeID("node-first-" + created.ID.String())
+	secondID := workflow.NodeID("node-second-" + created.ID.String())
 	for _, node := range []workflowstore.NodeRecord{
 		{
 			ID: firstID, WorkflowID: created.ID, Key: "first", Kind: first.kind, DisplayName: "First",
@@ -1030,9 +1030,9 @@ func createCurrentNodeTwoStepWorkflow(
 			t.Fatalf("add node: %v", err)
 		}
 	}
-	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
-	nextGroup := workflow.TransitionGroupID("group-next-" + string(created.ID))
-	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	for _, group := range []workflowstore.TransitionGroupRecord{
 		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
 		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: firstID, TransitionID: "next", DisplayName: "Next"},
@@ -1044,16 +1044,16 @@ func createCurrentNodeTwoStepWorkflow(
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
 		{
-			ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID,
+			ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
 			TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID,
 			ContextMode: workflow.ContextModeNewSession, PromptTemplate: first.prompt,
 		},
 		{
-			ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID,
+			ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID,
 			TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
 			ContextMode: mode, PromptTemplate: second.prompt,
 		},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
@@ -1085,7 +1085,7 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 	if startID == "" || doneID == "" {
 		t.Fatalf("default workflow nodes = %+v", definition.Nodes)
 	}
-	nodeID := workflow.NodeID("node-execute-" + string(created.ID))
+	nodeID := workflow.NodeID("node-execute-" + created.ID.String())
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
 		ID: nodeID, WorkflowID: created.ID, Key: "execute", Kind: kind, DisplayName: "Execute",
 		SubagentRole: role, PromptTemplate: "Do the work.", ScriptPath: scriptPath,
@@ -1093,8 +1093,8 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 	}); err != nil {
 		t.Fatalf("add executable node: %v", err)
 	}
-	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
-	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
 	for _, group := range []workflowstore.TransitionGroupRecord{
 		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
 		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: nodeID, TransitionID: "done", DisplayName: "Done"},
@@ -1104,13 +1104,13 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 		}
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
-		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: nodeID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: func() string {
+		{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: nodeID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: func() string {
 			if kind == workflow.NodeKindAgent {
 				return "Do the work."
 			}
 			return ""
 		}()},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)

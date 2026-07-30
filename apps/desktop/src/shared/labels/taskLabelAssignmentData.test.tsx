@@ -49,7 +49,7 @@ describe("useManagedTaskLabelAssignment", () => {
           initialAssignment,
           projectID: "project-1",
           taskID: "task-1",
-          workflowID: "workflow-1",
+          workflowID: "11111111-1111-4111-8111-111111111111",
         }),
       );
       return null;
@@ -127,7 +127,7 @@ describe("useManagedTaskLabelAssignment", () => {
         initialAssignment: enabledAssignment,
         projectID: "project-1",
         taskID: "task-2",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
       });
       return null;
     }
@@ -139,7 +139,7 @@ describe("useManagedTaskLabelAssignment", () => {
         initialAssignment: disabledAssignment,
         projectID: "project-1",
         taskID: "task-2",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
       });
       return null;
     }

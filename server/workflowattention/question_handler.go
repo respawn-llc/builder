@@ -146,7 +146,7 @@ func taskQuestionAttentionTarget(context TaskQuestionContext, focusKind clientui
 	target := &clientui.AttentionNotificationTarget{
 		Kind:          clientui.AttentionNotificationTargetWorkflowTask,
 		ProjectID:     strings.TrimSpace(context.Task.ProjectID),
-		WorkflowID:    strings.TrimSpace(string(context.Task.WorkflowID)),
+		WorkflowID:    context.Task.WorkflowID.String(),
 		TaskID:        strings.TrimSpace(string(context.Task.ID)),
 		TaskShortID:   strings.TrimSpace(context.Task.ShortID),
 		TaskTitle:     strings.TrimSpace(context.Task.Title),

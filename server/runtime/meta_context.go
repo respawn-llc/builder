@@ -463,7 +463,7 @@ func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowr
 
 func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (string, error) {
 	instructions := cfg.Instructions
-	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})
+	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowID.String(), workflowruntime.CompletionContract{Transitions: cfg.Transitions})
 	if err != nil {
 		return "", err
 	}
@@ -475,7 +475,7 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		TaskShortId:          instructions.TaskShortID,
 		TaskTitle:            instructions.TaskTitle,
 		TaskBody:             instructions.TaskBody,
-		WorkflowId:           instructions.WorkflowID,
+		WorkflowId:           instructions.WorkflowID.String(),
 		WorkflowName:         instructions.WorkflowName,
 		NodeId:               string(instructions.CurrentNode.NodeID),
 		NodeKey:              instructions.NodeKey,

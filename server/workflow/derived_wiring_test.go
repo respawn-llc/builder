@@ -191,23 +191,23 @@ func TestDeriveWiringKeepsPriorTransitionNamespaceSeparateFromProviderNode(t *te
 
 func parameterWorkflow() workflow.Definition {
 	return workflow.Definition{
-		ID:          "workflow_parameters",
+		ID:          testWorkflowID("workflow_parameters"),
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_parameters", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_parameters", "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
-			testAgentNode("workflow_parameters", "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
-			testTerminalNode("workflow_parameters", "node_done", "done", "Done"),
+			testStartNode(testWorkflowID("workflow_parameters"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testWorkflowID("workflow_parameters"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
+			testAgentNode(testWorkflowID("workflow_parameters"), "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
+			testTerminalNode(testWorkflowID("workflow_parameters"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_parameters", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_parameters", ID: "group_plan_implement", SourceNodeID: "node_plan", TransitionID: "implement", DisplayName: "Implement"},
-			{WorkflowID: "workflow_parameters", ID: "group_implement_done", SourceNodeID: "node_implement", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testWorkflowID("workflow_parameters"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testWorkflowID("workflow_parameters"), ID: "group_plan_implement", SourceNodeID: "node_plan", TransitionID: "implement", DisplayName: "Implement"},
+			{WorkflowID: testWorkflowID("workflow_parameters"), ID: "group_implement_done", SourceNodeID: "node_implement", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_parameters", ID: "edge_start_plan", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			{WorkflowID: testWorkflowID("workflow_parameters"), ID: "edge_start_plan", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
 			{
-				WorkflowID:        "workflow_parameters",
+				WorkflowID:        testWorkflowID("workflow_parameters"),
 				ID:                "edge_plan_implement",
 				Key:               "implement",
 				TransitionGroupID: "group_plan_implement",
@@ -220,7 +220,7 @@ func parameterWorkflow() workflow.Definition {
 				},
 			},
 			{
-				WorkflowID:        "workflow_parameters",
+				WorkflowID:        testWorkflowID("workflow_parameters"),
 				ID:                "edge_implement_done",
 				Key:               "done",
 				TransitionGroupID: "group_implement_done",
@@ -234,7 +234,7 @@ func parameterWorkflow() workflow.Definition {
 
 func fanoutParameterWorkflow() workflow.Definition {
 	def := parameterWorkflow()
-	def.Nodes = append(def.Nodes, testAgentNode("workflow_parameters", "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
+	def.Nodes = append(def.Nodes, testAgentNode(testWorkflowID("workflow_parameters"), "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
 	def.TransitionGroups[1] = workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_plan_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"}
 	def.Edges[1] = workflow.Edge{
 		WorkflowID:        def.ID,

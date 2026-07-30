@@ -572,25 +572,25 @@ func TestContextSourceValidation(t *testing.T) {
 
 func validWorkflow() workflow.Definition {
 	return workflow.Definition{
-		ID:          "workflow_default",
+		ID:          testWorkflowID("workflow_default"),
 		DisplayName: "Default Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_default", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_default", "node_agent", "implement", "Implement", workflow.NodeFields{
+			testStartNode(testWorkflowID("workflow_default"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testWorkflowID("workflow_default"), "node_agent", "implement", "Implement", workflow.NodeFields{
 				SubagentRole:   "coder",
 				PromptTemplate: "Implement task.",
 				OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Summary of completed work."}},
 			}),
-			testTerminalNode("workflow_default", "node_done", "done", "Done"),
+			testTerminalNode(testWorkflowID("workflow_default"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_default", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_default", ID: "group_done", SourceNodeID: "node_agent", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testWorkflowID("workflow_default"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testWorkflowID("workflow_default"), ID: "group_done", SourceNodeID: "node_agent", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_default", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement task."},
+			{WorkflowID: testWorkflowID("workflow_default"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement task."},
 			{
-				WorkflowID:         "workflow_default",
+				WorkflowID:         testWorkflowID("workflow_default"),
 				ID:                 "edge_done",
 				Key:                "done",
 				TransitionGroupID:  "group_done",
@@ -605,30 +605,30 @@ func validWorkflow() workflow.Definition {
 
 func fanoutWorkflow() workflow.Definition {
 	def := workflow.Definition{
-		ID:          "workflow_fanout",
+		ID:          testWorkflowID("workflow_fanout"),
 		DisplayName: "Fanout Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_fanout", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_fanout", "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Plan.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
-			testAgentNode("workflow_fanout", "node_impl_a", "impl_a", "Implement A", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "A."}),
-			testAgentNode("workflow_fanout", "node_impl_b", "impl_b", "Implement B", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "B."}),
-			testJoinNode("workflow_fanout", "node_join", "join", "Join"),
-			testTerminalNode("workflow_fanout", "node_done", "done", "Done"),
+			testStartNode(testWorkflowID("workflow_fanout"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testWorkflowID("workflow_fanout"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Plan.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
+			testAgentNode(testWorkflowID("workflow_fanout"), "node_impl_a", "impl_a", "Implement A", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "A."}),
+			testAgentNode(testWorkflowID("workflow_fanout"), "node_impl_b", "impl_b", "Implement B", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "B."}),
+			testJoinNode(testWorkflowID("workflow_fanout"), "node_join", "join", "Join"),
+			testTerminalNode(testWorkflowID("workflow_fanout"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_fanout", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_fanout", ID: "group_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"},
-			{WorkflowID: "workflow_fanout", ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join", DisplayName: "Join"},
-			{WorkflowID: "workflow_fanout", ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join", DisplayName: "Join"},
-			{WorkflowID: "workflow_fanout", ID: "group_join_done", SourceNodeID: "node_join", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "group_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join", DisplayName: "Join"},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join", DisplayName: "Join"},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "group_join_done", SourceNodeID: "node_join", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_fanout", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
-			{WorkflowID: "workflow_fanout", ID: "edge_split_a", Key: "split_a", TransitionGroupID: "group_split", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement A."},
-			{WorkflowID: "workflow_fanout", ID: "edge_split_b", Key: "split_b", TransitionGroupID: "group_split", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement B."},
-			{WorkflowID: "workflow_fanout", ID: "edge_impl_a_join", Key: "join_a", TransitionGroupID: "group_impl_a_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_fanout", ID: "edge_impl_b_join", Key: "join_b", TransitionGroupID: "group_impl_b_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_fanout", ID: "edge_join_done", Key: "done", TransitionGroupID: "group_join_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_split_a", Key: "split_a", TransitionGroupID: "group_split", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement A."},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_split_b", Key: "split_b", TransitionGroupID: "group_split", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement B."},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_impl_a_join", Key: "join_a", TransitionGroupID: "group_impl_a_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_impl_b_join", Key: "join_b", TransitionGroupID: "group_impl_b_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_fanout"), ID: "edge_join_done", Key: "done", TransitionGroupID: "group_join_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
 	}
 	return def
@@ -636,36 +636,36 @@ func fanoutWorkflow() workflow.Definition {
 
 func reviewAcceptanceWorkflow() workflow.Definition {
 	return workflow.Definition{
-		ID:          "workflow_review_acceptance",
+		ID:          testWorkflowID("workflow_review_acceptance"),
 		DisplayName: "Review Acceptance Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_review_acceptance", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_review_acceptance", "node_implementation", "implementation", "Implementation", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Implement.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
-			testAgentNode("workflow_review_acceptance", "node_code_review", "code_review", "Code Review", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Review."}),
-			testAgentNode("workflow_review_acceptance", "node_qa_test", "qa_test", "QA Test", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "QA."}),
-			testJoinNode("workflow_review_acceptance", "node_review_join", "review_join", "Review Join"),
-			testAgentNode("workflow_review_acceptance", "node_final_acceptance", "final_acceptance", "Final Acceptance", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Accept."}),
-			testAgentNode("workflow_review_acceptance", "node_open_pr", "open_pr", "Open PR", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Open PR."}),
-			testTerminalNode("workflow_review_acceptance", "node_done", "done", "Done"),
+			testStartNode(testWorkflowID("workflow_review_acceptance"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testWorkflowID("workflow_review_acceptance"), "node_implementation", "implementation", "Implementation", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Implement.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
+			testAgentNode(testWorkflowID("workflow_review_acceptance"), "node_code_review", "code_review", "Code Review", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Review."}),
+			testAgentNode(testWorkflowID("workflow_review_acceptance"), "node_qa_test", "qa_test", "QA Test", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "QA."}),
+			testJoinNode(testWorkflowID("workflow_review_acceptance"), "node_review_join", "review_join", "Review Join"),
+			testAgentNode(testWorkflowID("workflow_review_acceptance"), "node_final_acceptance", "final_acceptance", "Final Acceptance", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Accept."}),
+			testAgentNode(testWorkflowID("workflow_review_acceptance"), "node_open_pr", "open_pr", "Open PR", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Open PR."}),
+			testTerminalNode(testWorkflowID("workflow_review_acceptance"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_review_acceptance", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_implementation_review", SourceNodeID: "node_implementation", TransitionID: "review", DisplayName: "Review"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "reviewed", DisplayName: "Reviewed"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "reviewed", DisplayName: "Reviewed"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_join_accept", SourceNodeID: "node_review_join", TransitionID: "accept", DisplayName: "Accept"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_accept_open_pr", SourceNodeID: "node_final_acceptance", TransitionID: "approved", DisplayName: "Approved"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_open_pr_done", SourceNodeID: "node_open_pr", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_implementation_review", SourceNodeID: "node_implementation", TransitionID: "review", DisplayName: "Review"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "reviewed", DisplayName: "Reviewed"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "reviewed", DisplayName: "Reviewed"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_join_accept", SourceNodeID: "node_review_join", TransitionID: "accept", DisplayName: "Accept"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_accept_open_pr", SourceNodeID: "node_final_acceptance", TransitionID: "approved", DisplayName: "Approved"},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "group_open_pr_done", SourceNodeID: "node_open_pr", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_implementation_review", Key: "code_review", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_code_review", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_implementation_qa", Key: "qa_test", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_qa_test", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_code_review_join", Key: "code_review_done", TransitionGroupID: "group_code_review_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_qa_test_join", Key: "qa_test_done", TransitionGroupID: "group_qa_test_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_join_accept", Key: "final_acceptance", TransitionGroupID: "group_join_accept", TargetNodeID: "node_final_acceptance", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_accept_open_pr", Key: "open_pr", TransitionGroupID: "group_accept_open_pr", TargetNodeID: "node_open_pr", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Open PR."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_open_pr_done", Key: "done", TransitionGroupID: "group_open_pr_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_implementation_review", Key: "code_review", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_code_review", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_implementation_qa", Key: "qa_test", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_qa_test", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_code_review_join", Key: "code_review_done", TransitionGroupID: "group_code_review_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_qa_test_join", Key: "qa_test_done", TransitionGroupID: "group_qa_test_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_join_accept", Key: "final_acceptance", TransitionGroupID: "group_join_accept", TargetNodeID: "node_final_acceptance", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept."},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_accept_open_pr", Key: "open_pr", TransitionGroupID: "group_accept_open_pr", TargetNodeID: "node_open_pr", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Open PR."},
+			{WorkflowID: testWorkflowID("workflow_review_acceptance"), ID: "edge_open_pr_done", Key: "done", TransitionGroupID: "group_open_pr_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
 	}
 }

@@ -341,7 +341,7 @@ func taskLabelScope(ctx context.Context, q *sqlitegen.Queries, taskID workflow.T
 	}
 	return TaskLabelScope{
 		ProjectID:  row.ProjectID,
-		WorkflowID: workflow.WorkflowID(row.WorkflowID),
+		WorkflowID: row.WorkflowID,
 	}, nil
 }
 

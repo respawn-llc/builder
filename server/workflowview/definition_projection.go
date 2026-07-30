@@ -3,11 +3,11 @@ package workflowview
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -37,7 +37,7 @@ func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.Project
 	return item
 }
 
-func (p *DefinitionProjection) GetDefinition(ctx context.Context, workflowID string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
+func (p *DefinitionProjection) GetDefinition(ctx context.Context, workflowID runtimeids.WorkflowID) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
 	snapshot, err := p.snapshot(ctx, workflowID)
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, nil, err
@@ -60,15 +60,14 @@ func workflowNodesByID(def serverapi.WorkflowDefinition) map[string]serverapi.Wo
 	return nodes
 }
 
-func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID string) (definitionSnapshot, error) {
+func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID workflow.WorkflowID) (definitionSnapshot, error) {
 	if p == nil {
 		return definitionSnapshot{}, errors.New("definition projection is required")
 	}
-	trimmedWorkflowID := strings.TrimSpace(workflowID)
-	if trimmedWorkflowID == "" {
+	if workflowID.IsZero() {
 		return definitionSnapshot{}, errors.New("workflow_id is required")
 	}
-	domain, record, err := p.store.GetDefinition(ctx, workflow.WorkflowID(trimmedWorkflowID))
+	domain, record, err := p.store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
@@ -80,7 +79,7 @@ func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID string) 
 func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
 	api := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{
-			ID:                    string(record.ID),
+			ID:                    record.ID,
 			Name:                  record.Name,
 			Description:           record.Description,
 			Version:               record.Version,
@@ -95,7 +94,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 		groupKeyByID[group.ID] = string(group.Key)
 		api.NodeGroups = append(api.NodeGroups, serverapi.WorkflowNodeGroup{
 			GroupID:     group.ID,
-			WorkflowID:  string(group.WorkflowID),
+			WorkflowID:  group.WorkflowID,
 			GroupKey:    string(group.Key),
 			DisplayName: group.DisplayName,
 			SortOrder:   int(group.SortOrder),
@@ -124,7 +123,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 		nodeID := string(identity.ID)
 		api.Nodes = append(api.Nodes, serverapi.WorkflowNode{
 			ID:                 nodeID,
-			WorkflowID:         string(identity.WorkflowID),
+			WorkflowID:         identity.WorkflowID,
 			Key:                string(identity.Key),
 			Kind:               string(node.Kind()),
 			DisplayName:        identity.DisplayName,
@@ -143,7 +142,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 	for _, group := range def.TransitionGroups {
 		api.TransitionGroups = append(api.TransitionGroups, serverapi.WorkflowTransitionGroup{
 			ID:           string(group.ID),
-			WorkflowID:   string(group.WorkflowID),
+			WorkflowID:   group.WorkflowID,
 			SourceNodeID: string(group.SourceNodeID),
 			TransitionID: string(group.TransitionID),
 			DisplayName:  group.DisplayName,
@@ -161,7 +160,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 		}
 		api.Edges = append(api.Edges, serverapi.WorkflowEdge{
 			ID:                 string(edge.ID),
-			WorkflowID:         string(edge.WorkflowID),
+			WorkflowID:         edge.WorkflowID,
 			TransitionGroupID:  string(edge.TransitionGroupID),
 			Key:                string(edge.Key),
 			TargetNodeID:       string(edge.TargetNodeID),

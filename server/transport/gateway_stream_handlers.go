@@ -10,6 +10,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -242,10 +243,18 @@ func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.
 	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
 }
 
+func protocolWorkflowID(id *runtimeids.WorkflowID) *string {
+	if id == nil {
+		return nil
+	}
+	value := id.String()
+	return &value
+}
+
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {
 	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
 		ProjectID:        evt.ProjectID,
-		WorkflowID:       evt.WorkflowID,
+		WorkflowID:       protocolWorkflowID(evt.WorkflowID),
 		Resource:         protocol.WorkflowProjectEventResource(evt.Resource),
 		Action:           protocol.WorkflowProjectEventAction(evt.Action),
 		PrimaryEntityID:  evt.PrimaryEntityID,

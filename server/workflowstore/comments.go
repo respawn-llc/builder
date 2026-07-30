@@ -59,10 +59,10 @@ func (s *Store) CountTaskComments(ctx context.Context, taskID workflow.TaskID) (
 	return s.queries.CountTaskComments(ctx, string(taskID))
 }
 
-func (s *Store) TaskIdentityForComment(ctx context.Context, commentID string) (taskID string, projectID string, workflowID string, err error) {
+func (s *Store) TaskIdentityForComment(ctx context.Context, commentID string) (taskID string, projectID string, workflowID workflow.WorkflowID, err error) {
 	row, err := s.queries.GetTaskIdentityForComment(ctx, strings.TrimSpace(commentID))
 	if err != nil {
-		return "", "", "", err
+		return "", "", workflow.WorkflowID{}, err
 	}
 	return row.TaskID, row.ProjectID, row.WorkflowID, nil
 }

@@ -302,6 +302,67 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
       sqlc.narg(project_id) IS NULL
       OR project_link.id IS NOT NULL
   )
+  AND (
+      sqlc.arg(cursor_active) = 0
+      OR (
+          sqlc.narg(project_id) IS NULL
+          AND (
+              MAX(
+                  workflows.updated_at_unix_ms,
+                  COALESCE((
+                      SELECT MAX(task_records.updated_at_unix_ms)
+                      FROM task_records
+                      WHERE task_records.workflow_id = workflows.id
+                  ), workflows.updated_at_unix_ms)
+              ) < sqlc.narg(cursor_activity_at_unix_ms)
+              OR (
+                  MAX(
+                      workflows.updated_at_unix_ms,
+                      COALESCE((
+                          SELECT MAX(task_records.updated_at_unix_ms)
+                          FROM task_records
+                          WHERE task_records.workflow_id = workflows.id
+                      ), workflows.updated_at_unix_ms)
+                  ) = sqlc.narg(cursor_activity_at_unix_ms)
+                  AND workflows.id < sqlc.narg(cursor_workflow_id)
+              )
+          )
+      )
+      OR (
+          sqlc.narg(project_id) IS NOT NULL
+          AND (
+              project_link.is_default < sqlc.narg(cursor_project_default)
+              OR (
+                  project_link.is_default = sqlc.narg(cursor_project_default)
+                  AND (
+                      (
+                          sqlc.narg(cursor_activity_at_unix_ms) IS NOT NULL
+                          AND (
+                              project_latest_task.updated_at_unix_ms IS NULL
+                              OR project_latest_task.updated_at_unix_ms < sqlc.narg(cursor_activity_at_unix_ms)
+                          )
+                      )
+                      OR (
+                          (
+                              project_latest_task.updated_at_unix_ms = sqlc.narg(cursor_activity_at_unix_ms)
+                              OR (
+                                  project_latest_task.updated_at_unix_ms IS NULL
+                                  AND sqlc.narg(cursor_activity_at_unix_ms) IS NULL
+                              )
+                          )
+                          AND (
+                              lower(workflows.name) > sqlc.narg(cursor_project_name)
+                              OR (
+                                  lower(workflows.name) = sqlc.narg(cursor_project_name)
+                                  AND workflows.id > sqlc.narg(cursor_workflow_id)
+                              )
+                          )
+                      )
+                  )
+              )
+          )
+      )
+  )
 ORDER BY
     project_link_default DESC,
     CASE
@@ -1345,7 +1406,7 @@ WITH
 args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-        CAST(sqlc.narg(workflow_id) AS TEXT) AS workflow_id,
+        sqlc.narg(workflow_id) AS workflow_id,
         CAST(sqlc.narg(visible_columns_json) AS TEXT) AS visible_columns_json,
         CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
@@ -2166,9 +2227,9 @@ SELECT
     COALESCE(w.id, '') AS primary_workspace_id,
     COALESCE(w.canonical_root_path, '') AS primary_workspace_root_path,
     CAST(COALESCE(w.updated_at_unix_ms, p.updated_at_unix_ms) AS INTEGER) AS primary_workspace_updated_at_unix_ms,
-    COALESCE(default_workflow.id, '') AS default_workflow_id,
-    COALESCE(default_workflow.name, '') AS default_workflow_name,
-    CASE WHEN default_workflow.id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
+    default_workflow.workflow_id AS default_workflow_id,
+    COALESCE(default_workflow.workflow_name, '') AS default_workflow_name,
+    CASE WHEN default_workflow.workflow_id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
     CAST(MAX(
         p.updated_at_unix_ms,
         COALESCE(w.updated_at_unix_ms, 0),
@@ -2197,10 +2258,7 @@ SELECT
     ) AS INTEGER) AS workflow_count
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
-LEFT JOIN project_workflow_links default_link
-    ON default_link.id = p.default_project_workflow_link_id
-   AND default_link.project_id = p.id
-LEFT JOIN workflows default_workflow ON default_workflow.id = default_link.workflow_id
+JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
 WHERE (sqlc.arg(project_id) = '' OR p.id = sqlc.arg(project_id))
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT sqlc.arg(limit_rows)

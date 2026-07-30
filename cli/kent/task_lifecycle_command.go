@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -57,9 +58,9 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		var workflowID *string
+		var workflowID *runtimeids.WorkflowID
 		if selectedWorkflow != nil {
-			value := selectedWorkflow.PersistedID()
+			value := selectedWorkflow.value
 			workflowID = &value
 		}
 		labelIDs := []string(nil)

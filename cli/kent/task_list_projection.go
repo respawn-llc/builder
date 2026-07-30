@@ -56,11 +56,20 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	if resp.Scope.ProjectID != expectedScope.ProjectID {
 		return taskListProjection{}, fmt.Errorf("task list response project %q does not match requested project %q", resp.Scope.ProjectID, expectedScope.ProjectID)
 	}
-	if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
-		return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
-	}
-	if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
-		return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
+	switch expectedScope.WorkflowOwner {
+	case taskListExpectedWorkflowFromRequest:
+		if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
+			return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
+		}
+		if resp.Scope.WorkflowID != nil && resp.Scope.WorkflowID.String() != *expectedScope.WorkflowID {
+			return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
+		}
+	case taskListExpectedWorkflowFromToken:
+		if expectedScope.WorkflowID != nil {
+			return taskListProjection{}, errors.New("task list token-owned workflow scope cannot include an explicit workflow_id")
+		}
+	default:
+		return taskListProjection{}, errors.New("task list request has invalid workflow scope ownership")
 	}
 	switch resp.MatchingWorkflowCardinality {
 	case serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,

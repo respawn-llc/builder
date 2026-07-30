@@ -21,6 +21,14 @@ import (
 	"core/shared/toolspec"
 )
 
+func mustRuntimeWorkflowID() workflow.WorkflowID {
+	id, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	completeErr                         error
@@ -173,8 +181,7 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 			TaskShortID:     "BUI-1",
 			TaskTitle:       "Workflow task",
 			TaskBody:        "Task body.",
-			WorkflowID:      "workflow-1",
-			WorkflowShortID: "workflow-1",
+			WorkflowID:      mustRuntimeWorkflowID(),
 			WorkflowName:    "Release preparation",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",

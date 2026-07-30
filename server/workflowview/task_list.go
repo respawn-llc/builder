@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -98,7 +99,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if workflowID == nil {
 		liveSnapshots, err = l.authority.CurrentProjectTaskExecutionSnapshots(projectID)
 	} else {
-		liveSnapshots, err = l.authority.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, workflow.WorkflowID(*workflowID))
+		liveSnapshots, err = l.authority.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, *workflowID)
 	}
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
@@ -160,8 +161,26 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	}, nil
 }
 
-func (l *TaskList) resolveScope(ctx context.Context, projectIDValue *string, workflowIDValue *string) (string, *string, error) {
+func (l *TaskList) resolveScope(ctx context.Context, projectIDValue *string, workflowIDValue *runtimeids.WorkflowID, token *workflowTaskListPageTokenPayload) (string, *runtimeids.WorkflowID, error) {
+	if token != nil {
+		if projectIDValue != nil && *projectIDValue != token.Scope.ProjectID {
+			return "", nil, ErrInvalidPageToken
+		}
+		var tokenWorkflowID *runtimeids.WorkflowID
+		if token.Scope.Narrowed != nil {
+			value := token.Scope.Narrowed.WorkflowID
+			tokenWorkflowID = &value
+		}
+		if workflowIDValue != nil {
+			if tokenWorkflowID == nil || *workflowIDValue != *tokenWorkflowID {
+				return "", nil, ErrInvalidPageToken
+			}
+		}
+		projectIDValue = &token.Scope.ProjectID
+		workflowIDValue = tokenWorkflowID
+	}
 	if projectIDValue != nil && workflowIDValue != nil {
+
 		if _, err := l.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{
 			ProjectID:  *projectIDValue,
 			WorkflowID: *workflowIDValue,

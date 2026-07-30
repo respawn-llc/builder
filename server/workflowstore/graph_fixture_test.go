@@ -9,7 +9,7 @@ import (
 )
 
 func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.T) {
-	workflowID := workflow.WorkflowID("workflow-rich")
+	workflowID := mustWorkflowID("workflow-rich")
 	groupID := "group-parallel"
 	agentID := workflow.NodeID("node-agent")
 	scriptID := workflow.NodeID("node-script")

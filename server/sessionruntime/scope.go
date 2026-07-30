@@ -23,7 +23,7 @@ func (r WorkflowExecutionRef) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("workflow project id is required")
 	}
-	if strings.TrimSpace(string(r.WorkflowID)) == "" {
+	if r.WorkflowID.IsZero() {
 		return errors.New("workflow id is required")
 	}
 	if err := r.CurrentNode.Validate(); err != nil {

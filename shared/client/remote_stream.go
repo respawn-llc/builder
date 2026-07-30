@@ -13,6 +13,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -135,12 +136,18 @@ func (c *Remote) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSu
 func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serverapi.WorkflowProjectEvent, error) {
 	decoded := serverapi.WorkflowProjectEvent{
 		ProjectID:        event.ProjectID,
-		WorkflowID:       event.WorkflowID,
 		Resource:         serverapi.WorkflowProjectEventResource(event.Resource),
 		Action:           serverapi.WorkflowProjectEventAction(event.Action),
 		PrimaryEntityID:  event.PrimaryEntityID,
 		RelatedIDs:       append([]string(nil), event.RelatedIDs...),
 		OccurredAtUnixMs: event.OccurredAtUnixMs,
+	}
+	if event.WorkflowID != nil {
+		workflowID, err := runtimeids.ParseWorkflowID(*event.WorkflowID)
+		if err != nil {
+			return serverapi.WorkflowProjectEvent{}, err
+		}
+		decoded.WorkflowID = &workflowID
 	}
 	if err := decoded.Validate(); err != nil {
 		return serverapi.WorkflowProjectEvent{}, err

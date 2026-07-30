@@ -9,7 +9,7 @@ import (
 )
 
 type WorkflowDefinitionReadModel interface {
-	GetDefinition(context.Context, string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error)
+	GetDefinition(context.Context, workflow.WorkflowID) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error)
 }
 
 type WorkflowBoardReadModel interface {

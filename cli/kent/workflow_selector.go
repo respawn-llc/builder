@@ -1,37 +1,23 @@
 package main
 
 import (
-	"core/shared/runtimeids"
+	"errors"
 
-	"github.com/google/uuid"
+	"core/shared/runtimeids"
 )
 
-const persistedWorkflowIDPrefix = "workflow-"
-
 type workflowSelector struct {
-	value uuid.UUID
+	value runtimeids.WorkflowID
 }
 
 func parseWorkflowSelector(raw string) (workflowSelector, error) {
-	value, err := runtimeids.ParseCanonicalUUIDv4(raw, "workflow selector")
+	value, err := runtimeids.ParseWorkflowID(raw)
 	if err != nil {
-		return workflowSelector{}, err
-	}
-	return workflowSelector{value: value}, nil
-}
-
-func workflowSelectorFromPersistedID(raw string) (workflowSelector, error) {
-	value, err := runtimeids.ParseCanonicalPrefixedUUIDv4(raw, persistedWorkflowIDPrefix, "workflow id")
-	if err != nil {
-		return workflowSelector{}, err
+		return workflowSelector{}, errors.New("invalid workflow ID")
 	}
 	return workflowSelector{value: value}, nil
 }
 
 func (s workflowSelector) String() string {
 	return s.value.String()
-}
-
-func (s workflowSelector) PersistedID() string {
-	return persistedWorkflowIDPrefix + s.String()
 }

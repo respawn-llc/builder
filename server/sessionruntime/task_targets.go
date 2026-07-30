@@ -97,7 +97,7 @@ func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID strin
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(string(workflowID)) == "" {
+	if strings.TrimSpace(projectID) == "" || workflowID.IsZero() {
 		return nil, errors.New("workflow execution scope is required")
 	}
 	a.mu.Lock()
@@ -122,7 +122,7 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workfl
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(string(workflowID)) == "" {
+	if strings.TrimSpace(projectID) == "" || workflowID.IsZero() {
 		return nil, errors.New("workflow execution scope is required")
 	}
 	snapshots := make(map[workflow.TaskID]TaskExecutionSnapshot, len(taskIDs))

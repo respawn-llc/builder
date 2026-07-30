@@ -239,6 +239,15 @@ func TestSessionViewFromRuntimeOmitsDefaultAgentRole(t *testing.T) {
 	}
 }
 
+func mustProjectionWorkflowID(t *testing.T) runtimeids.WorkflowID {
+	t.Helper()
+	id, err := runtimeids.ParseWorkflowID(projectionWorkflowID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.RuntimeMainView {
 	t.Helper()
 	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
@@ -261,7 +270,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 					TaskID: workflow.TaskID(projectionWorkflowTask),
 					NodeID: workflow.NodeID("10000000-0000-4000-8000-000000000007"),
 				},
-				WorkflowID: projectionWorkflowID,
+				WorkflowID: mustProjectionWorkflowID(t),
 			},
 		},
 	})
@@ -269,7 +278,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	if !view.Status.WorkflowActive || view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
 	}
-	if view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
+	if view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != mustProjectionWorkflowID(t) {
 		t.Fatalf("workflow session = %+v, want task/workflow ids", view.Status.WorkflowSession)
 	}
 }

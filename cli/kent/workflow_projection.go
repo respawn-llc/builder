@@ -1,15 +1,16 @@
 package main
 
-import "core/shared/serverapi"
+import (
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
+	"errors"
+)
 
 func workflowRecordForCLI(record serverapi.WorkflowRecord) (serverapi.WorkflowRecord, error) {
-	selector, err := workflowSelectorFromPersistedID(record.ID)
-	if err != nil {
-		return serverapi.WorkflowRecord{}, err
+	if record.ID.IsZero() {
+		return serverapi.WorkflowRecord{}, errors.New("workflow_id is required")
 	}
-	projected := record
-	projected.ID = selector.String()
-	return projected, nil
+	return record, nil
 }
 
 func workflowRecordsForCLI(records []serverapi.WorkflowRecord) ([]serverapi.WorkflowRecord, error) {
@@ -25,23 +26,17 @@ func workflowRecordsForCLI(records []serverapi.WorkflowRecord) ([]serverapi.Work
 }
 
 func workflowDeleteResponseForCLI(response serverapi.WorkflowDeleteResponse) (serverapi.WorkflowDeleteResponse, error) {
-	workflowID, err := workflowIDForCLI(response.Impact.WorkflowID)
-	if err != nil {
+	if _, err := workflowIDForCLI(response.Impact.WorkflowID); err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
 	}
-	projected := response
-	projected.Impact.WorkflowID = workflowID
-	return projected, nil
+	return response, nil
 }
 
 func workflowTaskSummaryForCLI(summary serverapi.WorkflowTaskSummary) (serverapi.WorkflowTaskSummary, error) {
-	workflowID, err := workflowIDForCLI(summary.WorkflowID)
-	if err != nil {
+	if _, err := workflowIDForCLI(summary.WorkflowID); err != nil {
 		return serverapi.WorkflowTaskSummary{}, err
 	}
-	projected := summary
-	projected.WorkflowID = workflowID
-	return projected, nil
+	return summary, nil
 }
 
 func workflowDefinitionForCLI(definition serverapi.WorkflowDefinition) (serverapi.WorkflowDefinition, error) {
@@ -51,34 +46,6 @@ func workflowDefinitionForCLI(definition serverapi.WorkflowDefinition) (serverap
 	}
 	projected := definition
 	projected.Workflow = workflow
-	projected.NodeGroups = append([]serverapi.WorkflowNodeGroup(nil), definition.NodeGroups...)
-	for i := range projected.NodeGroups {
-		projected.NodeGroups[i].WorkflowID, err = workflowIDForCLI(projected.NodeGroups[i].WorkflowID)
-		if err != nil {
-			return serverapi.WorkflowDefinition{}, err
-		}
-	}
-	projected.Nodes = append([]serverapi.WorkflowNode(nil), definition.Nodes...)
-	for i := range projected.Nodes {
-		projected.Nodes[i].WorkflowID, err = workflowIDForCLI(projected.Nodes[i].WorkflowID)
-		if err != nil {
-			return serverapi.WorkflowDefinition{}, err
-		}
-	}
-	projected.TransitionGroups = append([]serverapi.WorkflowTransitionGroup(nil), definition.TransitionGroups...)
-	for i := range projected.TransitionGroups {
-		projected.TransitionGroups[i].WorkflowID, err = workflowIDForCLI(projected.TransitionGroups[i].WorkflowID)
-		if err != nil {
-			return serverapi.WorkflowDefinition{}, err
-		}
-	}
-	projected.Edges = append([]serverapi.WorkflowEdge(nil), definition.Edges...)
-	for i := range projected.Edges {
-		projected.Edges[i].WorkflowID, err = workflowIDForCLI(projected.Edges[i].WorkflowID)
-		if err != nil {
-			return serverapi.WorkflowDefinition{}, err
-		}
-	}
 	projected.DerivedWiring.Diagnostics, err = workflowValidationErrorsForCLI(definition.DerivedWiring.Diagnostics)
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, err
@@ -86,22 +53,18 @@ func workflowDefinitionForCLI(definition serverapi.WorkflowDefinition) (serverap
 	return projected, nil
 }
 
-func workflowIDForCLI(persistedID string) (string, error) {
-	selector, err := workflowSelectorFromPersistedID(persistedID)
-	if err != nil {
-		return "", err
+func workflowIDForCLI(workflowID runtimeids.WorkflowID) (string, error) {
+	if workflowID.IsZero() {
+		return "", errors.New("workflow_id is required")
 	}
-	return selector.String(), nil
+	return workflowID.String(), nil
 }
 
 func projectWorkflowLinkForCLI(link serverapi.ProjectWorkflowLink) (serverapi.ProjectWorkflowLink, error) {
-	workflowID, err := workflowIDForCLI(link.WorkflowID)
-	if err != nil {
+	if _, err := workflowIDForCLI(link.WorkflowID); err != nil {
 		return serverapi.ProjectWorkflowLink{}, err
 	}
-	projected := link
-	projected.WorkflowID = workflowID
-	return projected, nil
+	return link, nil
 }
 
 func workflowValidationForCLI(response serverapi.WorkflowValidateResponse) (serverapi.WorkflowValidateResponse, error) {
@@ -120,11 +83,6 @@ func workflowValidationErrorsForCLI(errors []serverapi.WorkflowValidationError) 
 		if projected[i].WorkflowID == nil {
 			continue
 		}
-		workflowID, err := workflowIDForCLI(*projected[i].WorkflowID)
-		if err != nil {
-			return nil, err
-		}
-		projected[i].WorkflowID = &workflowID
 	}
 	return projected, nil
 }
@@ -136,9 +94,5 @@ func workflowTaskDetailForCLI(detail serverapi.WorkflowTaskDetail) (serverapi.Wo
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	projected.Summary = summary
-	projected.Workflow.WorkflowID, err = workflowIDForCLI(detail.Workflow.WorkflowID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
 	return projected, nil
 }

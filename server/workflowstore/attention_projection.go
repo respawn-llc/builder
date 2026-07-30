@@ -70,7 +70,7 @@ func pendingApprovalAttentionProjection(ctx context.Context, q *sqlitegen.Querie
 		ApprovalID:       approval.ID,
 		Source:           approval.Source,
 		ProjectID:        task.ProjectID,
-		WorkflowID:       task.WorkflowID,
+		WorkflowID:       task.WorkflowID.String(),
 		TaskShortID:      task.ShortID,
 		TaskTitle:        task.Title,
 		SessionID:        sessionID,
@@ -115,7 +115,7 @@ func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sq
 	return InterruptedCurrentNodeAttentionProjection{
 		CurrentNode:            reference,
 		ProjectID:              task.ProjectID,
-		WorkflowID:             task.WorkflowID,
+		WorkflowID:             task.WorkflowID.String(),
 		TaskShortID:            task.ShortID,
 		TaskTitle:              task.Title,
 		SessionID:              sessionID,
@@ -170,7 +170,7 @@ func taskApprovalAttentionResolution(ctx context.Context, q *sqlitegen.Queries, 
 }
 
 func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (TaskAttentionResolution, error) {
-	taskIDs, err := q.ListWorkflowTaskIDs(ctx, string(workflowID))
+	taskIDs, err := q.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}

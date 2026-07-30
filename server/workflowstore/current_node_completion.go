@@ -69,7 +69,7 @@ func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector I
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -121,7 +121,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	definition, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, workflowRecord, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}

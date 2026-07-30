@@ -31,8 +31,7 @@ Task references:
   project attached to the current workspace.
 
 Workflow selection:
-  Workflow selectors are bare canonical UUIDv4 values. Workflow names and
-  persisted `workflow-...` IDs are not accepted.
+  Workflow selectors are bare canonical UUIDv4 values.
   Task creation uses `--workflow` when supplied. Otherwise it uses the project
   default, or the lone linked workflow when the project has no default.
 

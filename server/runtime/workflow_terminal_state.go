@@ -1,8 +1,9 @@
 package runtime
 
 import (
-	"strings"
 	"time"
+
+	"core/server/workflow"
 )
 
 type WorkflowCompletionSource string
@@ -22,21 +23,21 @@ type WorkflowTerminalState struct {
 }
 
 type WorkflowSessionState struct {
-	TaskID     string
-	WorkflowID string
+	TaskID     workflow.TaskID
+	WorkflowID workflow.WorkflowID
 }
 
-func (e *Engine) WorkflowSessionState() WorkflowSessionState {
+func (e *Engine) WorkflowSessionState() *WorkflowSessionState {
 	if e == nil {
-		return WorkflowSessionState{}
+		return nil
 	}
 	if e.currentNodeExecutionActive() {
-		return WorkflowSessionState{
-			TaskID:     string(e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID),
-			WorkflowID: strings.TrimSpace(e.cfg.CurrentNodeExecution.Instructions.WorkflowID),
+		return &WorkflowSessionState{
+			TaskID:     e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID,
+			WorkflowID: e.cfg.CurrentNodeExecution.Instructions.WorkflowID,
 		}
 	}
-	return WorkflowSessionState{}
+	return nil
 }
 
 func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {

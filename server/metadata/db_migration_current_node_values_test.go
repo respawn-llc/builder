@@ -35,9 +35,9 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, subagent_role,
     prompt_template, input_fields_json, output_fields_json
 ) VALUES
-    ('node-review', 'workflow-1', 'review', 'agent', 'Review', 'coder',
+    ('node-review', 'workflow-550e8400-e29b-41d4-a716-446655440001', 'review', 'agent', 'Review', 'coder',
      'Review.', '[{"name":"summary","description":"Plan summary."}]', '[]'),
-    ('node-audit', 'workflow-1', 'audit', 'agent', 'Audit', 'coder',
+    ('node-audit', 'workflow-550e8400-e29b-41d4-a716-446655440001', 'audit', 'agent', 'Audit', 'coder',
      'Audit.', '[]', '[]');
 
 DELETE FROM workflow_edges

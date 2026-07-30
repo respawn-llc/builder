@@ -34,7 +34,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 					ctx:        ctx,
 					task:       createDefaultTask(t, ctx, store, binding.ProjectID),
 					workflowID: workflowID,
-					targetID:   workflow.NodeID("node-agent-" + string(workflowID)),
+					targetID:   workflow.NodeID("node-agent-" + workflowID.String()),
 				}
 			},
 		},
@@ -209,7 +209,7 @@ func TestCurrentNodeStartContextDerivesContinuationFromOutgoingEdges(t *testing.
 	workflowID := createValidWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		for index := range req.Edges {
-			if req.Edges[index].TransitionGroupID == workflow.TransitionGroupID("group-done-"+string(workflowID)) {
+			if req.Edges[index].TransitionGroupID == workflow.TransitionGroupID("group-done-"+workflowID.String()) {
 				req.Edges[index].ContextMode = workflow.ContextModeContinueSession
 			}
 		}

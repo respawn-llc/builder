@@ -762,7 +762,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	}
 	audit := nodeByKey(t, definition, "audit")
 	review := nodeByKey(t, definition, "review")
-	reworkGroupID := workflow.TransitionGroupID("group-rework-" + string(workflowID))
+	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		auditRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(audit))
 		auditRecord.OutputFields = append(auditRecord.OutputFields, workflow.OutputField{Name: "summary", Description: "Rework summary."})
@@ -774,7 +774,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",

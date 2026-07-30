@@ -230,7 +230,7 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
-	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, string(workflowID))
+	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, workflowID)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}

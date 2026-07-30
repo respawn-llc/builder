@@ -13,3 +13,14 @@ sql:
         sql_package: "database/sql"
         emit_json_tags: false
         emit_interface: false
+        overrides:
+          - db_type: "BLOB"
+            go_type:
+              import: "core/shared/runtimeids"
+              type: "WorkflowID"
+          - db_type: "BLOB"
+            nullable: true
+            go_type:
+              import: "core/shared/runtimeids"
+              type: "WorkflowID"
+              pointer: true

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -77,7 +78,7 @@ type taskWorkflowRecovery struct {
 type taskWorkflowRecoveryFailure struct {
 	kind       taskWorkflowRecoveryKind
 	projectID  string
-	workflowID *string
+	workflowID *runtimeids.WorkflowID
 }
 
 type taskWorkflowRecoveryContext struct {

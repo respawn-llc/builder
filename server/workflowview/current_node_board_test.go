@@ -14,7 +14,7 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 
 	board, err := fixture.board.Get(fixture.ctx, serverapi.WorkflowBoardRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: stringPointer(string(fixture.workflowID)),
+		WorkflowID: &fixture.workflowID,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
 			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
 		},
@@ -29,7 +29,7 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 
 	cards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -71,7 +71,7 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 
 	request := serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   1,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{

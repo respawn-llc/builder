@@ -990,7 +990,7 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1038,16 +1038,16 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 		return handle
 	}
-	selected := start("project-a", "workflow-a", "task-a")
-	unrelatedWorkflow := start("project-a", "workflow-b", "task-b")
-	unrelatedProject := start("project-b", "workflow-a", "task-c")
+	selected := start("project-a", authorityWorkflowID(t, "a"), "task-a")
+	unrelatedWorkflow := start("project-a", authorityWorkflowID(t, "b"), "task-b")
+	unrelatedProject := start("project-b", authorityWorkflowID(t, "a"), "task-c")
 	t.Cleanup(func() {
 		for _, handle := range []ExecutionHandle{selected, unrelatedWorkflow, unrelatedProject} {
 			_ = handle.Stop(context.Background())
 		}
 	})
 
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("scoped snapshot: %v", err)
 	}
@@ -1055,7 +1055,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		t.Fatalf("scoped snapshot included unrelated execution: %+v", snapshot)
 	}
 	snapshot.Executions[0].Script.Path = "mutated"
-	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("repeat scoped snapshot: %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1239,7 +1239,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -2212,6 +2212,23 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	}
 }
 
+func authorityWorkflowID(t *testing.T, name string) workflow.WorkflowID {
+	t.Helper()
+	raw, found := map[string]string{
+		"test": "550e8400-e29b-41d4-a716-446655440101",
+		"a":    "550e8400-e29b-41d4-a716-446655440102",
+		"b":    "550e8400-e29b-41d4-a716-446655440103",
+	}[name]
+	if !found {
+		t.Fatalf("unknown authority Workflow fixture %q", name)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse authority Workflow fixture %q: %v", raw, err)
+	}
+	return workflowID
+}
+
 func workflowExecutionRefForTest(
 	t *testing.T,
 	taskID workflow.TaskID,
@@ -2223,7 +2240,7 @@ func workflowExecutionRefForTest(
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: "workflow-test", CurrentNode: reference}
+	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"), CurrentNode: reference}
 }
 
 func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref WorkflowExecutionRef) *WorkflowExecutionLease {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -68,7 +69,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	workflowProvided := flagWasProvided(fs, "workflow")
-	var selectedWorkflowID *string
+	var selectedWorkflowID *runtimeids.WorkflowID
 	var selectedWorkflowSelector *string
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)
@@ -77,8 +78,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		persistedID := selector.PersistedID()
-		selectedWorkflowID = &persistedID
+		selectedWorkflowID = &selector.value
 		selectorValue := selector.String()
 		selectedWorkflowSelector = &selectorValue
 	}
@@ -141,7 +141,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		expectedScope := taskListExpectedScope{
 			ProjectID:  projectID,
-			WorkflowID: selectedWorkflowID,
+			WorkflowID: selectedWorkflowSelector,
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})

@@ -31,6 +31,7 @@ import {
   taskActionsSchema,
   taskStatusSchema,
   workflowPickerItemSchema,
+  workflowIDSchema,
   workspaceSummarySchema,
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
@@ -59,7 +60,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
     scope: z
       .object({
         project_id: z.string().min(1),
-        workflow_id: z.string().min(1).optional(),
+        workflow_id: workflowIDSchema.optional(),
       })
       .strict(),
     matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
@@ -70,7 +71,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
         .object({
           task_id: z.string().min(1),
           short_id: z.string().min(1),
-          workflow_id: z.string().min(1),
+          workflow_id: workflowIDSchema,
           workflow_name: z.string().min(1).optional(),
           title: z.string(),
           created_at_unix_ms: z.number(),
@@ -233,7 +234,7 @@ export const projectWorkflowLinksSchema: z.ZodType<readonly ProjectWorkflowLink[
           .object({
             id: z.string(),
             project_id: z.string(),
-            workflow_id: z.string(),
+            workflow_id: workflowIDSchema,
             default: z.boolean(),
           })
           .transform((value) => ({
@@ -306,7 +307,7 @@ function visibleBoardGroups(
 export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
   .object({
     project_id: z.string(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     node_id: z.string(),
     cards: boardCardsSchema,
     previous_page_token: z.string().nullable(),
@@ -352,7 +353,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       summary: z.object({
         id: z.string(),
         project_id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         short_id: z.string(),
         title: z.string(),
         created_at_unix_ms: z.number(),
@@ -363,7 +364,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
         display_name: z.string(),
       }),
       workflow: z.object({
-        workflow_id: nonBlankString,
+        workflow_id: workflowIDSchema,
         display_name: z.string(),
         version: z.number(),
       }),
@@ -419,46 +420,45 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     done: value.task.summary.done,
   }));
 
-const activityItemSchema = z
-  .discriminatedUnion("type", [
-    z
-      .object({
-        activity_id: nonBlankString,
-        type: z.literal("comment"),
-        task_id: nonBlankString,
-        occurred_at_unix_ms: z.number(),
-        updated_at_unix_ms: z.number(),
-        comment: commentSchema,
-      })
-      .strict()
-      .transform((value) => ({
-        id: value.activity_id,
-        type: value.type,
-        taskID: value.task_id,
-        occurredAt: value.occurred_at_unix_ms,
-        updatedAt: value.updated_at_unix_ms,
-        comment: value.comment,
-      })),
-    z
-      .object({
-        activity_id: nonBlankString,
-        type: z.literal("session_started"),
-        task_id: nonBlankString,
-        occurred_at_unix_ms: z.number(),
-        updated_at_unix_ms: z.number(),
-        session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
-      })
-      .strict()
-      .transform((value) => ({
-        id: value.activity_id,
-        type: value.type,
-        taskID: value.task_id,
-        occurredAt: value.occurred_at_unix_ms,
-        updatedAt: value.updated_at_unix_ms,
-        sessionID: value.session_started.session_id,
-        sessionName: value.session_started.name,
-      })),
-  ]);
+const activityItemSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("comment"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      comment: commentSchema,
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      comment: value.comment,
+    })),
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("session_started"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      sessionID: value.session_started.session_id,
+      sessionName: value.session_started.name,
+    })),
+]);
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z
   .object({

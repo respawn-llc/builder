@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -18,7 +19,7 @@ const (
 func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	projectID := "project-1"
 	taskID := "task-1"
-	workflowID := "workflow-1"
+	workflowID := runtimeids.NewWorkflowID()
 	nodeID := "node-1"
 
 	catalog := WorkflowProjectLabelCatalog{
@@ -426,7 +427,7 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 		},
 		{
 			name:    "board cards require a tagged filter",
-			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: "workflow-1", NodeID: "node-1"},
+			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: runtimeids.NewWorkflowID(), NodeID: "node-1"},
 			field:   "label_filter.kind",
 			code:    WorkflowRequestErrorRequired,
 		},
@@ -436,9 +437,9 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
 	labelIDs := []string{workflowLabelIDAlpha, workflowLabelIDBeta}
 	for _, value := range []any{
-		WorkflowTaskDetail{LabelIDs: labelIDs},
-		WorkflowTaskListItem{LabelIDs: labelIDs},
-		WorkflowBoardTaskCard{LabelIDs: labelIDs},
+		WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, LabelIDs: labelIDs},
+		WorkflowTaskListItem{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
+		WorkflowBoardTaskCard{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 	} {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -629,7 +630,7 @@ func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *te
 			name: "board cards malformed filter is typed",
 			request: WorkflowBoardNodeCardsListRequest{
 				ProjectID:  projectID,
-				WorkflowID: "workflow-1",
+				WorkflowID: runtimeids.NewWorkflowID(),
 				NodeID:     "node-1",
 			},
 			wantField:  "label_filter.kind",

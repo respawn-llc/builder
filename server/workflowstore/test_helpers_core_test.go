@@ -2,11 +2,21 @@ package workflowstore
 
 import (
 	"context"
+	"core/shared/runtimeids"
 	"errors"
 	"testing"
 
 	"core/server/workflow"
 )
+
+func mustWorkflowID(raw string) workflow.WorkflowID {
+	const canonical = "11111111-1111-4111-8111-111111111111"
+	id, err := runtimeids.ParseWorkflowID(canonical)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
 
 func completionHasCode(err error, code CompletionCode) bool {
 	var cve CompletionValidationError

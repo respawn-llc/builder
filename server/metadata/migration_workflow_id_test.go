@@ -3,7 +3,7 @@ package metadata
 import (
 	"bytes"
 	"database/sql/driver"
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -62,8 +62,12 @@ func TestMigrationWorkflowIDFunctionsRejectInvalidTextWithContext(t *testing.T) 
 					if err == nil {
 						t.Fatalf("%s(%q) succeeded", name, raw)
 					}
-					if !strings.Contains(err.Error(), location) {
-						t.Fatalf("%s(%q) error = %q, want location %q", name, raw, err, location)
+					var diagnostic *WorkflowIdentityMigrationDiagnostic
+					if !errors.As(err, &diagnostic) {
+						t.Fatalf("%s(%q) error = %T, want WorkflowIdentityMigrationDiagnostic", name, raw, err)
+					}
+					if diagnostic.Location != location {
+						t.Fatalf("%s(%q) diagnostic location = %q, want %q", name, raw, diagnostic.Location, location)
 					}
 				})
 			}

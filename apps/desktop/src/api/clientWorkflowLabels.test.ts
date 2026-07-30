@@ -160,7 +160,7 @@ describe("ApiClient workflow labels", () => {
     await expect(
       client.createTask({
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         title: "Ship labels",
         body: "Wire the desktop API.",
         sourceWorkspaceID: "workspace-1",
@@ -172,7 +172,7 @@ describe("ApiClient workflow labels", () => {
         method: "workflow.task.create",
         params: {
           project_id: "project-1",
-          workflow_id: "workflow-1",
+          workflow_id: "11111111-1111-4111-8111-111111111111",
           title: "Ship labels",
           body: "Wire the desktop API.",
           source_workspace_id: "workspace-1",
@@ -187,7 +187,7 @@ describe("ApiClient workflow labels", () => {
       {
         method: "workflow.task.list",
         result: {
-          scope: { project_id: "project-1", workflow_id: "workflow-1" },
+          scope: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111" },
           matching_workflow_cardinality: "one",
           next_offset: null,
           generated_at_unix_ms: 7,
@@ -195,7 +195,7 @@ describe("ApiClient workflow labels", () => {
             {
               task_id: "task-1",
               short_id: "PROJ-1",
-              workflow_id: "workflow-1",
+              workflow_id: "11111111-1111-4111-8111-111111111111",
               workflow_name: "Delivery",
               title: "Ship labels",
               created_at_unix_ms: 1,
@@ -218,7 +218,7 @@ describe("ApiClient workflow labels", () => {
     await expect(
       client.listTasks({
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         labelFilter: {
           kind: "named",
           mode: "any",
@@ -228,7 +228,7 @@ describe("ApiClient workflow labels", () => {
         limit: 25,
       }),
     ).resolves.toMatchObject({
-      scope: { projectID: "project-1", workflowID: "workflow-1" },
+      scope: { projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111" },
       matchingWorkflowCardinality: "one",
       tasks: [{ id: "task-1", labelIDs: [priorityID] }],
     });
@@ -237,7 +237,7 @@ describe("ApiClient workflow labels", () => {
         method: "workflow.task.list",
         params: {
           project_id: "project-1",
-          workflow_id: "workflow-1",
+          workflow_id: "11111111-1111-4111-8111-111111111111",
           column_keys: [],
           status_kinds: [],
           attention_kinds: [],

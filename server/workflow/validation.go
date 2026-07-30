@@ -56,7 +56,7 @@ func newValidationState(def Definition, opts ValidationOptions, context Validati
 }
 
 func (s *validationState) validateShape() {
-	if strings.TrimSpace(string(s.def.ID)) == "" {
+	if s.def.ID.IsZero() {
 		s.addHard(CodeMissingWorkflowID, "workflow id is required", ValidationError{})
 	}
 	if !validDisplayName(s.def.DisplayName) {
@@ -95,7 +95,7 @@ func (s *validationState) indexNodeGroups() {
 	seenKeys := map[ModelKey]string{}
 	for _, group := range s.def.NodeGroups {
 		ref := ValidationError{WorkflowID: s.def.ID, RelatedIDs: []string{group.ID}}
-		if strings.TrimSpace(string(group.WorkflowID)) != "" && group.WorkflowID != s.def.ID {
+		if !group.WorkflowID.IsZero() && group.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "node group references another workflow", ref)
 		}
 		id := strings.TrimSpace(group.ID)
@@ -125,7 +125,7 @@ func (s *validationState) indexNodeGroups() {
 func (s *validationState) indexNodes() {
 	for _, node := range s.def.Nodes {
 		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
-		if strings.TrimSpace(string(NodeWorkflowID(node))) != "" && NodeWorkflowID(node) != s.def.ID {
+		if !NodeWorkflowID(node).IsZero() && NodeWorkflowID(node) != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "node references another workflow", ref)
 		}
 		if strings.TrimSpace(string(NodeIDOf(node))) == "" {
@@ -147,7 +147,7 @@ func (s *validationState) indexTransitionGroups() {
 	seenTransitionBySource := map[NodeID]map[string]TransitionGroupID{}
 	for _, group := range s.def.TransitionGroups {
 		ref := ValidationError{WorkflowID: s.def.ID, TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
-		if strings.TrimSpace(string(group.WorkflowID)) != "" && group.WorkflowID != s.def.ID {
+		if !group.WorkflowID.IsZero() && group.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "transition group references another workflow", ref)
 		}
 		if strings.TrimSpace(string(group.ID)) == "" {
@@ -185,7 +185,7 @@ func (s *validationState) indexTransitionGroups() {
 func (s *validationState) indexEdges() {
 	for _, edge := range s.def.Edges {
 		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
-		if strings.TrimSpace(string(edge.WorkflowID)) != "" && edge.WorkflowID != s.def.ID {
+		if !edge.WorkflowID.IsZero() && edge.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "edge references another workflow", ref)
 		}
 		if strings.TrimSpace(string(edge.ID)) == "" {
@@ -963,7 +963,7 @@ func (s *validationState) validateFanouts() {
 func (s *validationState) validateDerivedWiring() {
 	derived := DeriveWiring(s.def)
 	for _, diagnostic := range derived.Diagnostics {
-		if diagnostic.WorkflowID == "" {
+		if diagnostic.WorkflowID.IsZero() {
 			diagnostic.WorkflowID = s.def.ID
 		}
 		s.errors = append(s.errors, diagnostic)

@@ -48,7 +48,7 @@ describe("attention notification API", () => {
           target: {
             kind: "workflow_task",
             project_id: "project-1",
-            workflow_id: "workflow-1",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             task_short_id: "KT-1",
             task_title: "Needs answer",

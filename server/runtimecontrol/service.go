@@ -738,8 +738,11 @@ func (s *Service) rejectWorkflowAutoCompactionDisable(ctx context.Context, sessi
 }
 
 func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, engine *runtime.Engine) (bool, error) {
-	if engine != nil && engine.WorkflowSessionState().TaskID != "" {
-		return true, nil
+	if engine != nil {
+		workflowState := engine.WorkflowSessionState()
+		if workflowState != nil && workflowState.TaskID != "" {
+			return true, nil
+		}
 	}
 	if s != nil && s.workflowTasks != nil {
 		workflow, err := s.workflowTasks.SessionHasWorkflowTask(ctx, sessionID)

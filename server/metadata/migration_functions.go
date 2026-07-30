@@ -99,17 +99,27 @@ func migrationWorkflowIDArgument(args []driver.Value) (uuid.UUID, error) {
 	return parseMigrationWorkflowID(raw, location)
 }
 
+type WorkflowIdentityMigrationDiagnostic struct {
+	Location string
+	Cause    error
+}
+
+func (e *WorkflowIdentityMigrationDiagnostic) Error() string {
+	return fmt.Sprintf("workflow ID migration failure at %s: %v", e.Location, e.Cause)
+}
+
+func (e *WorkflowIdentityMigrationDiagnostic) Unwrap() error { return e.Cause }
+
 func parseMigrationWorkflowID(raw string, location string) (uuid.UUID, error) {
 	if parsed, err := runtimeids.ParseCanonicalUUIDv4(raw, "workflow ID"); err == nil {
 		return parsed, nil
 	}
 	parsed, err := runtimeids.ParseCanonicalPrefixedUUIDv4(raw, "workflow-", "workflow ID")
 	if err != nil {
-		return uuid.Nil, fmt.Errorf(
-			"workflow ID migration failure at %s: must be a canonical UUIDv4 or workflow-prefixed canonical UUIDv4: %w",
-			location,
-			err,
-		)
+		return uuid.Nil, &WorkflowIdentityMigrationDiagnostic{
+			Location: location,
+			Cause:    fmt.Errorf("must be a canonical UUIDv4 or workflow-prefixed canonical UUIDv4: %w", err),
+		}
 	}
 	return parsed, nil
 }

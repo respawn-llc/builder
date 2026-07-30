@@ -63,7 +63,7 @@ type RuntimeStatus struct {
 
 type WorkflowSessionStatus struct {
 	TaskID     string
-	WorkflowID string
+	WorkflowID runtimeids.WorkflowID
 }
 
 type RunStatus string
