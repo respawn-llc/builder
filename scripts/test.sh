@@ -357,6 +357,7 @@ run_desktop_tests() {
 
 run_server_tests() {
     local pty_fixture_binary=""
+    ./scripts/build_test.sh
     if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
         pty_fixture_build_dir="$(mktemp -d -t kent-pty-fixture.XXXXXX)"
         pty_fixture_binary="$pty_fixture_build_dir/kent-pty-fixture.test"

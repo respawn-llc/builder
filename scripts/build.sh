@@ -19,6 +19,7 @@ Targets:
 
 Options:
   --output   Output path for the Go server/CLI binary. Defaults to ./bin/kent when server is selected.
+             Symlink outputs are preserved; the binary is written to the final target.
   --goout    Deprecated alias for --output.
   --version  Override the embedded Kent version. Defaults to KENT_VERSION or VERSION.
   --package  Main package to build. Defaults to ./cli/kent.
@@ -71,6 +72,32 @@ run_tui_build() {
 	cargo build --manifest-path tui-rs/Cargo.toml --workspace --locked
 }
 
+resolve_output_symlinks() {
+	local path="$1"
+	local link_target
+	local link_count=0
+	local max_symlink_depth=40
+
+	while [ -L "$path" ]; do
+		if [ "$link_count" -ge "$max_symlink_depth" ]; then
+			printf 'build output symlink chain exceeds %d links: %s\n' "$max_symlink_depth" "$1" >&2
+			return 1
+		fi
+		link_count=$((link_count + 1))
+		link_target="$(readlink "$path")"
+		case "$link_target" in
+		/*)
+			path="$link_target"
+			;;
+		*)
+			path="$(dirname -- "$path")/$link_target"
+			;;
+		esac
+	done
+
+	printf '%s' "$path"
+}
+
 run_server_build() {
 	if [ -z "$output" ]; then
 		output="./bin/kent"
@@ -82,6 +109,7 @@ run_server_build() {
 	version="${version#v}"
 
 	mkdir -p "$(dirname -- "$output")"
+	output="$(resolve_output_symlinks "$output")"
 
 	ldflags=(-s -w)
 	if [ -n "$version" ]; then
