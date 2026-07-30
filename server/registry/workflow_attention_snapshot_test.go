@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	testharness "core/internal/testharness/testsetup"
 	"core/server/attentionnotify"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -263,10 +264,7 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 }
 
 func registryWorkflowID() *runtimeids.WorkflowID {
-	workflowID, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		panic(err)
-	}
+	workflowID := testharness.WorkflowIDValue("registry-workflow-attention")
 	return &workflowID
 }
 

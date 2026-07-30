@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	testharness "core/internal/testharness/testsetup"
 	"core/server/attentionnotify"
 	"core/server/runtime"
 	askquestion "core/server/tools"
@@ -321,10 +322,7 @@ func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEve
 }
 
 func registryTestWorkflowID() *runtimeids.WorkflowID {
-	workflowID, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		panic(err)
-	}
+	workflowID := testharness.WorkflowIDValue("registry-workflow-task")
 	return &workflowID
 }
 

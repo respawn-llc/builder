@@ -13,10 +13,7 @@ import {
 } from "./routeComponents";
 
 const optionalSearchString = z.string().catch("");
-const optionalWorkflowSelector = z.preprocess(
-  (value) => (value === undefined ? undefined : value),
-  workflowIDSchema.optional(),
-);
+const optionalWorkflowSelector = workflowIDSchema.optional();
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
