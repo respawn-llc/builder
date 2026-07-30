@@ -3,6 +3,7 @@ package sqlitegen
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"core/shared/tasksearchtext"
@@ -80,10 +81,9 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 		t.Fatalf("first raw page = %+v, want title ordinal 1", firstPage)
 	}
 	nextPageParams := firstPageParams
-	nextPageParams.CursorSet = 1
-	nextPageParams.CursorOrdinal = firstPage[0].Ordinal
+	nextPageParams.CursorOrdinal = sql.NullInt64{Int64: firstPage[0].Ordinal, Valid: true}
 	nextPageParams.CursorWeightedRank = sql.NullFloat64{Float64: firstPage[0].TaskWeightedRank, Valid: true}
-	nextPageParams.CursorTaskID = firstPage[0].TaskID
+	nextPageParams.CursorTaskID = sql.NullString{String: firstPage[0].TaskID, Valid: true}
 	nextPage, err := New(db).ListTaskSearchPageDescriptors(t.Context(), nextPageParams)
 	if err != nil {
 		t.Fatalf("ListTaskSearchPageDescriptors raw continuation: %v", err)
@@ -121,9 +121,8 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 		"needle",
 		int64(tasksearchtext.LiteralCaseInsensitive),
 	)
-	params.ProjectIdsJson = `["project-a"]`
-	params.StatusFilterSet = 1
-	params.StatusKindsJson = `["done"]`
+	params.ProjectIdsJson = sql.NullString{String: `["project-a"]`, Valid: true}
+	params.StatusKindsJson = sql.NullString{String: `["done"]`, Valid: true}
 	rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
 		t.Fatalf("ListTaskSearchPageDescriptors scoped raw: %v", err)
@@ -171,7 +170,7 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 	}
 
 	params.IncludeComments = 1
-	params.ProjectIdsJson = `["project-b"]`
+	params.ProjectIdsJson = sql.NullString{String: `["project-b"]`, Valid: true}
 	projectB, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
 		t.Fatalf("ListTaskSearchPageDescriptors project-b: %v", err)
@@ -184,7 +183,7 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 	}
 
 	params.IncludeComments = 0
-	params.ProjectIdsJson = "[]"
+	params.ProjectIdsJson = sql.NullString{}
 	params.LimitRows = 1
 	first, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
@@ -193,10 +192,9 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 	if len(first) != 1 || first[0].TaskID != "task-a" || first[0].Ordinal != 1 {
 		t.Fatalf("keyset first page = %+v, want task-a ordinal 1", first)
 	}
-	params.CursorSet = 1
-	params.CursorOrdinal = first[0].Ordinal
+	params.CursorOrdinal = sql.NullInt64{Int64: first[0].Ordinal, Valid: true}
 	params.CursorWeightedRank = sql.NullFloat64{Float64: first[0].TaskWeightedRank, Valid: true}
-	params.CursorTaskID = first[0].TaskID
+	params.CursorTaskID = sql.NullString{String: first[0].TaskID, Valid: true}
 	second, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
 		t.Fatalf("ListTaskSearchPageDescriptors keyset second page: %v", err)
@@ -210,6 +208,60 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 			first[0].TaskWeightedRank,
 			second[0].TaskWeightedRank,
 		)
+	}
+}
+
+func TestListTaskSearchPageDescriptorsOrdersCommentsByWeightedRankBeforeRecency(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	createTaskSearchPageDescriptorFilteringFixture(t, db)
+	weakerNewComment := "needle " + strings.Repeat("filler ", 256)
+	if _, err := db.Exec(`
+UPDATE task_search_content
+SET comment = CASE document_id
+    WHEN 2 THEN 'needle'
+    WHEN 3 THEN ?
+END
+WHERE document_id IN (2, 3);
+UPDATE task_search_fts
+SET comment = CASE rowid
+    WHEN 2 THEN 'needle'
+    WHEN 3 THEN ?
+END
+WHERE rowid IN (2, 3);`, weakerNewComment, weakerNewComment); err != nil {
+		t.Fatalf("set unequal Comment relevance fixture: %v", err)
+	}
+
+	for _, mode := range []string{"literal", "fts5"} {
+		t.Run(mode, func(t *testing.T) {
+			params := taskSearchPageDescriptorParams(
+				mode,
+				"needle",
+				"needle",
+				int64(tasksearchtext.LiteralCaseInsensitive),
+			)
+			params.ProjectIdsJson = sql.NullString{String: `["project-a"]`, Valid: true}
+			params.StatusKindsJson = sql.NullString{String: `["done"]`, Valid: true}
+			rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+			if err != nil {
+				t.Fatalf("ListTaskSearchPageDescriptors: %v", err)
+			}
+			commentIDs := make([]string, 0, 2)
+			for _, row := range rows {
+				if row.SourceKind == "comment" {
+					if !row.CommentID.Valid {
+						t.Fatalf("Comment descriptor missing identity: %+v", row)
+					}
+					commentIDs = append(commentIDs, row.CommentID.String)
+				}
+			}
+			if len(commentIDs) != 2 || commentIDs[0] != "comment-old" || commentIDs[1] != "comment-new" {
+				t.Fatalf(
+					"Comment order = %v, want older stronger match before newer weaker match",
+					commentIDs,
+				)
+			}
+		})
 	}
 }
 
@@ -235,8 +287,7 @@ func TestListTaskSearchPageDescriptorsKeepsSelectiveStatusPageWorkNearLinear(t *
 						int64(tasksearchtext.LiteralCaseInsensitive),
 					)
 					params.IncludeComments = 0
-					params.StatusFilterSet = 1
-					params.StatusKindsJson = `["done"]`
+					params.StatusKindsJson = sql.NullString{String: `["done"]`, Valid: true}
 					params.LimitRows = 1
 					rows, cacheHits := executeTaskSearchDescriptorPageWithCacheMeasurement(t, db, params)
 					if len(rows) != 1 ||
@@ -272,14 +323,12 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		LiteralQuery:        literalQuery,
 		CaseMode:            caseMode,
 		IncludeComments:     1,
-		ProjectIdsJson:      "[]",
-		StatusFilterSet:     0,
-		StatusKindsJson:     "[]",
+		ProjectIdsJson:      sql.NullString{},
+		StatusKindsJson:     sql.NullString{},
 		ContextClusters:     20,
-		CursorSet:           0,
-		CursorOrdinal:       0,
+		CursorOrdinal:       sql.NullInt64{},
 		CursorWeightedRank:  sql.NullFloat64{},
-		CursorTaskID:        "",
+		CursorTaskID:        sql.NullString{},
 		LimitRows:           100,
 		LiveTaskStatesJson:  "[]",
 	}
@@ -293,10 +342,8 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.CaseMode,
 		params.IncludeComments,
 		params.ProjectIdsJson,
-		params.StatusFilterSet,
 		params.StatusKindsJson,
 		params.ContextClusters,
-		params.CursorSet,
 		params.CursorOrdinal,
 		params.CursorWeightedRank,
 		params.CursorTaskID,

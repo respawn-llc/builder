@@ -289,7 +289,9 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
 		}
 		if strings.TrimSpace(response.NextPageToken) != "" {
-			fmt.Fprintf(stderr, "Next page token: `%s`\n", response.NextPageToken)
+			if err := writeNextPageToken(stderr, response.NextPageToken); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})

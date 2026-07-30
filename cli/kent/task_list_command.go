@@ -221,7 +221,9 @@ func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writ
 		}
 	}
 	if resp.NextPageToken != nil {
-		fmt.Fprintf(stderr, "Next page token: `%s`\n", *resp.NextPageToken)
+		if err := writeNextPageToken(stderr, *resp.NextPageToken); err != nil {
+			return 1
+		}
 	}
 	return 0
 }

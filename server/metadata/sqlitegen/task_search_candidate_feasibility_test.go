@@ -10,6 +10,86 @@ import (
 	"core/shared/tasksearchtext"
 )
 
+const taskSearchCandidateFeasibilityQuery = `
+WITH matching_sources AS (
+    SELECT
+        document.task_id,
+        document.source_kind,
+        document.document_id,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 0.75
+            END
+            AS REAL
+        ) AS weighted_rank
+    FROM task_search_fts
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    WHERE task_search_fts MATCH ?4
+      AND document.source_kind IN ('title', 'body')
+      AND kent_task_search_occurrence_count_v1(
+          COALESCE(content.title, content.body, content.comment),
+          CAST(?5 AS TEXT),
+          CAST(?6 AS INTEGER)
+      ) > 0
+),
+ranked_task_sources AS (
+    SELECT
+        task_id,
+        source_kind,
+        document_id,
+        weighted_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY
+                weighted_rank DESC,
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                document_id ASC
+        ) AS task_source_rank
+    FROM matching_sources
+)
+SELECT
+    task_id,
+    source_kind,
+    document_id,
+    weighted_rank
+FROM ranked_task_sources
+WHERE task_source_rank = 1
+  AND (
+      ?1 IS NULL
+      OR weighted_rank < CAST(?1 AS REAL)
+      OR (
+          weighted_rank = CAST(?1 AS REAL)
+          AND task_id > ?2
+      )
+  )
+ORDER BY weighted_rank DESC, task_id ASC
+LIMIT ?3`
+
+type taskSearchCandidateFeasibilityParams struct {
+	CursorRank          sql.NullFloat64
+	CursorTaskID        sql.NullString
+	PageSize            int64
+	CandidateExpression sql.NullString
+	LiteralQuery        string
+	CaseMode            int64
+}
+
+type taskSearchCandidateFeasibilityRow struct {
+	TaskID       sql.NullString
+	SourceKind   string
+	DocumentID   int64
+	WeightedRank float64
+}
+
 func TestListTaskSearchCandidateFeasibilityFiltersCanonicalDocumentsBeforeTaskWinnerSelection(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
@@ -19,15 +99,15 @@ func TestListTaskSearchCandidateFeasibilityFiltersCanonicalDocumentsBeforeTaskWi
 	if err != nil {
 		t.Fatalf("NewLiteralMatcher: %v", err)
 	}
-	params := ListTaskSearchCandidateFeasibilityParams{
+	params := taskSearchCandidateFeasibilityParams{
 		CandidateExpression: sql.NullString{String: matcher.CandidateExpression(), Valid: true},
 		LiteralQuery:        "foo",
 		CaseMode:            int64(tasksearchtext.LiteralCaseSensitive),
 		PageSize:            10,
 	}
-	rows, err := New(db).ListTaskSearchCandidateFeasibility(t.Context(), params)
+	rows, err := readTaskSearchCandidateFeasibility(t, db, params)
 	if err != nil {
-		t.Fatalf("ListTaskSearchCandidateFeasibility: %v", err)
+		t.Fatalf("list Task-search candidate feasibility: %v", err)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("candidate feasibility rows = %+v, want two surviving Tasks", rows)
@@ -44,7 +124,7 @@ func TestListTaskSearchCandidateFeasibilityFiltersCanonicalDocumentsBeforeTaskWi
 		}
 	}
 
-	firstPage, err := New(db).ListTaskSearchCandidateFeasibility(t.Context(), ListTaskSearchCandidateFeasibilityParams{
+	firstPage, err := readTaskSearchCandidateFeasibility(t, db, taskSearchCandidateFeasibilityParams{
 		CandidateExpression: sql.NullString{String: matcher.CandidateExpression(), Valid: true},
 		LiteralQuery:        "foo",
 		CaseMode:            int64(tasksearchtext.LiteralCaseSensitive),
@@ -56,7 +136,7 @@ func TestListTaskSearchCandidateFeasibilityFiltersCanonicalDocumentsBeforeTaskWi
 	if len(firstPage) != 1 || taskSearchCandidateFeasibilityTaskID(t, firstPage[0]) != taskSearchCandidateFeasibilityTaskID(t, rows[0]) {
 		t.Fatalf("first feasibility page = %+v, want %+v", firstPage, rows[0])
 	}
-	secondPage, err := New(db).ListTaskSearchCandidateFeasibility(t.Context(), ListTaskSearchCandidateFeasibilityParams{
+	secondPage, err := readTaskSearchCandidateFeasibility(t, db, taskSearchCandidateFeasibilityParams{
 		CandidateExpression: sql.NullString{String: matcher.CandidateExpression(), Valid: true},
 		LiteralQuery:        "foo",
 		CaseMode:            int64(tasksearchtext.LiteralCaseSensitive),
@@ -73,11 +153,36 @@ func TestListTaskSearchCandidateFeasibilityFiltersCanonicalDocumentsBeforeTaskWi
 
 	requireTaskSearchCandidateFeasibilityStartsFromFTS(
 		t,
-		queryProgram(t, db, listTaskSearchCandidateFeasibility, taskSearchCandidateFeasibilityArgs(params)...),
+		queryProgram(t, db, taskSearchCandidateFeasibilityQuery, taskSearchCandidateFeasibilityArgs(params)...),
 	)
 }
 
-func taskSearchCandidateFeasibilityTaskID(t *testing.T, row ListTaskSearchCandidateFeasibilityRow) string {
+func readTaskSearchCandidateFeasibility(
+	t *testing.T,
+	db *sql.DB,
+	params taskSearchCandidateFeasibilityParams,
+) ([]taskSearchCandidateFeasibilityRow, error) {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), taskSearchCandidateFeasibilityQuery, taskSearchCandidateFeasibilityArgs(params)...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeQueryRows(t, rows)
+	var result []taskSearchCandidateFeasibilityRow
+	for rows.Next() {
+		var row taskSearchCandidateFeasibilityRow
+		if err := rows.Scan(&row.TaskID, &row.SourceKind, &row.DocumentID, &row.WeightedRank); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func taskSearchCandidateFeasibilityTaskID(t *testing.T, row taskSearchCandidateFeasibilityRow) string {
 	t.Helper()
 	if !row.TaskID.Valid || row.TaskID.String == "" {
 		t.Fatalf("candidate feasibility row has no canonical Task identity: %+v", row)
@@ -114,7 +219,7 @@ INSERT INTO tasks (id, title, body) VALUES
 	}
 }
 
-func taskSearchCandidateFeasibilityArgs(params ListTaskSearchCandidateFeasibilityParams) []any {
+func taskSearchCandidateFeasibilityArgs(params taskSearchCandidateFeasibilityParams) []any {
 	return []any{
 		params.CursorRank,
 		params.CursorTaskID,

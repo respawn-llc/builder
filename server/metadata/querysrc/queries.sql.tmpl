@@ -3280,70 +3280,6 @@ FROM task_pending_approval_branches
 WHERE approval_id = sqlc.arg(approval_id)
 ORDER BY transition_branch_key;
 
--- name: ListTaskSearchCandidateFeasibility :many
-WITH matching_sources AS (
-    SELECT
-        document.task_id,
-        document.source_kind,
-        document.document_id,
-        CAST(
-            -task_search_fts.rank * CASE document.source_kind
-                WHEN 'title' THEN 10.0
-                WHEN 'body' THEN 1.0
-                ELSE 0.75
-            END
-            AS REAL
-        ) AS weighted_rank
-    FROM task_search_fts
-    JOIN task_search_documents document
-      ON document.document_id = task_search_fts.rowid
-    JOIN task_search_content content
-      ON content.document_id = document.document_id
-    WHERE task_search_fts MATCH sqlc.arg(candidate_expression)
-      AND document.source_kind IN ('title', 'body')
-      AND kent_task_search_occurrence_count_v1(
-          COALESCE(content.title, content.body, content.comment),
-          CAST(sqlc.arg(literal_query) AS TEXT),
-          CAST(sqlc.arg(case_mode) AS INTEGER)
-      ) > 0
-),
-ranked_task_sources AS (
-    SELECT
-        task_id,
-        source_kind,
-        document_id,
-        weighted_rank,
-        ROW_NUMBER() OVER (
-            PARTITION BY task_id
-            ORDER BY
-                weighted_rank DESC,
-                CASE source_kind
-                    WHEN 'title' THEN 0
-                    WHEN 'body' THEN 1
-                    WHEN 'comment' THEN 2
-                END ASC,
-                document_id ASC
-        ) AS task_source_rank
-    FROM matching_sources
-)
-SELECT
-    task_id,
-    source_kind,
-    document_id,
-    weighted_rank
-FROM ranked_task_sources
-WHERE task_source_rank = 1
-  AND (
-      sqlc.narg(cursor_rank) IS NULL
-      OR weighted_rank < CAST(sqlc.narg(cursor_rank) AS REAL)
-      OR (
-          weighted_rank = CAST(sqlc.narg(cursor_rank) AS REAL)
-          AND task_id > sqlc.narg(cursor_task_id)
-      )
-  )
-ORDER BY weighted_rank DESC, task_id ASC
-LIMIT sqlc.arg(page_size);
-
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (
     SELECT CAST(value AS TEXT) AS project_id
@@ -3573,15 +3509,13 @@ args AS (
         CAST(?4 AS INTEGER) AS case_mode,
         CAST(?5 AS INTEGER) AS include_comments,
         CAST(?6 AS TEXT) AS project_ids_json,
-        CAST(?7 AS INTEGER) AS status_filter_set,
-        CAST(?8 AS TEXT) AS status_kinds_json,
-        CAST(?9 AS INTEGER) AS context_clusters,
-        CAST(?10 AS INTEGER) AS cursor_set,
-        CAST(?11 AS INTEGER) AS cursor_ordinal,
-        CAST(?12 AS REAL) AS cursor_weighted_rank,
-        CAST(?13 AS TEXT) AS cursor_task_id,
-        CAST(?14 AS INTEGER) AS limit_rows,
-        CAST(?15 AS TEXT) AS live_task_states_json
+        CAST(?7 AS TEXT) AS status_kinds_json,
+        CAST(?8 AS INTEGER) AS context_clusters,
+        CAST(?9 AS INTEGER) AS cursor_ordinal,
+        CAST(?10 AS REAL) AS cursor_weighted_rank,
+        CAST(?11 AS TEXT) AS cursor_task_id,
+        CAST(?12 AS INTEGER) AS limit_rows,
+        CAST(?13 AS TEXT) AS live_task_states_json
 ),
 {{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
 matching_sources AS (
@@ -3653,14 +3587,14 @@ matching_sources AS (
     WHERE task_search_fts MATCH ?2
       AND (args.include_comments != 0 OR document.source_kind != 'comment')
       AND (
-          NOT EXISTS (SELECT 1 FROM json_each(args.project_ids_json))
+          args.project_ids_json IS NULL
           OR task.project_id IN (
               SELECT CAST(value AS TEXT)
               FROM json_each(args.project_ids_json)
           )
       )
       AND (
-          args.status_filter_set = 0
+          args.status_kinds_json IS NULL
           OR status.kind IN (
               SELECT CAST(value AS TEXT)
               FROM json_each(args.status_kinds_json)
@@ -3692,6 +3626,9 @@ ranked_sources AS (
                     WHEN 'body' THEN 1
                     WHEN 'comment' THEN 2
                 END ASC,
+                CASE source_kind
+                    WHEN 'comment' THEN weighted_rank
+                END DESC,
                 comment_created_at_unix_ms DESC,
                 comment_id DESC,
                 document_id ASC
@@ -3701,10 +3638,7 @@ ranked_sources AS (
 ),
 rounds AS (
     SELECT
-        CASE args.cursor_set
-            WHEN 0 THEN 1
-            ELSE args.cursor_ordinal
-        END AS ordinal,
+        COALESCE(args.cursor_ordinal, 1) AS ordinal,
         0 AS lookahead_count
     FROM args
     UNION ALL
@@ -3739,7 +3673,7 @@ JOIN ranked_sources
   ON rounds.ordinal > ranked_sources.source_ordinal_before
  AND rounds.ordinal <= ranked_sources.source_ordinal_before + ranked_sources.source_hit_count
 CROSS JOIN args
-WHERE args.cursor_set = 0
+WHERE args.cursor_ordinal IS NULL
    OR rounds.ordinal > args.cursor_ordinal
    OR (
        rounds.ordinal = args.cursor_ordinal

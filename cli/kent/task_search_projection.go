@@ -29,7 +29,6 @@ const (
 	taskSearchPlainNoMatchesLine         = "No matches."
 	taskSearchPlainCommentHeading        = "comments:"
 	taskSearchPlainLiteralOmissionMarker = "…"
-	taskSearchNextPageTokenLineFormat    = "Next page token: `%s`"
 )
 
 type taskSearchPlainLine struct {
@@ -132,8 +131,4 @@ func taskSearchPlainTaskHeader(shortID string, title string) string {
 
 func taskSearchPlainRemainingHitsLine(count int) string {
 	return "[" + strconv.Itoa(count) + " more hits]"
-}
-
-func taskSearchNextPageTokenLine(token string) string {
-	return fmt.Sprintf(taskSearchNextPageTokenLineFormat, token)
 }

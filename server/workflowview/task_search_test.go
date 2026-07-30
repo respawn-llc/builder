@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,67 @@ func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *
 	}
 	if err := <-mutationsDone; err != nil {
 		t.Fatalf("canonical mutation: %v", err)
+	}
+}
+
+func TestTaskSearchStableReadCaptureRetriesLiveGenerationInterleaving(t *testing.T) {
+	var captureCalls int
+	events := []string{}
+	captureLive := func() (taskSearchLiveSnapshot, error) {
+		captureCalls++
+		events = append(events, fmt.Sprintf("capture-%d", captureCalls))
+		revision := uint64(3)
+		if captureCalls == 1 {
+			revision = 1
+		}
+		if captureCalls == 2 {
+			revision = 2
+		}
+		return taskSearchLiveSnapshot{revision: revision}, nil
+	}
+	var anchored int
+	var closed int
+	openRead := func(context.Context) (*taskSearchReadSnapshot, error) {
+		events = append(events, fmt.Sprintf("open-%d", anchored+1))
+		return &taskSearchReadSnapshot{
+			anchor: func(context.Context) error {
+				anchored++
+				events = append(events, fmt.Sprintf("anchor-%d", anchored))
+				return nil
+			},
+			close: func() error {
+				closed++
+				events = append(events, fmt.Sprintf("close-%d", closed))
+				return nil
+			},
+		}, nil
+	}
+
+	snapshot, err := taskSearchStableReadCapture(t.Context(), captureLive, openRead)
+	if err != nil {
+		t.Fatalf("taskSearchStableReadCapture: %v", err)
+	}
+	if captureCalls != 4 || anchored != 2 || closed != 1 || snapshot.live.revision != 3 {
+		t.Fatalf(
+			"stable capture calls/candidates = captures:%d anchors:%d closed:%d revision:%d, want 4/2/1/3",
+			captureCalls,
+			anchored,
+			closed,
+			snapshot.live.revision,
+		)
+	}
+	wantEvents := []string{
+		"open-1", "capture-1", "anchor-1", "capture-2", "close-1",
+		"open-2", "capture-3", "anchor-2", "capture-4",
+	}
+	if !slices.Equal(events, wantEvents) {
+		t.Fatalf("stable capture event order = %v, want %v", events, wantEvents)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("close stable snapshot: %v", err)
+	}
+	if closed != 2 {
+		t.Fatalf("closed snapshots = %d, want unstable and returned snapshots closed", closed)
 	}
 }
 

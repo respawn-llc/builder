@@ -121,7 +121,7 @@ func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {
 	if !reflect.DeepEqual(remote.requests, []serverapi.TaskSearchRequest{wantRequest}) {
 		t.Fatalf("search requests = %#v, want %#v", remote.requests, []serverapi.TaskSearchRequest{wantRequest})
 	}
-	if stderr.String() != taskSearchNextPageTokenLine(nextPageToken)+"\n" {
+	if stderr.String() != nextPageTokenLine(nextPageToken)+"\n" {
 		t.Fatalf("next-page diagnostic = %q", stderr.String())
 	}
 }

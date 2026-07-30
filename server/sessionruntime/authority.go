@@ -45,6 +45,7 @@ type Authority struct {
 	closed             bool
 	nextExecution      ExecutionGeneration
 	nextResource       runtimeids.ResourceGeneration
+	workflowRevision   uint64
 	byScope            map[runtimeids.ExecutionScopeID]*execution
 	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
@@ -177,6 +178,7 @@ func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key wor
 		byWorkflow[ref.CurrentNode.TaskID] = byTask
 	}
 	byTask[key] = item
+	a.advanceWorkflowRevisionLocked()
 }
 
 func (a *Authority) beginWorkflowExecution(item *execution) {
@@ -189,6 +191,7 @@ func (a *Authority) beginWorkflowExecution(item *execution) {
 		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
 	}
 	item.phase = executionPhaseRunning
+	a.advanceWorkflowRevisionLocked()
 }
 
 func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
@@ -214,6 +217,29 @@ func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key 
 	if len(byProject) == 0 {
 		delete(a.workflowExecutions, ref.ProjectID)
 	}
+	a.advanceWorkflowRevisionLocked()
+}
+
+func (a *Authority) advanceWorkflowRevisionLocked() {
+	a.workflowRevision++
+	if a.workflowRevision == 0 {
+		panic("workflow execution revision overflow")
+	}
+}
+
+func (a *Authority) workflowPromptStateChanged(scope ExecutionScope) {
+	if a == nil {
+		return
+	}
+	if _, workflowScoped := scope.Workflow(); !workflowScoped {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.byScope[scope.ID()] == nil {
+		return
+	}
+	a.advanceWorkflowRevisionLocked()
 }
 
 func (a *Authority) forEachWorkflowExecutionLocked(fn func(*execution)) {
@@ -393,7 +419,7 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		ctx:       runCtx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		prompts:   newExecutionPromptStore(scope, a.promptFeed),
+		prompts:   newExecutionPromptStore(scope, a.promptFeed, a.workflowPromptStateChanged),
 		phase:     executionPhaseRunning,
 	}
 	if workflowRef != nil {

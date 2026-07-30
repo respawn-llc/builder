@@ -111,14 +111,12 @@ type ListTaskSearchPageDescriptorsParams struct {
 	LiteralQuery              string
 	CaseMode                  int64
 	IncludeComments           int64
-	ProjectIdsJson            string
-	StatusFilterSet           int64
-	StatusKindsJson           string
+	ProjectIdsJson            sql.NullString
+	StatusKindsJson           sql.NullString
 	ContextClusters           int64
-	CursorSet                 int64
-	CursorOrdinal             int64
+	CursorOrdinal             sql.NullInt64
 	CursorWeightedRank        sql.NullFloat64
-	CursorTaskID              string
+	CursorTaskID              sql.NullString
 	LimitRows                 int64
 	LiveTaskStatesJson        string
 }
@@ -152,10 +150,8 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.CaseMode,
 		arg.IncludeComments,
 		arg.ProjectIdsJson,
-		arg.StatusFilterSet,
 		arg.StatusKindsJson,
 		arg.ContextClusters,
-		arg.CursorSet,
 		arg.CursorOrdinal,
 		arg.CursorWeightedRank,
 		arg.CursorTaskID,

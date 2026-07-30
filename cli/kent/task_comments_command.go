@@ -140,7 +140,9 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		writeTaskCommentList(stdout, resp.Comments)
 		if strings.TrimSpace(resp.NextPageToken) != "" {
-			fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
+			if err := writeNextPageToken(stderr, resp.NextPageToken); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})
