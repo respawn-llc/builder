@@ -296,8 +296,8 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.list",
         compactJsonObject({
-          page_size: input.pageSize ?? 40,
-          page_token: input.pageToken ?? "",
+          offset: input.offset ?? 0,
+          limit: input.limit ?? 40,
           query: input.query ?? "",
         }),
       ),
@@ -583,14 +583,14 @@ export class ApiClient implements ApiService {
     return response;
   }
 
-  async listTaskComments(taskID: string, pageToken: string): Promise<CommentPage> {
+  async listTaskComments(taskID: string, offset: number): Promise<CommentPage> {
     return parse(
       "workflow.task.comment.list",
       commentPageSchema,
       await this.#transport.call("workflow.task.comment.list", {
         task_id: taskID,
-        page_size: 40,
-        page_token: pageToken,
+        offset,
+        limit: 40,
       }),
     );
   }

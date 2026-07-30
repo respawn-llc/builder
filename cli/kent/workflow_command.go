@@ -20,15 +20,15 @@ import (
 )
 
 const (
-	workflowCommandTimeout              = time.Minute
-	workflowCommandWorkflowListPageSize = serverapi.WorkflowListMaxPageSize
+	workflowCommandTimeout           = time.Minute
+	workflowCommandWorkflowListLimit = serverapi.WorkflowPaginationMaxLimit
 )
 
 // workflowListOutput is the machine-readable shape of `workflow list --json`.
 type workflowListOutput struct {
-	Workflows     []serverapi.WorkflowRecord `json:"workflows"`
-	ProjectID     *string                    `json:"project_id,omitempty"`
-	NextPageToken string                     `json:"next_page_token,omitempty"`
+	Workflows  []serverapi.WorkflowRecord `json:"workflows"`
+	ProjectID  *string                    `json:"project_id,omitempty"`
+	NextOffset *int                       `json:"next_offset,omitempty"`
 }
 
 // workflowNodeOutput is the machine-readable shape of `workflow node add/update --json`.
@@ -235,10 +235,10 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 
 func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow list", stderr, workflowListUsage)
-	pageSize := fs.Int("page-size", workflowCommandWorkflowListPageSize, "maximum number of workflows to return")
-	pageToken := fs.String("page-token", "", "continue from a previous list response")
+	offset := fs.Int("offset", 0, "zero-based workflow offset")
+	limit := fs.Int("limit", workflowCommandWorkflowListLimit, "maximum number of workflows to return")
 	project := fs.String("project", "", "project path or ID to list linked workflows for")
-	jsonOut := fs.Bool("json", false, "write workflows and the next page token as JSON")
+	jsonOut := fs.Bool("json", false, "write workflows and the next offset as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -261,7 +261,7 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			}
 			projectID = &resolved
 		}
-		response, err := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{PageSize: *pageSize, PageToken: *pageToken, ProjectID: projectID})
+		response, err := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{Offset: offset, Limit: limit, ProjectID: projectID})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -271,15 +271,12 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if err := validateWorkflowListProjectMetadata(workflowListExpectedScope{
-			ProjectID:      projectID,
-			TokenOwnsScope: projectID == nil && strings.TrimSpace(*pageToken) != "",
-		}, response.ProjectID, workflows); err != nil {
+		if err := validateWorkflowListProjectMetadata(workflowListExpectedScope{ProjectID: projectID}, response.ProjectID, workflows); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, ProjectID: response.ProjectID, NextPageToken: response.NextPageToken})
+			return writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, ProjectID: response.ProjectID, NextOffset: response.NextOffset})
 		}
 		for _, workflow := range workflows {
 			if response.ProjectID != nil {
@@ -288,45 +285,25 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			}
 			fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
 		}
-		if strings.TrimSpace(response.NextPageToken) != "" {
-			fmt.Fprintf(stderr, "Next page token: `%s`\n", response.NextPageToken)
+		if response.NextOffset != nil {
+			fmt.Fprintf(stderr, "Next offset: `%d`\n", *response.NextOffset)
 		}
 		return 0
 	})
 }
 
 type workflowListExpectedScope struct {
-	ProjectID      *string
-	TokenOwnsScope bool
+	ProjectID *string
 }
 
 func validateWorkflowListProjectMetadata(expected workflowListExpectedScope, responseProjectID *string, workflows []serverapi.WorkflowRecord) error {
-	if expected.ProjectID == nil && !expected.TokenOwnsScope {
+	if expected.ProjectID == nil {
 		if responseProjectID != nil {
 			return fmt.Errorf("global workflow list response unexpectedly contains project_id %q", *responseProjectID)
 		}
 		for _, workflow := range workflows {
 			if workflow.ProjectLink != nil {
 				return fmt.Errorf("global workflow list response workflow %q contains project_link metadata", workflow.ID)
-			}
-		}
-		return nil
-	}
-	if expected.ProjectID == nil {
-		if responseProjectID == nil {
-			for _, workflow := range workflows {
-				if workflow.ProjectLink != nil {
-					return fmt.Errorf("global workflow list continuation workflow %q contains project_link metadata", workflow.ID)
-				}
-			}
-			return nil
-		}
-		if strings.TrimSpace(*responseProjectID) == "" {
-			return errors.New("project workflow list continuation response has blank project_id")
-		}
-		for _, workflow := range workflows {
-			if workflow.ProjectLink == nil {
-				return fmt.Errorf("project workflow list continuation workflow %q is missing project_link metadata", workflow.ID)
 			}
 		}
 		return nil
@@ -999,16 +976,17 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		if *summary {
 			persistedWorkflowID := selector.PersistedID()
+			limit := 1
 			response, listErr := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{
-				PageSize:   1,
+				Limit:      &limit,
 				WorkflowID: &persistedWorkflowID,
 			})
 			if listErr != nil {
 				fmt.Fprintln(stderr, listErr)
 				return 1
 			}
-			if response.NextPageToken != "" {
-				fmt.Fprintln(stderr, "workflow summary response contains a continuation token")
+			if response.NextOffset != nil {
+				fmt.Fprintln(stderr, "workflow summary response contains a continuation offset")
 				return 1
 			}
 			workflows, projectionErr := workflowRecordsForCLI(response.Workflows)
@@ -1315,7 +1293,6 @@ func listWorkflowPage(ctx context.Context, remote workflowCommandRemote, req ser
 	if err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
-	resp.NextPageToken = strings.TrimSpace(resp.NextPageToken)
 	return resp, nil
 }
 

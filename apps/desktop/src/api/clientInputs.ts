@@ -20,7 +20,7 @@ export type TaskMutationInput = Readonly<{
 }>;
 
 export type TaskListInput = Readonly<{
-  projectID?: string | undefined;
+  projectID: string;
   workflowID?: string | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
@@ -32,8 +32,8 @@ export type TaskListInput = Readonly<{
         direction: "asc" | "desc";
       }>[]
     | undefined;
-  pageSize: number;
-  pageToken?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
 }>;
 
 export type BoardNodeCardsInput = Readonly<{
@@ -45,8 +45,8 @@ export type BoardNodeCardsInput = Readonly<{
 }>;
 
 export type WorkflowListInput = Readonly<{
-  pageSize?: number | undefined;
-  pageToken?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
   query?: string | undefined;
 }>;
 

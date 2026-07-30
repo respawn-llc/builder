@@ -13,10 +13,10 @@ type taskLabelAssignmentReader interface {
 }
 
 func loadTaskLabelIDsByTask(ctx context.Context, queries taskLabelAssignmentReader, taskIDs []string) (map[string][]string, error) {
-	if len(taskIDs) > serverapi.WorkflowTaskListMaxPageSize {
+	if len(taskIDs) > serverapi.WorkflowPaginationMaxLimit {
 		return nil, fmt.Errorf(
 			"task label projection requires at most %d task ids, got %d",
-			serverapi.WorkflowTaskListMaxPageSize,
+			serverapi.WorkflowPaginationMaxLimit,
 			len(taskIDs),
 		)
 	}

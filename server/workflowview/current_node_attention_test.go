@@ -219,6 +219,33 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		_, err := authority.ResolvePendingWorkflowPrompt(started.currentNode.TaskID, askID)
 		return err == nil
 	}, "timed out waiting for live workflow Question")
+	taskList, err := NewTaskList(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		NewTaskProjector(),
+		authority,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	projectID := fixture.binding.ProjectID
+	limit := 20
+	listed, err := taskList.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Limit:       &limit,
+	})
+	if err != nil {
+		t.Fatalf("TaskList.List waiting question: %v", err)
+	}
+	if len(listed.Tasks) != 1 ||
+		listed.Tasks[0].TaskID != string(started.task.ID) ||
+		listed.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
+		len(listed.Tasks[0].Status.AttentionTypes) != 1 ||
+		listed.Tasks[0].Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindQuestion {
+		t.Fatalf("task list waiting-question projection = %+v", listed)
+	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		sessionID.String(): {{
 			ID:                     askID,

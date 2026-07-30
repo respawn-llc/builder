@@ -588,6 +588,7 @@ func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
 
 func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *testing.T) {
 	projectID := "project-1"
+	negativeOffset := -1
 	tests := []struct {
 		name       string
 		request    interface{ ValidateRPC() error }
@@ -609,8 +610,8 @@ func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *te
 		},
 		{
 			name:      "task list non-label field remains generic",
-			request:   WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone(), PageSize: -1},
-			wantField: "page_size",
+			request:   WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone(), Offset: &negativeOffset},
+			wantField: "offset",
 		},
 		{
 			name:       "task list malformed filter is typed",

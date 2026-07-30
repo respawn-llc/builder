@@ -90,8 +90,8 @@ export function useTaskComments(taskID: string, enabled: boolean) {
     queryKey: queryKeys.comments(taskID),
     queryFn: async ({ pageParam }) => api.listTaskComments(taskID, pageParam),
     enabled: enabled && taskID.length > 0,
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
   });
 }
 

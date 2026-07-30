@@ -5058,76 +5058,6 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 	return items, nil
 }
 
-const listTaskCommentsPage = `-- name: ListTaskCommentsPage :many
-SELECT
-    id,
-    task_id,
-    body,
-    author_kind,
-    author_id,
-    created_at_unix_ms,
-    updated_at_unix_ms
-FROM task_comments
-WHERE task_id = ?1
-    AND (
-        ?2 = 0
-        OR created_at_unix_ms < ?3
-        OR (
-            created_at_unix_ms = ?3
-            AND id < ?4
-        )
-    )
-ORDER BY created_at_unix_ms DESC, id DESC
-LIMIT ?5
-`
-
-type ListTaskCommentsPageParams struct {
-	TaskID                string
-	HasCursor             interface{}
-	CursorCreatedAtUnixMs int64
-	CursorID              string
-	LimitRows             int64
-}
-
-func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskCommentsPageParams) ([]TaskComment, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskCommentsPage,
-		arg.TaskID,
-		arg.HasCursor,
-		arg.CursorCreatedAtUnixMs,
-		arg.CursorID,
-		arg.LimitRows,
-	)
-	err = recordQueryError(ctx, err, listTaskCommentsPage, 5)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskComment
-	for rows.Next() {
-		var i TaskComment
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.Body,
-			&i.AuthorKind,
-			&i.AuthorID,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-		), listTaskCommentsPage, 5); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskCommentsPage, 5); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskCommentsPage, 5); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTaskCurrentNodes = `-- name: ListTaskCurrentNodes :many
 SELECT
     task_id,
@@ -6004,67 +5934,6 @@ WHERE (?2 IS NULL OR workflows.id = ?2)
       ?1 IS NULL
       OR project_link.id IS NOT NULL
   )
-  AND (
-      ?4 = 0
-      OR (
-          ?1 IS NULL
-          AND (
-              MAX(
-                  workflows.updated_at_unix_ms,
-                  COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                  ), workflows.updated_at_unix_ms)
-              ) < ?5
-              OR (
-                  MAX(
-                      workflows.updated_at_unix_ms,
-                      COALESCE((
-                          SELECT MAX(task_records.updated_at_unix_ms)
-                          FROM task_records
-                          WHERE task_records.workflow_id = workflows.id
-                      ), workflows.updated_at_unix_ms)
-                  ) = ?5
-                  AND workflows.id < ?6
-              )
-          )
-      )
-      OR (
-          ?1 IS NOT NULL
-          AND (
-              project_link.is_default < ?7
-              OR (
-                  project_link.is_default = ?7
-                  AND (
-                      (
-                          ?5 IS NOT NULL
-                          AND (
-                              project_latest_task.updated_at_unix_ms IS NULL
-                              OR project_latest_task.updated_at_unix_ms < ?5
-                          )
-                      )
-                      OR (
-                          (
-                              project_latest_task.updated_at_unix_ms = ?5
-                              OR (
-                                  project_latest_task.updated_at_unix_ms IS NULL
-                                  AND ?5 IS NULL
-                              )
-                          )
-                          AND (
-                              lower(workflows.name) > ?8
-                              OR (
-                                  lower(workflows.name) = ?8
-                                  AND workflows.id > ?6
-                              )
-                          )
-                      )
-                  )
-              )
-          )
-      )
-  )
 ORDER BY
     project_link_default DESC,
     CASE
@@ -6074,19 +5943,16 @@ ORDER BY
     CASE WHEN project_link_default IS NOT NULL THEN lower(workflows.name) END ASC,
     CASE WHEN project_link_default IS NULL THEN workflows.id END DESC,
     CASE WHEN project_link_default IS NOT NULL THEN workflows.id END ASC
-LIMIT ?9
+LIMIT ?5
+OFFSET ?4
 `
 
 type ListWorkflowRecordsPageParams struct {
-	ProjectID              sql.NullString
-	WorkflowID             interface{}
-	SearchQuery            interface{}
-	CursorActive           interface{}
-	CursorActivityAtUnixMs sql.NullInt64
-	CursorWorkflowID       string
-	CursorProjectDefault   sql.NullInt64
-	CursorProjectName      sql.NullString
-	PageLimit              int64
+	ProjectID   sql.NullString
+	WorkflowID  interface{}
+	SearchQuery interface{}
+	PageOffset  int64
+	PageLimit   int64
 }
 
 type ListWorkflowRecordsPageRow struct {
@@ -6109,14 +5975,10 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 		arg.ProjectID,
 		arg.WorkflowID,
 		arg.SearchQuery,
-		arg.CursorActive,
-		arg.CursorActivityAtUnixMs,
-		arg.CursorWorkflowID,
-		arg.CursorProjectDefault,
-		arg.CursorProjectName,
+		arg.PageOffset,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listWorkflowRecordsPage, 9)
+	err = recordQueryError(ctx, err, listWorkflowRecordsPage, 5)
 
 	if err != nil {
 		return nil, err
@@ -6138,15 +6000,15 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.ProjectActivityAtUnixMs,
 			&i.ProjectLinkDefault,
 			&i.ProjectNameOrderKey,
-		), listWorkflowRecordsPage, 9); err != nil {
+		), listWorkflowRecordsPage, 5); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowRecordsPage, 9); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowRecordsPage, 5); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowRecordsPage, 9); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowRecordsPage, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6300,25 +6162,19 @@ args AS (
         CAST(?10 AS TEXT) AS label_filter_kind,
         CAST(?11 AS TEXT) AS label_filter_mode,
         CAST(?12 AS TEXT) AS label_ids_json,
-        CAST(?13 AS INTEGER) AS cursor_set,
-        CAST(?14 AS INTEGER) AS cursor_created_at_unix_ms,
-        CAST(?15 AS INTEGER) AS cursor_updated_at_unix_ms,
-        CAST(?16 AS INTEGER) AS cursor_primary_status_rank,
-        CAST(?17 AS INTEGER) AS cursor_column_rank,
-        CAST(?18 AS TEXT) AS cursor_title_sort,
-        CAST(?19 AS TEXT) AS cursor_task_id,
-        CAST(?20 AS TEXT) AS sort_1_field,
-        CAST(?21 AS INTEGER) AS sort_1_desc,
-        CAST(?22 AS TEXT) AS sort_2_field,
-        CAST(?23 AS INTEGER) AS sort_2_desc,
-        CAST(?24 AS TEXT) AS sort_3_field,
-        CAST(?25 AS INTEGER) AS sort_3_desc,
-        CAST(?26 AS TEXT) AS sort_4_field,
-        CAST(?27 AS INTEGER) AS sort_4_desc,
-        CAST(?28 AS TEXT) AS sort_5_field,
-        CAST(?29 AS INTEGER) AS sort_5_desc,
-        CAST(?30 AS TEXT) AS live_task_states_json,
-        CAST(?31 AS INTEGER) AS limit_rows
+        CAST(?13 AS INTEGER) AS offset_rows,
+        CAST(?14 AS TEXT) AS sort_1_field,
+        CAST(?15 AS INTEGER) AS sort_1_desc,
+        CAST(?16 AS TEXT) AS sort_2_field,
+        CAST(?17 AS INTEGER) AS sort_2_desc,
+        CAST(?18 AS TEXT) AS sort_3_field,
+        CAST(?19 AS INTEGER) AS sort_3_desc,
+        CAST(?20 AS TEXT) AS sort_4_field,
+        CAST(?21 AS INTEGER) AS sort_4_desc,
+        CAST(?22 AS TEXT) AS sort_5_field,
+        CAST(?23 AS INTEGER) AS sort_5_desc,
+        CAST(?24 AS TEXT) AS live_task_states_json,
+        CAST(?25 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
@@ -6388,16 +6244,12 @@ effective_status AS (
         durable.node_ids_json,
         CASE
             WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-            ELSE COALESCE((
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT value AS attention_type
-                    FROM json_each(durable.attention_types_json)
-                    UNION
-                    SELECT 'question'
-                    ORDER BY attention_type
-                )
-            ), '["question"]')
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'question'
+            ) THEN durable.attention_types_json
+            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
@@ -6518,7 +6370,7 @@ selected_rows AS (
                   )
                   OR EXISTS (
                       SELECT 1
-                      FROM json_each(?32) excluded_label
+                      FROM json_each(?26) excluded_label
                       WHERE NOT EXISTS (
                           SELECT 1
                           FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -6543,7 +6395,7 @@ selected_rows AS (
               )
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?32) excluded_label
+                  FROM json_each(?26) excluded_label
                   JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                     ON assignment.label_id = excluded_label.value
                   WHERE assignment.task_id = t.id
@@ -6573,154 +6425,112 @@ matching_workflows AS (
       )
     LIMIT 2
 ),
-cursor_values AS (
-    SELECT
-        CASE args.sort_1_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_1_value,
-        CASE args.sort_2_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_2_value,
-        CASE args.sort_3_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_3_value,
-        CASE args.sort_4_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_4_value,
-        CASE args.sort_5_field
-            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
-            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
-            WHEN 'title' THEN args.cursor_title_sort
-            ELSE ''
-        END AS sort_5_value
-    FROM args
+page_rows AS (
+    SELECT "rows".id, "rows".project_id, "rows".project_workflow_link_id, "rows".workflow_id, "rows".workflow_name, "rows".workflow_revision_seen, "rows".task_seq, "rows".short_id, "rows".title, "rows".body, "rows".source_url, "rows".source_workspace_id, "rows".managed_worktree_id, "rows".execution_target_mode, "rows".execution_target_requested_ref, "rows".execution_target_resolved_ref, "rows".execution_target_commit_oid, "rows".execution_target_provenance, "rows".created_at_unix_ms, "rows".updated_at_unix_ms, "rows".metadata_json, "rows".column_rank, "rows".column_keys_json, "rows".kind, "rows".primary_status_rank, "rows".node_ids_json, "rows".attention_types_json, "rows".title_sort, "rows".sort_1_value, "rows".sort_2_value, "rows".sort_3_value, "rows".sort_4_value, "rows".sort_5_value   FROM selected_rows rows
+    CROSS JOIN args
+    ORDER BY
+        CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
+        CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
+        CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
+        CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
+        CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
+        CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
+        CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
+        CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
+        CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
+        CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
+        rows.id ASC
+    LIMIT (SELECT limit_rows FROM args)
+    OFFSET (SELECT offset_rows FROM args)
 )
 SELECT
-    rows.id,
-    rows.project_id,
-    rows.project_workflow_link_id,
-    rows.workflow_id,
-    rows.workflow_name,
-    rows.workflow_revision_seen,
-    rows.task_seq,
-    rows.short_id,
-    rows.title,
-    rows.body,
-    rows.source_url,
-    rows.source_workspace_id,
-    rows.managed_worktree_id,
-    rows.execution_target_mode,
-    rows.execution_target_requested_ref,
-    rows.execution_target_resolved_ref,
-    rows.execution_target_commit_oid,
-    rows.execution_target_provenance,
-    rows.created_at_unix_ms,
-    rows.updated_at_unix_ms,
-    rows.metadata_json,
-    rows.column_rank,
-    rows.column_keys_json,
-    rows.kind,
-    rows.primary_status_rank,
-    rows.node_ids_json,
-    rows.attention_types_json,
-    rows.title_sort,
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_name,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    page.column_rank,
+    page.column_keys_json,
+    page.kind,
+    page.primary_status_rank,
+    page.node_ids_json,
+    page.attention_types_json,
+    page.title_sort,
     CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count
-FROM selected_rows rows
-CROSS JOIN args
-CROSS JOIN cursor_values cursor
-WHERE args.cursor_set = 0
-   OR (
-       (args.sort_1_field != '' AND ((args.sort_1_desc = 0 AND rows.sort_1_value > cursor.sort_1_value) OR (args.sort_1_desc != 0 AND rows.sort_1_value < cursor.sort_1_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND args.sort_2_field != '' AND ((args.sort_2_desc = 0 AND rows.sort_2_value > cursor.sort_2_value) OR (args.sort_2_desc != 0 AND rows.sort_2_value < cursor.sort_2_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND args.sort_3_field != '' AND ((args.sort_3_desc = 0 AND rows.sort_3_value > cursor.sort_3_value) OR (args.sort_3_desc != 0 AND rows.sort_3_value < cursor.sort_3_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND args.sort_4_field != '' AND ((args.sort_4_desc = 0 AND rows.sort_4_value > cursor.sort_4_value) OR (args.sort_4_desc != 0 AND rows.sort_4_value < cursor.sort_4_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND args.sort_5_field != '' AND ((args.sort_5_desc = 0 AND rows.sort_5_value > cursor.sort_5_value) OR (args.sort_5_desc != 0 AND rows.sort_5_value < cursor.sort_5_value)))
-       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND (args.sort_5_field = '' OR rows.sort_5_value = cursor.sort_5_value) AND rows.id > args.cursor_task_id)
-   )
+FROM args
+CROSS JOIN (SELECT 1) summary
+LEFT JOIN page_rows page ON TRUE
 ORDER BY
-    CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
-    CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
-    CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
-    CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
-    CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
-    CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
-    CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
-    CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
-    CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
-    CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
-    rows.id ASC
-LIMIT (SELECT limit_rows FROM args)
+    CASE WHEN args.sort_1_desc = 0 THEN page.sort_1_value END ASC,
+    CASE WHEN args.sort_1_desc != 0 THEN page.sort_1_value END DESC,
+    CASE WHEN args.sort_2_desc = 0 THEN page.sort_2_value END ASC,
+    CASE WHEN args.sort_2_desc != 0 THEN page.sort_2_value END DESC,
+    CASE WHEN args.sort_3_desc = 0 THEN page.sort_3_value END ASC,
+    CASE WHEN args.sort_3_desc != 0 THEN page.sort_3_value END DESC,
+    CASE WHEN args.sort_4_desc = 0 THEN page.sort_4_value END ASC,
+    CASE WHEN args.sort_4_desc != 0 THEN page.sort_4_value END DESC,
+    CASE WHEN args.sort_5_desc = 0 THEN page.sort_5_value END ASC,
+    CASE WHEN args.sort_5_desc != 0 THEN page.sort_5_value END DESC,
+    page.id ASC
 `
 
 type ListWorkflowTaskListRowsParams struct {
-	ProjectID               string
-	WorkflowID              sql.NullString
-	VisibleColumnsJson      sql.NullString
-	ColumnFilterSet         int64
-	ColumnKeysJson          sql.NullString
-	StatusFilterSet         int64
-	StatusKindsJson         string
-	AttentionFilterSet      int64
-	AttentionKindsJson      string
-	LabelFilterKind         string
-	LabelFilterMode         sql.NullString
-	LabelIdsJson            string
-	CursorSet               int64
-	CursorCreatedAtUnixMs   int64
-	CursorUpdatedAtUnixMs   int64
-	CursorPrimaryStatusRank int64
-	CursorColumnRank        sql.NullInt64
-	CursorTitleSort         string
-	CursorTaskID            string
-	Sort1Field              string
-	Sort1Desc               int64
-	Sort2Field              string
-	Sort2Desc               int64
-	Sort3Field              string
-	Sort3Desc               int64
-	Sort4Field              string
-	Sort4Desc               int64
-	Sort5Field              string
-	Sort5Desc               int64
-	LiveTaskStatesJson      string
-	LimitRows               int64
-	ExcludedLabelIdsJson    interface{}
+	ProjectID            string
+	WorkflowID           sql.NullString
+	VisibleColumnsJson   sql.NullString
+	ColumnFilterSet      int64
+	ColumnKeysJson       sql.NullString
+	StatusFilterSet      int64
+	StatusKindsJson      string
+	AttentionFilterSet   int64
+	AttentionKindsJson   string
+	LabelFilterKind      string
+	LabelFilterMode      sql.NullString
+	LabelIdsJson         string
+	OffsetRows           int64
+	Sort1Field           string
+	Sort1Desc            int64
+	Sort2Field           string
+	Sort2Desc            int64
+	Sort3Field           string
+	Sort3Desc            int64
+	Sort4Field           string
+	Sort4Desc            int64
+	Sort5Field           string
+	Sort5Desc            int64
+	LiveTaskStatesJson   string
+	LimitRows            int64
+	ExcludedLabelIdsJson interface{}
 }
 
 type ListWorkflowTaskListRowsRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  string
-	WorkflowName                string
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
+	ID                          sql.NullString
+	ProjectID                   sql.NullString
+	ProjectWorkflowLinkID       sql.NullString
+	WorkflowID                  sql.NullString
+	WorkflowName                sql.NullString
+	WorkflowRevisionSeen        sql.NullInt64
+	TaskSeq                     sql.NullInt64
+	ShortID                     sql.NullString
+	Title                       sql.NullString
+	Body                        sql.NullString
+	SourceUrl                   sql.NullString
 	SourceWorkspaceID           sql.NullString
 	ManagedWorktreeID           sql.NullString
 	ExecutionTargetMode         sql.NullString
@@ -6728,16 +6538,16 @@ type ListWorkflowTaskListRowsRow struct {
 	ExecutionTargetResolvedRef  sql.NullString
 	ExecutionTargetCommitOid    sql.NullString
 	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
+	CreatedAtUnixMs             sql.NullInt64
+	UpdatedAtUnixMs             sql.NullInt64
+	MetadataJson                sql.NullString
 	ColumnRank                  sql.NullInt64
 	ColumnKeysJson              sql.NullString
-	Kind                        string
-	PrimaryStatusRank           int64
-	NodeIdsJson                 string
-	AttentionTypesJson          string
-	TitleSort                   string
+	Kind                        sql.NullString
+	PrimaryStatusRank           sql.NullInt64
+	NodeIdsJson                 sql.NullString
+	AttentionTypesJson          sql.NullString
+	TitleSort                   sql.NullString
 	MatchingWorkflowCount       int64
 }
 
@@ -6755,13 +6565,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.LabelFilterKind,
 		arg.LabelFilterMode,
 		arg.LabelIdsJson,
-		arg.CursorSet,
-		arg.CursorCreatedAtUnixMs,
-		arg.CursorUpdatedAtUnixMs,
-		arg.CursorPrimaryStatusRank,
-		arg.CursorColumnRank,
-		arg.CursorTitleSort,
-		arg.CursorTaskID,
+		arg.OffsetRows,
 		arg.Sort1Field,
 		arg.Sort1Desc,
 		arg.Sort2Field,
@@ -6776,7 +6580,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.LimitRows,
 		arg.ExcludedLabelIdsJson,
 	)
-	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 32)
+	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 26)
 
 	if err != nil {
 		return nil, err
@@ -6815,15 +6619,15 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.AttentionTypesJson,
 			&i.TitleSort,
 			&i.MatchingWorkflowCount,
-		), listWorkflowTaskListRows, 32); err != nil {
+		), listWorkflowTaskListRows, 26); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 32); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 26); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 32); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 26); err != nil {
 		return nil, err
 	}
 	return items, nil

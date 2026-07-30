@@ -216,7 +216,7 @@ export type WorkflowRecord = Readonly<{
 
 export type WorkflowPage = Readonly<{
   workflows: readonly WorkflowRecord[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
 export type WorkflowNodeGroup = Readonly<{
@@ -611,7 +611,7 @@ export type TaskComment = Readonly<{
 
 export type CommentPage = Readonly<{
   comments: readonly TaskComment[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
 export type TaskCurrentNode = Readonly<{
