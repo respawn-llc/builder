@@ -336,6 +336,35 @@ func currentNodeDefinitionNode(definition workflow.Definition, nodeID workflow.N
 	return nil, fmt.Errorf("current node %q is absent from workflow %q", nodeID, definition.ID)
 }
 
+func currentNodeDefinitionEnteringEdge(
+	definition workflow.Definition,
+	currentNode workflow.CurrentNode,
+) (workflow.Edge, error) {
+	if currentNode.EnteredByEdgeID == nil {
+		return workflow.Edge{}, fmt.Errorf("current workflow node %v has no entering edge", currentNode.Reference)
+	}
+	for _, edge := range definition.Edges {
+		if edge.ID != *currentNode.EnteredByEdgeID {
+			continue
+		}
+		if edge.TargetNodeID != currentNode.Reference.NodeID {
+			return workflow.Edge{}, fmt.Errorf(
+				"current workflow node %v entering edge %q targets node %q",
+				currentNode.Reference,
+				edge.ID,
+				edge.TargetNodeID,
+			)
+		}
+		return edge, nil
+	}
+	return workflow.Edge{}, fmt.Errorf(
+		"current workflow node %v entering edge %q is absent from workflow %q",
+		currentNode.Reference,
+		*currentNode.EnteredByEdgeID,
+		definition.ID,
+	)
+}
+
 type currentNodeCompletionTarget struct {
 	Edge workflow.Edge
 	Node workflow.Node
@@ -482,6 +511,18 @@ func materializeCompletionTargetCurrentNode(
 			value, exists = outputValues[requirement.OutputName]
 		} else {
 			value, exists = currentSource.PriorNodeValues[namespace][requirement.OutputName]
+			if !exists {
+				recoveredValue, recovered, recoveryErr := currentNodeEnteringTransitionParameterValue(
+					definition,
+					wiring,
+					currentSource,
+					requirement,
+				)
+				if recoveryErr != nil {
+					return workflow.CurrentNode{}, recoveryErr
+				}
+				value, exists = recoveredValue, recovered
+			}
 		}
 		if !exists {
 			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
@@ -508,6 +549,58 @@ func materializeCompletionTargetCurrentNode(
 		sessionID,
 		edge.ID,
 	)
+}
+
+func currentNodeEnteringTransitionParameterValue(
+	definition workflow.Definition,
+	wiring workflow.DerivedWiring,
+	currentNode workflow.CurrentNode,
+	requirement workflow.PriorNodeValueRequirement,
+) (string, bool, error) {
+	if requirement.ProviderTransitionKey == nil || currentNode.EnteredByEdgeID == nil {
+		return "", false, nil
+	}
+	enteringEdge, err := currentNodeDefinitionEnteringEdge(definition, currentNode)
+	if err != nil {
+		return "", false, err
+	}
+	var enteringGroup *workflow.TransitionGroup
+	for index := range definition.TransitionGroups {
+		if definition.TransitionGroups[index].ID == enteringEdge.TransitionGroupID {
+			enteringGroup = &definition.TransitionGroups[index]
+			break
+		}
+	}
+	if enteringGroup == nil {
+		return "", false, fmt.Errorf(
+			"current node %v entering edge %q references absent transition group %q",
+			currentNode.Reference,
+			enteringEdge.ID,
+			enteringEdge.TransitionGroupID,
+		)
+	}
+	if string(enteringGroup.TransitionID) != string(*requirement.ProviderTransitionKey) {
+		return "", false, nil
+	}
+	provider, err := currentNodeDefinitionNode(definition, enteringGroup.SourceNodeID)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"resolve entering transition source for current node %v: %w",
+			currentNode.Reference,
+			err,
+		)
+	}
+	if workflow.NodeKey(provider) != requirement.ProviderNodeKey {
+		return "", false, nil
+	}
+	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(enteringEdge.ID) {
+		if binding.Field != requirement.OutputName {
+			continue
+		}
+		value, exists := currentNode.CurrentInputValues[binding.Name]
+		return value, exists, nil
+	}
+	return "", false, nil
 }
 
 func completionTargetSession(

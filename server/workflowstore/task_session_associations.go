@@ -287,9 +287,6 @@ func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference wo
 }
 
 func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode workflow.CurrentNode) (CurrentNodeStartContext, error) {
-	if currentNode.EnteredByEdgeID == nil {
-		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v has no entering edge", currentNode.Reference)
-	}
 	taskRow, err := s.queries.GetTask(ctx, string(currentNode.Reference.TaskID))
 	if err != nil {
 		return CurrentNodeStartContext{}, err
@@ -309,19 +306,9 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if !executableNodeKind(node.Kind()) {
 		return CurrentNodeStartContext{}, fmt.Errorf("current node %v is not executable", currentNode.Reference)
 	}
-	var enteringEdge *workflow.Edge
-	for i := range definition.Edges {
-		if definition.Edges[i].ID != *currentNode.EnteredByEdgeID {
-			continue
-		}
-		enteringEdge = &definition.Edges[i]
-		break
-	}
-	if enteringEdge == nil {
-		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v entering edge %q is absent from workflow %q", currentNode.Reference, *currentNode.EnteredByEdgeID, definition.ID)
-	}
-	if enteringEdge.TargetNodeID != currentNode.Reference.NodeID {
-		return CurrentNodeStartContext{}, fmt.Errorf("current workflow node %v entering edge %q targets node %q", currentNode.Reference, enteringEdge.ID, enteringEdge.TargetNodeID)
+	enteringEdge, err := currentNodeDefinitionEnteringEdge(definition, currentNode)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
 	}
 	transitionIDs, transitionOptions, err := currentNodeTransitionOptions(definition, node)
 	if err != nil {
@@ -362,7 +349,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 		Workflow:        workflowRecord,
 		Node:            nodeRecordFromCurrentDefinition(node),
 		CurrentNode:     currentNode,
-		EnteringEdge:    *enteringEdge,
+		EnteringEdge:    enteringEdge,
 		ContextMode:     effectiveContextMode,
 		SourceSessionID: sourceSessionID,
 		IsFanoutBranch:  currentNode.Reference.IsBranchScoped(),

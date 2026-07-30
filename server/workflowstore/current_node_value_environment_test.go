@@ -75,6 +75,52 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	}
 }
 
+func TestCompleteCurrentNodeRecoversEnteringTransitionParameterFromCurrentInput(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode plan: %v", err)
+	}
+	review := reviewResult.Mutation.Created[0]
+	if review.CurrentInputValues["summary"] != "approved plan" {
+		t.Fatalf("review current inputs = %+v, want entering Transition Parameter", review.CurrentInputValues)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
+SET prior_node_values_json = '{"plan":{"summary":"approved plan"}}'
+WHERE task_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		string(review.Reference.TaskID),
+		string(review.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("simulate Current Node missing its entering Transition namespace: %v", err)
+	}
+
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Reference,
+		TransitionID: "audit",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review with recoverable entering Transition Parameter: %v", err)
+	}
+	if len(auditResult.Mutation.Created) != 1 {
+		t.Fatalf("review completion mutation = %+v, want audit current node", auditResult.Mutation)
+	}
+	audit := auditResult.Mutation.Created[0]
+	if audit.PriorNodeValues["review"]["summary"] != "approved plan" {
+		t.Fatalf("audit prior Transition values = %+v, want recovered review summary", audit.PriorNodeValues)
+	}
+}
+
 func TestCompleteCurrentNodeUsesTransitionParametersInsteadOfTargetInputFields(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
