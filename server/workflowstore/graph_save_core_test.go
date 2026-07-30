@@ -186,6 +186,79 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	}
 }
 
+func TestWorkflowGraphSaveAddingTransitionFromActiveSourceIsBlocked(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(workflow.WorkflowID, workflow.NodeID, workflow.NodeID, *WorkflowGraphSaveRequest)
+	}{
+		{
+			name: "transition group",
+			mutate: func(workflowID workflow.WorkflowID, agentID workflow.NodeID, spareDoneID workflow.NodeID, req *WorkflowGraphSaveRequest) {
+				groupID := workflow.TransitionGroupID("group-added-" + string(workflowID))
+				req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+					ID:           groupID,
+					WorkflowID:   workflowID,
+					SourceNodeID: agentID,
+					TransitionID: "added",
+					DisplayName:  "Added",
+				})
+				req.Edges = append(req.Edges, EdgeRecord{
+					ID:                workflow.EdgeID("edge-added-" + string(workflowID)),
+					WorkflowID:        workflowID,
+					TransitionGroupID: groupID,
+					Key:               "added",
+					TargetNodeID:      spareDoneID,
+					ContextMode:       workflow.ContextModeNewSession,
+				})
+			},
+		},
+		{
+			name: "edge",
+			mutate: func(workflowID workflow.WorkflowID, _ workflow.NodeID, spareDoneID workflow.NodeID, req *WorkflowGraphSaveRequest) {
+				req.Edges = append(req.Edges, EdgeRecord{
+					ID:                workflow.EdgeID("edge-added-" + string(workflowID)),
+					WorkflowID:        workflowID,
+					TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(workflowID)),
+					Key:               "added",
+					TargetNodeID:      spareDoneID,
+					ContextMode:       workflow.ContextModeNewSession,
+				})
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+			workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			startTask(t, ctx, store, task.ID)
+
+			def, record, err := store.GetDefinition(ctx, workflowID)
+			if err != nil {
+				t.Fatalf("GetDefinition: %v", err)
+			}
+			agentID := workflow.NodeID("node-agent-" + string(workflowID))
+			spareDoneID := workflow.NodeID("node-spare-done-" + string(workflowID))
+			req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+			req.Nodes = append(req.Nodes, NodeRecord{
+				ID:          spareDoneID,
+				WorkflowID:  workflowID,
+				Key:         "spare_done",
+				Kind:        workflow.NodeKindTerminal,
+				DisplayName: "Spare Done",
+			})
+			test.mutate(workflowID, agentID, spareDoneID, &req)
+
+			preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+			if err != nil {
+				t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+			}
+			if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
+				t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+			}
+		})
+	}
+}
+
 func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testing.T) {
 	ctx, store, _, cfg := newTestStoreWithConfigContext(t)
 	remote, _ := openConcurrentWorkflowStores(t, cfg)

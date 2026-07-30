@@ -118,11 +118,17 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 	err = s.withLiveExecutionRuntime(runCtx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
 			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, req.OperationRef.ClientRequestID, nil)
-			if err != nil && !errors.Is(err, runtime.ErrNoActiveLiveRun) {
+			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+				if !activeExecutionAllowsUserTurnAutoDrain(engine.ActiveStepSnapshot()) {
+					return serverapi.ErrSessionRunStarting
+				}
+				item = engine.QueueUserMessageForAutoDrain(memoReq.Text, req.OperationRef.ClientRequestID.String())
+				accepted = true
+			} else if err != nil {
 				return err
 			}
 			if !accepted {
-				item = engine.QueueUserMessageForAutoDrain(memoReq.Text, req.OperationRef.ClientRequestID.String())
+				return serverapi.ErrSessionRunStarting
 			}
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
 			steered = true
@@ -143,6 +149,18 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 		return serverapi.RuntimeSubmitUserTurnResponse{}, steered, err
 	}
 	return resp, steered, nil
+}
+
+func activeExecutionAllowsUserTurnAutoDrain(snapshot *runtime.RunSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.ActiveKind {
+	case runtime.ActiveKindCompaction, runtime.ActiveKindPreSubmitCompaction:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {

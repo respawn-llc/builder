@@ -1922,6 +1922,28 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 }
 
+func TestActiveExecutionAllowsUserTurnAutoDrainOnlyForCompaction(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		snapshot *runtime.RunSnapshot
+		want     bool
+	}{
+		{name: "no active step"},
+		{name: "user turn", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindUserTurn}},
+		{name: "workflow turn", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindWorkflowTurn}},
+		{name: "goal loop", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindGoalLoop}},
+		{name: "runtime maintenance", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindRuntimeMaintenance}},
+		{name: "compaction", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindCompaction}, want: true},
+		{name: "pre-submit compaction", snapshot: &runtime.RunSnapshot{ActiveKind: runtime.ActiveKindPreSubmitCompaction}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := activeExecutionAllowsUserTurnAutoDrain(test.snapshot); got != test.want {
+				t.Fatalf("activeExecutionAllowsUserTurnAutoDrain(%+v) = %t, want %t", test.snapshot, got, test.want)
+			}
+		})
+	}
+}
+
 func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	defer close(client.releaseFirst)
