@@ -62,9 +62,9 @@ func TestMigrationWorkflowIDFunctionsRejectInvalidTextWithContext(t *testing.T) 
 					if err == nil {
 						t.Fatalf("%s(%q) succeeded", name, raw)
 					}
-					var diagnostic *WorkflowIdentityMigrationDiagnostic
+					var diagnostic *workflowIdentityMigrationDiagnostic
 					if !errors.As(err, &diagnostic) {
-						t.Fatalf("%s(%q) error = %T, want WorkflowIdentityMigrationDiagnostic", name, raw, err)
+						t.Fatalf("%s(%q) error = %T, want workflowIdentityMigrationDiagnostic", name, raw, err)
 					}
 					if diagnostic.Location != location {
 						t.Fatalf("%s(%q) diagnostic location = %q, want %q", name, raw, diagnostic.Location, location)

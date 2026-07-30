@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"testing"
 
-	"core/shared/runtimeids"
+	"core/internal/testharness/testsetup"
+
 	"core/shared/serverapi"
 )
 
 func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: mustTaskShowWorkflowID()},
-		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: mustTaskShowWorkflowID()},
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
 			NodeID:    "node-1",
 			SessionID: &sessionID,
@@ -51,14 +52,6 @@ func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	}
 }
 
-func mustTaskShowWorkflowID() runtimeids.WorkflowID {
-	id, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
-
 func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNodeIdentity(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{
@@ -70,7 +63,7 @@ func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNode
 		},
 		Project: serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowTaskWorkflowSummary{
-			WorkflowID:  mustTaskShowWorkflowID(),
+			WorkflowID:  testsetup.WorkflowID(t, "task-show"),
 			DisplayName: "Workflow",
 		},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{

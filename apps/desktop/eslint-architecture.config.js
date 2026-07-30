@@ -209,12 +209,6 @@ const appFacadeDependencyPolicies = Object.freeze([
   allowOwnerDependency({
     from: architectureOwners.APP_FACADE,
     to: architectureOwners.API,
-    source: "@/api/composition",
-    targetFile: architectureEntrypoints.API_COMPOSITION,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.APP_FACADE,
-    to: architectureOwners.API,
     source: "@/api",
   }),
   allowOwnerDependency({

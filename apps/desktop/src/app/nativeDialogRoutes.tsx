@@ -9,7 +9,7 @@ import { NewTaskWindowRoute } from "@/features/tasks";
 import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 import { taskDetailNativeDialogPath } from "./sidebarPopOut";
 import { useWindowChromeTitle } from "@/app-facade";
-import { workflowIDSchema } from "@/api/composition";
+import { workflowIDSchema } from "@/api";
 
 export const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
 export const workspaceUnlinkNativeDialogPath = "/native-dialog/workspace-unlink";

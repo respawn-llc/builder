@@ -3,6 +3,7 @@ package workflowrunner
 import (
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/runtimeids"
 
 	"core/server/sessionruntime"
@@ -10,15 +11,6 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 )
-
-func testWorkflowID(t *testing.T) workflow.WorkflowID {
-	t.Helper()
-	id, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
 
 func TestCurrentSessionReconstructionPreservesBranchScopedPromptIdentity(t *testing.T) {
 	implementation := workflow.TransitionBranchKey("implementation")
@@ -34,7 +26,7 @@ func TestCurrentSessionReconstructionPreservesBranchScopedPromptIdentity(t *test
 		}
 		instructions, err := BuildCurrentSessionTaskInstructions(workflowstore.CurrentNodeStartContext{
 			Task:        workflowstore.TaskRecord{ID: "task-1"},
-			Workflow:    workflowstore.WorkflowRecord{ID: testWorkflowID(t)},
+			Workflow:    workflowstore.WorkflowRecord{ID: testsetup.WorkflowID(t, "workflowrunner-inspection")},
 			Node:        workflowstore.NodeRecord{ID: "node-1"},
 			CurrentNode: workflow.CurrentNode{Reference: reference},
 		})
@@ -55,7 +47,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: testWorkflowID(t), CurrentNode: reference})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: testsetup.WorkflowID(t, "workflowrunner-inspection"), CurrentNode: reference})
 	if err != nil {
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
@@ -63,7 +55,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
 		workflowstore.CurrentNodeStartContext{
 			Task:        workflowstore.TaskRecord{ID: "task-1"},
-			Workflow:    workflowstore.WorkflowRecord{ID: testWorkflowID(t)},
+			Workflow:    workflowstore.WorkflowRecord{ID: testsetup.WorkflowID(t, "workflowrunner-inspection")},
 			Node:        workflowstore.NodeRecord{ID: "node-1"},
 			CurrentNode: workflow.CurrentNode{Reference: reference},
 			TransitionOptions: []workflowstore.TransitionOption{{

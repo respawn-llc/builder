@@ -1,7 +1,7 @@
 import { createRoute, createRouter, createRootRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { workflowIDSchema } from "@/api/composition";
+import { workflowIDSchema } from "@/api";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
@@ -13,7 +13,10 @@ import {
 } from "./routeComponents";
 
 const optionalSearchString = z.string().catch("");
-const optionalWorkflowSelector = workflowIDSchema.optional().catch(undefined);
+const optionalWorkflowSelector = z.preprocess(
+  (value) => (value === undefined ? undefined : value),
+  workflowIDSchema.optional(),
+);
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,

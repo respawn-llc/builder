@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -20,14 +21,6 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
-
-func mustRuntimeWorkflowID() workflow.WorkflowID {
-	id, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
 
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
@@ -181,7 +174,7 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 			TaskShortID:     "BUI-1",
 			TaskTitle:       "Workflow task",
 			TaskBody:        "Task body.",
-			WorkflowID:      mustRuntimeWorkflowID(),
+			WorkflowID:      testsetup.WorkflowID(t, "runtime-workflow"),
 			WorkflowName:    "Release preparation",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",

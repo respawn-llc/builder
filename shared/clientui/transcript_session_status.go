@@ -23,7 +23,6 @@ type TranscriptSessionStatus struct {
 }
 
 type TranscriptWorkflowSession struct {
-	Active     bool
 	TaskID     string
 	WorkflowID runtimeids.WorkflowID
 }

@@ -3,12 +3,13 @@ package workflow_test
 import (
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 )
 
 func TestNewNodeRejectsInvalidKind(t *testing.T) {
 	_, err := workflow.NewNode(workflow.NodeIdentity{
-		WorkflowID:  testWorkflowID("workflow_test"),
+		WorkflowID:  testsetup.WorkflowID(t, "workflow_test"),
 		ID:          "node_test",
 		Key:         "test",
 		DisplayName: "Test",
@@ -37,7 +38,7 @@ func TestNewNodeDropsUnsupportedFieldsForNonExecutableNodes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node, err := workflow.NewNode(workflow.NodeIdentity{
-				WorkflowID:  testWorkflowID("workflow_test"),
+				WorkflowID:  testsetup.WorkflowID(t, "workflow_test"),
 				ID:          workflow.NodeID("node_" + tc.name),
 				Key:         workflow.ModelKey(tc.name),
 				DisplayName: tc.name,

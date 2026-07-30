@@ -57,7 +57,6 @@ type RuntimeStatus struct {
 	ContextUsage                      RuntimeContextUsage
 	CompactionCount                   int
 	Goal                              *RuntimeGoal
-	WorkflowActive                    bool
 	WorkflowSession                   *WorkflowSessionStatus
 }
 

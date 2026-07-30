@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"reflect"
 	"testing"
 
@@ -9,7 +10,7 @@ import (
 )
 
 func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.T) {
-	workflowID := mustWorkflowID("workflow-rich")
+	workflowID := testsetup.WorkflowID(t, "workflow-rich")
 	groupID := "group-parallel"
 	agentID := workflow.NodeID("node-agent")
 	scriptID := workflow.NodeID("node-script")

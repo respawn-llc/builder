@@ -13,7 +13,7 @@ func TestDefinitionRejectsInvalidExecutionTargetPolicies(t *testing.T) {
 		{Mode: workflow.ExecutionTargetModeHead, CustomRef: &customRef},
 		{Mode: workflow.ExecutionTargetMode("future")},
 	} {
-		def := parameterWorkflow()
+		def := parameterWorkflow(t)
 		def.ExecutionTargetPolicy = policy
 		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 			Context:      workflow.ValidationContextDraft,
@@ -55,7 +55,7 @@ func TestExecutionTargetSelectionValidation(t *testing.T) {
 }
 
 func TestDefinitionReportsCustomRefDraftIssueWithoutBlockingDraft(t *testing.T) {
-	def := parameterWorkflow()
+	def := parameterWorkflow(t)
 	def.ExecutionTargetPolicy = workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef}
 
 	draft := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
