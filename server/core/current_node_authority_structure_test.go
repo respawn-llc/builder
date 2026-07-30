@@ -503,7 +503,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	}
 	sort.Strings(serializedShapes)
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "3c4774028219e5ef26c3c7e9fc7047312264cf6bb2eb3ad4d69bf4473afa4589"
+	const expectedWorkflowCurrentNodeWireDigest = "39100fa0902cf8ffd552d305c251e18ceba052317ae63e0284ef72986ab5494c"
 	if digest != expectedWorkflowCurrentNodeWireDigest {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,

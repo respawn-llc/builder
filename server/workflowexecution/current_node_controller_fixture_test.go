@@ -260,7 +260,7 @@ func (s *currentNodeControllerStore) ResumeCurrentNode(_ context.Context, refere
 	return workflowstore.InterruptedCurrentNodeAttentionProjection{
 		CurrentNode:        reference,
 		ProjectID:          "project-test",
-		WorkflowID:         currentNodeControllerTestWorkflowID.String(),
+		WorkflowID:         currentNodeControllerTestWorkflowID,
 		InterruptionReason: "workflow_test_interruption",
 		OccurredAtUnixMs:   1,
 	}, true, nil

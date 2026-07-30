@@ -9,6 +9,7 @@ import (
 
 	"core/server/attentionnotify"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -224,6 +225,7 @@ func registryWorkflowInterruptionNotification(id string, taskID string, nodeID s
 		},
 		Target: clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			WorkflowID:    registryWorkflowID(),
 			TaskID:        taskID,
 			CurrentNodeID: &nodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
@@ -249,6 +251,7 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 		},
 		Target: clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			WorkflowID:    registryWorkflowID(),
 			TaskID:        "task-" + id,
 			CurrentNodeID: &nodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
@@ -257,6 +260,14 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 			},
 		},
 	}
+}
+
+func registryWorkflowID() *runtimeids.WorkflowID {
+	workflowID, err := runtimeids.ParseWorkflowID("11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		panic(err)
+	}
+	return &workflowID
 }
 
 func waitForRegistryAttentionCondition(t *testing.T, condition func() bool, failure string) {
