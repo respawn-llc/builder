@@ -471,7 +471,7 @@ func materializeCompletionTargetCurrentNode(
 		}
 		currentInputValues[binding.Name] = value
 	}
-	priorNodeValues := make(map[string]map[string]string)
+	priorNodeValues := clonePriorParameterValues(currentSource.PriorNodeValues)
 	sourceKey := string(workflow.NodeKey(source))
 	for _, requirement := range wiring.PriorNodeValueRequirementsForNode(workflow.NodeIDOf(target)) {
 		namespace := string(requirement.Namespace)

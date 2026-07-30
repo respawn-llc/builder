@@ -115,6 +115,75 @@ func TestCompleteCurrentNodeUsesTransitionParametersInsteadOfTargetInputFields(t
 	}
 }
 
+func TestCompleteCurrentNodePreservesPathSpecificPriorParametersAcrossLoop(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		review := nodeByKey(t, def, "review")
+		audit := nodeByKey(t, def, "audit")
+		auditEdge := workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-audit-"+string(workflowID)),
+		)
+		auditEdge.PromptTemplate = "Audit {{.Params.summary}}."
+		auditEdge.Parameters = []workflow.Parameter{{
+			Key:         "summary",
+			Description: "Audit findings.",
+		}}
+		reworkGroupID := workflow.TransitionGroupID("group-rework-" + string(workflowID))
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           reworkGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(audit),
+			TransitionID: "rework",
+			DisplayName:  "Rework",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-rework-" + string(workflowID)),
+			WorkflowID:        workflowID,
+			TransitionGroupID: reworkGroupID,
+			Key:               "rework",
+			TargetNodeID:      workflow.NodeIDOf(review),
+			ContextMode:       workflow.ContextModeNewSession,
+			PromptTemplate:    "Rework {{.Params.audit.summary}}.",
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode plan: %v", err)
+	}
+	audit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "audit",
+		OutputValues: map[string]string{"summary": "blocking findings"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review: %v", err)
+	}
+	if audit.Mutation.Created[0].PriorNodeValues["audit"]["summary"] != "blocking findings" {
+		t.Fatalf("audit prior values = %+v, want path-specific findings", audit.Mutation.Created[0].PriorNodeValues)
+	}
+	reworked, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       audit.Mutation.Created[0].Reference,
+		TransitionID: "rework",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode audit: %v", err)
+	}
+	if reworked.Mutation.Created[0].PriorNodeValues["audit"]["summary"] != "blocking findings" {
+		t.Fatalf("reworked prior values = %+v, want path-specific findings preserved across loop", reworked.Mutation.Created[0].PriorNodeValues)
+	}
+}
+
 func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
