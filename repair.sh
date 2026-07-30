@@ -1,7 +1,11 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
-script_path="${0:A}"
+script_path="$(perl -MCwd=abs_path -e '
+    my $path = abs_path($ARGV[0]);
+    die "cannot resolve repair script path\n" unless defined $path;
+    print $path;
+' "${BASH_SOURCE[0]}")"
 db="${KENT_REPAIR_DB:-}"
 repair_sql="${KENT_REPAIR_SQL:-}"
 legacy_backup="${KENT_REPAIR_LEGACY_BACKUP:-}"
