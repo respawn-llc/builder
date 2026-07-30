@@ -337,7 +337,7 @@ SELECT
     json_extract(branch.target_snapshot_json, '$.transition_branch_key'),
     json_extract(branch.target_snapshot_json, '$.entered_by_edge_id'),
     json_extract(branch.target_snapshot_json, '$.current_input_values'),
-    json_extract(branch.target_snapshot_json, '$.prior_node_values')
+    json_extract(branch.target_snapshot_json, '$.prior_values')
 FROM task_pending_approval_branches branch
 JOIN task_pending_approvals approval ON approval.id = branch.approval_id
 WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
@@ -351,7 +351,7 @@ WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
 	if targetBranchKey != "split_a" ||
 		targetEnteredByEdgeID != "edge-branch-a-done" ||
 		targetInputs != `{"summary":"approved branch"}` ||
-		targetPriorValues != `{"agent":{"summary":"parallel source"}}` {
+		targetPriorValues != `{"node_outputs":{"agent":{"summary":"parallel source"}},"transition_parameters":{}}` {
 		t.Fatalf(
 			"migrated parallel approval target = branch=%q entered_by=%q inputs=%q prior=%q",
 			targetBranchKey,

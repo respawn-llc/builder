@@ -175,18 +175,16 @@ func TestDeriveWiringKeepsPriorTransitionNamespaceSeparateFromProviderNode(t *te
 
 	derived := workflow.DeriveWiring(def)
 
-	requirements := derived.PriorNodeValueRequirementsForNode("node_audit")
-	providerTransitionKey := workflow.ModelKey("implement")
-	want := []workflow.PriorNodeValueRequirement{{
-		Namespace:             "implement",
-		ProviderNodeKey:       "plan",
-		ProviderTransitionKey: &providerTransitionKey,
-		OutputName:            "plan",
+	requirements := derived.PriorValueRequirementsForNode("node_audit")
+	want := []workflow.PriorValueRequirement{workflow.PriorTransitionParameterRequirement{
+		ProviderNode:  "plan",
+		TransitionKey: "implement",
+		ParameterName: "plan",
 	}}
 	if !reflect.DeepEqual(requirements, want) {
 		t.Fatalf("prior value requirements = %+v, want %+v", requirements, want)
 	}
-	if beforeProvider := derived.PriorNodeValueRequirementsForNode("node_plan"); len(beforeProvider) != 0 {
+	if beforeProvider := derived.PriorValueRequirementsForNode("node_plan"); len(beforeProvider) != 0 {
 		t.Fatalf("provider current node requirements = %+v, want no value before the transition runs", beforeProvider)
 	}
 }

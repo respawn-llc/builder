@@ -32,11 +32,11 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	if review.CurrentInputValues["summary"] != "approved plan" {
 		t.Fatalf("review current inputs = %+v, want materialized summary", review.CurrentInputValues)
 	}
-	if review.PriorNodeValues["plan"]["summary"] != "approved plan" {
-		t.Fatalf("review prior node values = %+v, want plan summary retained for downstream audit", review.PriorNodeValues)
+	if review.PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" {
+		t.Fatalf("review prior Node outputs = %+v, want plan summary retained for downstream audit", review.PriorValues)
 	}
-	if review.PriorNodeValues["review"]["summary"] != "approved plan" {
-		t.Fatalf("review prior transition values = %+v, want review transition summary retained for downstream audit", review.PriorNodeValues)
+	if review.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
+		t.Fatalf("review prior Transition parameters = %+v, want review transition summary retained for downstream audit", review.PriorValues)
 	}
 
 	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
@@ -50,18 +50,18 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 		t.Fatalf("review completion mutation = %+v, want audit current node", auditResult.Mutation)
 	}
 	audit := auditResult.Mutation.Created[0]
-	if audit.PriorNodeValues["plan"]["summary"] != "approved plan" {
-		t.Fatalf("audit prior node values = %+v, want plan summary carried from review current node", audit.PriorNodeValues)
+	if audit.PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" {
+		t.Fatalf("audit prior Node outputs = %+v, want plan summary carried from review current node", audit.PriorValues)
 	}
-	if audit.PriorNodeValues["review"]["summary"] != "approved plan" {
-		t.Fatalf("audit prior transition values = %+v, want review transition summary carried from review current node", audit.PriorNodeValues)
+	if audit.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
+		t.Fatalf("audit prior Transition parameters = %+v, want review transition summary carried from review current node", audit.PriorValues)
 	}
 	startContext, err := store.ResolveCurrentNodeStartContext(ctx, audit.Reference)
 	if err != nil {
 		t.Fatalf("ResolveCurrentNodeStartContext audit: %v", err)
 	}
-	if startContext.PriorParameterValues["review"]["summary"] != "approved plan" {
-		t.Fatalf("audit start prior parameter values = %+v, want review transition namespace", startContext.PriorParameterValues)
+	if startContext.CurrentNode.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
+		t.Fatalf("audit start prior Transition parameters = %+v, want review transition namespace", startContext.CurrentNode.PriorValues)
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
@@ -69,9 +69,107 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	}
 	if len(currentNodes) != 1 ||
 		!currentNodes[0].Reference.Equal(audit.Reference) ||
-		currentNodes[0].PriorNodeValues["plan"]["summary"] != "approved plan" ||
-		currentNodes[0].PriorNodeValues["review"]["summary"] != "approved plan" {
+		currentNodes[0].PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" ||
+		currentNodes[0].PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
 		t.Fatalf("current nodes = %+v, want audit-owned materialized values", currentNodes)
+	}
+}
+
+func TestCompleteCurrentNodeKeepsSameNamedNodeAndTransitionValuesSeparate(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		plan := nodeByKey(t, def, "plan")
+		workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(plan)).Key = "shared"
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		consumerID := workflow.NodeID("node-consumer-" + string(workflowID))
+		consumerDoneGroupID := workflow.TransitionGroupID("group-consumer-done-" + string(workflowID))
+		req.Nodes = append(req.Nodes, NodeRecord{
+			ID:           consumerID,
+			WorkflowID:   workflowID,
+			Key:          "consumer",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Consumer",
+			SubagentRole: "coder",
+		})
+		sharedTransitionEdge := workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-audit-"+string(workflowID)),
+		)
+		sharedTransitionEdge.PromptTemplate = "Audit {{.Params.summary}}."
+		sharedTransitionEdge.Parameters = []workflow.Parameter{{
+			Key:         "summary",
+			Description: "Review summary.",
+		}}
+		for index := range req.TransitionGroups {
+			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(nodeByKey(t, def, "review")) {
+				req.TransitionGroups[index].TransitionID = "shared"
+				req.TransitionGroups[index].DisplayName = "Shared"
+			}
+		}
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-done-"+string(workflowID)),
+		).TargetNodeID = consumerID
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-done-"+string(workflowID)),
+		).PromptTemplate = "Consume {{.Nodes.shared.summary}} and {{.Params.shared.summary}}."
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           consumerDoneGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: consumerID,
+			TransitionID: "done",
+			DisplayName:  "Done",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-consumer-done-" + string(workflowID)),
+			WorkflowID:        workflowID,
+			TransitionGroupID: consumerDoneGroupID,
+			Key:               "done",
+			TargetNodeID:      workflow.NodeIDOf(done),
+			ContextMode:       workflow.ContextModeNewSession,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "node output"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode shared Node: %v", err)
+	}
+	audit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "shared",
+		OutputValues: map[string]string{"summary": "transition parameter"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode shared Transition: %v", err)
+	}
+	consumer, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       audit.Mutation.Created[0].Reference,
+		TransitionID: "done",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode audit: %v", err)
+	}
+	if len(consumer.Mutation.Created) != 1 {
+		t.Fatalf("audit mutation = %+v, want consumer Current Node", consumer.Mutation)
+	}
+	priorValues := consumer.Mutation.Created[0].PriorValues
+	if priorValues.NodeOutputs["shared"]["summary"] != "node output" {
+		t.Fatalf("Node outputs = %+v, want independently materialized Node value", priorValues.NodeOutputs)
+	}
+	if priorValues.TransitionParameters["shared"]["summary"] != "transition parameter" {
+		t.Fatalf("Transition parameters = %+v, want independently materialized Transition value", priorValues.TransitionParameters)
 	}
 }
 
@@ -95,7 +193,7 @@ func TestCompleteCurrentNodeRecoversEnteringTransitionParameterFromCurrentInput(
 		t.Fatalf("review current inputs = %+v, want entering Transition Parameter", review.CurrentInputValues)
 	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
-SET prior_node_values_json = '{"plan":{"summary":"approved plan"}}'
+SET prior_node_values_json = '{"node_outputs":{"plan":{"summary":"approved plan"}},"transition_parameters":{}}'
 WHERE task_id = ?
   AND node_id = ?
   AND transition_branch_key IS NULL`,
@@ -116,8 +214,8 @@ WHERE task_id = ?
 		t.Fatalf("review completion mutation = %+v, want audit current node", auditResult.Mutation)
 	}
 	audit := auditResult.Mutation.Created[0]
-	if audit.PriorNodeValues["review"]["summary"] != "approved plan" {
-		t.Fatalf("audit prior Transition values = %+v, want recovered review summary", audit.PriorNodeValues)
+	if audit.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
+		t.Fatalf("audit prior Transition values = %+v, want recovered review summary", audit.PriorValues)
 	}
 }
 
@@ -215,8 +313,8 @@ func TestCompleteCurrentNodePreservesPathSpecificPriorParametersAcrossLoop(t *te
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode review: %v", err)
 	}
-	if audit.Mutation.Created[0].PriorNodeValues["audit"]["summary"] != "blocking findings" {
-		t.Fatalf("audit prior values = %+v, want path-specific findings", audit.Mutation.Created[0].PriorNodeValues)
+	if audit.Mutation.Created[0].PriorValues.TransitionParameters["audit"]["summary"] != "blocking findings" {
+		t.Fatalf("audit prior values = %+v, want path-specific findings", audit.Mutation.Created[0].PriorValues)
 	}
 	reworked, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       audit.Mutation.Created[0].Reference,
@@ -225,8 +323,8 @@ func TestCompleteCurrentNodePreservesPathSpecificPriorParametersAcrossLoop(t *te
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode audit: %v", err)
 	}
-	if reworked.Mutation.Created[0].PriorNodeValues["audit"]["summary"] != "blocking findings" {
-		t.Fatalf("reworked prior values = %+v, want path-specific findings preserved across loop", reworked.Mutation.Created[0].PriorNodeValues)
+	if reworked.Mutation.Created[0].PriorValues.TransitionParameters["audit"]["summary"] != "blocking findings" {
+		t.Fatalf("reworked prior values = %+v, want path-specific findings preserved across loop", reworked.Mutation.Created[0].PriorValues)
 	}
 }
 
@@ -320,11 +418,11 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		t.Fatalf("join completion mutation = %+v, want synth current node", joined.Mutation)
 	}
 	synth := joined.Mutation.Created[0]
-	if synth.PriorNodeValues["split"]["summary"] != "approved plan" {
-		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split output retained across join", synth.PriorNodeValues)
+	if synth.PriorValues.TransitionParameters["split"]["summary"] != "approved plan" {
+		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split output retained across join", synth.PriorValues)
 	}
-	if synth.PriorNodeValues["done"]["joined"] != "joined implementation" {
-		t.Fatalf("synth prior parameter values = %+v, want join transition output under done namespace", synth.PriorNodeValues)
+	if synth.PriorValues.TransitionParameters["done"]["joined"] != "joined implementation" {
+		t.Fatalf("synth prior parameter values = %+v, want join transition output under done namespace", synth.PriorValues)
 	}
 
 	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
@@ -335,8 +433,8 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		t.Fatalf("CompleteCurrentNode synth: %v", err)
 	}
 	if len(auditResult.Mutation.Created) != 1 ||
-		auditResult.Mutation.Created[0].PriorNodeValues["split"]["summary"] != "approved plan" ||
-		auditResult.Mutation.Created[0].PriorNodeValues["done"]["joined"] != "joined implementation" {
+		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["split"]["summary"] != "approved plan" ||
+		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["done"]["joined"] != "joined implementation" {
 		t.Fatalf("audit current node = %+v, want propagated pre-fanout and join transition outputs", auditResult.Mutation.Created)
 	}
 }

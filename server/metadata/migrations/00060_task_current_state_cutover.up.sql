@@ -25,7 +25,7 @@ CREATE TABLE task_current_nodes (
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
     current_input_values_json TEXT NOT NULL DEFAULT '{}'
         CHECK (json_valid(current_input_values_json) AND json_type(current_input_values_json) = 'object'),
-    prior_node_values_json TEXT NOT NULL DEFAULT '{}'
+    prior_node_values_json TEXT NOT NULL DEFAULT '{"node_outputs":{},"transition_parameters":{}}'
         CHECK (json_valid(prior_node_values_json) AND json_type(prior_node_values_json) = 'object'),
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     scheduling_state TEXT
@@ -760,7 +760,7 @@ SELECT
     placement.node_id,
     NULL,
     '{}',
-    '{}',
+    '{"node_outputs":{},"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1596,7 +1596,7 @@ SELECT
         'entered_by_edge_id', value_environment.entered_by_edge_id,
         'display_name', edge.target_node_display_name,
         'current_input_values', json(value_environment.current_input_values_json),
-        'prior_node_values', json(value_environment.prior_node_values_json),
+        'prior_values', json(value_environment.prior_node_values_json),
         'session_id', CASE
             WHEN edge.context_mode = 'new_session' THEN NULL
             ELSE json_extract(edge.metadata_json, '$.source_session_id')
@@ -1902,7 +1902,7 @@ SELECT
     node.id,
     NULL,
     '{}',
-    '{}',
+    '{"node_outputs":{},"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1932,7 +1932,7 @@ SELECT
     candidate.node_id,
     NULL,
     '{}',
-    '{}',
+    '{"node_outputs":{},"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1978,7 +1978,7 @@ SELECT
     terminal.id,
     NULL,
     '{}',
-    '{}',
+    '{"node_outputs":{},"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,

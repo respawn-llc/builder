@@ -129,6 +129,9 @@ export const workflowEditorEnglish = {
     "Use the parameter template syntax prefixed with the transition key to add previous node parameters, e.g.",
   promptTransitionScopedParameterHelpSuffix:
     "The transition output must be guaranteed to exist (no branching) to be usable.",
+  promptPriorNodeOutputHelpPrefix: "Reference a guaranteed-prior node output with",
+  promptPriorNodeOutputHelpSuffix:
+    "Use the source node key and one of that node's declared output fields.",
   requiredInputs: "Required inputs",
   outputs: "Outputs",
   parameters: "Parameters",

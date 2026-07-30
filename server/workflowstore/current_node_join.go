@@ -73,10 +73,10 @@ func completeCurrentNodeJoinArrival(
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	joinSource, err := newNonExecutableCurrentNodeWithPriorNodeValues(
+	joinSource, err := newNonExecutableCurrentNodeWithPriorValues(
 		source.Reference.TaskID,
 		workflow.NodeIDOf(resolution.Join),
-		source.PriorNodeValues,
+		source.PriorValues,
 	)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err

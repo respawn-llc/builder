@@ -76,6 +76,45 @@ WHERE task_id = 'task-1'
   AND transition_branch_key IS NULL`)
 }
 
+func TestTaskCurrentNodeSchemaRejectsFlattenedPriorValueUpdate(t *testing.T) {
+	t.Parallel()
+	store, _ := newTaskCurrentSchemaFixture(t)
+	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
+	assertSQLiteConstraint(
+		t,
+		store.db,
+		sqlite3.SQLITE_CONSTRAINT_TRIGGER,
+		`UPDATE task_current_nodes
+SET prior_node_values_json = '{"shared":{"value":"ambiguous"}}'
+WHERE task_id = 'task-1'`,
+	)
+}
+
+func TestTaskPendingApprovalSchemaRejectsFlattenedTargetPriorValues(t *testing.T) {
+	t.Parallel()
+	store, now := newTaskCurrentSchemaFixture(t)
+	insertTaskCurrentNode(t, store.db, "task-1", "node-start", nil)
+	insertTaskPendingApproval(t, store.db, "approval-1", "task-1", "node-start", nil, now)
+	assertSQLiteConstraint(
+		t,
+		store.db,
+		sqlite3.SQLITE_CONSTRAINT_TRIGGER,
+		`INSERT INTO task_pending_approval_branches (
+    approval_id,
+    transition_branch_key,
+    target_snapshot_json,
+    effective_edge_configuration_json,
+    context_source_resolution_json
+) VALUES (
+    'approval-1',
+    'done',
+    '{"prior_node_values":{"shared":{"value":"ambiguous"}}}',
+    '{}',
+    '{}'
+)`,
+	)
+}
+
 func TestTaskCurrentNodeSchemaAllowsSerialParallelAggregateReplacement(t *testing.T) {
 	t.Parallel()
 	store, _ := newTaskCurrentSchemaFixture(t)
@@ -196,7 +235,7 @@ const insertTaskCurrentNodeSQL = `INSERT INTO task_current_nodes (
     transition_branch_key,
     current_input_values_json,
     prior_node_values_json
-) VALUES (?, ?, ?, '{}', '{}')`
+) VALUES (?, ?, ?, '{}', '{"node_outputs":{},"transition_parameters":{}}')`
 
 const insertTaskPendingApprovalSQL = `INSERT INTO task_pending_approvals (
     id,

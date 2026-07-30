@@ -500,17 +500,15 @@ func materializeCompletionTargetCurrentNode(
 		}
 		currentInputValues[binding.Name] = value
 	}
-	priorNodeValues := clonePriorParameterValues(currentSource.PriorNodeValues)
-	sourceKey := string(workflow.NodeKey(source))
-	for _, requirement := range wiring.PriorNodeValueRequirementsForNode(workflow.NodeIDOf(target)) {
-		namespace := string(requirement.Namespace)
-		providerNodeKey := string(requirement.ProviderNodeKey)
+	priorValues := currentSource.PriorValues.Clone()
+	sourceKey := workflow.NodeKey(source)
+	for _, requirement := range wiring.PriorValueRequirementsForNode(workflow.NodeIDOf(target)) {
 		var value string
 		var exists bool
-		if providerNodeKey == sourceKey {
-			value, exists = outputValues[requirement.OutputName]
+		if requirement.ProviderNodeKey() == sourceKey {
+			value, exists = outputValues[requirement.ValueName()]
 		} else {
-			value, exists = currentSource.PriorNodeValues[namespace][requirement.OutputName]
+			value, exists = currentSource.PriorValues.Value(requirement)
 			if !exists {
 				recoveredValue, recovered, recoveryErr := currentNodeEnteringTransitionParameterValue(
 					definition,
@@ -527,14 +525,11 @@ func materializeCompletionTargetCurrentNode(
 		if !exists {
 			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
 				Code:    CompletionCodeRequiredOutputMissing,
-				Field:   strings.TrimSpace(requirement.OutputName),
+				Field:   strings.TrimSpace(requirement.ValueName()),
 				Message: "required prior-node output is missing",
 			}}}
 		}
-		if priorNodeValues[namespace] == nil {
-			priorNodeValues[namespace] = make(map[string]string)
-		}
-		priorNodeValues[namespace][requirement.OutputName] = value
+		priorValues.Set(requirement, value)
 	}
 	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource)
 	if err != nil {
@@ -545,7 +540,7 @@ func materializeCompletionTargetCurrentNode(
 		target,
 		transitionBranchKey,
 		currentInputValues,
-		priorNodeValues,
+		priorValues,
 		sessionID,
 		edge.ID,
 	)
@@ -555,9 +550,9 @@ func currentNodeEnteringTransitionParameterValue(
 	definition workflow.Definition,
 	wiring workflow.DerivedWiring,
 	currentNode workflow.CurrentNode,
-	requirement workflow.PriorNodeValueRequirement,
+	requirement workflow.PriorValueRequirement,
 ) (string, bool, error) {
-	if requirement.ProviderTransitionKey == nil || currentNode.EnteredByEdgeID == nil {
+	if requirement.Origin() != workflow.PriorValueOriginTransitionParameter || currentNode.EnteredByEdgeID == nil {
 		return "", false, nil
 	}
 	enteringEdge, err := currentNodeDefinitionEnteringEdge(definition, currentNode)
@@ -579,7 +574,7 @@ func currentNodeEnteringTransitionParameterValue(
 			enteringEdge.TransitionGroupID,
 		)
 	}
-	if string(enteringGroup.TransitionID) != string(*requirement.ProviderTransitionKey) {
+	if workflow.ModelKey(enteringGroup.TransitionID) != requirement.Namespace() {
 		return "", false, nil
 	}
 	provider, err := currentNodeDefinitionNode(definition, enteringGroup.SourceNodeID)
@@ -590,11 +585,11 @@ func currentNodeEnteringTransitionParameterValue(
 			err,
 		)
 	}
-	if workflow.NodeKey(provider) != requirement.ProviderNodeKey {
+	if workflow.NodeKey(provider) != requirement.ProviderNodeKey() {
 		return "", false, nil
 	}
 	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(enteringEdge.ID) {
-		if binding.Field != requirement.OutputName {
+		if binding.Field != requirement.ValueName() {
 			continue
 		}
 		value, exists := currentNode.CurrentInputValues[binding.Name]
@@ -677,7 +672,7 @@ func completionTargetCurrentNode(
 	target workflow.Node,
 	transitionBranchKey *workflow.TransitionBranchKey,
 	currentInputValues map[string]string,
-	priorNodeValues map[string]map[string]string,
+	priorValues workflow.MaterializedPriorValues,
 	sessionID *runtimeids.SessionID,
 	enteredByEdgeID workflow.EdgeID,
 ) (workflow.CurrentNode, error) {
@@ -694,7 +689,7 @@ func completionTargetCurrentNode(
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, currentInputValues, priorNodeValues, sessionID, scheduling)
+	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, currentInputValues, priorValues, sessionID, scheduling)
 }
 
 func currentNodeReferenceBranchKey(reference workflow.CurrentNodeReference) *workflow.TransitionBranchKey {

@@ -379,7 +379,7 @@ SELECT
     json_extract(branch.target_snapshot_json, '$.entered_by_edge_id'),
     json_extract(branch.target_snapshot_json, '$.display_name'),
     json_extract(branch.target_snapshot_json, '$.current_input_values'),
-    json_extract(branch.target_snapshot_json, '$.prior_node_values'),
+    json_extract(branch.target_snapshot_json, '$.prior_values'),
     COALESCE(json_extract(branch.target_snapshot_json, '$.session_id'), ''),
     COALESCE(json_extract(branch.target_snapshot_json, '$.scheduling_state'), ''),
     json_extract(branch.effective_edge_configuration_json, '$.id'),
@@ -443,7 +443,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		targetEnteredByEdgeID != "transition-edge-pending-approval-migration" ||
 		targetDisplayName != "Done" ||
 		targetInputs != `{"summary":"done"}` ||
-		targetPriorValues != `{"plan":{"summary":"frozen plan"}}` ||
+		targetPriorValues != `{"node_outputs":{"plan":{"summary":"frozen plan"}},"transition_parameters":{}}` ||
 		targetSessionID != "" ||
 		targetSchedulingState != "" ||
 		edgeID != "transition-edge-pending-approval-migration" ||

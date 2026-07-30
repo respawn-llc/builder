@@ -15,7 +15,8 @@ import (
 )
 
 const migrationCurrentInputValuesFunction = "kent_migration_current_input_values_v1"
-const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
+const migrationPriorValuesFunction = "kent_migration_prior_node_values_v1"
+const migrationReclassifyPriorValuesFunction = "kent_migration_reclassify_prior_values_v1"
 
 var registerMetadataSQLiteFunctionsOnce sync.Once
 var registerMetadataSQLiteFunctionsErr error
@@ -31,9 +32,17 @@ func registerMetadataSQLiteFunctions() error {
 			return
 		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
-			migrationPriorNodeValuesFunction,
+			migrationPriorValuesFunction,
 			8,
-			migrationPriorNodeValues,
+			migrationPriorValues,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationReclassifyPriorValuesFunction,
+			5,
+			migrationReclassifyPriorValues,
 		)
 	})
 	if registerMetadataSQLiteFunctionsErr != nil {
@@ -66,9 +75,9 @@ type migrationPriorValueCandidate struct {
 	TransitionRecordID string `json:"transition_record_id"`
 }
 
-func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+func migrationPriorValues(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
 	if len(args) != 8 {
-		return nil, fmt.Errorf("%s requires 8 arguments", migrationPriorNodeValuesFunction)
+		return nil, fmt.Errorf("%s requires 8 arguments", migrationPriorValuesFunction)
 	}
 	taskID, err := migrationStringArgument(args[0], "task id")
 	if err != nil {
@@ -96,7 +105,7 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	if err := json.Unmarshal([]byte(graphJSON), &graph); err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: decode workflow graph: %w", context, err)
 	}
-	requirements, err := migrationPriorNodeRequirements(currentNodeID, graph)
+	requirements, err := migrationPriorValueRequirements(currentNodeID, graph)
 	if err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
@@ -108,7 +117,7 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	if err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: %w", context, err)
 	}
-	frozen, err := migrationFrozenPriorValues(context, frozenNodeJSON, frozenParameterJSON)
+	values, err := migrationFrozenPriorValues(context, frozenNodeJSON, frozenParameterJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -120,17 +129,13 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	if err := json.Unmarshal([]byte(candidatesJSON), &candidates); err != nil {
 		return nil, fmt.Errorf("prior-node migration failure: %s: decode candidates: %w", context, err)
 	}
-	values := frozen
 	for _, requirement := range requirements {
-		namespace := strings.TrimSpace(string(requirement.Namespace))
-		providerNodeKey := strings.TrimSpace(string(requirement.ProviderNodeKey))
-		outputName := strings.TrimSpace(requirement.OutputName)
-		valueKey := namespace + "." + outputName
-		candidate, candidateFound, candidateErr := migrationLatestPriorNodeCandidate(branch != "", requirement, candidates)
+		valueKey := migrationPriorValueRequirementKey(requirement)
+		candidate, candidateFound, candidateErr := migrationLatestPriorValueCandidate(branch != "", requirement, candidates)
 		if candidateErr != nil {
 			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: %w", context, valueKey, candidateErr)
 		}
-		frozenValue, frozenFound := frozen[namespace][outputName]
+		frozenValue, frozenFound := values.Value(requirement)
 		if frozenFound {
 			if candidateFound && candidate != frozenValue {
 				return nil, fmt.Errorf(
@@ -139,29 +144,18 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 					valueKey,
 				)
 			}
-			if values[namespace] == nil {
-				values[namespace] = make(map[string]string)
-			}
-			values[namespace][outputName] = frozenValue
+			values.Set(requirement, frozenValue)
 			continue
 		}
 		if !candidateFound {
-			providerTransitionKey := ""
-			if requirement.ProviderTransitionKey != nil {
-				providerTransitionKey = string(*requirement.ProviderTransitionKey)
-			}
 			return nil, fmt.Errorf(
-				"prior-node migration failure: %s, value_key=%s, provider_node_key=%s, provider_transition_key=%s: required value is missing",
+				"prior-node migration failure: %s, value_key=%s, provider_node_key=%s: required value is missing",
 				context,
 				valueKey,
-				providerNodeKey,
-				providerTransitionKey,
+				requirement.ProviderNodeKey(),
 			)
 		}
-		if values[namespace] == nil {
-			values[namespace] = make(map[string]string)
-		}
-		values[namespace][outputName] = candidate
+		values.Set(requirement, candidate)
 	}
 	encoded, err := json.Marshal(values)
 	if err != nil {
@@ -170,50 +164,53 @@ func migrationPriorNodeValues(_ *sqlitedriver.FunctionContext, args []driver.Val
 	return string(encoded), nil
 }
 
-func migrationFrozenPriorValues(context string, frozenSources ...string) (map[string]map[string]string, error) {
-	values := map[string]map[string]string{}
-	for _, frozenJSON := range frozenSources {
-		frozen := map[string]map[string]string{}
-		if err := json.Unmarshal([]byte(frozenJSON), &frozen); err != nil {
-			return nil, fmt.Errorf("prior-node migration failure: %s: decode frozen values: %w", context, err)
+func migrationFrozenPriorValues(context, frozenNodeJSON, frozenParameterJSON string) (workflow.MaterializedPriorValues, error) {
+	nodeOutputs, err := migrationFrozenPriorValueNamespace(context, "node output", frozenNodeJSON)
+	if err != nil {
+		return workflow.MaterializedPriorValues{}, err
+	}
+	transitionParameters, err := migrationFrozenPriorValueNamespace(context, "transition parameter", frozenParameterJSON)
+	if err != nil {
+		return workflow.MaterializedPriorValues{}, err
+	}
+	return workflow.MaterializedPriorValues{
+		NodeOutputs:          nodeOutputs,
+		TransitionParameters: transitionParameters,
+	}, nil
+}
+
+func migrationFrozenPriorValueNamespace(context, kind, raw string) (map[workflow.ModelKey]map[string]string, error) {
+	decoded := map[string]map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, fmt.Errorf("prior-node migration failure: %s: decode frozen values: %w", context, err)
+	}
+	values := make(map[workflow.ModelKey]map[string]string, len(decoded))
+	for namespace, fields := range decoded {
+		trimmedNamespace := strings.TrimSpace(namespace)
+		if trimmedNamespace == "" {
+			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=<blank>: frozen %s key is required", context, kind)
 		}
-		for namespace, outputValues := range frozen {
-			trimmedNamespace := strings.TrimSpace(namespace)
-			if trimmedNamespace == "" {
-				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=<blank>: frozen node key is required", context)
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: frozen %s values are empty", context, trimmedNamespace, kind)
+		}
+		values[workflow.ModelKey(trimmedNamespace)] = make(map[string]string, len(fields))
+		for fieldName, value := range fields {
+			trimmedFieldName := strings.TrimSpace(fieldName)
+			if trimmedFieldName == "" {
+				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s.<blank>: frozen %s field name is required", context, trimmedNamespace, kind)
 			}
-			if len(outputValues) == 0 {
-				return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s: frozen node values are empty", context, trimmedNamespace)
-			}
-			if values[trimmedNamespace] == nil {
-				values[trimmedNamespace] = make(map[string]string, len(outputValues))
-			}
-			for outputName, value := range outputValues {
-				trimmedOutputName := strings.TrimSpace(outputName)
-				if trimmedOutputName == "" {
-					return nil, fmt.Errorf("prior-node migration failure: %s, value_key=%s.<blank>: frozen output name is required", context, trimmedNamespace)
-				}
-				if existing, exists := values[trimmedNamespace][trimmedOutputName]; exists && existing != value {
-					return nil, fmt.Errorf(
-						"prior-node migration failure: %s, value_key=%s.%s: frozen value sources conflict",
-						context,
-						trimmedNamespace,
-						trimmedOutputName,
-					)
-				}
-				values[trimmedNamespace][trimmedOutputName] = value
-			}
+			values[workflow.ModelKey(trimmedNamespace)][trimmedFieldName] = value
 		}
 	}
 	return values, nil
 }
 
-func migrationPriorNodeRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorNodeValueRequirement, error) {
+func migrationPriorValueRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorValueRequirement, error) {
 	definition, err := migrationWorkflowDefinition(graph)
 	if err != nil {
 		return nil, err
 	}
-	return workflow.DeriveWiring(definition).PriorNodeValueRequirementsForNode(workflow.NodeID(currentNodeID)), nil
+	return workflow.DeriveWiring(definition).PriorValueRequirementsForNode(workflow.NodeID(currentNodeID)), nil
 }
 
 func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
@@ -342,12 +339,12 @@ func addMigrationWorkflowNode(
 	return nil
 }
 
-func migrationLatestPriorNodeCandidate(
+func migrationLatestPriorValueCandidate(
 	branchScoped bool,
-	requirement workflow.PriorNodeValueRequirement,
+	requirement workflow.PriorValueRequirement,
 	candidates []migrationPriorValueCandidate,
 ) (string, bool, error) {
-	outputName := strings.TrimSpace(requirement.OutputName)
+	outputName := requirement.ValueName()
 	for _, scope := range migrationPriorCandidateScopes(branchScoped) {
 		var selected *migrationPriorValueCandidate
 		var selectedValue string
@@ -387,11 +384,264 @@ func migrationLatestPriorNodeCandidate(
 	return "", false, nil
 }
 
-func migrationCandidateProvidesRequirement(candidate migrationPriorValueCandidate, requirement workflow.PriorNodeValueRequirement) bool {
-	if requirement.ProviderTransitionKey != nil {
-		return strings.TrimSpace(candidate.TransitionKey) == strings.TrimSpace(string(*requirement.ProviderTransitionKey))
+func migrationCandidateProvidesRequirement(candidate migrationPriorValueCandidate, requirement workflow.PriorValueRequirement) bool {
+	if strings.TrimSpace(candidate.NodeKey) != strings.TrimSpace(string(requirement.ProviderNodeKey())) {
+		return false
 	}
-	return strings.TrimSpace(candidate.NodeKey) == strings.TrimSpace(string(requirement.ProviderNodeKey))
+	switch requirement.Origin() {
+	case workflow.PriorValueOriginNodeOutput:
+		return true
+	case workflow.PriorValueOriginTransitionParameter:
+		return strings.TrimSpace(candidate.TransitionKey) == strings.TrimSpace(string(requirement.Namespace()))
+	default:
+		panic(fmt.Sprintf("unsupported prior value origin %q", requirement.Origin()))
+	}
+}
+
+func migrationPriorValueRequirementKey(requirement workflow.PriorValueRequirement) string {
+	switch requirement.Origin() {
+	case workflow.PriorValueOriginNodeOutput:
+		return ".Nodes." + string(requirement.Namespace()) + "." + requirement.ValueName()
+	case workflow.PriorValueOriginTransitionParameter:
+		return ".Params." + string(requirement.Namespace()) + "." + requirement.ValueName()
+	default:
+		panic(fmt.Sprintf("unsupported prior value origin %q", requirement.Origin()))
+	}
+}
+
+type migrationFlatPriorValueKey struct {
+	Namespace string
+	FieldName string
+}
+
+type migrationPriorValueOrigin uint8
+
+const (
+	migrationPriorValueOriginNodeOutput migrationPriorValueOrigin = 1 << iota
+	migrationPriorValueOriginTransitionParameter
+)
+
+func migrationReclassifyPriorValues(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 5 {
+		return nil, fmt.Errorf("%s requires 5 arguments", migrationReclassifyPriorValuesFunction)
+	}
+	taskID, err := migrationStringArgument(args[0], "task id")
+	if err != nil {
+		return nil, err
+	}
+	nodeID, err := migrationStringArgument(args[1], "node id")
+	if err != nil {
+		return nil, err
+	}
+	branch := strings.TrimSpace(migrationOptionalStringArgument(args[2]))
+	branchLabel := branch
+	if branchLabel == "" {
+		branchLabel = "serial"
+	}
+	context := fmt.Sprintf("task_id=%s, node_id=%s, transition_branch_key=%s", taskID, nodeID, branchLabel)
+	rawValues, err := migrationStringArgument(args[3], "prior values")
+	if err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: %w", context, err)
+	}
+	if typed, present, err := migrationDecodeTypedPriorValues(context, rawValues); present || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return migrationEncodePriorValues(context, typed)
+	}
+	graphJSON, err := migrationStringArgument(args[4], "workflow graph")
+	if err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: %w", context, err)
+	}
+	graph := []migrationGraphEdge{}
+	if err := json.Unmarshal([]byte(graphJSON), &graph); err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: decode workflow graph: %w", context, err)
+	}
+	definition, err := migrationWorkflowDefinition(graph)
+	if err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: %w", context, err)
+	}
+	flat := map[string]map[string]string{}
+	if err := json.Unmarshal([]byte(rawValues), &flat); err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: decode flat values: %w", context, err)
+	}
+	if flat == nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: flat values must be an object", context)
+	}
+	currentOrigins := migrationPriorValueOriginsForNode(definition, workflow.NodeID(nodeID))
+	allOrigins := migrationAllPriorValueOrigins(definition)
+	nodeKeys := make(map[string]struct{}, len(definition.Nodes))
+	for _, node := range definition.Nodes {
+		nodeKeys[string(workflow.NodeKey(node))] = struct{}{}
+	}
+	transitionKeys := make(map[string]struct{}, len(definition.TransitionGroups))
+	for _, group := range definition.TransitionGroups {
+		transitionKeys[string(group.TransitionID)] = struct{}{}
+	}
+	values := workflow.MaterializedPriorValues{
+		NodeOutputs:          map[workflow.ModelKey]map[string]string{},
+		TransitionParameters: map[workflow.ModelKey]map[string]string{},
+	}
+	namespaces := make([]string, 0, len(flat))
+	for namespace := range flat {
+		namespaces = append(namespaces, namespace)
+	}
+	sort.Strings(namespaces)
+	for _, namespace := range namespaces {
+		trimmedNamespace := strings.TrimSpace(namespace)
+		if trimmedNamespace == "" {
+			return nil, fmt.Errorf("prior-value origin migration failure: %s, value_key=<blank>: namespace is required", context)
+		}
+		fields := flat[namespace]
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("prior-value origin migration failure: %s, value_key=%s: values are empty", context, trimmedNamespace)
+		}
+		fieldNames := make([]string, 0, len(fields))
+		for fieldName := range fields {
+			fieldNames = append(fieldNames, fieldName)
+		}
+		sort.Strings(fieldNames)
+		for _, fieldName := range fieldNames {
+			trimmedFieldName := strings.TrimSpace(fieldName)
+			if trimmedFieldName == "" {
+				return nil, fmt.Errorf("prior-value origin migration failure: %s, value_key=%s.<blank>: field name is required", context, trimmedNamespace)
+			}
+			key := migrationFlatPriorValueKey{Namespace: trimmedNamespace, FieldName: trimmedFieldName}
+			origin := currentOrigins[key]
+			if origin == 0 {
+				origin = allOrigins[key]
+			}
+			if origin == 0 {
+				_, nodeKeyExists := nodeKeys[trimmedNamespace]
+				_, transitionKeyExists := transitionKeys[trimmedNamespace]
+				if nodeKeyExists {
+					origin |= migrationPriorValueOriginNodeOutput
+				}
+				if transitionKeyExists {
+					origin |= migrationPriorValueOriginTransitionParameter
+				}
+			}
+			switch origin {
+			case migrationPriorValueOriginNodeOutput:
+				values.SetNodeOutput(workflow.ModelKey(trimmedNamespace), trimmedFieldName, fields[fieldName])
+			case migrationPriorValueOriginTransitionParameter:
+				values.SetTransitionParameter(workflow.ModelKey(trimmedNamespace), trimmedFieldName, fields[fieldName])
+			case migrationPriorValueOriginNodeOutput | migrationPriorValueOriginTransitionParameter:
+				return nil, fmt.Errorf(
+					"prior-value origin migration failure: %s, value_key=%s.%s: flat value collides between Node output and Transition parameter origins",
+					context,
+					trimmedNamespace,
+					trimmedFieldName,
+				)
+			default:
+				return nil, fmt.Errorf(
+					"prior-value origin migration failure: %s, value_key=%s.%s: flat value origin cannot be determined",
+					context,
+					trimmedNamespace,
+					trimmedFieldName,
+				)
+			}
+		}
+	}
+	return migrationEncodePriorValues(context, values)
+}
+
+func migrationDecodeTypedPriorValues(context, raw string) (workflow.MaterializedPriorValues, bool, error) {
+	object := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+		return workflow.MaterializedPriorValues{}, false, nil
+	}
+	_, hasNodeOutputs := object["node_outputs"]
+	_, hasTransitionParameters := object["transition_parameters"]
+	if !hasNodeOutputs && !hasTransitionParameters {
+		return workflow.MaterializedPriorValues{}, false, nil
+	}
+	if !hasNodeOutputs || !hasTransitionParameters || len(object) != 2 {
+		return workflow.MaterializedPriorValues{}, true, fmt.Errorf(
+			"prior-value origin migration failure: %s: typed prior values must contain exactly node_outputs and transition_parameters",
+			context,
+		)
+	}
+	values := workflow.MaterializedPriorValues{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return workflow.MaterializedPriorValues{}, true, fmt.Errorf("prior-value origin migration failure: %s: decode typed values: %w", context, err)
+	}
+	if err := migrationValidatePriorValues(context, values); err != nil {
+		return workflow.MaterializedPriorValues{}, true, err
+	}
+	return values, true, nil
+}
+
+func migrationPriorValueOriginsForNode(definition workflow.Definition, nodeID workflow.NodeID) map[migrationFlatPriorValueKey]migrationPriorValueOrigin {
+	return migrationPriorValueOrigins(workflow.DeriveWiring(definition).PriorValueRequirementsForNode(nodeID))
+}
+
+func migrationAllPriorValueOrigins(definition workflow.Definition) map[migrationFlatPriorValueKey]migrationPriorValueOrigin {
+	origins := map[migrationFlatPriorValueKey]migrationPriorValueOrigin{}
+	derived := workflow.DeriveWiring(definition)
+	for _, node := range definition.Nodes {
+		for key, origin := range migrationPriorValueOrigins(derived.PriorValueRequirementsForNode(workflow.NodeIDOf(node))) {
+			origins[key] |= origin
+		}
+	}
+	return origins
+}
+
+func migrationPriorValueOrigins(requirements []workflow.PriorValueRequirement) map[migrationFlatPriorValueKey]migrationPriorValueOrigin {
+	origins := make(map[migrationFlatPriorValueKey]migrationPriorValueOrigin, len(requirements))
+	for _, requirement := range requirements {
+		key := migrationFlatPriorValueKey{Namespace: string(requirement.Namespace()), FieldName: requirement.ValueName()}
+		switch requirement.Origin() {
+		case workflow.PriorValueOriginNodeOutput:
+			origins[key] |= migrationPriorValueOriginNodeOutput
+		case workflow.PriorValueOriginTransitionParameter:
+			origins[key] |= migrationPriorValueOriginTransitionParameter
+		default:
+			panic(fmt.Sprintf("unsupported prior value origin %q", requirement.Origin()))
+		}
+	}
+	return origins
+}
+
+func migrationEncodePriorValues(context string, values workflow.MaterializedPriorValues) (driver.Value, error) {
+	if err := migrationValidatePriorValues(context, values); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("prior-value origin migration failure: %s: encode values: %w", context, err)
+	}
+	return string(encoded), nil
+}
+
+func migrationValidatePriorValues(context string, values workflow.MaterializedPriorValues) error {
+	if values.NodeOutputs == nil || values.TransitionParameters == nil {
+		return fmt.Errorf("prior-value origin migration failure: %s: typed value namespaces must be objects", context)
+	}
+	if err := migrationValidatePriorValueNamespace(context, "node output", values.NodeOutputs); err != nil {
+		return err
+	}
+	if err := migrationValidatePriorValueNamespace(context, "transition parameter", values.TransitionParameters); err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrationValidatePriorValueNamespace(context, kind string, namespace map[workflow.ModelKey]map[string]string) error {
+	for key, fields := range namespace {
+		if strings.TrimSpace(string(key)) == "" {
+			return fmt.Errorf("prior-value origin migration failure: %s: %s key is required", context, kind)
+		}
+		if len(fields) == 0 {
+			return fmt.Errorf("prior-value origin migration failure: %s, value_key=%s: %s values are empty", context, key, kind)
+		}
+		for fieldName := range fields {
+			if strings.TrimSpace(fieldName) == "" {
+				return fmt.Errorf("prior-value origin migration failure: %s, value_key=%s.<blank>: %s field name is required", context, key, kind)
+			}
+		}
+	}
+	return nil
 }
 
 func migrationPriorCandidateScopes(branchScoped bool) []string {

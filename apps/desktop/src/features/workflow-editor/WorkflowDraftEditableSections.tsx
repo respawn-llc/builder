@@ -35,6 +35,7 @@ import { DetailSection } from "./WorkflowInspectorPrimitives";
 import { type DraftWorkflowEdge, type DraftWorkflowNode } from "./workflowEditorDraft";
 import { type WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import {
+  priorNodeOutputPlaceholderExample,
   transitionKeyedParameterPlaceholderExample,
   workflowPromptTemplatePlaceholders,
   type PromptTemplatePlaceholder,
@@ -154,6 +155,16 @@ function PromptPlaceholderChip({
       </InteractiveChip>
     );
   }
+  const isNodeOutput = placeholder.topic === "node_output";
+  const helpPrefix = isNodeOutput
+    ? t("workflowEditor.promptPriorNodeOutputHelpPrefix")
+    : t("workflowEditor.promptTransitionScopedParameterHelpPrefix");
+  const helpExample = isNodeOutput
+    ? priorNodeOutputPlaceholderExample
+    : transitionKeyedParameterPlaceholderExample;
+  const helpSuffix = isNodeOutput
+    ? t("workflowEditor.promptPriorNodeOutputHelpSuffix")
+    : t("workflowEditor.promptTransitionScopedParameterHelpSuffix");
   return (
     <Tooltip onOpenChange={setInfoOpen} open={infoOpen}>
       <TooltipTrigger asChild>
@@ -186,16 +197,15 @@ function PromptPlaceholderChip({
       </TooltipTrigger>
       <TooltipContent
         className="grid max-w-[24rem] gap-[var(--space-1)] whitespace-normal text-left"
-        data-testid="transition-keyed-parameter-placeholder-help"
+        data-testid={`${placeholder.topic}-placeholder-help`}
         level={3}
         side="top"
         sideOffset={6}
       >
         <span>
-          {t("workflowEditor.promptTransitionScopedParameterHelpPrefix")}{" "}
-          <code>{transitionKeyedParameterPlaceholderExample}</code>.
+          {helpPrefix} <code>{helpExample}</code>.
         </span>
-        <span>{t("workflowEditor.promptTransitionScopedParameterHelpSuffix")}</span>
+        <span>{helpSuffix}</span>
       </TooltipContent>
     </Tooltip>
   );

@@ -308,7 +308,7 @@ func renderCurrentNodePrompt(text string, input workflowstore.CurrentNodeStartCo
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
 }
 
 func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
@@ -514,21 +514,21 @@ func BuildCurrentSessionTaskInstructions(input workflowstore.CurrentNodeStartCon
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorParameterValues: input.PriorParameterValues})
+	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
 }
 
 type workflowPromptInput struct {
-	Task                 workflowstore.TaskRecord
-	Workflow             workflowstore.WorkflowRecord
-	Node                 workflowstore.NodeRecord
-	CurrentNode          workflow.CurrentNodeReference
-	ContextMode          workflow.ContextMode
-	SourceSessionID      string
-	TransitionOptions    []workflowstore.TransitionOption
-	TransitionIDs        []string
-	PromptTemplate       string
-	ParameterValues      map[string]string
-	PriorParameterValues map[string]map[string]string
+	Task              workflowstore.TaskRecord
+	Workflow          workflowstore.WorkflowRecord
+	Node              workflowstore.NodeRecord
+	CurrentNode       workflow.CurrentNodeReference
+	ContextMode       workflow.ContextMode
+	SourceSessionID   string
+	TransitionOptions []workflowstore.TransitionOption
+	TransitionIDs     []string
+	PromptTemplate    string
+	ParameterValues   map[string]string
+	PriorValues       workflow.MaterializedPriorValues
 }
 
 func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.TaskInstructions, error) {
@@ -591,6 +591,7 @@ func workflowCompletionTransitions(options []workflowstore.TransitionOption, ids
 type nodePromptTemplateData struct {
 	TaskId, TaskShortId, TaskTitle, TaskBody, NodeId, NodeKey, NodeDisplayName string
 	Params                                                                     map[string]promptParameterNamespace
+	Nodes                                                                      map[string]map[string]string
 }
 
 const currentParameterValueKey = "\x00current"
@@ -608,21 +609,31 @@ func renderWorkflowPrompt(text string, input workflowPromptInput) (string, error
 		return "", fmt.Errorf("parse workflow transition prompt template: %w", err)
 	}
 	var out strings.Builder
-	err = tmpl.Execute(&out, nodePromptTemplateData{TaskId: string(input.Task.ID), TaskShortId: input.Task.ShortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, NodeId: string(input.Node.ID), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, Params: promptParameterData(input.ParameterValues, input.PriorParameterValues)})
+	err = tmpl.Execute(&out, nodePromptTemplateData{
+		TaskId:          string(input.Task.ID),
+		TaskShortId:     input.Task.ShortID,
+		TaskTitle:       input.Task.Title,
+		TaskBody:        input.Task.Body,
+		NodeId:          string(input.Node.ID),
+		NodeKey:         string(input.Node.Key),
+		NodeDisplayName: input.Node.DisplayName,
+		Params:          promptParameterData(input.ParameterValues, input.PriorValues.TransitionParameters),
+		Nodes:           promptNodeOutputData(input.PriorValues.NodeOutputs),
+	})
 	return out.String(), err
 }
 
-func promptParameterData(current map[string]string, prior map[string]map[string]string) map[string]promptParameterNamespace {
+func promptParameterData(current map[string]string, prior map[workflow.ModelKey]map[string]string) map[string]promptParameterNamespace {
 	out := map[string]promptParameterNamespace{workflow.RuntimePromptParameterCommentary: {currentParameterValueKey: ""}}
 	for transition, values := range prior {
-		namespace := out[transition]
+		namespace := out[string(transition)]
 		if namespace == nil {
 			namespace = promptParameterNamespace{}
 		}
 		for key, value := range values {
 			namespace[key] = value
 		}
-		out[transition] = namespace
+		out[string(transition)] = namespace
 	}
 	for key, value := range current {
 		namespace := out[key]
@@ -631,6 +642,14 @@ func promptParameterData(current map[string]string, prior map[string]map[string]
 		}
 		namespace[currentParameterValueKey] = value
 		out[key] = namespace
+	}
+	return out
+}
+
+func promptNodeOutputData(values map[workflow.ModelKey]map[string]string) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(values))
+	for nodeKey, outputs := range values {
+		out[string(nodeKey)] = maps.Clone(outputs)
 	}
 	return out
 }

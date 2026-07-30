@@ -37,7 +37,7 @@ type pendingApprovalTargetSnapshot struct {
 	EnteredByEdgeID     *workflow.EdgeID                     `json:"entered_by_edge_id,omitempty"`
 	DisplayName         string                               `json:"display_name"`
 	CurrentInputValues  map[string]string                    `json:"current_input_values"`
-	PriorNodeValues     map[string]map[string]string         `json:"prior_node_values"`
+	PriorValues         workflow.MaterializedPriorValues     `json:"prior_values"`
 	SessionID           *string                              `json:"session_id,omitempty"`
 	SchedulingState     *workflow.CurrentNodeSchedulingState `json:"scheduling_state,omitempty"`
 }
@@ -515,6 +515,9 @@ func pendingApprovalBranchFromRow(taskID workflow.TaskID, row sqlitegen.TaskPend
 	if err := workflow.UnmarshalString(row.TargetSnapshotJson, &targetSnapshot); err != nil {
 		return workflow.PendingApprovalBranch{}, fmt.Errorf("decode pending approval target snapshot: %w", err)
 	}
+	if targetSnapshot.PriorValues.NodeOutputs == nil || targetSnapshot.PriorValues.TransitionParameters == nil {
+		return workflow.PendingApprovalBranch{}, errors.New("pending approval target prior values are invalid")
+	}
 	target, err := pendingApprovalTargetFromSnapshot(taskID, targetSnapshot)
 	if err != nil {
 		return workflow.PendingApprovalBranch{}, err
@@ -591,7 +594,7 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 		EnteredByEdgeID:     enteredByEdgeID,
 		DisplayName:         target.DisplayName,
 		CurrentInputValues:  cloneCurrentNodeOutputValues(currentNode.CurrentInputValues),
-		PriorNodeValues:     clonePendingApprovalPriorNodeValues(currentNode.PriorNodeValues),
+		PriorValues:         currentNode.PriorValues.Clone(),
 		SessionID:           sessionID,
 		SchedulingState:     schedulingState,
 	})
@@ -621,7 +624,7 @@ func pendingApprovalTargetFromSnapshot(taskID workflow.TaskID, snapshot pendingA
 		reference,
 		snapshot.EnteredByEdgeID,
 		snapshot.CurrentInputValues,
-		snapshot.PriorNodeValues,
+		snapshot.PriorValues,
 		sessionID,
 		scheduling,
 	)
@@ -690,15 +693,4 @@ func clonePendingApprovalSessionID(sessionID *runtimeids.SessionID) *runtimeids.
 	}
 	cloned := *sessionID
 	return &cloned
-}
-
-func clonePendingApprovalPriorNodeValues(values map[string]map[string]string) map[string]map[string]string {
-	if values == nil {
-		return nil
-	}
-	cloned := make(map[string]map[string]string, len(values))
-	for nodeKey, outputValues := range values {
-		cloned[nodeKey] = cloneCurrentNodeOutputValues(outputValues)
-	}
-	return cloned
 }

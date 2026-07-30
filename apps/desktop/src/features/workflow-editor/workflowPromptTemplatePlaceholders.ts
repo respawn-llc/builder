@@ -2,6 +2,7 @@ import type { WorkflowParameter } from "@/api";
 import { isWorkflowModelKeyValid } from "./workflowEditorGraphKeys";
 
 export type PromptTemplatePlaceholderTone = "muted" | "primary";
+export type PromptTemplatePlaceholderInfoTopic = "node_output" | "transition_parameter";
 
 export type PromptTemplatePlaceholder =
   | Readonly<{
@@ -14,11 +15,16 @@ export type PromptTemplatePlaceholder =
       kind: "info";
       label: string;
       tone: PromptTemplatePlaceholderTone;
+      topic: PromptTemplatePlaceholderInfoTopic;
     }>;
 
 export const transitionKeyedParameterPlaceholderLabel = "{{.Params.<transition_key>.<parameter>}}";
 
 export const transitionKeyedParameterPlaceholderExample = "{{.Params.planning.plan_file_location}}";
+
+export const priorNodeOutputPlaceholderLabel = "{{.Nodes.<node_key>.<field>}}";
+
+export const priorNodeOutputPlaceholderExample = "{{.Nodes.planning.plan_file_location}}";
 
 // Keep this in sync with server/workflowrunner/starter.go nodePromptTemplateData.
 export const builtInPromptTemplatePlaceholderNames = [
@@ -60,6 +66,13 @@ export function workflowPromptTemplatePlaceholders(
       kind: "info" as const,
       label: transitionKeyedParameterPlaceholderLabel,
       tone: "primary" as const,
+      topic: "transition_parameter" as const,
+    },
+    {
+      kind: "info" as const,
+      label: priorNodeOutputPlaceholderLabel,
+      tone: "primary" as const,
+      topic: "node_output" as const,
     },
     ...builtInPromptTemplatePlaceholderNames.map((name) => ({
       kind: "insert" as const,

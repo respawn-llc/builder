@@ -143,30 +143,91 @@ type CurrentNodeScheduling struct {
 	Interruption *CurrentNodeInterruption
 }
 
+type MaterializedPriorValues struct {
+	NodeOutputs          map[ModelKey]map[string]string `json:"node_outputs"`
+	TransitionParameters map[ModelKey]map[string]string `json:"transition_parameters"`
+}
+
+func (v MaterializedPriorValues) Clone() MaterializedPriorValues {
+	return cloneMaterializedPriorValues(v)
+}
+
+func (v MaterializedPriorValues) NodeOutput(nodeKey ModelKey, outputName string) (string, bool) {
+	value, exists := v.NodeOutputs[nodeKey][outputName]
+	return value, exists
+}
+
+func (v MaterializedPriorValues) TransitionParameter(transitionKey ModelKey, parameterName string) (string, bool) {
+	value, exists := v.TransitionParameters[transitionKey][parameterName]
+	return value, exists
+}
+
+func (v MaterializedPriorValues) Value(requirement PriorValueRequirement) (string, bool) {
+	switch requirement.Origin() {
+	case PriorValueOriginNodeOutput:
+		return v.NodeOutput(requirement.Namespace(), requirement.ValueName())
+	case PriorValueOriginTransitionParameter:
+		return v.TransitionParameter(requirement.Namespace(), requirement.ValueName())
+	default:
+		panic(fmt.Sprintf("unsupported prior value origin %q", requirement.Origin()))
+	}
+}
+
+func (v *MaterializedPriorValues) SetNodeOutput(nodeKey ModelKey, outputName, value string) {
+	if v.NodeOutputs == nil {
+		v.NodeOutputs = make(map[ModelKey]map[string]string)
+	}
+	if v.NodeOutputs[nodeKey] == nil {
+		v.NodeOutputs[nodeKey] = make(map[string]string)
+	}
+	v.NodeOutputs[nodeKey][outputName] = value
+}
+
+func (v *MaterializedPriorValues) SetTransitionParameter(transitionKey ModelKey, parameterName, value string) {
+	if v.TransitionParameters == nil {
+		v.TransitionParameters = make(map[ModelKey]map[string]string)
+	}
+	if v.TransitionParameters[transitionKey] == nil {
+		v.TransitionParameters[transitionKey] = make(map[string]string)
+	}
+	v.TransitionParameters[transitionKey][parameterName] = value
+}
+
+func (v *MaterializedPriorValues) Set(requirement PriorValueRequirement, value string) {
+	switch requirement.Origin() {
+	case PriorValueOriginNodeOutput:
+		v.SetNodeOutput(requirement.Namespace(), requirement.ValueName(), value)
+	case PriorValueOriginTransitionParameter:
+		v.SetTransitionParameter(requirement.Namespace(), requirement.ValueName(), value)
+	default:
+		panic(fmt.Sprintf("unsupported prior value origin %q", requirement.Origin()))
+	}
+}
+
 type CurrentNode struct {
 	Reference          CurrentNodeReference
 	EnteredByEdgeID    *EdgeID
 	CurrentInputValues map[string]string
-	PriorNodeValues    map[string]map[string]string
+	PriorValues        MaterializedPriorValues
 	SessionID          *runtimeids.SessionID
 	Scheduling         *CurrentNodeScheduling
 }
 
 func NewCurrentNode(reference CurrentNodeReference, sessionID *runtimeids.SessionID, scheduling *CurrentNodeScheduling) (CurrentNode, error) {
-	return NewCurrentNodeWithMaterializedValues(reference, nil, nil, sessionID, scheduling)
+	return NewCurrentNodeWithMaterializedValues(reference, nil, MaterializedPriorValues{}, sessionID, scheduling)
 }
 
 func NewCurrentNodeWithMaterializedValues(
 	reference CurrentNodeReference,
 	currentInputValues map[string]string,
-	priorNodeValues map[string]map[string]string,
+	priorValues MaterializedPriorValues,
 	sessionID *runtimeids.SessionID,
 	scheduling *CurrentNodeScheduling,
 ) (CurrentNode, error) {
 	if err := reference.Validate(); err != nil {
 		return CurrentNode{}, err
 	}
-	if err := validateCurrentNodeValueEnvironment(currentInputValues, priorNodeValues); err != nil {
+	if err := validateCurrentNodeValueEnvironment(currentInputValues, priorValues); err != nil {
 		return CurrentNode{}, err
 	}
 	if sessionID != nil && sessionID.IsZero() {
@@ -178,7 +239,7 @@ func NewCurrentNodeWithMaterializedValues(
 	node := CurrentNode{
 		Reference:          reference,
 		CurrentInputValues: cloneMaterializedInputValues(currentInputValues),
-		PriorNodeValues:    cloneMaterializedPriorNodeValues(priorNodeValues),
+		PriorValues:        cloneMaterializedPriorValues(priorValues),
 		SessionID:          cloneCurrentNodeSessionID(sessionID),
 		Scheduling:         cloneCurrentNodeScheduling(scheduling),
 	}
@@ -189,11 +250,11 @@ func NewCurrentNodeWithEntry(
 	reference CurrentNodeReference,
 	enteredByEdgeID *EdgeID,
 	currentInputValues map[string]string,
-	priorNodeValues map[string]map[string]string,
+	priorValues MaterializedPriorValues,
 	sessionID *runtimeids.SessionID,
 	scheduling *CurrentNodeScheduling,
 ) (CurrentNode, error) {
-	node, err := NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, sessionID, scheduling)
+	node, err := NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorValues, sessionID, scheduling)
 	if err != nil {
 		return CurrentNode{}, err
 	}
@@ -208,22 +269,32 @@ func NewCurrentNodeWithEntry(
 	return node, nil
 }
 
-func validateCurrentNodeValueEnvironment(currentInputValues map[string]string, priorNodeValues map[string]map[string]string) error {
+func validateCurrentNodeValueEnvironment(currentInputValues map[string]string, priorValues MaterializedPriorValues) error {
 	for name := range currentInputValues {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("current node input name is required")
 		}
 	}
-	for nodeKey, values := range priorNodeValues {
-		if strings.TrimSpace(nodeKey) == "" {
-			return fmt.Errorf("current node prior node key is required")
+	if err := validateMaterializedPriorValueNamespace("node output", priorValues.NodeOutputs); err != nil {
+		return err
+	}
+	if err := validateMaterializedPriorValueNamespace("transition parameter", priorValues.TransitionParameters); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMaterializedPriorValueNamespace(kind string, values map[ModelKey]map[string]string) error {
+	for namespace, fields := range values {
+		if strings.TrimSpace(string(namespace)) == "" {
+			return fmt.Errorf("current node prior %s key is required", kind)
 		}
-		if len(values) == 0 {
-			return fmt.Errorf("current node prior node values are required")
+		if len(fields) == 0 {
+			return fmt.Errorf("current node prior %s values are required", kind)
 		}
-		for outputName := range values {
-			if strings.TrimSpace(outputName) == "" {
-				return fmt.Errorf("current node prior output name is required")
+		for fieldName := range fields {
+			if strings.TrimSpace(fieldName) == "" {
+				return fmt.Errorf("current node prior %s field name is required", kind)
 			}
 		}
 	}
@@ -297,10 +368,17 @@ func cloneMaterializedInputValues(values map[string]string) map[string]string {
 	return cloned
 }
 
-func cloneMaterializedPriorNodeValues(values map[string]map[string]string) map[string]map[string]string {
-	cloned := make(map[string]map[string]string, len(values))
-	for nodeKey, outputValues := range values {
-		cloned[nodeKey] = cloneMaterializedInputValues(outputValues)
+func cloneMaterializedPriorValues(values MaterializedPriorValues) MaterializedPriorValues {
+	return MaterializedPriorValues{
+		NodeOutputs:          cloneMaterializedPriorValueNamespace(values.NodeOutputs),
+		TransitionParameters: cloneMaterializedPriorValueNamespace(values.TransitionParameters),
+	}
+}
+
+func cloneMaterializedPriorValueNamespace(values map[ModelKey]map[string]string) map[ModelKey]map[string]string {
+	cloned := make(map[ModelKey]map[string]string, len(values))
+	for namespace, fields := range values {
+		cloned[namespace] = cloneMaterializedInputValues(fields)
 	}
 	return cloned
 }

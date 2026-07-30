@@ -362,7 +362,6 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 		HasContinueSessionOutgoingEdge: currentNodeHasContinueSessionOutgoingEdge(definition, workflow.NodeIDOf(node)),
 		PromptTemplate:                 strings.TrimSpace(enteringEdge.PromptTemplate),
 		ParameterValues:                values,
-		PriorParameterValues:           clonePriorParameterValues(currentNode.PriorNodeValues),
 		ExecutionRoot:                  executionRoot,
 	}, nil
 }
@@ -421,14 +420,6 @@ func currentNodeTransitionParameters(definition workflow.Definition, group workf
 		}
 	}
 	return nil
-}
-
-func clonePriorParameterValues(values map[string]map[string]string) map[string]map[string]string {
-	out := make(map[string]map[string]string, len(values))
-	for nodeKey, outputs := range values {
-		out[nodeKey] = cloneCurrentNodeOutputValues(outputs)
-	}
-	return out
 }
 
 func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parameter {
