@@ -1,15 +1,41 @@
 #!/bin/zsh
 set -euo pipefail
 
-db="${KENT_REPAIR_DB:-/Users/nek/.kent/db/main.sqlite3}"
+script_path="${0:A}"
+db="${KENT_REPAIR_DB:-}"
+repair_sql="${KENT_REPAIR_SQL:-}"
+legacy_backup="${KENT_REPAIR_LEGACY_BACKUP:-}"
+
+if [[ -z "$db" ]]; then
+    echo "ABORT: KENT_REPAIR_DB is required."
+    exit 1
+fi
+if [[ -z "$repair_sql" ]]; then
+    echo "ABORT: KENT_REPAIR_SQL is required."
+    exit 1
+fi
+if [[ -z "$legacy_backup" ]]; then
+    echo "ABORT: KENT_REPAIR_LEGACY_BACKUP is required."
+    exit 1
+fi
+
 persistence_root="${KENT_REPAIR_PERSISTENCE_ROOT:-$(dirname "$(dirname "$db")")}"
 backup_dir="${KENT_REPAIR_BACKUP_DIR:-$(dirname "$db")}"
-repair_sql="${KENT_REPAIR_SQL:-/tmp/kent-v60-new-session-offline-repair-20260730.sql}"
-legacy_backup="${KENT_REPAIR_LEGACY_BACKUP:-/Users/nek/.kent/db/main.sqlite3.pre-v60-20260729T1440+0200.backup}"
 root_lock="$persistence_root/app-server.lock"
 stamp="$(date +%Y%m%dT%H%M%S%z)"
 backup="$backup_dir/$(basename "$db").pre-current-node-repair-$stamp.backup"
-staged_backup="/tmp/$(basename "$backup").partial"
+staging_dir=""
+staged_backup=""
+
+cleanup_staging() {
+    if [[ -n "$staged_backup" && -e "$staged_backup" ]]; then
+        unlink "$staged_backup"
+    fi
+    if [[ -n "$staging_dir" && -d "$staging_dir" ]]; then
+        rmdir "$staging_dir"
+    fi
+}
+trap cleanup_staging EXIT
 
 if [[ ! -d "$persistence_root" ]]; then
     echo "ABORT: persistence root does not exist: $persistence_root"
@@ -40,7 +66,7 @@ if [[ "${KENT_REPAIR_ROOT_LOCK_HELD:-0}" != "1" ]]; then
             exit 128 + ($status & 127);
         }
         exit $status >> 8;
-    ' "$root_lock" "$0" "$@"
+    ' "$root_lock" "$script_path" "$@"
 fi
 
 if [[ ! -f "$db" ]]; then
@@ -59,7 +85,7 @@ if [[ ! -f "$legacy_backup" ]]; then
     echo "ABORT: authoritative pre-V60 backup does not exist: $legacy_backup"
     exit 1
 fi
-if [[ -e "$backup" || -e "$staged_backup" ]]; then
+if [[ -e "$backup" ]]; then
     echo "ABORT: backup destination already exists."
     exit 1
 fi
@@ -67,6 +93,8 @@ fi
 # The app-server root lock above is Kent's process-wide persistence ownership
 # fence. Holding it keeps every server topology out while backup and repair use
 # ordinary SQLite connections.
+staging_dir="$(mktemp -d "$backup_dir/.kent-current-node-repair.XXXXXX")"
+staged_backup="$staging_dir/$(basename "$backup").partial"
 sqlite3 "$db" ".timeout 5000" ".backup '$staged_backup'"
 if [[ ! -s "$staged_backup" ]]; then
     echo "ABORT: SQLite created an empty safety backup: $staged_backup"
@@ -75,5 +103,5 @@ fi
 mv "$staged_backup" "$backup"
 echo "Backup created: $backup"
 
-sqlite3 "$db" <"$repair_sql"
+sqlite3 -bail "$db" <"$repair_sql"
 echo "Repair completed."

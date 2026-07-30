@@ -108,8 +108,8 @@ run_server_build() {
 	fi
 	version="${version#v}"
 
-	mkdir -p "$(dirname -- "$output")"
 	output="$(resolve_output_symlinks "$output")"
+	mkdir -p "$(dirname -- "$output")"
 
 	ldflags=(-s -w)
 	if [ -n "$version" ]; then

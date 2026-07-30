@@ -9,14 +9,21 @@ output_dir="$test_root/output"
 output_link="$output_dir/kent"
 intermediate_link="$output_dir/kent-current"
 output_target="$output_dir/kent-target"
+missing_output_link="$output_dir/kent-missing"
+missing_output_dir="$test_root/resolved/missing"
+missing_output_target="$missing_output_dir/kent-target"
 
 cleanup() {
 	unlink "$fake_bin/go" 2>/dev/null || true
 	unlink "$output_link" 2>/dev/null || true
 	unlink "$intermediate_link" 2>/dev/null || true
 	unlink "$output_target" 2>/dev/null || true
+	unlink "$missing_output_link" 2>/dev/null || true
+	unlink "$missing_output_target" 2>/dev/null || true
 	rmdir "$fake_bin" 2>/dev/null || true
 	rmdir "$output_dir" 2>/dev/null || true
+	rmdir "$missing_output_dir" 2>/dev/null || true
+	rmdir "$(dirname -- "$missing_output_dir")" 2>/dev/null || true
 	rmdir "$test_root" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -73,5 +80,19 @@ if [ ! -L "$intermediate_link" ] || [ "$(readlink "$intermediate_link")" != "ken
 fi
 if [ "$(tr -d '\n' <"$output_target")" != "protected build" ]; then
 	printf 'build.sh did not update the symlink target\n' >&2
+	exit 1
+fi
+
+ln -s "$missing_output_target" "$missing_output_link"
+
+PATH="$fake_bin:$PATH" \
+	"$repo_root/scripts/build.sh" server --output "$missing_output_link"
+
+if [ ! -L "$missing_output_link" ]; then
+	printf 'build.sh replaced its symlink output with a missing target directory\n' >&2
+	exit 1
+fi
+if [ "$(tr -d '\n' <"$missing_output_target")" != "protected build" ]; then
+	printf 'build.sh did not create and update the resolved target directory\n' >&2
 	exit 1
 fi
