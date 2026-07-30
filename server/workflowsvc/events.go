@@ -22,7 +22,7 @@ type workflowProjectEventBroker struct {
 
 type workflowProjectSubscription struct {
 	projectID  string
-	workflowID runtimeids.WorkflowID
+	workflowID *runtimeids.WorkflowID
 	ch         chan serverapi.WorkflowProjectEvent
 	onClose    func()
 
@@ -35,7 +35,7 @@ func newWorkflowProjectEventBroker() *workflowProjectEventBroker {
 	return &workflowProjectEventBroker{subscribers: make(map[uint64]*workflowProjectSubscription)}
 }
 
-func (b *workflowProjectEventBroker) subscribe(projectID string, workflowID runtimeids.WorkflowID) (*workflowProjectSubscription, error) {
+func (b *workflowProjectEventBroker) subscribe(projectID string, workflowID *runtimeids.WorkflowID) (*workflowProjectSubscription, error) {
 	sub := &workflowProjectSubscription{
 		projectID:  projectID,
 		workflowID: workflowID,
@@ -104,8 +104,8 @@ func workflowProjectEventMatches(subscribedProjectID string, eventProjectID *str
 }
 
 func workflowSubscriptionMatches(sub *workflowProjectSubscription, event serverapi.WorkflowProjectEvent) bool {
-	if !sub.workflowID.IsZero() {
-		return event.ProjectID == nil && event.WorkflowID != nil && sub.workflowID == *event.WorkflowID
+	if sub.workflowID != nil {
+		return event.ProjectID == nil && event.WorkflowID != nil && *sub.workflowID == *event.WorkflowID
 	}
 	return workflowProjectEventMatches(sub.projectID, event.ProjectID)
 }

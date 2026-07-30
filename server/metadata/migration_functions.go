@@ -118,8 +118,23 @@ func parseMigrationWorkflowID(raw string, location string) (uuid.UUID, error) {
 	const canonicalUUIDTextLength = 36
 	var parsed uuid.UUID
 	var err error
-	if len(raw) == len(prefix)+canonicalUUIDTextLength && strings.HasPrefix(raw, prefix) {
-		parsed, err = runtimeids.ParseCanonicalUUIDv4(raw[len(prefix):], "workflow ID")
+	if len(raw) == len(prefix)+canonicalUUIDTextLength {
+		var canonical [canonicalUUIDTextLength]byte
+		matchesPrefix := true
+		for index := 0; index < len(prefix); index++ {
+			if raw[index] != prefix[index] {
+				matchesPrefix = false
+				break
+			}
+		}
+		if matchesPrefix {
+			for index := range canonical {
+				canonical[index] = raw[len(prefix)+index]
+			}
+			parsed, err = runtimeids.ParseCanonicalUUIDv4(string(canonical[:]), "workflow ID")
+		} else {
+			err = fmt.Errorf("workflow ID must use the %q prefix followed by a canonical UUIDv4", prefix)
+		}
 	} else {
 		err = fmt.Errorf("workflow ID must use the %q prefix followed by a canonical UUIDv4", prefix)
 	}

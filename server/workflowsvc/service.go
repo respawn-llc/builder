@@ -1479,7 +1479,7 @@ func (s *Service) SubscribeWorkflowProject(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	return s.events.subscribe(strings.TrimSpace(req.ProjectID), workflow.WorkflowID{})
+	return s.events.subscribe(strings.TrimSpace(req.ProjectID), nil)
 }
 
 func (s *Service) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSubscribeRequest) (serverapi.WorkflowSubscription, error) {
@@ -1489,7 +1489,7 @@ func (s *Service) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowS
 	if _, err := s.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: req.WorkflowID}); err != nil {
 		return nil, err
 	}
-	return s.events.subscribe("", req.WorkflowID)
+	return s.events.subscribe("", &req.WorkflowID)
 }
 
 func (s *Service) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {

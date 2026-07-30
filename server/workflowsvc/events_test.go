@@ -17,7 +17,7 @@ func workflowEventID() *runtimeids.WorkflowID {
 
 func TestWorkflowProjectEventBrokerRetainsBoundAndClosesOnGap(t *testing.T) {
 	broker := newWorkflowProjectEventBroker()
-	sub, err := broker.subscribe("project-1", runtimeids.WorkflowID{})
+	sub, err := broker.subscribe("project-1", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestWorkflowProjectEventBrokerRetainsBoundAndClosesOnGap(t *testing.T) {
 
 func TestWorkflowProjectEventBrokerCopiesRelatedIDs(t *testing.T) {
 	broker := newWorkflowProjectEventBroker()
-	sub, err := broker.subscribe("project-1", runtimeids.WorkflowID{})
+	sub, err := broker.subscribe("project-1", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}

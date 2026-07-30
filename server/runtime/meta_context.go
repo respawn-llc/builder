@@ -450,16 +450,7 @@ func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowr
 		}
 		return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 	}
-	content := ""
-	var err error
-	content, err = workflowCompletionInstructionsFragment(mode, runtimeids.WorkflowID{}, workflowruntime.CompletionContract{})
-	if err != nil {
-		return llm.Message{}, false, err
-	}
-	if content == "" {
-		return llm.Message{}, false, nil
-	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
+	return llm.Message{}, false, nil
 }
 
 func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (string, error) {

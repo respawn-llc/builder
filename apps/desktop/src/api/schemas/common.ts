@@ -29,10 +29,11 @@ import type {
   QuestionAttentionItem,
 } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
+export { workflowIDSchema } from "../composition";
+import { workflowIDSchema } from "../composition";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
-export const workflowIDSchema = z.uuidv4().refine((value) => value === value.toLowerCase(), { message: "Workflow IDs must use lower-case canonical UUIDv4 text" });
 export const nullableWorkflowIDSchema = workflowIDSchema.nullish().transform((value) => value ?? null);
 export const numberValue = z.number().default(0);
 export const nullableString = z

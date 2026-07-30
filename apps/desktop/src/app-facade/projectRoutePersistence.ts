@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 import { readBrowserStorage, removeBrowserStorage, writeBrowserStorage } from "./browserStorage";
+import { workflowIDSchema } from "@/api/composition";
 
 const lastProjectRouteStorageKey = "desktop.lastProjectRoute";
 const storedProjectRouteSchema = z.object({
   projectId: z.string(),
-  workflowId: z.string().optional(),
+  workflowId: workflowIDSchema.optional(),
 });
 type StoredProjectRoute = z.output<typeof storedProjectRouteSchema>;
 
