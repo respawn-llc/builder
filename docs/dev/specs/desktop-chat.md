@@ -182,7 +182,7 @@
 - Escape never declines a prompt. The explicit `×` and its Ctrl+D shortcut are the only per-prompt decline actions. On Windows and Linux, otherwise-unhandled Escape follows the whole-Session Stop arming contract.
 - Decline follows the shared prompt-cancellation transcript contract. An ordinary Question remains an error/canceled Ask Question tool row instead of becoming a completed answered Question. Desktop adds no synthetic user message, and a declined Approval adds no separate decision row.
 - When the final unresolved prompt becomes answered or declined, Desktop sends the complete typed answer batch to the server.
-- Ordinary Questions include the same `Neither` freeform option used by Task Detail. A freeform/commentary field is always visible below the options and is preserved independently for each prompt.
+- Ordinary Questions with at least one suggested answer include the same `Neither` freeform option used by Task Detail. A Question with no suggestions has only the freeform response and does not offer `Neither`. The freeform/commentary field is always visible below the options and is preserved independently for each prompt.
 - The freeform/commentary field is pinned below the main picker scroll region. It has a three-line minimum, grows through seven lines, and then scrolls internally.
 - For a suggested answer, freeform text is optional commentary. For `Neither`, at least one non-whitespace character is required.
 - Confirming a blank `Neither` selection only focuses the freeform field; it does not mark the prompt answered or advance.

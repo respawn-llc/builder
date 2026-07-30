@@ -261,6 +261,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Decline is immediate, terminal, read-only on revisit, has no confirmation/undo, and is distinct from `Neither`/Approval `Deny`. Ctrl+D activates it from the answer-picker area; Escape does not decline. Windows/Linux Escape may instead arm or confirm whole-Session Stop.
 - Decline uses the shared TUI prompt-cancellation transcript outcome: an error/canceled Ask Question row rather than a completed answer, no synthetic user message, and no separate Approval decision row.
 - The complete batch submits only after every prompt is answered or declined.
+- `Neither` is available only when the Question has at least one suggested answer. A Question without suggestions uses freeform as its sole response path.
 - `Neither` requires nonblank freeform; blank confirmation focuses the field without answering.
 - Pointer or Enter on nonblank `Neither` confirms; blank `Neither` only selects and focuses the freeform field.
 - Stop cancels the whole prompt batch and restores the hidden ordinary draft.
