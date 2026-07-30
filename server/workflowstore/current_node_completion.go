@@ -282,13 +282,6 @@ func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (Curr
 		return CurrentNodeCompletionRequest{}, err
 	}
 	req.TransitionID = strings.TrimSpace(req.TransitionID)
-	if req.TransitionID == "" {
-		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
-			Code:    CompletionCodeTransitionIDRequired,
-			Field:   "transition_id",
-			Message: "transition id is required",
-		}}}
-	}
 	if len(req.Commentary) > workflow.MaxCommentaryBytes {
 		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
 			Code:    CompletionCodeCommentaryTooLarge,
@@ -351,14 +344,34 @@ type currentNodeCompletionTarget struct {
 func currentNodeCompletionTransition(definition workflow.Definition, source workflow.Node, transitionID string) (workflow.TransitionGroup, []currentNodeCompletionTarget, error) {
 	var selected *workflow.TransitionGroup
 	for _, group := range definition.TransitionGroups {
-		if group.SourceNodeID != workflow.NodeIDOf(source) || string(group.TransitionID) != transitionID {
+		if group.SourceNodeID != workflow.NodeIDOf(source) {
+			continue
+		}
+		if transitionID == "" {
+			if selected != nil {
+				return workflow.TransitionGroup{}, nil, CompletionValidationError{Issues: []CompletionValidationIssue{{
+					Code:    CompletionCodeTransitionIDRequired,
+					Field:   "transition_id",
+					Message: "transition id is required when current node has multiple transitions",
+				}}}
+			}
+		} else if string(group.TransitionID) != transitionID {
 			continue
 		}
 		candidate := group
 		selected = &candidate
-		break
+		if transitionID != "" {
+			break
+		}
 	}
 	if selected == nil {
+		if transitionID == "" {
+			return workflow.TransitionGroup{}, nil, CompletionValidationError{Issues: []CompletionValidationIssue{{
+				Code:    CompletionCodeNoOutgoingTransition,
+				Field:   "transition_id",
+				Message: "current node has no outgoing transition",
+			}}}
+		}
 		return workflow.TransitionGroup{}, nil, CompletionValidationError{Issues: []CompletionValidationIssue{{
 			Code:    CompletionCodeInvalidTransitionID,
 			Field:   "transition_id",

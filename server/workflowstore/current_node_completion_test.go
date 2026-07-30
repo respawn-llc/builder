@@ -110,6 +110,75 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	}
 }
 
+func TestCompleteCurrentNodeInfersOnlyOutgoingFanoutTransition(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode without transition ID: %v", err)
+	}
+	if len(completed.Mutation.Created) != 2 {
+		t.Fatalf("completion mutation = %+v, want two fan-out branches", completed.Mutation)
+	}
+	branches := map[workflow.TransitionBranchKey]bool{}
+	for _, currentNode := range completed.Mutation.Created {
+		branchKey, present := currentNode.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("completion Current Node = %+v, want branch scope", currentNode)
+		}
+		branches[branchKey] = true
+	}
+	if !branches["split_a"] || !branches["split_b"] {
+		t.Fatalf("completion branches = %+v, want split_a and split_b", branches)
+	}
+}
+
+func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		source := nodeByKey(t, def, "plan")
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		groupID := workflow.TransitionGroupID("group-alternate-" + string(workflowID))
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           groupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(source),
+			TransitionID: "alternate",
+			DisplayName:  "Alternate",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-alternate-" + string(workflowID)),
+			WorkflowID:        workflowID,
+			TransitionGroupID: groupID,
+			Key:               "alternate",
+			TargetNodeID:      workflow.NodeIDOf(done),
+			ContextMode:       workflow.ContextModeNewSession,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	_, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	var validation CompletionValidationError
+	if !errors.As(err, &validation) ||
+		len(validation.Issues) != 1 ||
+		validation.Issues[0].Code != CompletionCodeTransitionIDRequired {
+		t.Fatalf("completion error = %v, want transition-required validation", err)
+	}
+}
+
 func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
