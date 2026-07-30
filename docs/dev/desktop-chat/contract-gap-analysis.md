@@ -284,6 +284,100 @@ The settings read model also needs:
 Provider, workspace/worktree/branch, compaction count, raw Run/Workflow IDs, and
 parent-agent lineage are not part of this settings read model.
 
+### Context And Manual Compaction
+
+The runtime main view and transcript feed already expose authoritative
+context-window usage and typed compaction lifecycle. Runtime control already
+accepts manual compaction with an optional guidance string.
+
+Desktop preserves the terminal `/compact` flow instead of adding a separate
+guidance form. Bare `/compact` requests manual compaction without guidance;
+text after the command is passed as guidance through the same typed operation.
+
+When no Agent Step is active, manual compaction may start immediately. During
+an Agent Step, both the slash command and Context button must enter the same
+server-owned Steer/Pending Work path as other next-boundary control. The item
+executes after the current Agent Step and before the next Agent Step. It must
+not wait for turn completion and must never become a model-visible user
+message.
+
+Pending Work must therefore represent a typed compaction control item rather
+than relying on display-text parsing. The Desktop client renders that item in
+its familiar `/compact` form, including optional guidance. Repeated requests
+remain distinct Steer items; neither client nor server silently coalesces them.
+
+The separate Context meter opens a compact detail pop-up. Its `Compact` action
+uses that same operation with no guidance. The pop-up must not become a second
+manual-compaction input model.
+
+The pop-up reproduces the TUI Context summary without its detailed instruction,
+skill, and Agent-file token breakdown. It needs remaining tokens and percentage
+against the context window, automatic-compaction threshold tokens and
+percentage, Auto-compaction state, and completed compaction count. The runtime
+main view already provides usage, Auto-compaction state, and count, but it does
+not expose the configured automatic-compaction threshold. The server read model
+must add that typed fact; Desktop must not derive policy by reading
+configuration.
+
+Lazy New Chat needs the same facts before a Session runtime exists. The
+server-owned Chat draft must project the effective draft Agent's context window,
+automatic-compaction threshold, and Auto-compaction state. Desktop presents
+zero used tokens and zero compactions until materialization. Agent or setting
+changes that alter the effective context contract update this one draft
+projection.
+
+Manual compaction is unavailable before the first Agent Step. A pre-Session
+`/compact` must remain a recognized command and return the typed unavailable or
+too-soon outcome without materializing a Session. Desktop must not create a
+throwaway Session merely to reject compaction.
+
+The remaining contract work is that threshold projection and the Desktop
+command adapter, plus a typed step-boundary compaction Steer item in the
+server-owned Pending Work contract. The current TUI has separate immediate
+dispatch and client-local turn-drain command paths; those are not the Desktop
+architecture and do not satisfy the next-Agent-Step contract.
+
+Only one compaction may be active. Server admission must expose typed manual
+compaction rejection reasons for disabled policy, active compaction, and no
+Agent Step boundary since Session creation or the latest successful
+compaction. A request queued during an active Agent Step may use that step's
+boundary to become eligible. Repeated pending requests are evaluated in order,
+so the first may compact and later requests may fail as too soon.
+
+Desktop disables the Context action while active compaction is authoritative,
+but it adds no client-owned cooldown or Step counter. Raced button actions,
+slash commands, and drained pending items all use the same server rejection
+contract. Failed items leave Pending Work and use Sonner unless the server
+explicitly identifies a durable transcript error as the feedback owner.
+Desktop never creates a local error row.
+
+User-triggered compaction closes its initiating transient surface. Automatic
+compaction does not close an already-open Context pop-up; the pop-up remains
+readable with its Compact action disabled. The compact Context meter switches
+to a compacting presentation for every compaction origin.
+
+Successful user-requested compaction follows the TUI focus policy. A focused
+Desktop window stays silent. An unfocused Desktop window sends a system
+notification only after the Pending Work drain following compaction is idle;
+activation opens the owning Session at latest. Automatic, pre-submit, and
+handoff compaction do not send a completion notification. This is transient
+client lifecycle feedback, not a durable attention-feed item.
+
+Compaction policy, ordering, pre-submit compaction, and execution remain
+server-owned. Desktop introduces no second compaction queue or client
+state machine.
+
+`compaction_mode=none` remains the authoritative fully disabled policy. Desktop
+must not call it Manual-only. In that state, the Context detail suppresses the
+irrelevant threshold, reports compaction and Auto-compaction as unavailable,
+and disables its Compact action. `/compact` still dispatches the typed operation
+so the server's disabled-policy error is surfaced rather than sending the text
+to the model.
+
+Existing onboarding language that calls `none` Manual-only is product drift.
+Its correction is a separate follow-up candidate and is not part of Desktop
+Sessions/Chat.
+
 ### Project Workflow Links Read Model
 
 The current project-workflow link response is unpaginated and contains only link IDs plus default state. The current workflow list is cursor paginated but does not produce one project-link row with workflow identity, default state, and execution validation. The project `Workflows` tab requires one server-owned cursor read model combining those facts.
@@ -292,11 +386,74 @@ Server set-default and unlink routes exist, but the desktop client has no adapte
 
 ### Attention Outside Workflow Tasks
 
-Desktop attention is task-oriented. Ordinary interactive session questions, approvals, failures, and turn completion need a typed target and durable read model if they should appear in Home Inbox or system notifications.
+The attention contract and server already carry a typed `session_prompt` target
+for ordinary interactive Session Questions and Approvals. Desktop parses that
+target but its notification controller currently ignores every target that is
+not a Workflow Task. Desktop Chat must route the existing target through the
+same focused/unfocused attention surfaces and open the owning Session picker.
+It must suppress only the duplicate in-app notification while that exact
+Session Chat and picker are already focused. It must not create a second
+notification mechanism or a Session-specific grouping or sound policy.
+
+Ordinary interactive Session failures and turn completion still need a typed
+target and durable read model if they should appear in Home Inbox or system
+notifications.
 
 The current durable global attention page exposes paged items and no aggregate unresolved count. Project summaries expose per-project attention counts, but a client cannot sum cursor-paginated project pages into a global count and those counts do not cover the required ordinary-session attention. An Inbox badge therefore requires an authoritative aggregate field on the expanded global attention read model.
 
 The Inbox badge is an optional standalone feature. Its server aggregate and desktop presentation must be implemented in their own task rather than expanding the Home redesign or session-attention task.
+
+### Prompt Batch Answers
+
+The server projects multiple pending Questions and Approvals with typed prompt
+identity, creation order, Step identity, suggestions, recommendation, approval
+decisions, and tool provenance. Existing answer operations resolve one prompt
+per RPC.
+
+Desktop intentionally gathers answer drafts for one visible prompt batch and
+sends nothing until every prompt is explicitly answered or declined. Existing
+`TranscriptPrompt.StepID` is the batch identity; prompts use existing server
+order. No second batch identifier is needed.
+
+Desktop needs one typed batch-answer operation. The operation resolves submitted
+entries that remain pending and returns typed resolved and stale/skipped prompt
+IDs. A stale prompt is never overwritten. An all-stale request is an idempotent
+no-op. This is a narrow prompt-control contract addition; it does not replace
+the existing parallel ask/approval runtime architecture.
+
+Each batch entry needs a typed disposition: answered ordinary Question,
+answered Approval, or declined prompt. Declined must not be encoded through
+display text or a client-chosen error string. The server adapts the typed
+disposition to the runtime's prompt-cancellation behavior.
+
+That cancellation preserves the existing transcript outcome. An ordinary
+Question remains an error/canceled Ask Question tool row instead of becoming a
+completed answered Question. No synthetic user message is added, and a
+declined Approval adds no separate decision row.
+
+The client may own selected/freeform/answered/declined form state only while the
+picker remains open. Navigation inside that picker preserves the state. Route
+changes, connection loss, browser refresh, and Desktop relaunch discard it.
+Pending prompt identity, ordering, membership, and final resolution remain
+server-authoritative.
+
+The existing per-prompt resolved transcript broadcast is sufficient for the
+normal cross-client path. It carries identity but not answer content. Although
+the answer exists at the execution-prompt submission boundary, exposing it
+would require threading new data through the execution feed, registry,
+transcript DTO/wire contract, clients, protocol version, and tests. That
+expansion is outside this initiative.
+
+Desktop therefore discards local form state and removes an externally resolved
+prompt from the picker without answer or placeholder presentation. The batch
+response handles races where the broadcast has not arrived.
+
+The owning implementation task also requires a developer-only browser fixture
+that repeatedly supplies synthetic prompt batches without model or production
+server dependency. It keeps generating the next batch after submission until
+the tab closes. Agent QA must exercise the fixture before the user acceptance
+gate. Completion requires an explicit user Approve response; a Reject response
+with findings returns the task to implementation and repeats both QA stages.
 
 ### Rollback/Fork Entry Point
 
@@ -349,6 +506,7 @@ JSONL-backed desktop transcript pages therefore remain compaction segments. The 
 - Ongoing/detail mode toggle.
 - Esc-Esc rollback arming.
 - Ctrl+C dual meaning for interrupt and application exit.
-- Slash command parsing as the primary discovery model.
+- Slash command parsing as the primary discovery model, except for commands
+  whose exact command flow is explicitly preserved by the Desktop Chat spec.
 
 The desktop must preserve their underlying capabilities while replacing these interaction mechanisms.
