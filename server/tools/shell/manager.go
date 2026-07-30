@@ -151,6 +151,25 @@ func (m *Manager) FinalizeAutomaticTerminal(processID string, activityID uuid.UU
 	return entry.finalizeAutomatic(activityID)
 }
 
+// ReserveAutomaticTerminal excludes owner-poll finalization before the
+// automatic notice's steering record durably commits. An uncommitted receipt
+// must call RestoreAutomaticTerminal before the scheduler retries.
+func (m *Manager) ReserveAutomaticTerminal(processID string, activityID uuid.UUID) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.reserveAutomaticTerminal(activityID)
+}
+
+func (m *Manager) RestoreAutomaticTerminal(processID string, activityID uuid.UUID) bool {
+	entry, err := m.entry(strings.TrimSpace(processID))
+	if err != nil {
+		return false
+	}
+	return entry.restoreAutomaticTerminal(activityID)
+}
+
 // ReplayPendingTerminal retries delivery after an Authority resource boundary.
 // Terminal output is re-materialized from the existing command log only after
 // the pending state wins the attempt transition.

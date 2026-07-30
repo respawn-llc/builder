@@ -282,6 +282,18 @@ func NewRuntimeWiringWithBackground(
 			}
 			return background.FinalizeAutomaticTerminal(processID, activityID)
 		},
+		BackgroundAutomaticReservation: func(processID string, activityID uuid.UUID) bool {
+			if background == nil {
+				return false
+			}
+			return background.ReserveAutomaticTerminal(processID, activityID)
+		},
+		BackgroundAutomaticRollback: func(processID string, activityID uuid.UUID) bool {
+			if background == nil {
+				return false
+			}
+			return background.RestoreAutomaticTerminal(processID, activityID)
+		},
 		BackgroundCompletionSettled: opts.BackgroundCompletionSettled,
 	})
 	if err != nil {

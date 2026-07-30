@@ -326,7 +326,14 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 		pendingNotices = m.background.DrainPendingNotices()
 	}
 	for index, notice := range pendingNotices {
+		if err := m.background.ReserveAutomaticDisposition(notice); err != nil {
+			m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index:])
+			return result, err
+		}
 		receipt, err := m.engine.steerWithCommitReceipt(stepID, notice.intent)
+		if !receipt.Committed {
+			m.background.RestoreAutomaticDisposition(notice)
+		}
 		if m.background != nil {
 			m.background.FinalizeCommittedBackgroundNotice(notice, receipt)
 		}

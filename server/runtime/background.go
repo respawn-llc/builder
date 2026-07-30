@@ -621,9 +621,14 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		}
 		accepted := false
 		for index, notice := range reserved {
+			if err := b.reserveAutomaticDisposition(notice); err != nil {
+				b.restoreUncommittedReservations(reserved[index:], err)
+				return err
+			}
 			if notice.diagnostic != nil {
 				diagnosticReceipt, diagnosticErr := b.engine.CommitPendingBackgroundDeliveryDiagnostic(*notice.diagnostic)
 				if !diagnosticReceipt.Committed {
+					b.restoreAutomaticDisposition(notice)
 					b.restoreUncommittedReservations(reserved[index:], diagnosticErr)
 					return diagnosticErr
 				}
@@ -639,6 +644,9 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 				}
 			}
 			receipt, steerErr := b.engine.steerWithCommitReceipt(stepID, notice.intent)
+			if !receipt.Committed {
+				b.restoreAutomaticDisposition(notice)
+			}
 			b.FinalizeCommittedBackgroundNotice(notice, receipt)
 			if receipt.Committed {
 				accepted = true
@@ -687,6 +695,41 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		}
 	}
 	return assistant, err
+}
+
+func (b *defaultBackgroundNoticeScheduler) reserveAutomaticDisposition(notice queuedBackgroundNotice) error {
+	if !notice.hasIdentity() || b.engine.cfg.BackgroundAutomaticReservation == nil {
+		return nil
+	}
+	if b.engine.cfg.BackgroundAutomaticReservation(notice.processID(), notice.activityID()) {
+		return nil
+	}
+	return fmt.Errorf(
+		"reserve automatic background terminal disposition: process_id=%s activity_id=%s",
+		notice.processID(),
+		notice.activityID(),
+	)
+}
+
+func (b *defaultBackgroundNoticeScheduler) restoreAutomaticDisposition(notice queuedBackgroundNotice) {
+	if !notice.hasIdentity() || b.engine.cfg.BackgroundAutomaticRollback == nil {
+		return
+	}
+	if !b.engine.cfg.BackgroundAutomaticRollback(notice.processID(), notice.activityID()) {
+		slog.Error(
+			"restore automatic background terminal disposition failed",
+			"process_id", notice.processID(),
+			"activity_id", notice.activityID().String(),
+		)
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) ReserveAutomaticDisposition(notice queuedBackgroundNotice) error {
+	return b.reserveAutomaticDisposition(notice)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RestoreAutomaticDisposition(notice queuedBackgroundNotice) {
+	b.restoreAutomaticDisposition(notice)
 }
 
 func nextBackgroundDeliveryAttempt(previous *PendingBackgroundDeliveryDiagnostic) uint64 {

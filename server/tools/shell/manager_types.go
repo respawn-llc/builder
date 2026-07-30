@@ -355,6 +355,13 @@ type queuedTerminalDisposition struct {
 func (d queuedTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
 func (queuedTerminalDisposition) terminalDisposition()           {}
 
+type automaticReservedTerminalDisposition struct {
+	facts terminalFacts
+}
+
+func (d automaticReservedTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
+func (automaticReservedTerminalDisposition) terminalDisposition()           {}
+
 type finalizedByOwnerPollTerminalDisposition struct {
 	facts terminalFacts
 }
@@ -632,11 +639,44 @@ func (p *processEntry) finalizeOwnerPoll(callerSessionID string) TerminalOwnerPo
 func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) bool {
 	p.interactMu.Lock()
 	defer p.interactMu.Unlock()
+	switch current := p.terminal.(type) {
+	case automaticReservedTerminalDisposition:
+		if current.facts.snapshot.ActivityID != activityID {
+			return false
+		}
+		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
+	case queuedTerminalDisposition:
+		if current.facts.snapshot.ActivityID != activityID {
+			return false
+		}
+		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
+	default:
+		return false
+	}
+	p.signalTerminalChangedLocked()
+	return true
+}
+
+func (p *processEntry) reserveAutomaticTerminal(activityID uuid.UUID) bool {
+	p.interactMu.Lock()
+	defer p.interactMu.Unlock()
 	queued, ok := p.terminal.(queuedTerminalDisposition)
 	if !ok || queued.facts.snapshot.ActivityID != activityID {
 		return false
 	}
-	p.terminal = finalizedAutomaticallyTerminalDisposition{facts: queued.facts}
+	p.terminal = automaticReservedTerminalDisposition{facts: queued.facts}
+	p.signalTerminalChangedLocked()
+	return true
+}
+
+func (p *processEntry) restoreAutomaticTerminal(activityID uuid.UUID) bool {
+	p.interactMu.Lock()
+	defer p.interactMu.Unlock()
+	reserved, ok := p.terminal.(automaticReservedTerminalDisposition)
+	if !ok || reserved.facts.snapshot.ActivityID != activityID {
+		return false
+	}
+	p.terminal = queuedTerminalDisposition{facts: reserved.facts}
 	p.signalTerminalChangedLocked()
 	return true
 }
@@ -655,6 +695,13 @@ func (p *processEntry) withdrawTerminalHandoff(activityID uuid.UUID) bool {
 		p.signalTerminalChangedLocked()
 		return true
 	case queuedTerminalDisposition:
+		if current.facts.snapshot.ActivityID != activityID {
+			return false
+		}
+		p.terminal = pendingTerminalDisposition{facts: current.facts}
+		p.signalTerminalChangedLocked()
+		return true
+	case automaticReservedTerminalDisposition:
 		if current.facts.snapshot.ActivityID != activityID {
 			return false
 		}

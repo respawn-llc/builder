@@ -509,6 +509,10 @@ func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShell
 func (s *recoverySchedulingObserver) AdmitBackgroundShellUpdate(BackgroundShellEvent)        {}
 func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
 func (s *recoverySchedulingObserver) DrainPendingNotices() []queuedBackgroundNotice          { return nil }
+func (s *recoverySchedulingObserver) ReserveAutomaticDisposition(queuedBackgroundNotice) error {
+	return nil
+}
+func (s *recoverySchedulingObserver) RestoreAutomaticDisposition(queuedBackgroundNotice) {}
 func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) {
 }
 func (s *recoverySchedulingObserver) RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice) {}

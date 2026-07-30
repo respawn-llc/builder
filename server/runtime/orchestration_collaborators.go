@@ -40,6 +40,8 @@ type backgroundNoticeScheduler interface {
 	AdmitBackgroundShellUpdate(evt BackgroundShellEvent)
 	QueueDeveloperNotice(msg llm.Message)
 	DrainPendingNotices() []queuedBackgroundNotice
+	ReserveAutomaticDisposition(queuedBackgroundNotice) error
+	RestoreAutomaticDisposition(queuedBackgroundNotice)
 	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt)
 	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
 	HasPendingNotices() bool

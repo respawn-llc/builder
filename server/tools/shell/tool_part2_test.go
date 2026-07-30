@@ -465,6 +465,71 @@ func TestAutomaticFinalizationRequiresAcknowledgedTerminalHandoff(t *testing.T) 
 	}
 }
 
+func TestAutomaticReservationBlocksOwnerPollUntilRollback(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	terminal := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) {
+		if evt.Type != EventCompleted && evt.Type != EventKilled {
+			return
+		}
+		if manager.AcknowledgeTerminalHandoff(evt.Snapshot.ID, evt.Snapshot.ActivityID) != TerminalHandoffAcknowledged {
+			t.Errorf("acknowledge terminal handoff")
+		}
+		terminal <- evt
+	})
+	start := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, "owner-session"), "automatic-reservation", map[string]any{
+		"cmd":           "sleep 0.15; printf done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("background start: %s", string(start.Output))
+	}
+	var event Event
+	select {
+	case event = <-terminal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for acknowledged terminal handoff")
+	}
+	reserved := make(chan struct{})
+	releasePersistence := make(chan struct{})
+	rolledBack := make(chan bool, 1)
+	go func() {
+		if !manager.ReserveAutomaticTerminal(event.Snapshot.ID, event.Snapshot.ActivityID) {
+			rolledBack <- false
+			return
+		}
+		close(reserved)
+		<-releasePersistence
+		rolledBack <- manager.RestoreAutomaticTerminal(event.Snapshot.ID, event.Snapshot.ActivityID)
+	}()
+	select {
+	case <-reserved:
+	case <-time.After(time.Second):
+		t.Fatal("automatic disposition did not reserve before persistence")
+	}
+	ownerPoll := make(chan TerminalOwnerPollFinalization, 1)
+	go func() {
+		ownerPoll <- manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID)
+	}()
+	select {
+	case finalization := <-ownerPoll:
+		if finalization.Finalized {
+			t.Fatal("owner poll finalized a completion reserved for automatic persistence")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner poll did not observe the automatic-persistence reservation")
+	}
+	close(releasePersistence)
+	if restored := <-rolledBack; !restored {
+		t.Fatal("rollback automatic terminal reservation")
+	}
+	if !manager.FinalizeTerminalOwnerPoll("owner-session", event.Snapshot.ID).Finalized {
+		t.Fatal("owner poll did not finalize completion after automatic rollback")
+	}
+}
+
 func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)

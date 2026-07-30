@@ -140,6 +140,11 @@ type Config struct {
 	// BackgroundAutomaticFinalizer records durable automatic acceptance for one
 	// admitted terminal notice after that notice's steering receipt commits.
 	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) bool
+	// BackgroundAutomaticReservation reserves the Manager's automatic
+	// disposition before steering persists the notice. A failed persistence
+	// receipt must release that reservation through BackgroundAutomaticRollback.
+	BackgroundAutomaticReservation func(processID string, activityID uuid.UUID) bool
+	BackgroundAutomaticRollback    func(processID string, activityID uuid.UUID) bool
 	// BackgroundCompletionSettled releases Authority-owned lifecycle retention
 	// only after this Engine has removed its provisional automatic notice.
 	BackgroundCompletionSettled func(processID string)
