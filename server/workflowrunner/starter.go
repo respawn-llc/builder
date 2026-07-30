@@ -121,11 +121,31 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 	if err != nil {
 		return err
 	}
+	sessionBound := false
 	cleanup := func(err error) error {
 		if !disposable {
 			return err
 		}
-		return errors.Join(err, s.cleanupSession(context.WithoutCancel(ctx), plan.Descriptor))
+		cleanupCtx := context.WithoutCancel(ctx)
+		if sessionBound && input.CurrentNode.SessionID != nil {
+			cloneSessionID := plan.Descriptor.SessionID()
+			if _, restoreErr := s.store.BindSessionToCurrentNode(cleanupCtx, workflowstore.CurrentNodeSessionBindingRequest{
+				Association: workflowstore.TaskSessionAssociationRequest{
+					SessionID:    *input.CurrentNode.SessionID,
+					CurrentNode:  input.CurrentNode.Reference,
+					AssociatedAt: time.Now().UTC(),
+				},
+				ExpectedCurrentSessionID: &cloneSessionID,
+			}); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf(
+					"restore current node %v source Session %q before clone cleanup: %w",
+					input.CurrentNode.Reference,
+					input.CurrentNode.SessionID,
+					restoreErr,
+				))
+			}
+		}
+		return errors.Join(err, s.cleanupSession(cleanupCtx, plan.Descriptor))
 	}
 	if err := s.applyCurrentNodeSessionMetadata(ctx, input, &plan); err != nil {
 		return cleanup(err)
@@ -148,6 +168,7 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 	}); err != nil {
 		return cleanup(err)
 	}
+	sessionBound = true
 	if err := s.applyCurrentNodeSessionExecutionTarget(ctx, input, plan.Descriptor); err != nil {
 		return cleanup(err)
 	}

@@ -45,6 +45,22 @@ type currentNodeRunnerFixture struct {
 	clientErr      error
 }
 
+type currentNodeStartContextStore struct {
+	RuntimeStore
+	transform func(workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext
+}
+
+func (s currentNodeStartContextStore) ResolveCurrentNodeStartContext(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (workflowstore.CurrentNodeStartContext, error) {
+	input, err := s.RuntimeStore.ResolveCurrentNodeStartContext(ctx, reference)
+	if err != nil {
+		return workflowstore.CurrentNodeStartContext{}, err
+	}
+	return s.transform(input), nil
+}
+
 func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *currentNodeRunnerFixture {
 	t.Helper()
 	home := t.TempDir()
@@ -371,6 +387,90 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 	}
 	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 3 {
 		t.Fatalf("retained Session count = %d, %v; want source plus two fan-out clones", count, err)
+	}
+}
+
+func TestCurrentNodeFanoutPreparationFailureRestoresSourceSessionBeforeCloneCleanup(t *testing.T) {
+	sourceResponseStarted := make(chan struct{})
+	sourceResponseRelease := make(chan struct{})
+	var releaseSource sync.Once
+	t.Cleanup(func() {
+		releaseSource.Do(func() { close(sourceResponseRelease) })
+	})
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceResponseStarted)
+				select {
+				case <-sourceResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
+		},
+	)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	select {
+	case <-sourceResponseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("source Current Node did not start")
+	}
+	sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(source) &&
+			nodes[0].SessionID != nil
+	})
+	sourceSessionID := *sourceNodes[0].SessionID
+	f.starter.store = currentNodeStartContextStore{
+		RuntimeStore: f.store,
+		transform: func(input workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext {
+			if !input.IsFanoutBranch {
+				return input
+			}
+			root := *input.ExecutionRoot
+			root.SourceWorkspaceID = "workspace-missing"
+			input.ExecutionRoot = &root
+			return input
+		},
+	}
+
+	releaseSource.Do(func() { close(sourceResponseRelease) })
+	branches := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		if len(nodes) != len(branchNodeIDs) {
+			return false
+		}
+		for _, node := range nodes {
+			if node.Scheduling == nil ||
+				node.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+				return false
+			}
+		}
+		return true
+	})
+	for _, branch := range branches {
+		if branch.SessionID == nil || *branch.SessionID != sourceSessionID {
+			t.Fatalf(
+				"branch %v Session = %v, want restored source Session %q",
+				branch.Reference,
+				branch.SessionID,
+				sourceSessionID,
+			)
+		}
+		if err := f.store.ValidateCurrentNodeSessionBinding(
+			context.Background(),
+			sourceSessionID,
+			branch.Reference,
+		); err != nil {
+			t.Fatalf("validate restored branch Session binding %v: %v", branch.Reference, err)
+		}
+	}
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
+		t.Fatalf("retained Session count after branch preparation failures = %d, %v; want source only", count, err)
 	}
 }
 
