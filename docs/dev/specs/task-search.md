@@ -36,5 +36,4 @@
 - SQLite reports malformed raw FTS5 syntax and some FTS schema or configuration failures through the same runtime error class. Kent therefore reports every raw FTS5 SQLite evaluation error as one generic operational failure with exit code `1`.
 - Search uses the same authoritative Task status as Task lists and Task detail.
 - Each response is point-in-time consistent for matching text, counts, filters, and Task metadata, and combines that data with one current view of live Task activity. A concurrent change appears wholly before or after the response, never as mixed state.
-- Task Search captures durable state and an Immutable Live Snapshot while Workflow Execution serializes durable lifecycle mutations. It verifies that live activity did not change during capture.
 - Search does not retain all matching Tasks, sources, or occurrences in memory.

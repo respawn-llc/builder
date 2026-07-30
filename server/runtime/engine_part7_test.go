@@ -97,7 +97,6 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 }
 
 func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
