@@ -83,9 +83,8 @@ type sessionMetadataDocument struct {
 }
 
 var (
-	ErrInvalidProjectKey                     = errors.New("invalid project key")
-	ErrWorkspaceUnlinkPreparationInvalidated = errors.New("workspace unlink preparation was invalidated")
-	ErrProjectKeyAlreadyInUse                = errors.New("project key already in use")
+	ErrInvalidProjectKey      = errors.New("invalid project key")
+	ErrProjectKeyAlreadyInUse = errors.New("project key already in use")
 
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
 	// is already bound to a workspace. Callers match it via errors.Is.
@@ -314,20 +313,99 @@ func (s *Store) LookupWorkspaceBindingByID(ctx context.Context, workspaceID stri
 	}
 	row, err := s.queries.GetWorkspaceBindingByID(ctx, strings.TrimSpace(workspaceID))
 	if err == nil {
-		return Binding{
-			ProjectID:       row.ProjectID,
-			ProjectKey:      row.ProjectKey,
-			ProjectName:     row.ProjectDisplayName,
-			WorkspaceID:     row.WorkspaceID,
-			CanonicalRoot:   row.WorkspaceRoot,
-			WorkspaceName:   filepath.Base(row.WorkspaceRoot),
-			WorkspaceStatus: availabilityForPath(row.WorkspaceRoot),
-		}, nil
+		return bindingFromWorkspaceFields(
+			row.ProjectID,
+			row.ProjectKey,
+			row.ProjectDisplayName,
+			row.WorkspaceID,
+			row.WorkspaceRoot,
+		), nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Binding{}, serverapi.ErrWorkspaceNotRegistered
 	}
 	return Binding{}, fmt.Errorf("lookup workspace binding by id: %w", err)
+}
+
+func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID string, selector serverapi.ProjectWorkspaceSelector) (Binding, error) {
+	if s == nil || s.queries == nil {
+		return Binding{}, errors.New("metadata store is required")
+	}
+	if err := selector.Validate(); err != nil {
+		return Binding{}, err
+	}
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return Binding{}, errors.New("project id is required")
+	}
+	if _, err := s.queries.GetProjectDisplayName(ctx, trimmedProjectID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+		}
+		return Binding{}, fmt.Errorf("check project: %w", err)
+	}
+	if workspaceID, selectedByID := selector.WorkspaceIDValue(); selectedByID {
+		binding, err := s.LookupWorkspaceBindingByID(ctx, workspaceID)
+		if err != nil {
+			return Binding{}, err
+		}
+		if strings.TrimSpace(binding.ProjectID) != trimmedProjectID {
+			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, workspaceID)
+		}
+		return binding, nil
+	}
+	workspaceRoot, _ := selector.WorkspaceRootValue()
+	absoluteRoot, absErr := filepath.Abs(filepath.Clean(workspaceRoot))
+	lookupByRoot := func(root string) (Binding, error) {
+		row, err := s.queries.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{
+			ProjectID:         trimmedProjectID,
+			CanonicalRootPath: root,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, workspaceRoot)
+		}
+		if err != nil {
+			return Binding{}, fmt.Errorf("lookup workspace binding by path: %w", err)
+		}
+		return bindingFromProjectCanonicalRootRow(row), nil
+	}
+	canonicalRoot, canonicalErr := canonicalFilesystemPath(workspaceRoot)
+	if canonicalErr != nil {
+		if absErr != nil {
+			return Binding{}, fmt.Errorf("%w: %q: %v", serverapi.ErrWorkspacePathIdentity, workspaceRoot, absErr)
+		}
+		if binding, err := lookupByRoot(filepath.Clean(absoluteRoot)); err == nil {
+			return binding, nil
+		} else if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+			return Binding{}, err
+		}
+		return Binding{}, serverapi.WorkspacePathIdentityError{WorkspaceRoot: workspaceRoot, Cause: canonicalErr}
+	}
+	binding, err := lookupByRoot(canonicalRoot)
+	if err == nil {
+		return binding, nil
+	}
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		return Binding{}, err
+	}
+	if absErr == nil && filepath.Clean(absoluteRoot) != canonicalRoot {
+		if binding, err := lookupByRoot(filepath.Clean(absoluteRoot)); err == nil {
+			return binding, nil
+		} else if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+			return Binding{}, err
+		}
+	}
+	return Binding{}, err
+}
+
+func bindingFromProjectCanonicalRootRow(row sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootRow) Binding {
+	return bindingFromWorkspaceFields(
+		row.ProjectID,
+		row.ProjectKey,
+		row.ProjectDisplayName,
+		row.WorkspaceID,
+		row.WorkspaceRoot,
+	)
 }
 
 func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlitegen.Workspace, error) {
@@ -714,6 +792,19 @@ func (s *Store) SetProjectDefaultWorkspace(ctx context.Context, projectID string
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	currentWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, trimmedProjectID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+		}
+		return fmt.Errorf("get current project primary workspace: %w", err)
+	}
+	if strings.TrimSpace(currentWorkspaceID) == trimmedWorkspaceID {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit unchanged default workspace tx: %w", err)
+		}
+		return nil
+	}
 	now := time.Now().UTC().UnixMilli()
 	updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
 		WorkspaceID:     trimmedWorkspaceID,
@@ -827,7 +918,10 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 		return blockers, nil
 	}
 	if !SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
-		return nil, ErrWorkspaceUnlinkPreparationInvalidated
+		return nil, &serverapi.WorkspaceDetachConflictError{
+			ProjectID:   trimmedProjectID,
+			WorkspaceID: trimmedWorkspaceID,
+		}
 	}
 	rows, err := q.DeleteWorkspaceBindingByID(ctx, sqlitegen.DeleteWorkspaceBindingByIDParams{ProjectID: trimmedProjectID, WorkspaceID: trimmedWorkspaceID})
 	if err != nil {
@@ -863,13 +957,6 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	}
 	if strings.TrimSpace(primaryWorkspaceID) == strings.TrimSpace(workspace.ID) {
 		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "default_workspace", Message: "Workspace is the project default workspace."})
-	}
-	workspaceCount, err := q.CountProjectWorkspaces(ctx, strings.TrimSpace(projectID))
-	if err != nil {
-		return nil, fmt.Errorf("count project workspaces: %w", err)
-	}
-	if workspaceCount <= 1 {
-		blockers = append(blockers, serverapi.ProjectWorkspaceUnlinkBlocker{Code: "only_workspace", Message: "Project must keep at least one workspace."})
 	}
 	workspaceID := sql.NullString{String: workspace.ID, Valid: strings.TrimSpace(workspace.ID) != ""}
 	nonTerminalTasks, err := q.CountNonTerminalTasksBySourceWorkspace(ctx, workspaceID)
@@ -1170,14 +1257,24 @@ func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonical
 }
 
 func bindingFromCanonicalRootRow(row sqlitegen.ListWorkspaceBindingsByCanonicalRootRow) Binding {
+	return bindingFromWorkspaceFields(
+		row.ProjectID,
+		row.ProjectKey,
+		row.ProjectDisplayName,
+		row.WorkspaceID,
+		row.WorkspaceRoot,
+	)
+}
+
+func bindingFromWorkspaceFields(projectID string, projectKey string, projectName string, workspaceID string, workspaceRoot string) Binding {
 	return Binding{
-		ProjectID:       row.ProjectID,
-		ProjectKey:      row.ProjectKey,
-		ProjectName:     row.ProjectDisplayName,
-		WorkspaceID:     row.WorkspaceID,
-		CanonicalRoot:   row.WorkspaceRoot,
-		WorkspaceName:   filepath.Base(row.WorkspaceRoot),
-		WorkspaceStatus: availabilityForPath(row.WorkspaceRoot),
+		ProjectID:       projectID,
+		ProjectKey:      projectKey,
+		ProjectName:     projectName,
+		WorkspaceID:     workspaceID,
+		CanonicalRoot:   workspaceRoot,
+		WorkspaceName:   filepath.Base(workspaceRoot),
+		WorkspaceStatus: availabilityForPath(workspaceRoot),
 	}
 }
 
@@ -2416,6 +2513,14 @@ func projectWorkspaceSummaryFromRow(workspaceID string, rootPath string, isPrima
 }
 
 func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) serverapi.ProjectHomeSummary {
+	var defaultWorkflowID *string
+	if row.DefaultWorkflowID.Valid {
+		defaultWorkflowID = &row.DefaultWorkflowID.String
+	}
+	var defaultWorkflowName *string
+	if row.DefaultWorkflowName.Valid {
+		defaultWorkflowName = &row.DefaultWorkflowName.String
+	}
 	return serverapi.ProjectHomeSummary{
 		ProjectID:   row.ProjectID,
 		ProjectKey:  row.ProjectKey,
@@ -2428,8 +2533,8 @@ func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) server
 			IsPrimary:       true,
 			UpdatedAtUnixMs: row.PrimaryWorkspaceUpdatedAtUnixMs,
 		},
-		DefaultWorkflowID:    row.DefaultWorkflowID,
-		DefaultWorkflowName:  row.DefaultWorkflowName,
+		DefaultWorkflowID:    defaultWorkflowID,
+		DefaultWorkflowName:  defaultWorkflowName,
 		DefaultWorkflowValid: row.DefaultWorkflowValid != 0,
 		UpdatedAtUnixMs:      row.LatestActivityUnixMs,
 		TaskCount:            int(row.TaskCount),

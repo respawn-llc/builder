@@ -63,6 +63,81 @@ func TestProtocolErrorPreservesBlankWorktreeBlockedDiagnostic(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorPreservesRemoteDiagnosticWithoutJoinedNewline(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkspaceNotRegistered,
+		Message: "workspace is not attached to the selected project",
+	})
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("decoded error = %v, want workspace-not-registered sentinel", err)
+	}
+	if err.Error() != "workspace is not attached to the selected project" {
+		t.Fatalf("decoded error message = %q, want remote diagnostic only", err.Error())
+	}
+}
+
+func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		source error
+		wantAs func(error) bool
+	}{
+		{
+			name:   "path identity",
+			source: serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
+			wantAs: func(err error) bool { var typed serverapi.WorkspacePathIdentityError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "detach conflict",
+			source: &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceDetachConflictError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "post-resolution mutation",
+			source: &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceMutationError; return errors.As(err, &typed) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive request: %v", err)
+					return
+				}
+				structured := test.source.(interface {
+					RPCErrorCode() int
+					RPCErrorData() json.RawMessage
+				})
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, structured.RPCErrorCode(), test.source.Error(), structured.RPCErrorData())); err != nil {
+					t.Errorf("send typed error: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if test.name == "path identity" {
+				selector, err = serverapi.NewProjectWorkspaceSelectorForRoot("/missing")
+			}
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			_, err = remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+				ProjectID:                "project-1",
+				ProjectWorkspaceSelector: selector,
+			})
+			if !test.wantAs(err) {
+				t.Fatalf("remote error = %T %v, want typed error", err, err)
+			}
+		})
+	}
+}
+
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 	if _, err := newRemoteSessionAttachmentIntent(" \t "); !errors.Is(err, errRemoteSessionIDRequired) {
 		t.Fatalf("intent error = %v, want required session ID error", err)

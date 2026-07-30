@@ -1,0 +1,157 @@
+package serverapi
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+
+	"core/shared/protocol"
+)
+
+var ErrWorkspaceDetachConflict = errors.New("workspace detach preparation conflicted")
+var ErrWorkspaceMutationFailed = errors.New("workspace mutation failed")
+
+func (e WorkspacePathIdentityError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkspacePathIdentity
+}
+
+func (e WorkspacePathIdentityError) RPCErrorData() json.RawMessage {
+	if strings.TrimSpace(e.WorkspaceRoot) == "" {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type          string `json:"type"`
+		WorkspaceRoot string `json:"workspace_root"`
+	}{
+		Type:          "workspace_path_identity_error",
+		WorkspaceRoot: strings.TrimSpace(e.WorkspaceRoot),
+	})
+}
+
+type WorkspaceDetachConflictError struct {
+	ProjectID   string
+	WorkspaceID string
+}
+
+func (e *WorkspaceDetachConflictError) Error() string {
+	if e == nil {
+		return ErrWorkspaceDetachConflict.Error()
+	}
+	return "workspace detach preparation was invalidated"
+}
+
+func (e *WorkspaceDetachConflictError) Is(target error) bool {
+	return target == ErrWorkspaceDetachConflict
+}
+
+func (e *WorkspaceDetachConflictError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkspaceDetachConflict
+}
+
+func (e *WorkspaceDetachConflictError) RPCErrorData() json.RawMessage {
+	if e == nil || !validWorkspaceMutationIdentity(e.ProjectID, e.WorkspaceID) {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type        string `json:"type"`
+		ProjectID   string `json:"project_id"`
+		WorkspaceID string `json:"workspace_id"`
+	}{
+		Type:        "workspace_detach_conflict_error",
+		ProjectID:   strings.TrimSpace(e.ProjectID),
+		WorkspaceID: strings.TrimSpace(e.WorkspaceID),
+	})
+}
+
+type WorkspaceMutationError struct {
+	ProjectID   string
+	WorkspaceID string
+	Cause       error
+}
+
+func (e *WorkspaceMutationError) Error() string {
+	if e == nil {
+		return ErrWorkspaceMutationFailed.Error()
+	}
+	if e.Cause == nil {
+		return ErrWorkspaceMutationFailed.Error()
+	}
+	return e.Cause.Error()
+}
+
+func (e *WorkspaceMutationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func (e *WorkspaceMutationError) Is(target error) bool {
+	return target == ErrWorkspaceMutationFailed
+}
+
+func (e *WorkspaceMutationError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkspaceMutationFailed
+}
+
+func (e *WorkspaceMutationError) RPCErrorData() json.RawMessage {
+	if e == nil || !validWorkspaceMutationIdentity(e.ProjectID, e.WorkspaceID) {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type        string `json:"type"`
+		ProjectID   string `json:"project_id"`
+		WorkspaceID string `json:"workspace_id"`
+	}{
+		Type:        "workspace_mutation_error",
+		ProjectID:   strings.TrimSpace(e.ProjectID),
+		WorkspaceID: strings.TrimSpace(e.WorkspaceID),
+	})
+}
+
+func validWorkspaceMutationIdentity(projectID string, workspaceID string) bool {
+	return strings.TrimSpace(projectID) != "" && strings.TrimSpace(workspaceID) != ""
+}
+
+func DecodeWorkspacePathIdentityError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type          string `json:"type"`
+		WorkspaceRoot string `json:"workspace_root"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_path_identity_error" || strings.TrimSpace(envelope.WorkspaceRoot) == "" {
+		return fallbackProjectWorkspaceRPCError(message, ErrWorkspacePathIdentity)
+	}
+	return WorkspacePathIdentityError{WorkspaceRoot: envelope.WorkspaceRoot, Cause: errors.New(strings.TrimSpace(message))}
+}
+
+func DecodeWorkspaceDetachConflictError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type        string `json:"type"`
+		ProjectID   string `json:"project_id"`
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_detach_conflict_error" || !validWorkspaceMutationIdentity(envelope.ProjectID, envelope.WorkspaceID) {
+		return fallbackProjectWorkspaceRPCError(message, ErrWorkspaceDetachConflict)
+	}
+	return &WorkspaceDetachConflictError{ProjectID: envelope.ProjectID, WorkspaceID: envelope.WorkspaceID}
+}
+
+func DecodeWorkspaceMutationError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type        string `json:"type"`
+		ProjectID   string `json:"project_id"`
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_mutation_error" || !validWorkspaceMutationIdentity(envelope.ProjectID, envelope.WorkspaceID) {
+		return fallbackProjectWorkspaceRPCError(message, ErrWorkspaceMutationFailed)
+	}
+	return &WorkspaceMutationError{
+		ProjectID:   envelope.ProjectID,
+		WorkspaceID: envelope.WorkspaceID,
+		Cause:       errors.New(strings.TrimSpace(message)),
+	}
+}
+
+func fallbackProjectWorkspaceRPCError(message string, sentinel error) error {
+	return protocol.NewSentinelError(sentinel, message)
+}

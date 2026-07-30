@@ -15,6 +15,12 @@ Commands:
   kent project create
     Create a project and attach its first server-visible workspace.
 
+  kent project default --project <project-id> [--workspace <workspace-id>] [path]
+    Choose the project's default workspace.
+
+  kent project detach --project <project-id> [--workspace <workspace-id>] [path]
+    Alias for `kent detach`.
+
 Examples:
   kent project
   kent project list

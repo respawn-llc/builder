@@ -157,8 +157,8 @@ type ProjectUpdateResponse struct {
 }
 
 type ProjectDefaultWorkspaceSetRequest struct {
-	ProjectID   string `json:"project_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ProjectID string `json:"project_id"`
+	ProjectWorkspaceSelector
 }
 
 type ProjectDefaultWorkspaceSetResponse struct {
@@ -166,8 +166,8 @@ type ProjectDefaultWorkspaceSetResponse struct {
 }
 
 type ProjectWorkspaceUnlinkRequest struct {
-	ProjectID   string `json:"project_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ProjectID string `json:"project_id"`
+	ProjectWorkspaceSelector
 }
 
 type ProjectWorkspaceUnlinkResponse struct {
@@ -203,6 +203,59 @@ type ProjectDeleteBlocker struct {
 type ProjectAttachWorkspaceRequest struct {
 	ProjectID     string `json:"project_id"`
 	WorkspaceRoot string `json:"workspace_root"`
+}
+
+// ProjectWorkspaceSelector identifies one workspace without using an empty
+// string as an absence sentinel. Its fields are intentionally flat so legacy
+// workspace_id request payloads remain wire-compatible.
+type ProjectWorkspaceSelector struct {
+	WorkspaceID   *string `json:"workspace_id,omitempty"`
+	WorkspaceRoot *string `json:"workspace_root,omitempty"`
+}
+
+func NewProjectWorkspaceSelectorForID(workspaceID string) (ProjectWorkspaceSelector, error) {
+	trimmed := strings.TrimSpace(workspaceID)
+	if trimmed == "" {
+		return ProjectWorkspaceSelector{}, errors.New("workspace_id is required")
+	}
+	return ProjectWorkspaceSelector{WorkspaceID: &trimmed}, nil
+}
+
+func NewProjectWorkspaceSelectorForRoot(workspaceRoot string) (ProjectWorkspaceSelector, error) {
+	trimmed := strings.TrimSpace(workspaceRoot)
+	if trimmed == "" {
+		return ProjectWorkspaceSelector{}, errors.New("workspace_root is required")
+	}
+	return ProjectWorkspaceSelector{WorkspaceRoot: &trimmed}, nil
+}
+
+func (s ProjectWorkspaceSelector) Validate() error {
+	hasID := s.WorkspaceID != nil
+	hasRoot := s.WorkspaceRoot != nil
+	if hasID == hasRoot {
+		return errors.New("exactly one workspace_id or workspace_root is required")
+	}
+	if hasID && strings.TrimSpace(*s.WorkspaceID) == "" {
+		return errors.New("workspace_id is required")
+	}
+	if hasRoot && strings.TrimSpace(*s.WorkspaceRoot) == "" {
+		return errors.New("workspace_root is required")
+	}
+	return nil
+}
+
+func (s ProjectWorkspaceSelector) WorkspaceIDValue() (string, bool) {
+	if s.WorkspaceID == nil {
+		return "", false
+	}
+	return strings.TrimSpace(*s.WorkspaceID), true
+}
+
+func (s ProjectWorkspaceSelector) WorkspaceRootValue() (string, bool) {
+	if s.WorkspaceRoot == nil {
+		return "", false
+	}
+	return strings.TrimSpace(*s.WorkspaceRoot), true
 }
 
 type ProjectAttachWorkspaceResponse struct {
@@ -272,20 +325,14 @@ func (r ProjectDefaultWorkspaceSetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if strings.TrimSpace(r.WorkspaceID) == "" {
-		return errors.New("workspace_id is required")
-	}
-	return nil
+	return r.ProjectWorkspaceSelector.Validate()
 }
 
 func (r ProjectWorkspaceUnlinkRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if strings.TrimSpace(r.WorkspaceID) == "" {
-		return errors.New("workspace_id is required")
-	}
-	return nil
+	return r.ProjectWorkspaceSelector.Validate()
 }
 
 func (r ProjectDeleteRequest) Validate() error {

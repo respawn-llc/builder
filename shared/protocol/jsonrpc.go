@@ -56,6 +56,9 @@ const (
 	ErrCodeWorkflowTaskCreateConflict        = -32046
 	ErrCodeWorkflowLabel                     = -32047
 	ErrCodeWorktreeBlocked                   = -32048
+	ErrCodeWorkspacePathIdentity             = -32049
+	ErrCodeWorkspaceDetachConflict           = -32050
+	ErrCodeWorkspaceMutationFailed           = -32051
 )
 
 type Request struct {

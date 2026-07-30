@@ -242,6 +242,12 @@ func TestUnlinkProjectWorkspaceBlocksUnsafeStates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
+	soleBlockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspace sole: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, soleBlockers, "default_workspace")
+	assertNoWorkspaceUnlinkBlocker(t, soleBlockers, "only_workspace")
 	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -251,6 +257,7 @@ func TestUnlinkProjectWorkspaceBlocksUnsafeStates(t *testing.T) {
 		t.Fatalf("UnlinkProjectWorkspace default: %v", err)
 	}
 	assertWorkspaceUnlinkBlocker(t, defaultBlockers, "default_workspace")
+	assertNoWorkspaceUnlinkBlocker(t, defaultBlockers, "only_workspace")
 
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
@@ -335,8 +342,8 @@ func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *test
 			return nil, func() {}, nil
 		},
 	)
-	if !errors.Is(err, ErrWorkspaceUnlinkPreparationInvalidated) {
-		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want preparation invalidated", err)
+	if !errors.Is(err, serverapi.ErrWorkspaceDetachConflict) {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want detach conflict", err)
 	}
 	workspace, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID)
 	if err != nil {
@@ -481,6 +488,15 @@ func assertWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWork
 		}
 	}
 	t.Fatalf("blockers = %+v, want code %q", blockers, code)
+}
+
+func assertNoWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWorkspaceUnlinkBlocker, code string) {
+	t.Helper()
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			t.Fatalf("blockers = %+v, must not contain code %q", blockers, code)
+		}
+	}
 }
 
 func addMetadataRaceSessionAndActiveTask(

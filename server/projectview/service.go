@@ -375,12 +375,16 @@ func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.Project
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
 	}
 	defer lease.Release()
-	if err := s.metadata.SetProjectDefaultWorkspace(ctx, req.ProjectID, req.WorkspaceID); err != nil {
+	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	if err != nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+	}
+	if err := s.metadata.SetProjectDefaultWorkspace(ctx, req.ProjectID, binding.WorkspaceID); err != nil {
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
 	}
 	project, err := s.projectHomeSummary(ctx, req.ProjectID)
 	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
 	}
 	return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
 }
@@ -400,6 +404,10 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
 	defer lease.Release()
+	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	if err != nil {
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+	}
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
 		blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil || len(blockers) > 0 {
@@ -416,13 +424,13 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 		}
 		return blockers, release, nil
 	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, nil, runtimeBlocker)
+	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, binding.WorkspaceID, nil, runtimeBlocker)
 	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
 	}
 	resp := serverapi.ProjectWorkspaceUnlinkResponse{
 		ProjectID:   strings.TrimSpace(req.ProjectID),
-		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
+		WorkspaceID: binding.WorkspaceID,
 		Blockers:    blockers,
 		Unlinked:    len(blockers) == 0,
 	}
@@ -431,12 +439,31 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	}
 	projects, err := s.metadata.ListProjectHomeSummaries(ctx, req.ProjectID, 1, 0)
 	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
 	}
 	if len(projects) > 0 {
 		resp.Project = &projects[0]
 	}
 	return resp, nil
+}
+
+func wrapWorkspaceMutationError(projectID string, workspaceID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var conflict *serverapi.WorkspaceDetachConflictError
+	if errors.As(err, &conflict) {
+		return err
+	}
+	var mutation *serverapi.WorkspaceMutationError
+	if errors.As(err, &mutation) {
+		return err
+	}
+	return &serverapi.WorkspaceMutationError{
+		ProjectID:   strings.TrimSpace(projectID),
+		WorkspaceID: strings.TrimSpace(workspaceID),
+		Cause:       err,
+	}
 }
 
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
