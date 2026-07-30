@@ -159,6 +159,26 @@ func (c *blockingRuntimeControlClient) Generate(ctx context.Context, req llm.Req
 	return llm.Response{}, ctx.Err()
 }
 
+type blockingCompactionRuntimeControlClient struct {
+	runtimeControlFakeClient
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingCompactionRuntimeControlClient) Compact(ctx context.Context, req llm.CompactionRequest) (llm.CompactionResponse, error) {
+	select {
+	case <-c.started:
+	default:
+		close(c.started)
+	}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return llm.CompactionResponse{}, context.Cause(ctx)
+	}
+	return c.runtimeControlFakeClient.Compact(ctx, req)
+}
+
 type cancelObservingRuntimeControlClient struct {
 	started     chan struct{}
 	release     chan struct{}
@@ -1820,6 +1840,86 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 		}
 	}
 	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testing.T) {
+	trimmed := 1
+	client := &blockingCompactionRuntimeControlClient{
+		runtimeControlFakeClient: runtimeControlFakeClient{
+			responses: []llm.Response{
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				},
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued message handled"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				},
+			},
+			compactionResponses: []llm.CompactionResponse{{
+				OutputItems: []llm.ResponseItem{
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+					{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
+				},
+				Usage:             llm.Usage{WindowTokens: 200000},
+				TrimmedItemsCount: &trimmed,
+			}},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "seed compaction"); err != nil {
+		t.Fatalf("seed runtime transcript: %v", err)
+	}
+
+	compactDone := make(chan error, 1)
+	compactRef := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
+	go func() {
+		compactDone <- service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
+			ClientRequestID: compactRef.ClientRequestID.String(),
+			SessionID:       store.Meta().SessionID,
+			Args:            "compact",
+			OperationRef:    compactRef,
+		})
+	}()
+	select {
+	case <-client.started:
+	case err := <-compactDone:
+		t.Fatalf("compaction ended before provider call: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("compaction did not start")
+	}
+
+	queuedText := "queue after compaction"
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "queue-while-compacting", queuedText))
+	if err != nil {
+		t.Fatalf("SubmitUserTurn while compacting: %v", err)
+	}
+	if !resp.Steered || resp.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued response", resp)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("queued turn was not retained while compaction was active")
+	}
+
+	close(client.release)
+	if err := <-compactDone; err != nil {
+		t.Fatalf("CompactContext: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for engine.HasQueuedUserWork() {
+		if time.Now().After(deadline) {
+			t.Fatal("queued turn did not drain after compaction completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := countUserMessagesWithContent(t, store, queuedText); got != 1 {
+		t.Fatalf("queued user message count = %d, want 1", got)
+	}
 }
 
 func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
