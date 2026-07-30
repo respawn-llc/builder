@@ -505,7 +505,7 @@ func TestWorkflowModePromptExistingCurrentNodeMessageSkipsCommentCountQuery(t *t
 	counter := &fakeTaskCommentCounter{count: 2}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = counter
-	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)), Content: textutil.Value("existing workflow instructions")}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowCfg.ScopeID.String()), Content: textutil.Value("existing workflow instructions")}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",

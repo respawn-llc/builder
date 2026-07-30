@@ -6,6 +6,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -33,6 +34,43 @@ func TestSelectWorkflowTaskPromptForAnotherNodeAssignmentInSameSession(t *testin
 	)
 	if !ok || kind != prompts.WorkflowTaskPromptReassignment {
 		t.Fatalf("selected workflow prompt = %d, present=%t, want reassignment", kind, ok)
+	}
+}
+
+func TestWorkflowPromptIdentityChangesWhenTheSameNodeIsReentered(t *testing.T) {
+	t.Parallel()
+	previousScopeID := runtimeids.NewExecutionScopeID()
+	currentScopeID := runtimeids.NewExecutionScopeID()
+	currentNode, err := workflow.NewCurrentNodeReference("task-1", "node-1", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        currentScopeID,
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{},
+	)
+	prompt, configured := engine.workflowPrompt()
+	if !configured {
+		t.Fatal("workflow prompt is not configured")
+	}
+	if prompt.Identity != currentScopeID.String() {
+		t.Fatalf("workflow prompt identity = %q, want exact scope %q", prompt.Identity, currentScopeID)
+	}
+	kind, inject := selectWorkflowTaskPrompt(
+		workflowPromptItems(previousScopeID.String()),
+		prompt.Identity,
+		workflowTaskPromptTriggerTaskDelivery,
+	)
+	if !inject || kind != prompts.WorkflowTaskPromptReassignment {
+		t.Fatalf("same-node reentry prompt = %d, inject=%t, want reassignment", kind, inject)
 	}
 }
 

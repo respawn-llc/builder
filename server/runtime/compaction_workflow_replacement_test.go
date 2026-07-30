@@ -64,8 +64,8 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeWorkflowMode {
-			if item.SourcePath == nil || *item.SourcePath != "workflow-current-node/task/node/branch/implementation" {
-				t.Fatalf("workflow replacement source identity = %+v, want branch-scoped Current Node", item)
+			if item.SourcePath == nil || *item.SourcePath != scopeID.String() {
+				t.Fatalf("workflow replacement source identity = %+v, want exact scope %q", item, scopeID)
 			}
 			workflowModes++
 		}
@@ -149,7 +149,7 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 				},
 				Config{Model: "gpt-5"},
 			)
-			currentNodeIdentity := workflowruntime.CurrentNodePromptIdentity(engine.cfg.CurrentNodeExecution.Instructions.CurrentNode)
+			currentNodeIdentity := scopeID.String()
 			existingIdentity := "previous-task/previous-node"
 			if test.existingCurrentNode {
 				existingIdentity = currentNodeIdentity

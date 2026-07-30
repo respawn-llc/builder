@@ -160,7 +160,7 @@ export function useTaskMutations(
       onError: (error) => {
         onActionError?.("interrupt", error);
       },
-      onSuccess: refresh,
+      onSettled: refresh,
     }),
     resume: useMutation({
       mutationFn: async () => api.resumeTask(taskID),
