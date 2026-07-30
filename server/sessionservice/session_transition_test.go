@@ -7,6 +7,7 @@ import (
 
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -29,6 +30,54 @@ func TestInitialInputPrefersPersistedDraft(t *testing.T) {
 func TestPersistInputDraftNoOpForNilStore(t *testing.T) {
 	if err := persistSessionInputDraft(nil, "draft"); err != nil {
 		t.Fatalf("persist input draft with nil store: %v", err)
+	}
+}
+
+func TestResolveOpenSessionRestoresStoredDraftWhenInitialInputIsOmitted(t *testing.T) {
+	targetID := runtimeids.NewSessionID()
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Transition: sessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			TargetSessionID: targetID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve open Session: %v", err)
+	}
+	intent, preparation := requireSessionLifecycleLaunch(t, resolved)
+	resolvedTargetID, existing := intent.SessionID()
+	if !existing || resolvedTargetID != targetID {
+		t.Fatalf("open Session target = %q/%t, want %q", resolvedTargetID, existing, targetID)
+	}
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionRestoreStoredDraft {
+		t.Fatalf("open Session draft disposition = %q, want restore stored draft", disposition.Kind())
+	}
+	if text, present := disposition.OverrideText(); present {
+		t.Fatalf("open Session draft override = %q/%t, want absent", text, present)
+	}
+}
+
+func TestResolveOpenSessionPreservesIntentionalEmptyDraftOverride(t *testing.T) {
+	targetID := runtimeids.NewSessionID()
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Transition: sessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			InitialInput:    textutil.Value(""),
+			TargetSessionID: targetID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve open Session: %v", err)
+	}
+	_, preparation := requireSessionLifecycleLaunch(t, resolved)
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
+		t.Fatalf("open Session draft disposition = %q, want override stored draft", disposition.Kind())
+	}
+	text, present := disposition.OverrideText()
+	if !present || text != "" {
+		t.Fatalf("open Session draft override = %q/%t, want intentional empty override", text, present)
 	}
 }
 

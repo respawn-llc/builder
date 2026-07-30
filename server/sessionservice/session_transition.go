@@ -103,12 +103,15 @@ func resolveSessionTransition(_ context.Context, req sessionTransitionResolveReq
 		if err != nil {
 			return serverapi.SessionDirective{}, err
 		}
-		initialInput, _ := textutil.OptionalValue(req.Transition.InitialInput)
+		draftDisposition := serverapi.RestoreStoredDraftSessionDraftDisposition()
+		if initialInput, present := textutil.OptionalValue(req.Transition.InitialInput); present {
+			draftDisposition = serverapi.OverrideStoredDraftSessionDraftDisposition(initialInput)
+		}
 		return serverapi.LaunchSessionDirective(
 			serverapi.OpenExistingSessionLaunchIntent(targetID),
 			serverapi.NewSessionLaunchPreparation(
 				nil,
-				serverapi.OverrideStoredDraftSessionDraftDisposition(initialInput),
+				draftDisposition,
 				serverapi.SessionAuthPreparationKeepCurrent,
 			),
 		), nil
