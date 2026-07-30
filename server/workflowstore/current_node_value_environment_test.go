@@ -177,6 +177,111 @@ func TestCompleteCurrentNodeMaterializesPriorParametersProducedByJoinTransition(
 	}
 }
 
+func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		branchCID := workflow.NodeID("node-impl-c-" + string(workflowID))
+		branchCGroupID := workflow.TransitionGroupID("group-join-c-" + string(workflowID))
+		synth := nodeByKey(t, def, "synth")
+		synthRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(synth))
+		synthRecord.InputFields = append(synthRecord.InputFields, workflow.InputField{
+			Name:        "compliance_findings",
+			Description: "Compliance findings.",
+		})
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-join-synth-"+string(workflowID)),
+		).PromptTemplate = "Synthesize {{.Params.joined}} {{.Params.compliance_findings}}."
+		req.Nodes = append(req.Nodes, NodeRecord{
+			ID:             branchCID,
+			WorkflowID:     workflowID,
+			Key:            "impl_c",
+			Kind:           workflow.NodeKindAgent,
+			DisplayName:    "Implement C",
+			SubagentRole:   "coder",
+			PromptTemplate: "C.",
+		})
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           branchCGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: branchCID,
+			TransitionID: "join",
+			DisplayName:  "Join",
+		})
+		req.Edges = append(req.Edges,
+			EdgeRecord{
+				ID:                workflow.EdgeID("edge-split-c-" + string(workflowID)),
+				WorkflowID:        workflowID,
+				TransitionGroupID: workflow.TransitionGroupID("group-split-" + string(workflowID)),
+				Key:               "split_c",
+				TargetNodeID:      branchCID,
+				ContextMode:       workflow.ContextModeNewSession,
+				PromptTemplate:    "C.",
+			},
+			EdgeRecord{
+				ID:                workflow.EdgeID("edge-join-c-" + string(workflowID)),
+				WorkflowID:        workflowID,
+				TransitionGroupID: branchCGroupID,
+				Key:               "join_c",
+				TargetNodeID:      workflow.NodeIDOf(nodeByKey(t, def, "join")),
+				ContextMode:       workflow.ContextModeNewSession,
+				Parameters: []workflow.Parameter{{
+					Key:         "compliance_findings",
+					Description: "Compliance findings.",
+				}},
+			},
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
+	}
+	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode, len(split.Mutation.Created))
+	for _, branch := range split.Mutation.Created {
+		branchKey, present := branch.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("fanout branch = %+v, want branch scope", branch)
+		}
+		branches[branchKey] = branch
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_a"].Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{"joined": "joined implementation"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode join A: %v", err)
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_b"].Reference,
+		TransitionID: "join",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode join B: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_c"].Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{"compliance_findings": "approved"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode join C with incomplete stored provider map: %v", err)
+	}
+	if len(joined.Mutation.Created) != 1 ||
+		joined.Mutation.Created[0].CurrentInputValues["joined"] != "joined implementation" ||
+		joined.Mutation.Created[0].CurrentInputValues["compliance_findings"] != "approved" {
+		t.Fatalf("joined Current Node = %+v, want derived incoming provider value", joined.Mutation.Created)
+	}
+}
+
 func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Materialized Current Node Values"})
