@@ -312,16 +312,14 @@ type executionPromptStore struct {
 	mu      sync.RWMutex
 	scope   ExecutionScope
 	feed    ExecutionPromptFeed
-	changed func(ExecutionScope)
 	closed  bool
 	pending map[string]*executionPromptEntry
 }
 
-func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed, changed func(ExecutionScope)) executionPromptStore {
+func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
 	return executionPromptStore{
 		scope:   scope,
 		feed:    feed,
-		changed: changed,
 		pending: make(map[string]*executionPromptEntry),
 	}
 }
@@ -354,7 +352,6 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
-	s.notifyChanged()
 	s.publishPending(snapshot)
 	defer func() {
 		s.mu.Lock()
@@ -364,7 +361,6 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		}
 		s.mu.Unlock()
 		if current == entry {
-			s.notifyChanged()
 			s.publishResolved(snapshot)
 		}
 	}()
@@ -395,7 +391,6 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
-	s.notifyChanged()
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	s.publishResolved(entry.snapshot)
 	return nil
@@ -417,18 +412,9 @@ func (s *executionPromptStore) Close(err error) {
 		delete(s.pending, requestID)
 	}
 	s.mu.Unlock()
-	if len(entries) != 0 {
-		s.notifyChanged()
-	}
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)
-	}
-}
-
-func (s *executionPromptStore) notifyChanged() {
-	if s.changed != nil {
-		s.changed(s.scope)
 	}
 }
 

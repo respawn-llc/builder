@@ -92,6 +92,9 @@ func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing
 	if !reflect.DeepEqual(output, response) {
 		t.Fatalf("JSON output = %#v, want %#v", output, response)
 	}
+	if stderr.String() != nextPageTokenLine(nextPageToken)+"\n" {
+		t.Fatalf("next-page diagnostic = %q", stderr.String())
+	}
 }
 
 func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {

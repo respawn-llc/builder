@@ -122,16 +122,19 @@ func writeTaskSearchResponse(stdout io.Writer, stderr io.Writer, response server
 		return 1
 	}
 	if jsonOut {
-		return writeCommandJSON(stdout, stderr, response)
-	}
-	projection, err := taskSearchPlainProjectionFromResponse(response)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if err := writeTaskSearchPlainProjection(stdout, projection); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		if exitCode := writeCommandJSON(stdout, stderr, response); exitCode != 0 {
+			return exitCode
+		}
+	} else {
+		projection, err := taskSearchPlainProjectionFromResponse(response)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeTaskSearchPlainProjection(stdout, projection); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	if response.NextPageToken != nil {
 		if err := writeNextPageToken(stderr, *response.NextPageToken); err != nil {

@@ -2191,15 +2191,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	statusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(
-		metadataStore,
-		workflowexecution.NewMutationPermit(),
-		authority,
-	)
-	if err != nil {
-		t.Fatalf("workflowview.NewTaskStatusSnapshotCoordinator: %v", err)
-	}
-	taskSearch, err := workflowview.NewTaskSearch(projector, statusSnapshots)
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}

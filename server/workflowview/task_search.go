@@ -11,7 +11,10 @@ import (
 	"math"
 	"strings"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/shared/serverapi"
 	"core/shared/tasksearchtext"
 
@@ -22,8 +25,10 @@ import (
 const taskSearchPageTokenVersion = 1
 
 type TaskSearch struct {
-	projector       *TaskProjector
-	statusSnapshots *TaskStatusSnapshotCoordinator
+	metadata  *metadata.Store
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
+	authority *sessionruntime.Authority
 }
 
 type taskSearchPageToken struct {
@@ -34,34 +39,27 @@ type taskSearchPageToken struct {
 	TaskID      string `json:"task_id"`
 }
 
-func NewTaskSearch(projector *TaskProjector, statusSnapshots *TaskStatusSnapshotCoordinator) (*TaskSearch, error) {
+func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskSearch, error) {
 	switch {
+	case metadataStore == nil || metadataStore.Queries() == nil:
+		return nil, errors.New("metadata store is required")
 	case projector == nil:
 		return nil, errors.New("task projector is required")
-	case statusSnapshots == nil:
-		return nil, errors.New("task status snapshot coordinator is required")
+	case authority == nil:
+		return nil, errors.New("session runtime authority is required")
 	default:
 		return &TaskSearch{
-			projector:       projector,
-			statusSnapshots: statusSnapshots,
+			metadata:  metadataStore,
+			queries:   metadataStore.Queries(),
+			projector: projector,
+			authority: authority,
 		}, nil
 	}
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.projector == nil || s.statusSnapshots == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
-	}
-	return s.searchWithSnapshotCapture(ctx, req, s.statusSnapshots.Capture)
-}
-
-func (s *TaskSearch) searchWithSnapshotCapture(
-	ctx context.Context,
-	req serverapi.TaskSearchRequest,
-	capture func(context.Context) (*TaskStatusSnapshot, error),
-) (response serverapi.TaskSearchResponse, err error) {
-	if capture == nil {
-		return serverapi.TaskSearchResponse{}, errors.New("task status snapshot capture is required")
 	}
 	if err := req.Validate(); err != nil {
 		return serverapi.TaskSearchResponse{}, err
@@ -77,28 +75,33 @@ func (s *TaskSearch) searchWithSnapshotCapture(
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	snapshot, err := capture(ctx)
+	liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
+	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return serverapi.TaskSearchResponse{}, fmt.Errorf("begin task search read transaction: %w", err)
+	}
 	defer func() {
-		if closeErr := snapshot.Close(); closeErr != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && err == nil {
 			response = serverapi.TaskSearchResponse{}
-			err = errors.Join(err, fmt.Errorf("close task search status snapshot: %w", closeErr))
+			err = fmt.Errorf("rollback task search read transaction: %w", rollbackErr)
 		}
 	}()
-	if err := s.validateSchemaAndScope(ctx, snapshot.queries, req); err != nil {
+	queries := s.queries.WithTx(tx)
+	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
 		}
 		return serverapi.TaskSearchResponse{}, err
 	}
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := snapshot.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot, req, cursor, hasCursor)
+	rows, err := s.queryPage(ctx, queries, liveSnapshots, req, cursor, hasCursor)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -109,7 +112,7 @@ func (s *TaskSearch) searchWithSnapshotCapture(
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, snapshot.queries, req, rows)
+	groups, err := s.materializeGroups(ctx, queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -157,8 +160,8 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, snapshot *TaskStatusSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
-	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(snapshot.live.executions)
+func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
+	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(liveSnapshots)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +195,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, snapshot *TaskStatusSnapshot
 		cursorRank = sql.NullFloat64{Float64: math.Float64frombits(cursor.RankBits), Valid: true}
 		cursorTaskID = sql.NullString{String: cursor.TaskID, Valid: true}
 	}
-	return snapshot.queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
+	return queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
 		Mode:                string(req.Mode),
 		CandidateExpression: candidateExpression,
 		LiteralQuery:        req.Query,

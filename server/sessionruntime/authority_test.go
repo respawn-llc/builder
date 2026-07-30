@@ -2027,10 +2027,6 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
-	_, revisionBeforeStart, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot before workflow execution: %v", err)
-	}
 	responseDone := make(chan executionPromptResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
@@ -2052,17 +2048,6 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
-	_, revisionWithPendingPrompt, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot with pending prompt: %v", err)
-	}
-	if revisionWithPendingPrompt <= revisionBeforeStart {
-		t.Fatalf(
-			"pending prompt revision = %d, want greater than pre-execution revision %d",
-			revisionWithPendingPrompt,
-			revisionBeforeStart,
-		)
-	}
 	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
@@ -2083,17 +2068,6 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	resolved := <-feed
 	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
 		t.Fatalf("resolved prompt = %+v, want exact resource %v scope %s ask %s", resolved, resource, handle.Scope().ID(), askID)
-	}
-	_, revisionAfterPromptResolution, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot after prompt resolution: %v", err)
-	}
-	if revisionAfterPromptResolution <= revisionWithPendingPrompt {
-		t.Fatalf(
-			"resolved prompt revision = %d, want greater than pending revision %d",
-			revisionAfterPromptResolution,
-			revisionWithPendingPrompt,
-		)
 	}
 	if result := <-responseDone; result.err != nil || result.response != want {
 		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, want)

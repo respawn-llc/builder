@@ -226,22 +226,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowMutationPermit := workflowexecution.NewMutationPermit()
-	workflowTaskStatusSnapshots, err := workflowview.NewTaskStatusSnapshotCoordinator(
-		metadataStore,
-		workflowMutationPermit,
-		runtimeAuthority,
-	)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task status snapshots: %w", err)
-	}
 	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
 	}
-	workflowTaskSearch, err := workflowview.NewTaskSearch(workflowTaskProjector, workflowTaskStatusSnapshots)
+	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, runtimeAuthority)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
@@ -266,6 +256,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
+	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
 	if err != nil {
 		cleanupNewFailure()
