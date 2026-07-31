@@ -60,7 +60,6 @@ type compactionResult struct {
 	trimmedItemsCount *int
 	overflowRepair    compactionOverflowRepairStats
 	provider          string
-	summary           string
 }
 
 type defaultContextCompactor struct {
@@ -681,12 +680,6 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
 	}
 	finalizationErr := replacementErr
-	if strings.TrimSpace(result.summary) != "" && result.engine != "local" {
-		summary := strings.TrimSpace(result.summary)
-		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: summary})); err != nil {
-			finalizationErr = errors.Join(finalizationErr, err)
-		}
-	}
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
 			"Context compaction succeeded after collapsing tool payloads: %d shell outputs, %d patch inputs, ~%d tokens omitted. Full original tool payloads remain in pre-compaction transcript history but are omitted from the compacted model context.",
