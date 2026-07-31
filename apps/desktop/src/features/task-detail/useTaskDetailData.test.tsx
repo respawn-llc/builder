@@ -105,7 +105,7 @@ function taskQuestionWaitingEventFor(askID: string) {
 }
 
 async function waitForProjectSubscription(
-  subscriptions: () => ReadonlyArray<Readonly<{ method: string; params: unknown }>>,
+  subscriptions: () => readonly Readonly<{ method: string; params: unknown }>[],
 ) {
   await waitFor(() => {
     expect(subscriptions()).toContainEqual({
