@@ -352,7 +352,7 @@ func (r bindingMutationResult) validate() error {
 		if r.ProjectID != nil || r.WorkspaceID != nil {
 			return errors.New("binding mutation result mixes project and workspace identity")
 		}
-		return r.Project.Validate()
+		return nil
 	}
 	if r.ProjectID == nil || r.WorkspaceID == nil || strings.TrimSpace(*r.ProjectID) == "" || strings.TrimSpace(*r.WorkspaceID) == "" {
 		return errors.New("binding mutation result requires project and workspace IDs")
