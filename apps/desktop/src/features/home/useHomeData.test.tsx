@@ -139,9 +139,20 @@ describe("Home global attention data", () => {
     const controller = createSidebarController((destination) => {
       openedDestinations.push(destination);
     });
-    const view = renderHome(services, <HomeAttentionQueryHarness />);
+    let homeAttention: ReturnType<typeof useGlobalAttentionPages> | undefined;
+    const view = renderHome(
+      services,
+      <HomeAttentionQueryHarness
+        onQuery={(query) => {
+          homeAttention = query;
+        }}
+      />,
+    );
 
     await expectAttentionCalls(services.transport, 1);
+    await waitFor(() => {
+      expect(homeAttention?.data?.pages[0]?.items[0]?.taskID).toBe("task-1");
+    });
     view.rerender(
       <TestAppProviders services={services}>
         <SidebarContext.Provider value={sidebarController}>
@@ -267,7 +278,7 @@ function attentionItem(taskID: string): Readonly<Record<string, JsonValue>> {
     id: `approval:${taskID}`,
     kind: "approval",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    workflow_id: "550e8400-e29b-41d4-a716-446655440001",
     task_id: taskID,
     task_short_id: taskID,
     task_title: taskID,
