@@ -10,7 +10,7 @@ import {
   waitForMacrotask,
 } from "@/test-support/scheduling";
 import {
-  workflowAttentionCallCount,
+  workflowAttentionCalls,
   workflowAttentionRpcMethods,
 } from "@/test-support/workflow-attention";
 
@@ -33,7 +33,7 @@ describe("application reconnect attention refresh", () => {
     await flushQueuedWork();
 
     await waitFor(() => {
-      expect(workflowAttentionCallCount(services.transport)).toBe(1);
+      expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
     });
     await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
@@ -47,7 +47,7 @@ describe("application reconnect attention refresh", () => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
       await waitForMacrotask();
     });
-    expect(workflowAttentionCallCount(services.transport)).toBe(1);
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
 
     await act(async () => {
       services.transport.connection.set("disconnected");
@@ -66,7 +66,7 @@ describe("application reconnect attention refresh", () => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
     });
     await waitFor(() => {
-      expect(workflowAttentionCallCount(services.transport)).toBe(2);
+      expect(workflowAttentionCalls(services.transport)).toHaveLength(2);
     });
     await flushQueuedWork();
 
@@ -74,7 +74,7 @@ describe("application reconnect attention refresh", () => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
       await waitForMacrotask();
     });
-    expect(workflowAttentionCallCount(services.transport)).toBe(2);
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(2);
   });
 });
 

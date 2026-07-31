@@ -9,7 +9,6 @@ import { createTestServices, TestAppProviders, type TestAppServices } from "@/te
 import type { FakeRpcTransport, FakeRoute } from "@/test-support/api";
 import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
 import {
-  workflowAttentionCallCount,
   workflowAttentionCalls,
   workflowAttentionRpcMethods,
 } from "@/test-support/workflow-attention";
@@ -71,6 +70,22 @@ describe("Home global attention data", () => {
 
     act(() => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
+    });
+    await expectAttentionCalls(services.transport, 2);
+  });
+
+  it("reconciles after a decoder error while the Project stream remains open", async () => {
+    const services = createAttentionServices();
+    renderHome(services, <HomeAttentionEventsHarness />);
+
+    await expectAttentionCalls(services.transport, 1);
+    act(() => {
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
+    });
+    await flushQueuedWork();
+
+    act(() => {
+      services.transport.emit(workflowAttentionRpcMethods.projectEvent, invalidProjectEvent);
     });
     await expectAttentionCalls(services.transport, 2);
   });
@@ -267,7 +282,7 @@ function attentionPageTokens(transport: FakeRpcTransport): string[] {
 
 async function expectAttentionCalls(transport: FakeRpcTransport, count: number): Promise<void> {
   await waitFor(() => {
-    expect(workflowAttentionCallCount(transport)).toBe(count);
+    expect(workflowAttentionCalls(transport)).toHaveLength(count);
   });
 }
 
@@ -313,6 +328,17 @@ const attentionChangingProjectEvent = {
     related_ids: [],
     resource: "task",
     workflow_id: "workflow-1",
+  },
+} as const;
+
+const invalidProjectEvent = {
+  event: {
+    action: "updated",
+    occurred_at_unix_ms: 3,
+    primary_entity_id: "task-1",
+    project_id: "project-1",
+    related_ids: [],
+    resource: "task",
   },
 } as const;
 
