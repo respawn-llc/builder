@@ -57,13 +57,12 @@ type RuntimeStatus struct {
 	ContextUsage                      RuntimeContextUsage
 	CompactionCount                   int
 	Goal                              *RuntimeGoal
-	WorkflowActive                    bool
 	WorkflowSession                   *WorkflowSessionStatus
 }
 
 type WorkflowSessionStatus struct {
 	TaskID     string
-	WorkflowID string
+	WorkflowID runtimeids.WorkflowID
 }
 
 type RunStatus string

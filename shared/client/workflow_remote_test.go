@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"golang.org/x/net/websocket"
 	"net/http/httptest"
@@ -39,7 +40,7 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 			handlerErr <- fmt.Errorf("workflow list method = %q", req.Method)
 			return
 		}
-		resp := serverapi.WorkflowListResponse{Workflows: []serverapi.WorkflowRecord{{ID: "workflow-1", Name: "Workflow"}}}
+		resp := serverapi.WorkflowListResponse{Workflows: []serverapi.WorkflowRecord{{ID: runtimeids.NewWorkflowID(), Name: "Workflow"}}}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, resp)); err != nil {
 			handlerErr <- fmt.Errorf("send workflow list response: %w", err)
 			return
@@ -61,7 +62,7 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 		_ = remote.Close()
 		t.Fatalf("ListWorkflows: %v", err)
 	}
-	if len(resp.Workflows) != 1 || resp.Workflows[0].ID != "workflow-1" {
+	if len(resp.Workflows) != 1 || resp.Workflows[0].ID.IsZero() {
 		_ = remote.Close()
 		t.Fatalf("response = %+v", resp)
 	}
@@ -328,7 +329,7 @@ func TestRemoteWorkflowTaskCreateCarriesLabelIDs(t *testing.T) {
 			return
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorkflowTaskCreateResponse{
-			Task: serverapi.WorkflowTaskSummary{ID: "task-1"},
+			Task: serverapi.WorkflowTaskSummary{ID: "task-1", WorkflowID: runtimeids.NewWorkflowID()},
 		})); err != nil {
 			handlerErr <- fmt.Errorf("send workflow task create response: %w", err)
 			return
@@ -343,9 +344,10 @@ func TestRemoteWorkflowTaskCreateCarriesLabelIDs(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	created, err := remote.CreateWorkflowTask(context.Background(), serverapi.WorkflowTaskCreateRequest{
-		ProjectID: "project-1",
-		Title:     "Labeled task",
-		LabelIDs:  []string{labelID},
+		ProjectID:  "project-1",
+		WorkflowID: func() *runtimeids.WorkflowID { value := runtimeids.NewWorkflowID(); return &value }(),
+		Title:      "Labeled task",
+		LabelIDs:   []string{labelID},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
@@ -371,7 +373,7 @@ func expectWorkflowRemoteMethod(ws *websocket.Conn, req *protocol.Request, metho
 func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	projectID := "project-1"
-	workflowID := "workflow-1"
+	workflowID := runtimeids.NewWorkflowID()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
 		var req protocol.Request
@@ -589,15 +591,13 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 }
 
 func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
-	detailJSON := `{"code":"restart","fields":{}}`
 	return &serverapi.WorkflowAttentionItem{
 		ProjectID:   "project-1",
 		Kind:        "interrupted_current_node",
 		TaskID:      taskID,
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
-		WorkflowID:  "workflow-1",
-		DetailJSON:  &detailJSON,
+		WorkflowID:  runtimeids.NewWorkflowID(),
 		CurrentNode: &serverapi.WorkflowTaskCurrentNode{NodeID: "review"},
 	}
 }
@@ -609,7 +609,7 @@ func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
 		TaskID:      "task-requested",
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
-		WorkflowID:  "workflow-1",
+		WorkflowID:  runtimeids.NewWorkflowID(),
 		ApprovalID:  workflowRemoteString("approval-1"),
 		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
 			SourceNodeDisplayName: "Review",

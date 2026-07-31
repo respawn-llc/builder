@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/runtimeids"
+
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -442,16 +444,19 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
 	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
+	workflowID := workflowTestID(t, "1")
+	otherWorkflowID := workflowTestID(t, "2")
 
-	execSeed(t, store.db, "node groups", workflowSchemaNodeGroupsSQL, now, now)
+	execSeed(t, store.db, "other workflow", `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES (?, 'Other', 1, ?, ?)`, otherWorkflowID, now, now)
+	execSeed(t, store.db, "node groups", `INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name) VALUES ('group-workflow-1', ?, 'impl', 'Implementation'), ('group-other', ?, 'impl', 'Implementation')`, workflowID, otherWorkflowID)
 
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', 'workflow-1', 'second_start', 'start', 'Second Start', '[]')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', 'workflow-1', 'bad', 'robot', 'Bad', '[]')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', 'workflow-1', 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`)
-	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-valid', 'workflow-1', 'script_valid', 'script', 'Script Valid', '[]', 'scripts/complete')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', 'workflow-1', 'script_blank', 'script', 'Script Blank', '[]', '   ')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', 'workflow-1', 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', 'workflow-1', 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', ?, 'second_start', 'start', 'Second Start', '[]')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', ?, 'bad', 'robot', 'Bad', '[]')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', ?, 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`, workflowID)
+	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-valid', ?, 'script_valid', 'script', 'Script Valid', '[]', 'scripts/complete')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', ?, 'script_blank', 'script', 'Script Blank', '[]', '   ')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', ?, 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', ?, 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`, workflowID)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-empty-key', 'group-start', 'bad_context_empty', 'node-agent', 0, 'continue_session', 'selected_node', '', '{}', '{}')`)
@@ -612,6 +617,7 @@ func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	workflowID := workflowTestID(t, "1")
 	worktreeRoot := t.TempDir()
 	execSeed(t, store.db, "task target worktree", `INSERT INTO worktrees (
     id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
@@ -641,16 +647,16 @@ func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
 	}
 
 	var policy string
-	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = 'workflow-1'`).Scan(&policy); err != nil {
+	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = ?`, workflowID).Scan(&policy); err != nil {
 		t.Fatalf("read default workflow target policy: %v", err)
 	}
 	if policy != "ask_on_first_execution" {
 		t.Fatalf("workflow target policy = %q, want ask_on_first_execution", policy)
 	}
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'unknown' WHERE id = 'workflow-1'`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'head', execution_target_custom_ref = 'refs/heads/main' WHERE id = 'workflow-1'`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = ' ' WHERE id = 'workflow-1'`)
-	if _, err := store.db.Exec(`UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = NULL WHERE id = 'workflow-1'`); err != nil {
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'unknown' WHERE id = ?`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'head', execution_target_custom_ref = 'refs/heads/main' WHERE id = ?`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = ' ' WHERE id = ?`, workflowID)
+	if _, err := store.db.Exec(`UPDATE workflows SET execution_target_policy = 'custom_ref', execution_target_custom_ref = NULL WHERE id = ?`, workflowID); err != nil {
 		t.Fatalf("incomplete custom-ref workflow draft should persist: %v", err)
 	}
 
@@ -928,7 +934,7 @@ func seedWorkflowGraph(t *testing.T, db *sql.DB, projectID string, now int64) {
 
 func seedWorkflowGraphForProject(t *testing.T, db *sql.DB, projectID string, now int64, suffix string) {
 	t.Helper()
-	workflowID := "workflow-" + suffix
+	workflowID := workflowSeedID(t, db, suffix)
 	startID := "node-start-" + suffix
 	agentID := "node-agent-" + suffix
 	doneID := "node-done-" + suffix
@@ -952,6 +958,56 @@ VALUES (?, ?, 'start', 'Start'),
 	execSeed(t, db, "project workflow link", `INSERT INTO project_workflow_links (id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms)
 VALUES (?, ?, ?, ?, ?)`, linkID, projectID, workflowID, now, now)
 	execSeed(t, db, "project default workflow link", `UPDATE projects SET default_project_workflow_link_id = ? WHERE id = ?`, linkID, projectID)
+}
+
+func workflowSeedID(t *testing.T, db *sql.DB, suffix string) any {
+	t.Helper()
+	workflowID := workflowTestID(t, suffix)
+	rows, err := db.Query(`PRAGMA table_info(workflows)`)
+	if err != nil {
+		t.Fatalf("inspect workflow identity storage: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var sequence, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&sequence, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan workflow identity storage: %v", err)
+		}
+		if name != "id" {
+			continue
+		}
+		switch columnType {
+		case "TEXT":
+			return "workflow-" + workflowID.String()
+		case "BLOB":
+			return workflowID
+		default:
+			t.Fatalf("workflows.id storage type = %q, want TEXT or BLOB", columnType)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate workflow identity storage: %v", err)
+	}
+	t.Fatal("workflows.id schema column is missing")
+	return nil
+}
+
+func workflowTestID(t *testing.T, suffix string) runtimeids.WorkflowID {
+	t.Helper()
+	raw, found := map[string]string{
+		"1": "550e8400-e29b-41d4-a716-446655440001",
+		"2": "550e8400-e29b-41d4-a716-446655440002",
+	}[suffix]
+	if !found {
+		t.Fatalf("unknown workflow fixture suffix %q", suffix)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse workflow fixture ID %q: %v", raw, err)
+	}
+	return workflowID
 }
 
 func execSeed(t *testing.T, db *sql.DB, label string, statement string, args ...any) {

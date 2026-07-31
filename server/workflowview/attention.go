@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -283,7 +284,7 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 		snapshots, err = a.authority.CurrentWorkflowTaskExecutionSnapshots()
 	} else {
 		snapshots, err = a.authority.CurrentScopedTaskExecutionSnapshots(
-			selectedTask.ProjectID, workflow.WorkflowID(selectedTask.WorkflowID), []workflow.TaskID{workflow.TaskID(selectedTask.ID)},
+			selectedTask.ProjectID, runtimeids.WorkflowID(selectedTask.WorkflowID), []workflow.TaskID{workflow.TaskID(selectedTask.ID)},
 		)
 	}
 	if err != nil {

@@ -101,8 +101,7 @@ type TaskInstructions struct {
 	TaskShortID     string
 	TaskTitle       string
 	TaskBody        string
-	WorkflowID      string
-	WorkflowShortID string
+	WorkflowID      runtimeids.WorkflowID
 	WorkflowName    string
 	NodeKey         string
 	NodeDisplayName string

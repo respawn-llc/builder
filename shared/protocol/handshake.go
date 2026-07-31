@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -878,7 +879,7 @@ const (
 
 type WorkflowProjectEvent struct {
 	ProjectID        *string                      `json:"project_id,omitempty"`
-	WorkflowID       *string                      `json:"workflow_id,omitempty"`
+	WorkflowID       *runtimeids.WorkflowID       `json:"workflow_id,omitempty"`
 	Resource         WorkflowProjectEventResource `json:"resource"`
 	Action           WorkflowProjectEventAction   `json:"action"`
 	PrimaryEntityID  string                       `json:"primary_entity_id"`

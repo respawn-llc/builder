@@ -749,11 +749,10 @@ func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (str
 	if err != nil {
 		return "", err
 	}
-	workflowShortID := ""
-	if e.cfg.CurrentNodeExecution != nil {
-		workflowShortID = e.cfg.CurrentNodeExecution.Instructions.WorkflowShortID
+	if e.cfg.CurrentNodeExecution == nil {
+		return "", errors.New("workflow completion instructions require active Current Node execution")
 	}
-	return workflowCompletionInstructionsFragment(mode, workflowShortID, e.cfg.CurrentNodeExecution.Contract)
+	return workflowCompletionInstructionsFragment(mode, e.cfg.CurrentNodeExecution.Instructions.WorkflowID, e.cfg.CurrentNodeExecution.Contract)
 }
 
 func customToolCallIDs(calls []llm.ToolCall) map[string]bool {

@@ -125,10 +125,8 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	status.PreviousSessionID = textutil.Pointer(update.PreviousSessionID)
 	status.ParentAgentSessionID = textutil.Pointer(update.ParentAgentSessionID)
 	status.NavigationTargetSessionID = textutil.Pointer(update.NavigationTargetSessionID)
-	status.WorkflowActive = false
 	status.WorkflowSession = nil
 	if update.Workflow != nil {
-		status.WorkflowActive = update.Workflow.Active
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
 			TaskID:     update.Workflow.TaskID,
 			WorkflowID: update.Workflow.WorkflowID,

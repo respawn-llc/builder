@@ -344,10 +344,14 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if err != nil {
 		return CurrentNodeStartContext{}, fmt.Errorf("resolve entering source node for current node %v: %w", currentNode.Reference, err)
 	}
+	nodeRecord, err := nodeRecordFromCurrentDefinition(node)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
 	return CurrentNodeStartContext{
 		Task:            task,
 		Workflow:        workflowRecord,
-		Node:            nodeRecordFromCurrentDefinition(node),
+		Node:            nodeRecord,
 		CurrentNode:     currentNode,
 		EnteringEdge:    enteringEdge,
 		ContextMode:     effectiveContextMode,
@@ -430,14 +434,18 @@ func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parame
 	return out
 }
 
-func nodeRecordFromCurrentDefinition(node workflow.Node) NodeRecord {
+func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
+	workflowID := workflow.NodeWorkflowID(node)
+	if workflowID == nil || workflowID.IsZero() {
+		return NodeRecord{}, errors.New("current definition node workflow id is required")
+	}
 	scriptPath := ""
 	if path := workflow.NodeScriptPath(node); path.IsPresent() {
 		scriptPath = path.String()
 	}
 	return NodeRecord{
 		ID:                 workflow.NodeIDOf(node),
-		WorkflowID:         workflow.NodeWorkflowID(node),
+		WorkflowID:         *workflowID,
 		Key:                workflow.NodeKey(node),
 		Kind:               node.Kind(),
 		DisplayName:        workflow.NodeDisplayName(node),
@@ -449,7 +457,7 @@ func nodeRecordFromCurrentDefinition(node workflow.Node) NodeRecord {
 		InputFields:        workflow.NodeInputFields(node),
 		JoinInputProviders: workflow.NodeJoinInputProviders(node),
 		OutputFields:       workflow.NodeOutputFields(node),
-	}
+	}, nil
 }
 
 func latestTaskSessionForNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {

@@ -721,7 +721,7 @@ func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 	if first.PrimaryWorkspace.WorkspaceID != created.Binding.WorkspaceID || !first.PrimaryWorkspace.IsPrimary {
 		t.Fatalf("primary workspace = %+v, want %q", first.PrimaryWorkspace, created.Binding.WorkspaceID)
 	}
-	if first.DefaultWorkflowID != string(workflow.ID) || first.DefaultWorkflowName != "Default Board" || !first.DefaultWorkflowValid {
+	if first.DefaultWorkflowID == nil || *first.DefaultWorkflowID != workflow.ID || first.DefaultWorkflowName != "Default Board" || !first.DefaultWorkflowValid {
 		t.Fatalf("default workflow = %+v, want linked workflow %s", first, workflow.ID)
 	}
 	if first.WorkflowCount != 1 {
@@ -745,7 +745,7 @@ func TestMetadataServiceListsProjectHomeForGUI(t *testing.T) {
 	if second.ProjectID != binding.ProjectID {
 		t.Fatalf("second project = %+v, want initial project %s", second, binding.ProjectID)
 	}
-	if second.DefaultWorkflowValid || second.DefaultWorkflowID != "" || second.DefaultWorkflowName != "" {
+	if second.DefaultWorkflowValid || second.DefaultWorkflowID != nil || second.DefaultWorkflowName != "" {
 		t.Fatalf("empty default workflow = %+v, want invalid empty default workflow", second)
 	}
 	if _, err := svc.ListProjectHome(context.Background(), serverapi.ProjectHomeListRequest{PageToken: "bad"}); err == nil {

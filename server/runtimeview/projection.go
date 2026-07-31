@@ -85,19 +85,20 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 		CompactionCount: engine.CompactionCount(),
 		Goal:            GoalFromSessionState(engine.Goal(), engine.GoalLoopSuspended()),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
-		status.WorkflowActive = engine.CurrentNodeExecutionConfigured() && !engine.WorkflowTerminalState().Completed
+	if workflowState, err := engine.WorkflowSessionState(); err != nil {
+		return clientui.RuntimeStatus{}, err
+	} else if workflowState != nil && !engine.WorkflowTerminalState().Completed {
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
-			TaskID:     workflowState.TaskID,
+			TaskID:     string(workflowState.TaskID),
 			WorkflowID: workflowState.WorkflowID,
 		}
 	}
 	return status, nil
 }
 
-func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionStatus {
+func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.TranscriptSessionStatus, error) {
 	if engine == nil {
-		return clientui.TranscriptSessionStatus{}
+		return clientui.TranscriptSessionStatus{}, nil
 	}
 	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:         engine.ReviewerFrequency(),
@@ -112,14 +113,17 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 		ParentAgentSessionID:      engine.ParentAgentSessionID(),
 		NavigationTargetSessionID: engine.NavigationTargetSessionID(),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.TaskID != "" {
+	workflowState, err := engine.WorkflowSessionState()
+	if err != nil {
+		return clientui.TranscriptSessionStatus{}, err
+	}
+	if workflowState != nil && !engine.WorkflowTerminalState().Completed {
 		status.Workflow = &clientui.TranscriptWorkflowSession{
-			Active:     engine.CurrentNodeExecutionConfigured() && !engine.WorkflowTerminalState().Completed,
-			TaskID:     workflowState.TaskID,
+			TaskID:     string(workflowState.TaskID),
 			WorkflowID: workflowState.WorkflowID,
 		}
 	}
-	return status
+	return status, nil
 }
 
 func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.RuntimeGoal {

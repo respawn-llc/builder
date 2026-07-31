@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	testharness "core/internal/testharness/testsetup"
 	"core/server/attentionnotify"
 	"core/server/runtime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -133,10 +135,11 @@ func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAtten
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
 	target := clientui.AttentionNotificationTarget{
-		Kind:      clientui.AttentionNotificationTargetWorkflowTask,
-		ProjectID: "project-1",
-		TaskID:    "task-1",
-		SessionID: "session-1",
+		Kind:       clientui.AttentionNotificationTargetWorkflowTask,
+		ProjectID:  "project-1",
+		WorkflowID: registryTestWorkflowID(),
+		TaskID:     "task-1",
+		SessionID:  "session-1",
 		Focus: &clientui.AttentionNotificationTaskDetailFocus{
 			Kind:   clientui.AttentionNotificationFocusQuestion,
 			AskIDs: []string{"approval-1"},
@@ -318,6 +321,11 @@ func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEve
 	return event.ID != nil && *event.ID == id
 }
 
+func registryTestWorkflowID() *runtimeids.WorkflowID {
+	workflowID := testharness.WorkflowIDValue("registry-workflow-task")
+	return &workflowID
+}
+
 func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
 	currentNodeID := "node-1"
 	return askquestion.AskQuestionRequest{
@@ -336,6 +344,7 @@ func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
 		},
 		AttentionTarget: &clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			WorkflowID:    registryTestWorkflowID(),
 			TaskID:        "task-1",
 			SessionID:     "session-1",
 			CurrentNodeID: &currentNodeID,

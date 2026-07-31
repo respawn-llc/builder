@@ -9,13 +9,14 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type ApprovalAttentionProjection struct {
 	ApprovalID       workflow.ApprovalID
 	Source           workflow.CurrentNodeReference
 	ProjectID        string
-	WorkflowID       string
+	WorkflowID       runtimeids.WorkflowID
 	TaskShortID      string
 	TaskTitle        string
 	SessionID        string
@@ -25,7 +26,7 @@ type ApprovalAttentionProjection struct {
 type InterruptedCurrentNodeAttentionProjection struct {
 	CurrentNode            workflow.CurrentNodeReference
 	ProjectID              string
-	WorkflowID             string
+	WorkflowID             runtimeids.WorkflowID
 	TaskShortID            string
 	TaskTitle              string
 	SessionID              string
@@ -169,8 +170,8 @@ func taskApprovalAttentionResolution(ctx context.Context, q *sqlitegen.Queries, 
 	return resolution, nil
 }
 
-func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (TaskAttentionResolution, error) {
-	taskIDs, err := q.ListWorkflowTaskIDs(ctx, string(workflowID))
+func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (TaskAttentionResolution, error) {
+	taskIDs, err := q.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}

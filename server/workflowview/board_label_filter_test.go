@@ -125,7 +125,7 @@ func TestCurrentNodeBoardLabelExclusionsFilterCountsAndCards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			board, err := fixture.board.Get(fixture.ctx, serverapi.WorkflowBoardRequest{
 				ProjectID:   fixture.binding.ProjectID,
-				WorkflowID:  stringPointer(string(fixture.workflowID)),
+				WorkflowID:  &fixture.workflowID,
 				LabelFilter: tt.filter,
 			})
 			if err != nil {
@@ -137,7 +137,7 @@ func TestCurrentNodeBoardLabelExclusionsFilterCountsAndCards(t *testing.T) {
 			}
 			page, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 				ProjectID:   fixture.binding.ProjectID,
-				WorkflowID:  string(fixture.workflowID),
+				WorkflowID:  fixture.workflowID,
 				NodeID:      string(fixture.agentNodeID),
 				LabelFilter: tt.filter,
 			})

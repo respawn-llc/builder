@@ -1,17 +1,17 @@
 Usage of kent workflow:
   kent workflow create [--description <text>] [--json] <name>
-  kent workflow delete <workflow> [--confirm] [--json]
-  kent workflow update <workflow> [--name <name>] [--description <text>] [--execution-target ask-on-first-execution|none|head|default-branch|ref:<revision>] [--json]
-  kent workflow list [--project <path-or-id>] [--offset <n>] [--limit <n>] [--json]
-  kent workflow node add <workflow> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
-  kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
-  kent workflow edge add <workflow> --from <source-node-key> --transition <transition-key> --edge-key <edge-key> --to <target-node-key> --context new_session|continue_session|compact_and_continue_session [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
-  kent workflow edge update <workflow> <edge-id> [--transition <transition-key>] [--transition-display-name <name>] [--transition-description <text>] [--edge-key <edge-key>] [--to <target-node-key>] [--context new_session|continue_session|compact_and_continue_session] [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--param <key>=<description> ...] [--clear-params] [--json]
-  kent workflow link <project> <workflow> [--default] [--json]
-  kent workflow unlink <project> <workflow> [--json]
-  kent workflow default <project> <workflow> [--json]
-  kent workflow validate <workflow> [--mode draft|task_creation|execution] [--json]
-  kent workflow inspect <workflow> [--summary] [--json]
+  kent workflow delete <uuid> [--confirm] [--json]
+  kent workflow update <uuid> [--name <name>] [--description <text>] [--execution-target ask-on-first-execution|none|head|default-branch|ref:<revision>] [--json]
+  kent workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]
+  kent workflow node add <uuid> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
+  kent workflow node update <uuid> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
+  kent workflow edge add <uuid> --from <source-node-key> --transition <transition-key> --edge-key <edge-key> --to <target-node-key> --context new_session|continue_session|compact_and_continue_session [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
+  kent workflow edge update <uuid> <edge-id> [--transition <transition-key>] [--transition-display-name <name>] [--transition-description <text>] [--edge-key <edge-key>] [--to <target-node-key>] [--context new_session|continue_session|compact_and_continue_session] [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--param <key>=<description> ...] [--clear-params] [--json]
+  kent workflow link <project> <uuid> [--default] [--json]
+  kent workflow unlink <project> <uuid> [--json]
+  kent workflow default <project> <uuid> [--json]
+  kent workflow validate <uuid> [--mode draft|task_creation|execution] [--json]
+  kent workflow inspect <uuid> [--summary] [--json]
 
 Create reusable task workflows and link them to projects.
 
@@ -25,8 +25,7 @@ Typical setup:
   4. Link it to a project.
   5. Create and start tasks with `kent task`.
 
-Workflow references accept only a bare canonical workflow UUID. Workflow names and
-persisted `workflow-...` IDs are not selectors.
+Workflow references accept only a bare canonical UUIDv4.
 Project filters accept a project path or project ID. Project-filtered results show the
 default workflow first and include link metadata.
 Use `workflow inspect --summary` to read workflow metadata without loading its graph.

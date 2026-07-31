@@ -9,6 +9,7 @@ import { NewTaskWindowRoute } from "@/features/tasks";
 import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 import { taskDetailNativeDialogPath } from "./sidebarPopOut";
 import { useWindowChromeTitle } from "@/app-facade";
+import { workflowIDSchema } from "@/api";
 
 export const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
 export const workspaceUnlinkNativeDialogPath = "/native-dialog/workspace-unlink";
@@ -36,7 +37,7 @@ const taskDetailSearchSchema = z.object({
 
 const newTaskSearchSchema = z.object({
   projectID: optionalSearchString,
-  workflowID: optionalSearchString,
+  workflowID: workflowIDSchema,
 });
 
 const workspaceUnlinkSearchSchema = z.object({

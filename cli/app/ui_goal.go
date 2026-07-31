@@ -37,11 +37,11 @@ func (m *uiModel) workflowSessionActive() bool {
 	if m == nil || !m.hasRuntimeClient() {
 		return false
 	}
-	if direct := m.runtimeClient().Status(); direct.WorkflowActive || direct.WorkflowSession != nil {
+	if direct := m.runtimeClient().Status(); direct.WorkflowSession != nil {
 		return true
 	}
 	status := m.cachedRuntimeStatus()
-	return status.WorkflowActive || status.WorkflowSession != nil
+	return status.WorkflowSession != nil
 }
 
 func goalIsActive(goal *clientui.RuntimeGoal) bool {

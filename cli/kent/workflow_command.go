@@ -13,6 +13,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/workflowkey"
 
@@ -33,22 +34,22 @@ type workflowListOutput struct {
 
 // workflowNodeOutput is the machine-readable shape of `workflow node add/update --json`.
 type workflowNodeOutput struct {
-	WorkflowID string  `json:"workflow_id"`
-	NodeID     string  `json:"node_id"`
-	Key        string  `json:"key"`
-	Kind       string  `json:"kind,omitempty"`
-	ScriptPath *string `json:"script_path,omitempty"`
-	Version    int64   `json:"version"`
+	WorkflowID runtimeids.WorkflowID `json:"workflow_id"`
+	NodeID     string                `json:"node_id"`
+	Key        string                `json:"key"`
+	Kind       string                `json:"kind,omitempty"`
+	ScriptPath *string               `json:"script_path,omitempty"`
+	Version    int64                 `json:"version"`
 }
 
 // workflowEdgeOutput is the machine-readable shape of `workflow edge add/update --json`.
 type workflowEdgeOutput struct {
-	WorkflowID        string `json:"workflow_id"`
-	EdgeID            string `json:"edge_id"`
-	TransitionGroupID string `json:"transition_group_id"`
-	Key               string `json:"key,omitempty"`
-	TransitionID      string `json:"transition_id,omitempty"`
-	Version           int64  `json:"version"`
+	WorkflowID        runtimeids.WorkflowID `json:"workflow_id"`
+	EdgeID            string                `json:"edge_id"`
+	TransitionGroupID string                `json:"transition_group_id"`
+	Key               string                `json:"key,omitempty"`
+	TransitionID      string                `json:"transition_id,omitempty"`
+	Version           int64                 `json:"version"`
 }
 
 type workflowCommandRemote interface {
@@ -128,7 +129,7 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	description := fs.String("description", "", "replace the workflow description; pass an empty value to clear")
 	executionTargetRaw := fs.String("execution-target", "", "workflow execution target: ask-on-first-execution, "+executionTargetSelectorHelp)
 	jsonOut := fs.Bool("json", false, "write the updated workflow as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow update requires <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow update requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -359,7 +360,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	completionMode := fs.String("completion-mode", "", "agent completion contract: auto|structured_output|tool|shell_command|unstructured_output")
 	scriptPath := fs.String("script-path", "", "server-side executable for a script node")
 	jsonOut := fs.Bool("json", false, "write the added node as JSON")
-	workflowRef, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow node add requires <workflow>")
+	workflowRef, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow node add requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -377,7 +378,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	}
 	nodeID := "node-" + uuid.NewString()
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		workflowID := selector.PersistedID()
+		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		req := serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, PromptTemplate: *prompt, CompletionMode: *completionMode, ScriptPath: workflowScriptPathFlagValue(fs, "script-path", *scriptPath)}
@@ -387,7 +388,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.String(), NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", *kind, *key, nodeID)
 		return 0
@@ -404,7 +405,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	completionMode := fs.String("completion-mode", "", "replace the agent completion contract: auto|structured_output|tool|shell_command|unstructured_output")
 	scriptPath := fs.String("script-path", "", "replace the server-side executable; pass an empty value to clear")
 	jsonOut := fs.Bool("json", false, "write the updated node as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow node update requires <workflow> <node-key>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow node update requires <uuid> <node-key>")
 	if !ok {
 		return exitCode
 	}
@@ -467,7 +468,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector.String(), NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Updated node `%s`.\n", updated.Key)
 		return 0
@@ -519,7 +520,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	var params repeatedStringFlag
 	fs.Var(&params, "param", "required transition value as key=description; repeatable")
 	jsonOut := fs.Bool("json", false, "write the added branch as JSON")
-	workflowRef, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow edge add requires <workflow>")
+	workflowRef, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow edge add requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -612,7 +613,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.String(), EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Added edge `%s` (%s) on transition `%s`: `%s` → `%s` (%s).\n", *edgeKey, edgeID, *transitionID, *fromKey, *toKey, workflowEdgeContextDetail(*contextMode, *requiresApproval, parsedContextSource))
 		return 0
@@ -634,7 +635,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.Var(&params, "param", "required transition value as key=description; repeatable and replaces all existing values")
 	clearParams := fs.Bool("clear-params", false, "remove all transition parameters")
 	jsonOut := fs.Bool("json", false, "write the updated branch as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow edge update requires <workflow> <edge-id>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow edge update requires <uuid> <edge-id>")
 	if !ok {
 		return exitCode
 	}
@@ -744,7 +745,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector.String(), EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
 		}
 		fmt.Fprintf(stdout, "Updated edge `%s`: `%s` → `%s` (%s).\n", updatedEdge.Key, updatedGroup.TransitionID, workflowNodeKeyOrID(workflowNodeKeyByID(def), updatedEdge.TargetNodeID), workflowEdgeContextDetail(updatedEdge.ContextMode, updatedEdge.RequiresApproval, updatedEdge.ContextSource))
 		return 0
@@ -755,7 +756,7 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	fs := newCommandFlagSet(config.Command+" workflow link", stderr, workflowLinkUsage)
 	defaultLink := fs.Bool("default", false, "use this workflow when a project task omits --workflow")
 	jsonOut := fs.Bool("json", false, "write the project-workflow link as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow link requires <project> and <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow link requires <project> and <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -770,7 +771,7 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		workflowID := selector.PersistedID()
+		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		defaultPolicy := serverapi.WorkflowProjectLinkDefaultNever
@@ -806,7 +807,7 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 func workflowUnlinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow unlink", stderr, workflowUnlinkUsage)
 	jsonOut := fs.Bool("json", false, "write the unlink result and blockers as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow unlink requires <project> and <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow unlink requires <project> and <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -847,7 +848,7 @@ func workflowUnlinkSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 func workflowDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow default", stderr, workflowDefaultUsage)
 	jsonOut := fs.Bool("json", false, "write the updated project-workflow link as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow default requires <project> and <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 2, stderr, "workflow default requires <project> and <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -862,7 +863,7 @@ func workflowDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		workflowID := selector.PersistedID()
+		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		resp, err := remote.SetDefaultProjectWorkflowLink(ctx, serverapi.WorkflowSetDefaultProjectLinkRequest{ProjectID: projectID, WorkflowID: workflowID})
@@ -887,7 +888,7 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 	fs := newCommandFlagSet(config.Command+" workflow validate", stderr, workflowValidateUsage)
 	mode := fs.String("mode", string(serverapi.WorkflowValidationModeExecution), "validation context: draft|task_creation|execution")
 	jsonOut := fs.Bool("json", false, "write validation diagnostics as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow validate requires <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow validate requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -897,7 +898,7 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		workflowID := selector.PersistedID()
+		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		resp, err := remote.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{WorkflowID: workflowID, Mode: serverapi.WorkflowValidationMode(*mode)})
@@ -964,7 +965,7 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	fs := newCommandFlagSet(config.Command+" workflow inspect", stderr, workflowInspectUsage)
 	jsonOut := fs.Bool("json", false, "write the complete workflow definition as JSON")
 	summary := fs.Bool("summary", false, "write workflow metadata without loading the graph")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow inspect requires <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow inspect requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -975,8 +976,8 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		if *summary {
-			persistedWorkflowID := selector.PersistedID()
 			limit := 1
+			persistedWorkflowID := selector
 			response, listErr := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{
 				Limit:      &limit,
 				WorkflowID: &persistedWorkflowID,
@@ -1002,7 +1003,7 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 				fmt.Fprintf(stderr, "workflow %s not found\n", selector.String())
 				return 1
 			}
-			if len(workflows) != 1 || workflows[0].ID != selector.String() {
+			if len(workflows) != 1 || workflows[0].ID != selector {
 				fmt.Fprintln(stderr, "workflow summary response does not match the requested workflow")
 				return 1
 			}
@@ -1269,18 +1270,18 @@ func canonicalAPIContextSource(source serverapi.WorkflowContextSource) serverapi
 	return source
 }
 
-func resolveWorkflowDefinition(ctx context.Context, remote workflowCommandRemote, selector workflowSelector) (serverapi.WorkflowDefinition, error) {
+func resolveWorkflowDefinition(ctx context.Context, remote workflowCommandRemote, selector runtimeids.WorkflowID) (serverapi.WorkflowDefinition, error) {
 	getCtx, getCancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer getCancel()
-	resp, err := remote.GetWorkflow(getCtx, serverapi.WorkflowGetRequest{WorkflowID: selector.PersistedID()})
+	resp, err := remote.GetWorkflow(getCtx, serverapi.WorkflowGetRequest{WorkflowID: selector})
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, err
 	}
-	if resp.Definition.Workflow.ID != selector.PersistedID() {
+	if resp.Definition.Workflow.ID != selector {
 		return serverapi.WorkflowDefinition{}, fmt.Errorf(
 			"workflow response identity %q does not match requested workflow %q",
 			resp.Definition.Workflow.ID,
-			selector.PersistedID(),
+			selector.String(),
 		)
 	}
 	return resp.Definition, nil
@@ -1396,12 +1397,12 @@ func resolveWorkflowSourceWorkspaceID(ctx context.Context, cfg config.App, remot
 	return trimmed, nil
 }
 
-func resolveWorkflowProjectLink(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, selector workflowSelector) (serverapi.ProjectWorkflowLink, error) {
+func resolveWorkflowProjectLink(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, selector runtimeids.WorkflowID) (serverapi.ProjectWorkflowLink, error) {
 	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
 	if err != nil {
 		return serverapi.ProjectWorkflowLink{}, err
 	}
-	workflowID := selector.PersistedID()
+	workflowID := selector
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.ListProjectWorkflowLinks(rpcCtx, serverapi.WorkflowListProjectLinksRequest{ProjectID: projectID})

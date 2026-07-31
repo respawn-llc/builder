@@ -48,7 +48,7 @@ describe("attention notification API", () => {
           target: {
             kind: "workflow_task",
             project_id: "project-1",
-            workflow_id: "workflow-1",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             task_short_id: "KT-1",
             task_title: "Needs answer",
@@ -95,6 +95,35 @@ describe("attention notification API", () => {
         sequence: 3,
         source: "live",
         pending: {
+          id: { kind: "question", uuid: "prefixed" },
+          kind: "question",
+          occurred_at: "2026-06-29T12:00:00Z",
+          revision: 1,
+          question: {
+            prepared_ask_ids: ["ask-1"],
+            materialized_ask_ids: ["ask-1"],
+            current_unresolved_ask_ids: ["ask-1"],
+            skipped_ask_ids: [],
+            display_count: 1,
+            materialized_count: 1,
+          },
+          target: {
+            kind: "workflow_task",
+            workflow_id: "workflow-11111111-1111-4111-8111-111111111111",
+            task_id: "task-1",
+            focus: { kind: "question", ask_ids: ["ask-1"] },
+          },
+        },
+      },
+    });
+    expect(errors[1]).toBeInstanceOf(ContractError);
+
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 4,
+        source: "live",
+        pending: {
           id: { kind: "question", uuid: "future" },
           kind: "future_attention",
           occurred_at: "2026-06-29T12:00:00Z",
@@ -105,8 +134,8 @@ describe("attention notification API", () => {
     });
 
     expect(events).toHaveLength(1);
-    expect(errors).toHaveLength(2);
-    expect(errors[1]).toBeInstanceOf(ContractError);
+    expect(errors).toHaveLength(3);
+    expect(errors[2]).toBeInstanceOf(ContractError);
   });
 
   it("parses generic and Workflow Approvals as distinct payloads", () => {
@@ -157,6 +186,7 @@ describe("attention notification API", () => {
           workflow_approval: { approval_id: "approval-1" },
           target: {
             kind: "workflow_task",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             focus: { kind: "approval", approval_id: "approval-1" },
           },
@@ -213,6 +243,7 @@ describe("attention notification API", () => {
           },
           target: {
             kind: "workflow_task",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             current_node_id: "node-1",
             focus: { kind: "interrupted_current_node" },
