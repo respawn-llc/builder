@@ -96,9 +96,9 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	return status, nil
 }
 
-func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionStatus {
+func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.TranscriptSessionStatus, error) {
 	if engine == nil {
-		return clientui.TranscriptSessionStatus{}
+		return clientui.TranscriptSessionStatus{}, nil
 	}
 	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:         engine.ReviewerFrequency(),
@@ -113,13 +113,17 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.Transcr
 		ParentAgentSessionID:      engine.ParentAgentSessionID(),
 		NavigationTargetSessionID: engine.NavigationTargetSessionID(),
 	}
-	if workflowState, err := engine.WorkflowSessionState(); err == nil && workflowState != nil && !engine.WorkflowTerminalState().Completed {
+	workflowState, err := engine.WorkflowSessionState()
+	if err != nil {
+		return clientui.TranscriptSessionStatus{}, err
+	}
+	if workflowState != nil && !engine.WorkflowTerminalState().Completed {
 		status.Workflow = &clientui.TranscriptWorkflowSession{
 			TaskID:     string(workflowState.TaskID),
 			WorkflowID: workflowState.WorkflowID,
 		}
 	}
-	return status
+	return status, nil
 }
 
 func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.RuntimeGoal {

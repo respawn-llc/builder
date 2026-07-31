@@ -400,9 +400,9 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) {
 	r.PublishRuntimeReadModelUpdate(id, update)
 }
 
-func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) {
+func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) error {
 	if r == nil {
-		return
+		return nil
 	}
 	r.authorityMu.RLock()
 	authorityEntries := make([]*authorityRuntimeEntry, 0, len(r.authorityBySession))
@@ -411,33 +411,40 @@ func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) {
 	}
 	r.authorityMu.RUnlock()
 	for _, entry := range authorityEntries {
-		r.publishRuntimeEvent(entry, evt)
+		if err := r.publishRuntimeEvent(entry, evt); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionResourceRef, evt runtime.Event) {
+func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionResourceRef, evt runtime.Event) error {
 	if r == nil {
-		return
+		return nil
 	}
 	entry := r.authorityEntryByRef(ref)
 	if entry == nil {
-		return
+		return nil
 	}
-	r.publishRuntimeEvent(entry, evt)
+	return r.publishRuntimeEvent(entry, evt)
 }
 
-func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) {
+func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
 		entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
 	}
 	if runtimeEventShouldPublishSessionStatus(evt) {
-		status := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		if err != nil {
+			return err
+		}
 		entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
 			Kind:    clientui.TranscriptMessageSessionStatus,
 			Payload: clientui.TranscriptPayload{SessionStatus: &status},
 		}})
 	}
 	r.recordQueuedMessageOperationStatus(evt)
+	return nil
 }
 
 func (r *RuntimeRegistry) PublishSessionIdentity(
@@ -469,19 +476,23 @@ func (r *RuntimeRegistry) PublishSessionIdentity(
 	return nil
 }
 
-func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) {
+func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if r == nil {
-		return
+		return nil
 	}
 	entry := r.authorityEntryBySession(sessionID)
 	if entry == nil {
-		return
+		return nil
 	}
-	status := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+	status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+	if err != nil {
+		return err
+	}
 	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
 		Kind:    clientui.TranscriptMessageSessionStatus,
 		Payload: clientui.TranscriptPayload{SessionStatus: &status},
 	}})
+	return nil
 }
 
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, bool) {
@@ -601,7 +612,10 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authori
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
 		var subscribeErr error
 		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
-		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		hydration.SessionStatus, subscribeErr = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		if subscribeErr != nil {
+			return subscribeErr
+		}
 		hydration.SessionIdentity, subscribeErr =
 			runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if subscribeErr != nil {
