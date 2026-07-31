@@ -671,7 +671,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		}
 		return noticeStyleRoleForMode(row, mode), text
 	}
-	if text, ok := worktreeNoticeText(row); ok {
+	if text, ok := worktreeNoticeText(row, mode); ok {
 		return noticeStyleRole(row), text
 	}
 	cacheWarningText := cacheWarningNoticeText(row.CacheWarning)
@@ -700,10 +700,13 @@ func compactionNoticeText(count *int) string {
 	return fmt.Sprintf("Context compacted for the %s time.", textutil.Ordinal(*count))
 }
 
-func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
+func worktreeNoticeText(row *clientui.TranscriptNoticeRow, mode Mode) (string, bool) {
 	context := row.Worktree
 	if context == nil {
 		return "", false
+	}
+	if mode == ModeDetailExpanded && row.Diagnostic != nil {
+		return row.Diagnostic.Detail, true
 	}
 	effectiveCWD := strings.TrimSpace(context.EffectiveCwd)
 	if effectiveCWD == "" {
@@ -792,8 +795,9 @@ func isExpandedCompactionNotice(row *clientui.TranscriptNoticeRow) bool {
 		return false
 	}
 	switch *row.MessageType {
-	case clientui.TranscriptMessageCompactionSummary,
-		clientui.TranscriptMessageCompactionSoonReminder:
+	case clientui.TranscriptMessageCompactionSummary:
+		return row.Compaction != nil && row.Compaction.Detail != nil
+	case clientui.TranscriptMessageCompactionSoonReminder:
 		return true
 	default:
 		return false
