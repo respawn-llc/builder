@@ -23,7 +23,6 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*ProjectHomeSummary){
 		"project ID":             func(summary *ProjectHomeSummary) { summary.ProjectID = "" },
-		"project key":            func(summary *ProjectHomeSummary) { summary.ProjectKey = " " },
 		"project name":           func(summary *ProjectHomeSummary) { summary.DisplayName = "" },
 		"workspace ID":           func(summary *ProjectHomeSummary) { summary.PrimaryWorkspace.WorkspaceID = "" },
 		"workspace name":         func(summary *ProjectHomeSummary) { summary.PrimaryWorkspace.DisplayName = "" },
@@ -37,6 +36,14 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 				t.Fatal("malformed summary accepted")
 			}
 		})
+	}
+}
+
+func TestProjectHomeSummaryValidateAllowsLegacyEmptyProjectKey(t *testing.T) {
+	summary := validProjectHomeSummaryForResponseTest()
+	summary.ProjectKey = ""
+	if err := summary.Validate(); err != nil {
+		t.Fatalf("legacy empty project key rejected: %v", err)
 	}
 }
 

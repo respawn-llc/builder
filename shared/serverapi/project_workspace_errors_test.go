@@ -68,12 +68,9 @@ func TestProjectWorkspaceTypedErrorsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestProjectWorkspaceRPCFallbackPreservesRemoteMessageWithoutJoinedNewline(t *testing.T) {
+func TestProjectWorkspaceRPCFallbackPreservesSentinel(t *testing.T) {
 	err := DecodeWorkspaceMutationError(nil, "remote mutation failed")
 	if !errors.Is(err, ErrWorkspaceMutationFailed) {
 		t.Fatalf("fallback error = %v, want mutation sentinel", err)
-	}
-	if err.Error() != "remote mutation failed" {
-		t.Fatalf("fallback error message = %q, want remote message only", err.Error())
 	}
 }

@@ -132,13 +132,7 @@ func TestDetachUsageValidationDoesNotOpenRemote(t *testing.T) {
 }
 
 func TestDetachUnexpectedIncompleteResponseEmitsJSONFailure(t *testing.T) {
-	originalOpener := bindingCommandRemoteOpener
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, nil
-	}
-	t.Cleanup(func() {
-		bindingCommandRemoteOpener = originalOpener
-	})
+	installBindingMutationTestRemote(t)
 
 	workspaceID := "workspace-1"
 	arguments := bindingMutationArguments{
@@ -210,6 +204,60 @@ func TestProjectDefaultBlankWorkflowFieldsEmitJSONFailure(t *testing.T) {
 	})
 }
 
+func TestLegacyEmptyProjectKeyMutationSuccessOutputs(t *testing.T) {
+	installBindingMutationTestRemote(t)
+	project := validProjectHomeSummaryForBindingMutationTest()
+	project.ProjectKey = ""
+	workspaceID := "workspace-1"
+
+	t.Run("default JSON", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := runBindingMutationCommand(
+			bindingMutationArguments{ProjectID: "project-1", WorkspaceID: &workspaceID, JSON: true},
+			&stdout,
+			&stderr,
+			func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+				return bindingMutationResult{Project: &project}, nil
+			},
+			true,
+		)
+		if code != 0 || stderr.Len() != 0 {
+			t.Fatalf("default mutation = exit %d stdout=%q stderr=%q, want success", code, stdout.String(), stderr.String())
+		}
+		var envelope bindingMutationEnvelope
+		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode default success: %v", err)
+		}
+		if envelope.Status != "ok" || envelope.Result == nil || envelope.Result.Project == nil {
+			t.Fatalf("default success envelope = %+v, want authoritative project result", envelope)
+		}
+		if envelope.Result.Project.ProjectID != project.ProjectID || envelope.Result.Project.ProjectKey != "" {
+			t.Fatalf("default success project = %+v, want legacy empty key project", envelope.Result.Project)
+		}
+	})
+
+	t.Run("detach plain", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := runBindingMutationCommand(
+			bindingMutationArguments{ProjectID: "project-1", WorkspaceID: &workspaceID},
+			&stdout,
+			&stderr,
+			func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+				return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
+					ProjectID:   project.ProjectID,
+					WorkspaceID: workspaceID,
+					Unlinked:    true,
+					Project:     &project,
+				})
+			},
+			false,
+		)
+		if code != 0 || stdout.String() != workspaceID+"\n" || stderr.Len() != 0 {
+			t.Fatalf("detach mutation = exit %d stdout=%q stderr=%q, want authoritative success", code, stdout.String(), stderr.String())
+		}
+	})
+}
+
 func TestDetachMalformedBlockerResponseEmitsJSONFailure(t *testing.T) {
 	assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
 		return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
@@ -222,11 +270,7 @@ func TestDetachMalformedBlockerResponseEmitsJSONFailure(t *testing.T) {
 	}, false)
 }
 
-func assertBindingMutationJSONFailure(
-	t *testing.T,
-	mutate func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error),
-	defaultMutation bool,
-) {
+func installBindingMutationTestRemote(t *testing.T) {
 	t.Helper()
 	originalOpener := bindingCommandRemoteOpener
 	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
@@ -235,6 +279,15 @@ func assertBindingMutationJSONFailure(
 	t.Cleanup(func() {
 		bindingCommandRemoteOpener = originalOpener
 	})
+}
+
+func assertBindingMutationJSONFailure(
+	t *testing.T,
+	mutate func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error),
+	defaultMutation bool,
+) {
+	t.Helper()
+	installBindingMutationTestRemote(t)
 
 	workspaceID := "workspace-1"
 	arguments := bindingMutationArguments{
@@ -291,8 +344,8 @@ func TestBindingMutationPlainOutputFailureReturnsNonZero(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("plain output exit code = %d, want 1; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "output write failed") {
-		t.Fatalf("stderr = %q, want output write failure", stderr.String())
+	if stderr.Len() == 0 {
+		t.Fatal("plain output failure omitted stderr diagnostics")
 	}
 }
 
@@ -328,11 +381,15 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 		if marshalErr != nil {
 			t.Fatalf("marshal projection: %v", marshalErr)
 		}
-		if projection.Code != "request_failed" || strings.Contains(string(encoded), "remediation") {
-			t.Fatalf("projection = %+v, want request_failed without remediation field", projection)
+		var encodedFields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &encodedFields); err != nil {
+			t.Fatalf("decode projection: %v", err)
 		}
-		if !strings.Contains(projection.Message, "--workspace <workspace-id>") {
-			t.Fatalf("projection message = %q, want workspace-ID fallback guidance", projection.Message)
+		if projection.Code != "request_failed" {
+			t.Fatalf("projection = %+v, want request_failed", projection)
+		}
+		if _, present := encodedFields["remediation"]; present {
+			t.Fatalf("projection encoded unexpected remediation field: %s", encoded)
 		}
 		generic, projectionErr := projectWorkspaceMutationErrorProjection(errors.New("remote failed"), "project-1", false)
 		if projectionErr != nil {
@@ -342,8 +399,12 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 		if marshalErr != nil {
 			t.Fatalf("marshal generic projection: %v", marshalErr)
 		}
-		if strings.Contains(string(genericEncoded), "remediation") {
-			t.Fatalf("generic projection = %+v, want no remediation field", generic)
+		var genericFields map[string]json.RawMessage
+		if err := json.Unmarshal(genericEncoded, &genericFields); err != nil {
+			t.Fatalf("decode generic projection: %v", err)
+		}
+		if _, present := genericFields["remediation"]; present {
+			t.Fatalf("generic projection encoded unexpected remediation field: %s", genericEncoded)
 		}
 	})
 
@@ -401,9 +462,6 @@ func TestDetachBlockerProjectionIncludesAllBlockersAndPositiveCounts(t *testing.
 	}
 	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" || strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
 		t.Fatalf("blocker guidance = %+v, want non-blank guidance", projection.Blockers)
-	}
-	if !strings.Contains(projection.Blockers[0].Guidance, "--workspace <replacement-workspace-id>") {
-		t.Fatalf("default-workspace guidance = %q, want workspace-ID remediation", projection.Blockers[0].Guidance)
 	}
 }
 

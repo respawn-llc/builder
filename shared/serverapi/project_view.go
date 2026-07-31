@@ -187,7 +187,6 @@ type ProjectWorkspaceUnlinkBlocker struct {
 func (s ProjectHomeSummary) Validate() error {
 	for field, value := range map[string]string{
 		"project_id":               s.ProjectID,
-		"project_key":              s.ProjectKey,
 		"display_name":             s.DisplayName,
 		"primary_workspace_id":     s.PrimaryWorkspace.WorkspaceID,
 		"primary_workspace_name":   s.PrimaryWorkspace.DisplayName,
