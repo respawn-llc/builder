@@ -87,6 +87,7 @@ import {
   workspaceUnlinkResponseSchema,
 } from "./schemas/project";
 import { readinessSchema } from "./schemas/status";
+import { workflowIDSchema } from "./schemas/workflowID";
 import {
   attentionPageSchema,
   projectWorkflowLinksSchema,
@@ -284,7 +285,7 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.get",
       workflowDefinitionSchema,
-      await this.#transport.call("workflow.get", { workflow_id: workflowID }),
+      await this.#transport.call("workflow.get", { workflow_id: workflowIDSchema.parse(workflowID) }),
     );
   }
 
@@ -343,7 +344,7 @@ export class ApiClient implements ApiService {
         "workflow.linkProject",
         compactJsonObject({
           project_id: input.projectID,
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           default_policy: "if_project_has_none",
         }),
       ),
@@ -357,7 +358,7 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowID, mode }),
+      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
     );
   }
 
@@ -368,7 +369,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.scriptPath.validate",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           node_id: input.nodeID,
           script_path: input.scriptPath,
         }),
@@ -385,7 +386,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.graph.validateDraft",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           metadata: workflowGraphMetadataPayload(input.metadata),
           graph: workflowGraphDraftPayload(input.graph),
           modes: input.modes,
@@ -401,7 +402,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.graph.deriveWiring",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           graph: workflowGraphDraftPayload(input.graph),
         }),
       ),
@@ -415,7 +416,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.graph.savePreview",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           expected_version: input.expectedVersion,
           metadata: workflowGraphMetadataPayload(input.metadata),
           graph: workflowGraphDraftPayload(input.graph),
@@ -431,7 +432,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.graph.save",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           expected_version: input.expectedVersion,
           metadata: workflowGraphMetadataPayload(input.metadata),
           graph: workflowGraphDraftPayload(input.graph),
@@ -445,7 +446,7 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowID }),
+      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
     );
   }
 
@@ -456,7 +457,7 @@ export class ApiClient implements ApiService {
       await this.#transport.call(
         "workflow.delete",
         compactJsonObject({
-          workflow_id: input.workflowID,
+          workflow_id: workflowIDSchema.parse(input.workflowID),
           confirmed: input.confirmed,
           expected_version: input.expectedVersion,
           expected_project_count: input.expectedProjectCount,
@@ -614,7 +615,7 @@ export class ApiClient implements ApiService {
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription {
     return this.#transport.subscribe(
       "workflow.subscribe",
-      { workflow_id: workflowID },
+      { workflow_id: workflowIDSchema.parse(workflowID) },
       workflowProjectEventRpcHandler("workflow.event", handler),
     );
   }

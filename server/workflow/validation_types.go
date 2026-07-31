@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
@@ -23,7 +24,7 @@ type RoleResolver interface {
 const DefaultAgentRole = config.DefaultSubagentRole
 
 func IsDefaultAgentRole(role string) bool {
-	return strings.TrimSpace(role) == DefaultAgentRole
+	return strings.EqualFold(strings.TrimSpace(role), DefaultAgentRole)
 }
 
 type ValidationOptions struct {
@@ -89,6 +90,7 @@ const (
 	CodeInvalidFirstNodeInput            ValidationErrorCode = "workflow.validation.invalid_first_node_input"
 	CodeInvalidContextMode               ValidationErrorCode = "workflow.validation.invalid_context_mode"
 	CodeInvalidContextSource             ValidationErrorCode = "workflow.validation.invalid_context_source"
+	CodeInvalidContinueSessionRole       ValidationErrorCode = "workflow.validation.invalid_continue_session_role"
 	CodeInvalidFanoutJoinTopology        ValidationErrorCode = "workflow.validation.invalid_fanout_join_topology"
 	CodeInvalidNodeGroup                 ValidationErrorCode = "workflow.validation.invalid_node_group"
 	CodeUnsupportedContextMode           ValidationErrorCode = "workflow.validation.unsupported_context_mode"
@@ -107,7 +109,7 @@ const (
 type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
-	WorkflowID        WorkflowID
+	WorkflowID        *runtimeids.WorkflowID
 	NodeID            NodeID
 	TransitionGroupID TransitionGroupID
 	EdgeID            EdgeID

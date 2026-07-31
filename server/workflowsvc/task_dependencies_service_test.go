@@ -13,7 +13,7 @@ func TestServiceTaskDependencyMutationEventsAreTypedAndIdempotent(t *testing.T) 
 	ctx, service, projectID, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
 	createdBlocker, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
 		ProjectID:  projectID,
-		WorkflowID: stringPtr(workflowID),
+		WorkflowID: &workflowID,
 		Title:      "blocker",
 		LabelIDs:   []string{},
 	})
@@ -22,7 +22,7 @@ func TestServiceTaskDependencyMutationEventsAreTypedAndIdempotent(t *testing.T) 
 	}
 	createdBlocked, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
 		ProjectID:  projectID,
-		WorkflowID: stringPtr(workflowID),
+		WorkflowID: &workflowID,
 		Title:      "blocked",
 		LabelIDs:   []string{},
 	})

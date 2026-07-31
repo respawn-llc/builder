@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -174,8 +175,7 @@ func testWorkflowConfig(controller workflowruntime.Controller, mode config.Workf
 			TaskShortID:     "BUI-1",
 			TaskTitle:       "Workflow task",
 			TaskBody:        "Task body.",
-			WorkflowID:      "workflow-1",
-			WorkflowShortID: "workflow-1",
+			WorkflowID:      testsetup.WorkflowIDValue("runtime-workflow"),
 			WorkflowName:    "Release preparation",
 			NodeKey:         "agent",
 			NodeDisplayName: "Agent",

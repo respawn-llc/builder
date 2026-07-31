@@ -277,7 +277,7 @@ func reviewerChatEntryLabel(entry ChatEntry) string {
 		return "Tool result error:"
 	case string(transcript.EntryRoleCompactionSummary):
 		return "Compaction:"
-	case string(transcript.EntryRoleManualCompactionCarryover):
+	case string(transcript.EntryRoleCompactionPreservedUserMessage):
 		return "Carryover:"
 	case "warning":
 		return "Warning:"

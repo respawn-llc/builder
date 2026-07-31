@@ -2,16 +2,14 @@ package workflowstore
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type WorkflowDeleteImpact struct {
-	WorkflowID                     workflow.WorkflowID
+	WorkflowID                     runtimeids.WorkflowID
 	Version                        int64
 	ProjectCount                   int64
 	LinkCount                      int64
@@ -23,7 +21,7 @@ type WorkflowDeleteImpact struct {
 }
 
 type WorkflowDeleteRequest struct {
-	WorkflowID           workflow.WorkflowID
+	WorkflowID           runtimeids.WorkflowID
 	Confirmed            bool
 	ExpectedVersion      int64
 	ExpectedProjectCount int64
@@ -45,11 +43,11 @@ type WorkflowDeleteBlocker struct {
 	Count   int64
 }
 
-func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID workflow.WorkflowID) (WorkflowDeleteImpact, error) {
-	if strings.TrimSpace(string(workflowID)) == "" {
-		return WorkflowDeleteImpact{}, errors.New("workflow id is required")
+func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
+	if workflowID.IsZero() {
+		return WorkflowDeleteImpact{}, ErrWorkflowIDRequired
 	}
-	row, err := s.queries.GetWorkflowDeleteImpact(ctx, string(workflowID))
+	row, err := s.queries.GetWorkflowDeleteImpact(ctx, workflowID)
 	if err != nil {
 		return WorkflowDeleteImpact{}, err
 	}
@@ -57,8 +55,8 @@ func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID workflow.W
 }
 
 func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (WorkflowDeleteResult, error) {
-	if strings.TrimSpace(string(req.WorkflowID)) == "" {
-		return WorkflowDeleteResult{}, errors.New("workflow id is required")
+	if req.WorkflowID.IsZero() {
+		return WorkflowDeleteResult{}, ErrWorkflowIDRequired
 	}
 	impact, err := s.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
@@ -74,10 +72,10 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("lock workflow dependency projects: %w", err)
 	}
-	current, err := q.GetWorkflowDeleteImpact(ctx, string(req.WorkflowID))
+	current, err := q.GetWorkflowDeleteImpact(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, err
 	}
@@ -91,7 +89,7 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
-	survivorIDs, err := q.ListWorkflowDependencySurvivorIDs(ctx, string(req.WorkflowID))
+	survivorIDs, err := q.ListWorkflowDependencySurvivorIDs(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("list workflow dependency survivors: %w", err)
 	}
@@ -107,28 +105,28 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 			return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors affected %d rows, want %d", touched, len(survivorIDs))
 		}
 	}
-	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task dependencies: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task pending approvals: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task current nodes: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskCommentsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTaskCommentsByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task comments: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow tasks: %w", err)
 	}
-	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: string(req.WorkflowID)}); err != nil {
+	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: req.WorkflowID}); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("clear workflow default links: %w", err)
 	}
-	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow project links: %w", err)
 	}
-	deletedCount, err := q.DeleteWorkflowByID(ctx, string(req.WorkflowID))
+	deletedCount, err := q.DeleteWorkflowByID(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow: %w", err)
 	}
@@ -147,7 +145,7 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 
 func workflowDeleteImpactFromRow(row sqlitegen.GetWorkflowDeleteImpactRow) WorkflowDeleteImpact {
 	return WorkflowDeleteImpact{
-		WorkflowID:                     workflow.WorkflowID(row.WorkflowID),
+		WorkflowID:                     row.WorkflowID,
 		Version:                        row.Version,
 		ProjectCount:                   row.ProjectCount,
 		LinkCount:                      row.LinkCount,

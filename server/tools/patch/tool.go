@@ -75,9 +75,12 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 			return json.Marshal(errorPayload(patchErr))
 		}), nil
 	}
-	warns, err := t.warnsForForeignManagedWorktree(doc)
+	foreignManagedWorktree, err := t.targetsForeignManagedWorktree(doc)
 	if err != nil {
 		return tools.ErrorResult(c, err.Error()), nil
+	}
+	if foreignManagedWorktree {
+		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
 	}
 	deletionFacts, err := t.apply(ctx, doc)
 	if err != nil {
@@ -91,9 +94,6 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		"operations": len(doc.Hunks),
 	})
 	result := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if warns {
-		result.ModelWarnings = []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()}
-	}
 	if len(deletionFacts) > 0 {
 		result.PresentationDelta = &transcript.ToolResultPresentationDelta{
 			WholeFileDeletionFacts: deletionFacts,
@@ -102,7 +102,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	return result, nil
 }
 
-func (t *Tool) warnsForForeignManagedWorktree(doc patchformat.Document) (bool, error) {
+func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, error) {
 	if t.managedWorktreePathContext == nil {
 		return false, nil
 	}
@@ -124,7 +124,7 @@ func (t *Tool) warnsForForeignManagedWorktree(doc patchformat.Document) (bool, e
 			if err != nil {
 				return false, err
 			}
-			if t.managedWorktreePathContext.WarnsFor(path, resolved) {
+			if t.managedWorktreePathContext.IsForeignManagedWorktreePath(path, resolved) {
 				return true, nil
 			}
 		}

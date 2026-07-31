@@ -3,6 +3,8 @@ package workflowrunner
 import (
 	"testing"
 
+	"core/internal/testharness/testsetup"
+
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -23,7 +25,7 @@ func TestCurrentSessionReconstructionPreservesBranchScopedPromptIdentity(t *test
 		}
 		instructions, err := BuildCurrentSessionTaskInstructions(workflowstore.CurrentNodeStartContext{
 			Task:        workflowstore.TaskRecord{ID: "task-1"},
-			Workflow:    workflowstore.WorkflowRecord{ID: "workflow-1"},
+			Workflow:    workflowstore.WorkflowRecord{ID: testsetup.WorkflowID(t, "workflowrunner-inspection")},
 			Node:        workflowstore.NodeRecord{ID: "node-1"},
 			CurrentNode: workflow.CurrentNode{Reference: reference},
 		})
@@ -44,7 +46,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: "workflow-1", CurrentNode: reference})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-1", WorkflowID: testsetup.WorkflowID(t, "workflowrunner-inspection"), CurrentNode: reference})
 	if err != nil {
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
@@ -56,7 +58,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
 		workflowstore.CurrentNodeStartContext{
 			Task:        workflowstore.TaskRecord{ID: "task-1"},
-			Workflow:    workflowstore.WorkflowRecord{ID: "workflow-1"},
+			Workflow:    workflowstore.WorkflowRecord{ID: testsetup.WorkflowID(t, "workflowrunner-inspection")},
 			Node:        workflowstore.NodeRecord{ID: "node-1"},
 			CurrentNode: workflow.CurrentNode{Reference: reference},
 			TransitionOptions: []workflowstore.TransitionOption{{

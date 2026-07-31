@@ -32,13 +32,13 @@ func (r *countingTaskDependencyReadModel) ListTaskDependencies(context.Context, 
 func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRecheck(t *testing.T) {
 	ctx, service, projectID, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
 	blocker, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
-		ProjectID: projectID, WorkflowID: stringPtr(workflowID), Title: "blocker", LabelIDs: []string{},
+		ProjectID: projectID, WorkflowID: &workflowID, Title: "blocker", LabelIDs: []string{},
 	})
 	if err != nil {
 		t.Fatalf("create blocker: %v", err)
 	}
 	blocked, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
-		ProjectID: projectID, WorkflowID: stringPtr(workflowID), Title: "blocked", LabelIDs: []string{},
+		ProjectID: projectID, WorkflowID: &workflowID, Title: "blocked", LabelIDs: []string{},
 	})
 	if err != nil {
 		t.Fatalf("create blocked: %v", err)

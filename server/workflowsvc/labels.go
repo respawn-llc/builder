@@ -129,7 +129,7 @@ func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.Wo
 			LabelIDs: labelIDs(ids),
 		},
 	}
-	s.publishProjectWorkflowEvent(ctx, scope.ProjectID, string(scope.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionLabelsChanged, req.TaskID)
+	s.publishProjectWorkflowEvent(ctx, scope.ProjectID, scope.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionLabelsChanged, req.TaskID)
 	return response, nil
 }
 

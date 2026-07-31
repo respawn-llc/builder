@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"encoding/json"
@@ -358,7 +359,7 @@ func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 			response: decodeAndHandle[serverapi.WorkflowBoardNodeCardsListRequest, struct{}](
 				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
 					ProjectID:  projectID,
-					WorkflowID: "workflow-1",
+					WorkflowID: runtimeids.NewWorkflowID(),
 					NodeID:     "node-1",
 				})},
 				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
@@ -407,7 +408,7 @@ func assertWorkflowLabelGatewayError(t *testing.T, response *protocol.ResponseEr
 
 func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskListScopeError{
 		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
 		ProjectID:  &projectID,
@@ -430,7 +431,7 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 }
 
 func TestDecodeAndHandlePreservesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskCreateSelectionError{
 		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
 		ProjectID:  "project-1",

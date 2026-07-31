@@ -31,7 +31,7 @@ func TestNewMissingWorkspaceSuggestsRebind(t *testing.T) {
 	}
 }
 
-func TestSuccessfulAbsoluteForeignManagedWorktreePatchWarnsForMoveDestination(t *testing.T) {
+func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
@@ -56,22 +56,22 @@ func TestSuccessfulAbsoluteForeignManagedWorktreePatchWarnsForMoveDestination(t 
 
 	result := callPatch(t, tool, "foreign-move", "*** Begin Patch\n*** Update File: "+source+"\n*** Move to: "+destination+"\n-before\n+after\n*** End Patch\n")
 
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
+	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
+		t.Fatalf("foreign worktree patch result = %+v", result)
 	}
-	if len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
-		t.Fatalf("managed worktree warning = %+v", result.ModelWarnings)
-	}
-	data, err := os.ReadFile(destination)
+	data, err := os.ReadFile(source)
 	if err != nil {
-		t.Fatalf("read destination: %v", err)
+		t.Fatalf("read source: %v", err)
 	}
-	if string(data) != "after\n" {
-		t.Fatalf("destination = %q, want after", data)
+	if string(data) != "before\n" {
+		t.Fatalf("source = %q, want before", data)
+	}
+	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destination stat error = %v, want not exist", err)
 	}
 }
 
-func TestPatchWarnsForEveryForeignAbsoluteTargetKind(t *testing.T) {
+func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
@@ -105,14 +105,14 @@ func TestPatchWarnsForEveryForeignAbsoluteTargetKind(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := callPatch(t, tool, "foreign-"+test.name, test.patch)
-			if result.IsError || len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
+			if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
 				t.Fatalf("foreign %s result = %+v", test.name, result)
 			}
 		})
 	}
 }
 
-func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *testing.T) {
+func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
@@ -126,9 +126,8 @@ func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *te
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
 	current := filepath.Join(currentRoot, "current.txt")
-	foreign := filepath.Join(foreignRoot, "foreign.txt")
 	outside := filepath.Join(outsideRoot, "outside.txt")
-	for _, path := range []string{current, foreign, outside} {
+	for _, path := range []string{current, outside} {
 		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
@@ -149,7 +148,6 @@ func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *te
 		{name: "relative current", path: "../current.txt", old: "before", new: "after"},
 		{name: "absolute current", path: current, old: "after", new: "again"},
 		{name: "absolute outside managed base", path: outside, old: "before", new: "after"},
-		{name: "failed foreign", path: foreign, old: "missing", new: "after", isError: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

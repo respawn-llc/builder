@@ -25,7 +25,7 @@ type currentNodeViewFixture struct {
 	store       *workflowstore.Store
 	binding     metadata.Binding
 	cfg         config.App
-	workflowID  workflow.WorkflowID
+	workflowID  runtimeids.WorkflowID
 	agentNodeID workflow.NodeID
 	authority   *sessionruntime.Authority
 	quiescence  *currentNodeViewQuiescence
@@ -330,7 +330,7 @@ func (f currentNodeViewFixture) attention(t *testing.T) *Attention {
 	return attention
 }
 
-func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresApproval bool) workflow.WorkflowID {
+func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresApproval bool) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(t.Context(), workflowstore.CreateWorkflowRequest{Name: "Current Node workflow"})
 	if err != nil {

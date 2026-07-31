@@ -42,25 +42,6 @@ func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderC
 	return providerCaps, nil
 }
 
-func ordinal(v int) string {
-	if v <= 0 {
-		return "0th"
-	}
-	if v%100 >= 11 && v%100 <= 13 {
-		return fmt.Sprintf("%dth", v)
-	}
-	switch v % 10 {
-	case 1:
-		return fmt.Sprintf("%dst", v)
-	case 2:
-		return fmt.Sprintf("%dnd", v)
-	case 3:
-		return fmt.Sprintf("%drd", v)
-	default:
-		return fmt.Sprintf("%dth", v)
-	}
-}
-
 func (e *Engine) inputTokensForItems(ctx context.Context, model string, instructions string, items []llm.ResponseItem) (int, bool) {
 	req, ok := buildTokenCountRequestForItems(model, instructions, items)
 	if !ok {

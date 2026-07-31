@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"text/template/parse"
 
+	"core/shared/runtimeids"
 	"core/shared/workflowkey"
 )
 
@@ -178,7 +179,7 @@ type WorkflowNodeContextArgs struct {
 	TaskShortId                    string
 	TaskTitle                      string
 	TaskBody                       string
-	WorkflowId                     string
+	WorkflowID                     runtimeids.WorkflowID
 	WorkflowName                   string
 	NodeId                         string
 	NodeKey                        string
@@ -212,8 +213,8 @@ type WorkflowTransition struct {
 }
 
 type WorkflowCompletionInstructionsArgs struct {
-	WorkflowShortID string
-	Contract        WorkflowCompletionContract
+	WorkflowID runtimeids.WorkflowID
+	Contract   WorkflowCompletionContract
 }
 
 type WorkflowCompletionContract struct {
@@ -572,29 +573,29 @@ func taskDependenciesLabel(count int64) string {
 	return fmt.Sprintf("%d unsatisfied dependencies", count)
 }
 
-func RenderWorkflowToolCompletionInstructions(workflowShortId string) (string, error) {
+func RenderWorkflowToolCompletionInstructions(workflowID runtimeids.WorkflowID) (string, error) {
 	return renderNamedTemplate("workflow tool completion instructions", WorkflowToolCompletionInstructionsPrompt, struct {
-		LaunchCommand   string
-		WorkflowShortId string
+		LaunchCommand string
+		WorkflowID    runtimeids.WorkflowID
 	}{
-		LaunchCommand:   LaunchCommand(),
-		WorkflowShortId: strings.TrimSpace(workflowShortId),
+		LaunchCommand: LaunchCommand(),
+		WorkflowID:    workflowID,
 	})
 }
 
-func RenderWorkflowStructuredCompletionInstructions(workflowShortId string) (string, error) {
+func RenderWorkflowStructuredCompletionInstructions(workflowID runtimeids.WorkflowID) (string, error) {
 	return renderNamedTemplate("workflow structured completion instructions", WorkflowStructuredCompletionInstructionsPrompt, struct {
-		LaunchCommand   string
-		WorkflowShortId string
+		LaunchCommand string
+		WorkflowID    runtimeids.WorkflowID
 	}{
-		LaunchCommand:   LaunchCommand(),
-		WorkflowShortId: strings.TrimSpace(workflowShortId),
+		LaunchCommand: LaunchCommand(),
+		WorkflowID:    workflowID,
 	})
 }
 
 type workflowCompletionInstructionsTemplateData struct {
 	LaunchCommand       string
-	WorkflowShortID     string
+	WorkflowID          runtimeids.WorkflowID
 	MultipleTransitions bool
 	Examples            []workflowCompletionExample
 }
@@ -626,7 +627,7 @@ func workflowCompletionInstructionsTemplateDataFor(args WorkflowCompletionInstru
 	examples := workflowCompletionExamples(args)
 	return workflowCompletionInstructionsTemplateData{
 		LaunchCommand:       LaunchCommand(),
-		WorkflowShortID:     strings.TrimSpace(args.WorkflowShortID),
+		WorkflowID:          args.WorkflowID,
 		MultipleTransitions: len(examples) > 1,
 		Examples:            examples,
 	}

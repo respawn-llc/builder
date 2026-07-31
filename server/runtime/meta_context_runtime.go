@@ -115,6 +115,9 @@ func selectWorkflowTaskPrompt(items []llm.ResponseItem, currentNodeIdentity stri
 	if !ok {
 		panic("select workflow task prompt: workflow-mode message classification failed")
 	}
+	if trigger == workflowTaskPromptTriggerResumeDelivery {
+		return prompts.WorkflowTaskPromptInitialAssignment, false
+	}
 	current, hasWorkflowPrompt := latestActiveMetaContextForSlot(items, metaContextKindWorkflow)
 	if !hasWorkflowPrompt {
 		return prompts.WorkflowTaskPromptInitialAssignment, true
@@ -123,7 +126,7 @@ func selectWorkflowTaskPrompt(items []llm.ResponseItem, currentNodeIdentity stri
 	switch trigger {
 	case workflowTaskPromptTriggerAssignmentDelivery:
 		return prompts.WorkflowTaskPromptReassignment, true
-	case workflowTaskPromptTriggerResumeDelivery, workflowTaskPromptTriggerTaskDelivery:
+	case workflowTaskPromptTriggerTaskDelivery:
 		if sameRun {
 			return prompts.WorkflowTaskPromptInitialAssignment, false
 		}
@@ -249,7 +252,11 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if !e.workflowPromptActive() {
 		return nil
 	}
-	return e.workflowDelivery.apply(workflowTaskPromptTriggerTaskDelivery, func(trigger workflowTaskPromptTrigger) error {
+	delivery := e.currentNodeExecutionSnapshot().delivery
+	if delivery == nil {
+		return errors.New("workflow prompt delivery state is unavailable")
+	}
+	return delivery.apply(workflowTaskPromptTriggerTaskDelivery, func(trigger workflowTaskPromptTrigger) error {
 		prompt, configured := e.workflowPrompt()
 		if !configured {
 			return errors.New("workflow prompt is unavailable")
@@ -302,6 +309,10 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if e.currentNodeExecutionActive() {
+		delivery := e.currentNodeExecutionSnapshot().delivery
+		if delivery == nil {
+			return nil, errors.New("workflow prompt delivery state is unavailable")
+		}
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		prompt, configured := e.workflowPrompt()
 		if !configured {
@@ -310,7 +321,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		kind, shouldInject := selectWorkflowTaskPrompt(
 			e.transcriptRuntimeState().SnapshotItems(),
 			prompt.Identity,
-			e.workflowDelivery.trigger(workflowTaskPromptTriggerCompaction),
+			delivery.trigger(workflowTaskPromptTriggerCompaction),
 		)
 		if !shouldInject {
 			panic("build compaction meta context: active workflow did not select a workflow task prompt")
@@ -339,18 +350,19 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 }
 
 func (e *Engine) currentWorkflowTaskAwareness(ctx context.Context) (workflowruntime.TaskAwareness, error) {
-	if !e.currentNodeExecutionActive() {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active {
 		if prompt, configured := e.workflowPrompt(); configured {
 			return prompt.TaskAwareness, nil
 		}
 		return workflowruntime.TaskAwareness{}, nil
 	}
-	if e.cfg.CurrentNodeExecution.TaskAwarenessSource == nil {
+	if execution.TaskAwarenessSource == nil {
 		return workflowruntime.TaskAwareness{}, nil
 	}
-	taskID := e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID
+	taskID := execution.Instructions.CurrentNode.TaskID
 	if taskID == "" {
 		return workflowruntime.TaskAwareness{}, nil
 	}
-	return e.cfg.CurrentNodeExecution.TaskAwarenessSource.TaskAwareness(ctx, taskID)
+	return execution.TaskAwarenessSource.TaskAwareness(ctx, taskID)
 }

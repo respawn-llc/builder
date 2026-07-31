@@ -65,6 +65,7 @@ type execution struct {
 	resource  *agentResource
 	scope     ExecutionScope
 	script    *TaskScriptExecutionTarget
+	workflow  *runtime.CurrentNodeExecutionBinding
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -292,6 +293,10 @@ func (e *execution) cleanup() error {
 	}
 	if resource.localTools != nil {
 		cleanupErr = errors.Join(cleanupErr, resource.localTools.BindExecutionCorrelation(nil))
+	}
+	if e.workflow != nil {
+		cleanupErr = errors.Join(cleanupErr, e.workflow.Close())
+		e.workflow = nil
 	}
 	resource.current = nil
 	resource.signalLocked()

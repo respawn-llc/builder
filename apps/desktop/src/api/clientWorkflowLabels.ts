@@ -8,6 +8,7 @@ import {
   taskLabelAssignmentSchema,
 } from "./schemas/workflowLabels";
 import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflowBoard";
+import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import { canonicalTaskLabelFilter } from "./workflowLabels";
 import type {
@@ -125,7 +126,7 @@ export async function createTask(transport: RpcTransport, input: TaskMutationInp
       "workflow.task.create",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id: input.workflowID,
+        workflow_id: workflowIDSchema.parse(input.workflowID),
         title: input.title,
         body: input.body,
         source_workspace_id: input.sourceWorkspaceID,
@@ -151,7 +152,8 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
       "workflow.task.list",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id: input.workflowID,
+        workflow_id:
+          input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],

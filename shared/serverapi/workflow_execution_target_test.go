@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 )
 
 func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
@@ -43,7 +44,7 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{
-		WorkflowID:      "workflow",
+		WorkflowID:      runtimeids.NewWorkflowID(),
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
@@ -53,7 +54,7 @@ func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 		t.Fatalf("custom target policy metadata rejected: %v", err)
 	}
 	if err := (WorkflowGraphSavePreviewRequest{
-		WorkflowID:      "workflow",
+		WorkflowID:      runtimeids.NewWorkflowID(),
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
@@ -168,7 +169,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy-observed target invalid: %v", err)
 	}
-	data, err := json.Marshal(WorkflowTaskDetail{ExecutionTarget: &target})
+	data, err := json.Marshal(WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, ExecutionTarget: &target})
 	if err != nil {
 		t.Fatalf("marshal detail: %v", err)
 	}
@@ -244,7 +245,7 @@ func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
 		}
 	}
 
-	data, err := json.Marshal(WorkflowTaskDetail{})
+	data, err := json.Marshal(WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}})
 	if err != nil {
 		t.Fatalf("marshal empty detail: %v", err)
 	}

@@ -38,32 +38,41 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
       return;
     }
     const relatedTaskIDs = dependencyRelatedTaskIDs(detail);
+    const refresh = async (): Promise<void> => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.task(detail.id),
+          refetchType: "active",
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.taskAttention(detail.id),
+          refetchType: "active",
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.activity(detail.id),
+          refetchType: "active",
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.comments(detail.id),
+          refetchType: "active",
+        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
+      ]);
+    };
+    const refreshOrReport = (): void => {
+      void refresh().catch((error: unknown) => {
+        void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
+      });
+    };
     const subscription = api.subscribeProject(detail.projectID, {
+      onOpen() {
+        refreshOrReport();
+      },
       onEvent(event) {
         if (!workflowProjectEventAffectsDependencyDetail(event, detail.id, relatedTaskIDs)) {
           return;
         }
-        void Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.task(detail.id),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.taskAttention(detail.id),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.activity(detail.id),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.comments(detail.id),
-            refetchType: "active",
-          }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
-        ]).catch((error: unknown) => {
-          void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
-        });
+        refreshOrReport();
       },
       onComplete() {
         return;

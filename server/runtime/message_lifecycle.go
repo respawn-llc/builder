@@ -99,7 +99,15 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
-			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, replacement.Items, replacement.CommittedEntryStart)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+				stepID,
+				replacement.Items,
+				replacement.CommittedEntryStart,
+				transcriptEntriesFromHistoryReplacement(
+					replacement.Items,
+					replacement.CompactionNumber,
+				),
+			)
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,
@@ -321,15 +329,12 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 	if err != nil || !result.continueCombinedFlush {
 		return result, err
 	}
-	pendingNotices := []steeringIntent(nil)
 	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
-	}
-	for _, notice := range pendingNotices {
-		if err := m.engine.steer(stepID, notice); err != nil {
-			return result, err
+		flushed, flushErr := m.background.flushPendingNotices(stepID)
+		result.flushed += flushed
+		if flushErr != nil {
+			return result, flushErr
 		}
-		result.flushed++
 	}
 	return result, nil
 }

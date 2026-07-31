@@ -144,10 +144,6 @@ Prepare an implementation task only for choice 2. Its title must be under 40 cha
 
 Do not prescribe file-by-file edits when ownership should be rediscovered in the implementation worktree.
 
-## Approved task creation
-
-`kent task create` is not idempotent. If the approved `Create Main SWE task` script run is interrupted, inspect Main SWE Backlog for the proposed title and body before resuming it. Do not retry the script blindly.
-
 ## Completion rules
 
 - Do not recommend deletion when the user-visible consequence is unknown.

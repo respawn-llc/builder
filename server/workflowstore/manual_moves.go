@@ -44,7 +44,7 @@ func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (M
 	if err != nil {
 		return ManualMovePreparation{}, err
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return ManualMovePreparation{}, err
 	}
@@ -115,7 +115,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	definition, workflowRecord, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
+	definition, workflowRecord, err := workflowDefinitionFromQueries(ctx, q, task.WorkflowID)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}

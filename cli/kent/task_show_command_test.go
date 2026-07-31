@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"testing"
 
+	"core/internal/testharness/testsetup"
+
 	"core/shared/serverapi"
 )
 
 func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
 			NodeID:    "node-1",
 			SessionID: &sessionID,
@@ -59,7 +63,7 @@ func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNode
 		},
 		Project: serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowTaskWorkflowSummary{
-			WorkflowID:  "workflow-1",
+			WorkflowID:  testsetup.WorkflowID(t, "task-show"),
 			DisplayName: "Workflow",
 		},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
@@ -100,7 +104,7 @@ func TestTaskShowHumanOutputUsesSharedDependencySections(t *testing.T) {
 			CreatedAtUnixMs: 1,
 		},
 		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show-dependencies"), DisplayName: "Workflow"},
 		Status:   taskDependencyTestStatus(serverapi.WorkflowTaskStatusKindBacklog),
 		Dependencies: serverapi.WorkflowTaskDependencies{
 			BlockerCount:            1,
@@ -131,7 +135,10 @@ func TestTaskShowHumanOutputUsesSharedDependencySections(t *testing.T) {
 }
 
 func TestTaskShowJSONIncludesAggregateDependenciesOnlyWhenNonzero(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "task-show-aggregate-dependencies")
 	task := serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: workflowID},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: workflowID},
 		Dependencies: serverapi.WorkflowTaskDependencies{
 			BlockerCount:             2,
 			UnsatisfiedBlockerCount:  1,
@@ -164,7 +171,10 @@ func TestTaskShowJSONIncludesAggregateDependenciesOnlyWhenNonzero(t *testing.T) 
 		t.Fatalf("task show JSON leaked dependency items: %s", data)
 	}
 
-	emptyData, err := json.Marshal(taskShowOutputFromDetail(serverapi.WorkflowTaskDetail{}))
+	emptyData, err := json.Marshal(taskShowOutputFromDetail(serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: workflowID},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: workflowID},
+	}))
 	if err != nil {
 		t.Fatalf("marshal empty task show output: %v", err)
 	}

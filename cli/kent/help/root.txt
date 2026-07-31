@@ -15,6 +15,7 @@ Commands:
   project     Find, list, or create projects.
   attach      Attach another workspace to a project.
   rebind      Move a session to another workspace.
+  worktree    Create, manage git worktrees and teleport into them.
 
 Examples:
   kent

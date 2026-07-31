@@ -7,6 +7,7 @@ import type {
   AttentionNotificationTarget,
   AttentionNotificationTaskDetailFocus,
 } from "../attentionNotifications";
+import { workflowIDSchema } from "./common";
 
 const id = z.string().min(1);
 const ids = z.array(id);
@@ -39,7 +40,7 @@ const targetSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("workflow_task"),
       project_id: id.optional(),
-      workflow_id: id.optional(),
+      workflow_id: workflowIDSchema,
       task_id: id,
       task_short_id: id.optional(),
       task_title: z.string().optional(),

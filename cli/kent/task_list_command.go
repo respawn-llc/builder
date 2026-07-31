@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -16,7 +17,7 @@ const taskListDefaultLimit = 100
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
-	workflowID := fs.String("workflow", "", "workflow UUID")
+	workflowID := fs.String("workflow", "", "workflow selector `<uuid>`")
 	offset := fs.Int("offset", 0, "zero-based task offset")
 	limit := fs.Int("limit", taskListDefaultLimit, "maximum tasks to print")
 	var statusFlags repeatedStringFlag
@@ -68,8 +69,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	workflowProvided := flagWasProvided(fs, "workflow")
-	var selectedWorkflowID *string
-	var selectedWorkflowSelector *string
+	var selectedWorkflowID *runtimeids.WorkflowID
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)
 		err = parseErr
@@ -77,10 +77,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		persistedID := selector.PersistedID()
-		selectedWorkflowID = &persistedID
-		selectorValue := selector.String()
-		selectedWorkflowSelector = &selectorValue
+		selectedWorkflowID = &selector
 	}
 	var recoveryLabelMatch *serverapi.WorkflowTaskNamedLabelFilterMode
 	if labelMatchExplicit {
@@ -124,7 +121,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			writeTaskListError(stderr, err, taskListCommandContext{
 				ProjectRef:             *projectRef,
 				ResolvedProjectID:      projectID,
-				SelectedWorkflowID:     selectedWorkflowSelector,
+				SelectedWorkflowID:     selectedWorkflowID,
 				ColumnKeys:             columnKeys,
 				StatusKinds:            statusKinds,
 				AttentionKinds:         attentionKinds,
@@ -140,8 +137,9 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		expectedScope := taskListExpectedScope{
-			ProjectID:  projectID,
-			WorkflowID: selectedWorkflowID,
+			ProjectID:     projectID,
+			WorkflowID:    selectedWorkflowID,
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})

@@ -2,15 +2,131 @@ package workflowexecution
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 )
+
+func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
+	cause := errors.New("automatic assignment failed")
+	controller := &CurrentNodeController{workerErr: cause}
+	taskID := workflow.TaskID("task-board-read")
+
+	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("CurrentTaskQuiescence: %v", err)
+	}
+	if !quiescence[taskID] {
+		t.Fatalf("task quiescence = %+v, want quiescent controller snapshot", quiescence)
+	}
+	if err := controller.EnsureTaskQuiescent(taskID); !errors.Is(err, cause) {
+		t.Fatalf("EnsureTaskQuiescent error = %v, want worker failure %v", err, cause)
+	}
+}
+
+func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T) {
+	target := currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-target")
+	approval := workflow.PendingApproval{
+		ID:     workflow.NewApprovalID(),
+		Source: currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-source"),
+	}
+	store := &currentNodeControllerStore{
+		pendingApproval: approval,
+		approvalApplied: workflowstore.PendingApprovalApplyResult{
+			Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
+				Reference:  target,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}}},
+			ResolvedApproval: approval,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    steerer,
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("ApplyPendingApproval: %v", err)
+	}
+	if got := steerer.references(); len(got) != 1 || !got[0].Equal(target) {
+		t.Fatalf("steered assignments = %+v, want %v", got, target)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return len(runner.promptDeliveries()) == 1
+	}, "approval target did not reach runner")
+	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
+		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
+		t.Fatalf("runner prompt deliveries = %+v, want Resume after transition steer", deliveries)
+	}
+}
+
+func TestCurrentNodeControllerDoesNotStartApprovalTargetWhenSteeringFails(t *testing.T) {
+	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
+	approval := workflow.PendingApproval{
+		ID:     workflow.NewApprovalID(),
+		Source: currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-source"),
+	}
+	store := &currentNodeControllerStore{
+		pendingApproval: approval,
+		approvalApplied: workflowstore.PendingApprovalApplyResult{
+			Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
+				Reference:  target,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}}},
+			ResolvedApproval: approval,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	cause := errors.New("assignment append failed")
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    &recordingCurrentNodeAssignmentSteerer{err: cause},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, cause) {
+		t.Fatalf("ApplyPendingApproval error = %v, want %v", err, cause)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if starts := runner.starts(); starts != 0 {
+		t.Fatalf("runner starts = %d, want none after steering failure", starts)
+	}
+	interruption, interrupted := store.interruption(target)
+	if !interrupted {
+		t.Fatal("approval target was not made resumable after steering failure")
+	}
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("approval target interruption = %+v, want runtime start failure", interruption)
+	}
+	if _, hasCause := interruption.detail.Fields["error"]; !hasCause {
+		t.Fatalf("approval target interruption = %+v, want failure diagnostics", interruption)
+	}
+}
 
 func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetires(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")

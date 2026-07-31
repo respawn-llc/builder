@@ -192,7 +192,8 @@ func (e *Engine) enableNativeWebSearch(ctx context.Context) (bool, error) {
 }
 
 func (e *Engine) currentNodeExecutionActive() bool {
-	return e != nil && e.cfg.CurrentNodeExecution != nil && !e.cfg.CurrentNodeExecution.ScopeID.IsZero()
+	_, active := e.currentNodeExecutionConfig()
+	return active
 }
 
 func (e *Engine) workflowPromptActive() bool {
@@ -207,10 +208,10 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 	if e.cfg.WorkflowPrompt != nil {
 		return e.cfg.WorkflowPrompt, true
 	}
-	if !e.currentNodeExecutionActive() {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active {
 		return nil, false
 	}
-	execution := e.cfg.CurrentNodeExecution
 	return &workflowruntime.PromptContract{
 		Identity:               workflowruntime.CurrentNodePromptIdentity(execution.Instructions.CurrentNode),
 		CompletionMode:         execution.CompletionMode,
@@ -230,7 +231,26 @@ func (e *Engine) workflowCompletionMode(ctx context.Context) (workflowruntime.Co
 	if !configured {
 		return "", nil
 	}
-	return workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+	promptMode, err := workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+	if err != nil {
+		return "", err
+	}
+	locked, lockedConfigured := e.lockedContractState().Snapshot()
+	if !lockedConfigured || locked.WorkflowCompletionMode == nil {
+		return promptMode, nil
+	}
+	lockedMode, err := workflowruntime.ParseCompletionMode(string(*locked.WorkflowCompletionMode))
+	if err != nil {
+		return "", fmt.Errorf("parse Session-locked workflow completion mode: %w", err)
+	}
+	if lockedMode != promptMode {
+		return "", fmt.Errorf(
+			"workflow completion mode invariant violated: Session contract has %q while live execution has %q",
+			lockedMode,
+			promptMode,
+		)
+	}
+	return lockedMode, nil
 }
 
 func (e *Engine) systemPrompt(locked session.LockedContract) (string, error) {

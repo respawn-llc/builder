@@ -212,7 +212,7 @@ SELECT
     related.id AS task_id,
     related.short_id,
     related.title,
-    related.workflow_id
+    CAST(related.workflow_id AS BLOB) AS workflow_id
 FROM task_dependencies td
 JOIN task_records related
   ON related.id = CASE
@@ -230,7 +230,7 @@ SELECT
     related.id AS task_id,
     related.short_id,
     related.title,
-    related.workflow_id
+    CAST(related.workflow_id AS BLOB) AS workflow_id
 FROM task_dependencies td
 JOIN task_records related ON related.id = td.blocker_task_id
 WHERE td.blocked_task_id = sqlc.arg(task_id)
@@ -404,7 +404,7 @@ LEFT JOIN tasks project_latest_task
         ORDER BY latest_task.updated_at_unix_ms DESC, latest_task.id DESC
         LIMIT 1
     )
-WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
+WHERE workflows.id = COALESCE(sqlc.narg(workflow_id), workflows.id)
   AND (
       sqlc.arg(search_query) = ''
       OR lower(workflows.name) LIKE '%' || lower(sqlc.arg(search_query)) || '%'
@@ -889,7 +889,7 @@ WHERE workflow_edges.id = sqlc.arg(edge_id)
 -- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
@@ -1055,7 +1055,7 @@ WHERE project_workflow_links.id = sqlc.arg(id)
 
 -- name: GetProjectWorkflowUnlinkState :one
 SELECT
-    COALESCE(p.default_project_workflow_link_id, '') AS default_project_workflow_link_id,
+    p.default_project_workflow_link_id AS default_project_workflow_link_id,
     (SELECT CAST(COUNT(*) AS INTEGER) FROM project_workflow_links active WHERE active.project_id = p.id) AS active_link_count
 FROM projects p
 WHERE p.id = sqlc.arg(project_id);
@@ -1150,7 +1150,7 @@ WHERE id IN (
 -- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE default_project_workflow_link_id IN (
     SELECT id
@@ -1502,7 +1502,7 @@ WITH
 args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-        CAST(sqlc.narg(workflow_id) AS TEXT) AS workflow_id,
+        sqlc.narg(workflow_id) AS workflow_id,
         CAST(sqlc.narg(visible_columns_json) AS TEXT) AS visible_columns_json,
         CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
@@ -2389,9 +2389,9 @@ SELECT
     COALESCE(w.id, '') AS primary_workspace_id,
     COALESCE(w.canonical_root_path, '') AS primary_workspace_root_path,
     CAST(COALESCE(w.updated_at_unix_ms, p.updated_at_unix_ms) AS INTEGER) AS primary_workspace_updated_at_unix_ms,
-    COALESCE(default_workflow.id, '') AS default_workflow_id,
-    COALESCE(default_workflow.name, '') AS default_workflow_name,
-    CASE WHEN default_workflow.id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
+    default_workflow.workflow_id AS default_workflow_id,
+    COALESCE(default_workflow.workflow_name, '') AS default_workflow_name,
+    CASE WHEN default_workflow.workflow_id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
     CAST(MAX(
         p.updated_at_unix_ms,
         COALESCE(w.updated_at_unix_ms, 0),
@@ -2420,10 +2420,7 @@ SELECT
     ) AS INTEGER) AS workflow_count
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
-LEFT JOIN project_workflow_links default_link
-    ON default_link.id = p.default_project_workflow_link_id
-   AND default_link.project_id = p.id
-LEFT JOIN workflows default_workflow ON default_workflow.id = default_link.workflow_id
+JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
 WHERE (sqlc.arg(project_id) = '' OR p.id = sqlc.arg(project_id))
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT sqlc.arg(limit_rows)

@@ -42,8 +42,8 @@ export function HomeRoute() {
   const queryClient = useQueryClient();
   const creation = useProjectCreation();
   const projects = useProjectPages();
-  const attention = useGlobalAttentionPages();
-  useGlobalAttentionEvents();
+  const attentionSubscriptionReady = useGlobalAttentionEvents();
+  const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];

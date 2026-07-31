@@ -169,7 +169,7 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, join_input_providers_json, output_fields_json
 ) VALUES (
     'node-join',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'join',
     'join',
     'Join',
@@ -493,7 +493,7 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, output_fields_json
 ) VALUES (
     'node-branch-a',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'branch_a',
     'agent',
     'Branch A',
@@ -502,7 +502,7 @@ INSERT INTO workflow_nodes (
     '[]'
 ), (
     'node-branch-b',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'branch_b',
     'agent',
     'Branch B',

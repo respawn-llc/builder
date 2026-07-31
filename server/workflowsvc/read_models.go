@@ -5,11 +5,12 @@ import (
 	"errors"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type WorkflowDefinitionReadModel interface {
-	GetDefinition(context.Context, string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error)
+	GetDefinition(context.Context, runtimeids.WorkflowID) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error)
 }
 
 type WorkflowBoardReadModel interface {

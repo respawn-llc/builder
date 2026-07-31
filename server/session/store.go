@@ -1327,6 +1327,18 @@ func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (L
 	})
 }
 
+func (s *Store) BackfillLockedWorkflowCompletionMode(mode sessioncontract.WorkflowCompletionMode) (LockedContractMutationResult, error) {
+	parsed, err := sessioncontract.ParseWorkflowCompletionMode(string(mode))
+	if err != nil {
+		return LockedContractMutationResult{}, err
+	}
+	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
+		if locked.WorkflowCompletionMode == nil {
+			*locked = locked.WithWorkflowCompletionMode(parsed)
+		}
+	})
+}
+
 func (s *Store) persistMetaLocked() (*persistenceObservation, error) {
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		return nil, err

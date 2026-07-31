@@ -13,29 +13,29 @@ describe("label query keys", () => {
     expect(queryKeys.projectBoardNodeCardsRoot("project-1")).toEqual(["board-node-cards", "project-1"]);
     expect(queryKeys.projectTaskListsRoot("project-1")).toEqual(["task-list", "project-1"]);
     expect(
-      queryKeys.board("project-1", "workflow-1", {
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", {
         kind: "named",
         mode: "all",
         labelIDs: [priorityID],
       }),
-    ).toEqual(["board", "project-1", "workflow-1", "named", "all", "included", priorityID, "excluded"]);
-    const cardKey = queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", {
+    ).toEqual(["board", "project-1", "11111111-1111-4111-8111-111111111111", "named", "all", "included", priorityID, "excluded"]);
+    const cardKey = queryKeys.boardNodeCards("project-1", "11111111-1111-4111-8111-111111111111", "node-1", {
       kind: "unlabeled",
     });
-    expect(cardKey).toEqual(["board-node-cards", "project-1", "workflow-1", "unlabeled", "node-1"]);
+    expect(cardKey).toEqual(["board-node-cards", "project-1", "11111111-1111-4111-8111-111111111111", "unlabeled", "node-1"]);
     expect(cardKey.slice(0, -1)).toEqual(
-      queryKeys.boardNodeCardsRoot("project-1", "workflow-1", {
+      queryKeys.boardNodeCardsRoot("project-1", "11111111-1111-4111-8111-111111111111", {
         kind: "unlabeled",
       }),
     );
     expect(
-      queryKeys.board("project-1", "workflow-1", {
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", {
         kind: "named",
         mode: "any",
         labelIDs: [priorityID, urgentID],
       }),
     ).toEqual(
-      queryKeys.board("project-1", "workflow-1", {
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", {
         kind: "named",
         mode: "any",
         labelIDs: [urgentID, priorityID],
@@ -64,10 +64,10 @@ describe("label query keys", () => {
       excludedLabelIDs: [urgentID, priorityID],
     };
 
-    expect(queryKeys.board("project-1", "workflow-1", filter)).toEqual([
+    expect(queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", filter)).toEqual([
       "board",
       "project-1",
-      "workflow-1",
+      "11111111-1111-4111-8111-111111111111",
       "named",
       "any",
       "included",
@@ -76,20 +76,20 @@ describe("label query keys", () => {
       "excluded",
       smallID,
     ]);
-    expect(queryKeys.board("project-1", "workflow-1", filter)).toEqual(
-      queryKeys.board("project-1", "workflow-1", reordered),
+    expect(queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", filter)).toEqual(
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", reordered),
     );
-    expect(queryKeys.board("project-1", "workflow-1", filter)).not.toEqual(
-      queryKeys.board("project-1", "workflow-1", differentExcluded),
+    expect(queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", filter)).not.toEqual(
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", differentExcluded),
     );
-    expect(queryKeys.board("project-1", "workflow-1", filter)).not.toEqual(
-      queryKeys.board("project-1", "workflow-1", swappedPolarity),
+    expect(queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", filter)).not.toEqual(
+      queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", swappedPolarity),
     );
-    expect(queryKeys.boardNodeCardsRoot("project-1", "workflow-1", filter)).not.toEqual(
-      queryKeys.boardNodeCardsRoot("project-1", "workflow-1", differentExcluded),
+    expect(queryKeys.boardNodeCardsRoot("project-1", "11111111-1111-4111-8111-111111111111", filter)).not.toEqual(
+      queryKeys.boardNodeCardsRoot("project-1", "11111111-1111-4111-8111-111111111111", differentExcluded),
     );
-    expect(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", filter).slice(0, -1)).toEqual(
-      queryKeys.boardNodeCardsRoot("project-1", "workflow-1", filter),
+    expect(queryKeys.boardNodeCards("project-1", "11111111-1111-4111-8111-111111111111", "node-1", filter).slice(0, -1)).toEqual(
+      queryKeys.boardNodeCardsRoot("project-1", "11111111-1111-4111-8111-111111111111", filter),
     );
   });
 });

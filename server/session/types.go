@@ -9,22 +9,23 @@ import (
 )
 
 type LockedContract struct {
-	Model             string                     `json:"model"`
-	Temperature       float64                    `json:"temperature"`
-	MaxOutputToken    int                        `json:"max_output_token"`
-	SystemPrompt      string                     `json:"system_prompt"`
-	HasSystemPrompt   bool                       `json:"has_system_prompt,omitempty"`
-	ReviewerPrompt    string                     `json:"reviewer_prompt,omitempty"`
-	HasReviewerPrompt bool                       `json:"has_reviewer_prompt,omitempty"`
-	ContextWindow     int                        `json:"context_window,omitempty"`
-	ContextPercent    int                        `json:"context_percent,omitempty"`
-	EnabledTools      []string                   `json:"enabled_tools,omitempty"`
-	HasEnabledTools   bool                       `json:"has_enabled_tools,omitempty"`
-	WebSearchMode     string                     `json:"web_search_mode,omitempty"`
-	ToolPreambles     *bool                      `json:"tool_preambles,omitempty"`
-	ModelCapabilities LockedModelCapabilities    `json:"model_capabilities,omitempty"`
-	ProviderContract  LockedProviderCapabilities `json:"provider_contract,omitempty"`
-	LockedAt          time.Time                  `json:"locked_at"`
+	Model                  string                                  `json:"model"`
+	Temperature            float64                                 `json:"temperature"`
+	MaxOutputToken         int                                     `json:"max_output_token"`
+	SystemPrompt           string                                  `json:"system_prompt"`
+	HasSystemPrompt        bool                                    `json:"has_system_prompt,omitempty"`
+	ReviewerPrompt         string                                  `json:"reviewer_prompt,omitempty"`
+	HasReviewerPrompt      bool                                    `json:"has_reviewer_prompt,omitempty"`
+	ContextWindow          int                                     `json:"context_window,omitempty"`
+	ContextPercent         int                                     `json:"context_percent,omitempty"`
+	EnabledTools           []string                                `json:"enabled_tools,omitempty"`
+	HasEnabledTools        bool                                    `json:"has_enabled_tools,omitempty"`
+	WebSearchMode          string                                  `json:"web_search_mode,omitempty"`
+	ToolPreambles          *bool                                   `json:"tool_preambles,omitempty"`
+	WorkflowCompletionMode *sessioncontract.WorkflowCompletionMode `json:"workflow_completion_mode,omitempty"`
+	ModelCapabilities      LockedModelCapabilities                 `json:"model_capabilities,omitempty"`
+	ProviderContract       LockedProviderCapabilities              `json:"provider_contract,omitempty"`
+	LockedAt               time.Time                               `json:"locked_at"`
 }
 
 func (c LockedContract) WithPromptFacingSnapshotsStale() LockedContract {
@@ -58,6 +59,11 @@ func (c LockedContract) WithRequestShape(fields LockedRequestShapeBackfill) Lock
 	c.EnabledTools = append([]string(nil), fields.EnabledTools...)
 	c.HasEnabledTools = fields.HasEnabledTools
 	c.WebSearchMode = fields.WebSearchMode
+	return c
+}
+
+func (c LockedContract) WithWorkflowCompletionMode(mode sessioncontract.WorkflowCompletionMode) LockedContract {
+	c.WorkflowCompletionMode = &mode
 	return c
 }
 

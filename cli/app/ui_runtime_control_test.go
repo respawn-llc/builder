@@ -67,7 +67,7 @@ func (timeoutNetError) Timeout() bool   { return true }
 func (timeoutNetError) Temporary() bool { return false }
 
 func (f *runtimeControlFakeClient) MainView() clientui.RuntimeMainView {
-	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.Activity.State != "" || f.mainView.Status.WorkflowSession != nil || f.mainView.Status.WorkflowActive {
+	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.Activity.State != "" || f.mainView.Status.WorkflowSession != nil {
 		return f.mainView
 	}
 	return clientui.RuntimeMainView{Status: f.status, Session: f.sessionView}

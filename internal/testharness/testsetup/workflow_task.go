@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/server/metadata"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -15,7 +16,7 @@ import (
 func BindSessionToWorkflowTask(t testing.TB, store *metadata.Store, projectID string, sessionID string) string {
 	t.Helper()
 	now := time.Now().UTC().UnixMilli()
-	workflowID := uuid.NewString()
+	workflowID := runtimeids.NewWorkflowID()
 	linkID := uuid.NewString()
 	taskID := uuid.NewString()
 	if _, err := store.DB().ExecContext(context.Background(), `

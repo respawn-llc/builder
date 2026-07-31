@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -34,6 +35,11 @@ type taskDependencyFactRow struct {
 
 type taskDependencyFacts struct {
 	rows map[serverapi.WorkflowTaskDependencyDirection][]taskDependencyFactRow
+}
+
+type taskDependencyRowKey struct {
+	direction serverapi.WorkflowTaskDependencyDirection
+	taskID    string
 }
 
 func NewTaskDependencies(
@@ -195,7 +201,8 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 		return facts, nil
 	}
 	taskIDs := make([]string, 0, len(rows))
-	seen := make(map[string]struct{}, len(rows))
+	seen := make(map[taskDependencyRowKey]struct{}, len(rows))
+	workflowIDs := make(map[taskDependencyRowKey]runtimeids.WorkflowID, len(rows))
 	for _, row := range rows {
 		direction := serverapi.WorkflowTaskDependencyDirection(row.Direction)
 		switch direction {
@@ -203,14 +210,19 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 		default:
 			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned invalid direction %q", taskID, row.Direction)
 		}
-		if strings.TrimSpace(row.TaskID) == "" || strings.TrimSpace(row.ShortID) == "" || strings.TrimSpace(row.WorkflowID) == "" {
+		if strings.TrimSpace(row.TaskID) == "" || strings.TrimSpace(row.ShortID) == "" {
 			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned incomplete related Task %q", taskID, row.TaskID)
 		}
-		key := string(direction) + "\x00" + row.TaskID
+		workflowID := runtimeids.WorkflowID{}
+		if err := workflowID.Scan(row.WorkflowID); err != nil {
+			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned invalid Workflow ID for related Task %q: %w", taskID, row.TaskID, err)
+		}
+		key := taskDependencyRowKey{direction: direction, taskID: row.TaskID}
 		if _, duplicate := seen[key]; duplicate {
 			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned duplicate related Task %q", taskID, row.TaskID)
 		}
 		seen[key] = struct{}{}
+		workflowIDs[key] = workflowID
 		taskIDs = append(taskIDs, row.TaskID)
 	}
 	statuses, err := loadWorkflowTaskStatusFacts(ctx, d.queries, d.projector, taskIDs)
@@ -228,29 +240,35 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 			return taskDependencyFacts{}, err
 		}
 	}
-	definitions := make(map[string]definitionSnapshot)
+	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot)
 	for _, row := range rows {
-		if _, exists := definitions[row.WorkflowID]; exists {
+		key := taskDependencyRowKey{
+			direction: serverapi.WorkflowTaskDependencyDirection(row.Direction),
+			taskID:    row.TaskID,
+		}
+		workflowID := workflowIDs[key]
+		if _, exists := definitions[workflowID]; exists {
 			continue
 		}
-		definition, err := d.definitions.snapshot(ctx, row.WorkflowID)
+		definition, err := d.definitions.snapshot(ctx, workflowID)
 		if err != nil {
 			return taskDependencyFacts{}, err
 		}
-		definitions[row.WorkflowID] = definition
+		definitions[workflowID] = definition
 	}
 	for _, row := range rows {
+		direction := serverapi.WorkflowTaskDependencyDirection(row.Direction)
+		workflowID := workflowIDs[taskDependencyRowKey{direction: direction, taskID: row.TaskID}]
 		durable := statuses[row.TaskID]
 		taskLive := live[workflow.TaskID(row.TaskID)].Executions
 		projectedStatus := taskDetailStatusFact(durable, taskLive)
-		done := durable.Done || currentNodesContainTerminal(currentNodes[workflow.TaskID(row.TaskID)], definitions[row.WorkflowID].nodeKinds)
-		direction := serverapi.WorkflowTaskDependencyDirection(row.Direction)
+		done := durable.Done || currentNodesContainTerminal(currentNodes[workflow.TaskID(row.TaskID)], definitions[workflowID].nodeKinds)
 		facts.rows[direction] = append(facts.rows[direction], taskDependencyFactRow{
 			direction: row.Direction,
 			taskID:    row.TaskID,
 			shortID:   row.ShortID,
 			title:     row.Title,
-			workflow:  row.WorkflowID,
+			workflow:  workflowID.String(),
 			status:    projectedStatus.Status,
 			done:      done,
 		})

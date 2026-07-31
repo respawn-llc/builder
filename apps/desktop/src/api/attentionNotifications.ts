@@ -16,7 +16,7 @@ export type AttentionNotificationTaskDetailFocus =
 export type AttentionNotificationWorkflowTaskTarget = Readonly<{
   kind: "workflow_task";
   projectID?: string | undefined;
-  workflowID?: string | undefined;
+  workflowID: string;
   taskID: string;
   taskShortID?: string | undefined;
   taskTitle?: string | undefined;

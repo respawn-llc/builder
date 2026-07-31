@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	testharness "core/internal/testharness/testsetup"
 	"core/server/attentionnotify"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -224,6 +226,7 @@ func registryWorkflowInterruptionNotification(id string, taskID string, nodeID s
 		},
 		Target: clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			WorkflowID:    registryWorkflowID(),
 			TaskID:        taskID,
 			CurrentNodeID: &nodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
@@ -249,6 +252,7 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 		},
 		Target: clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
+			WorkflowID:    registryWorkflowID(),
 			TaskID:        "task-" + id,
 			CurrentNodeID: &nodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
@@ -257,6 +261,11 @@ func registryWorkflowQuestionNotification(id string) clientui.AttentionNotificat
 			},
 		},
 	}
+}
+
+func registryWorkflowID() *runtimeids.WorkflowID {
+	workflowID := testharness.WorkflowIDValue("registry-workflow-attention")
+	return &workflowID
 }
 
 func waitForRegistryAttentionCondition(t *testing.T, condition func() bool, failure string) {

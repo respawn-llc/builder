@@ -10,7 +10,7 @@ const workspace = {
 };
 
 const selectedWorkflow = {
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   display_name: "Workflow",
   description: "",
   version: 1,
@@ -44,7 +44,7 @@ const card = {
     markdown: "Bounded Markdown **preview**",
     truncated: true,
   },
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   active_node_ids: [],
   source_workspace: workspace,
   status: {
@@ -103,6 +103,20 @@ describe("workflow board schemas", () => {
     ).toMatchObject({ selectedWorkflow: null });
   });
 
+  it("rejects legacy prefixed Workflow IDs", () => {
+    expect(() =>
+      workflowBoardSchema.parse({
+        board: {
+          ...boardResponse.board,
+          selected_workflow: {
+            ...selectedWorkflow,
+            workflow_id: "workflow-11111111-1111-4111-8111-111111111111",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects a present board workflow selection with a blank ID", () => {
     expect(() =>
       workflowBoardSchema.parse({
@@ -140,7 +154,7 @@ describe("workflow board schemas", () => {
   it("decodes nested Markdown previews, nullable cursors, and canonical detached workspace availability", () => {
     const page = boardNodeCardsPageSchema.parse({
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       node_id: "node-1",
       cards: [
         {
@@ -171,7 +185,7 @@ describe("workflow board schemas", () => {
   it("decodes server-owned dependency progress and rejects invalid progress", () => {
     const response = {
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       node_id: "node-1",
       cards: [
         {
@@ -207,7 +221,7 @@ describe("workflow board schemas", () => {
     expect(() =>
       boardNodeCardsPageSchema.parse({
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [legacyBodyCard],
         previous_page_token: null,
@@ -225,7 +239,7 @@ describe("workflow board schemas", () => {
     expect(() =>
       boardNodeCardsPageSchema.parse({
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [flatPreviewCard],
         previous_page_token: null,
@@ -237,7 +251,7 @@ describe("workflow board schemas", () => {
     expect(() =>
       boardNodeCardsPageSchema.parse({
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [{ ...card, preview: { markdown: card.preview.markdown } }],
         previous_page_token: null,
@@ -249,7 +263,7 @@ describe("workflow board schemas", () => {
     expect(() =>
       boardNodeCardsPageSchema.parse({
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [
           {

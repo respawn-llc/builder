@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type TaskDependencyMutationOutcome string
@@ -32,7 +33,7 @@ type TaskDependencyAddResult struct {
 	BlockedTaskID  workflow.TaskID
 	BlockedShortID string
 	ProjectID      string
-	WorkflowID     workflow.WorkflowID
+	WorkflowID     runtimeids.WorkflowID
 }
 
 type TaskDependencyRemoveRequest struct {
@@ -47,7 +48,7 @@ type TaskDependencyRemoveResult struct {
 	BlockedTaskID  workflow.TaskID
 	BlockedShortID string
 	ProjectID      string
-	WorkflowID     workflow.WorkflowID
+	WorkflowID     runtimeids.WorkflowID
 }
 
 func (s *Store) AddTaskDependency(ctx context.Context, req TaskDependencyAddRequest) (TaskDependencyAddResult, error) {
@@ -196,7 +197,7 @@ func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemo
 	return result, nil
 }
 
-func populateTaskDependencyIdentity(ctx context.Context, q *sqlitegen.Queries, blockerShortID, blockedShortID, projectID *string, workflowID *workflow.WorkflowID, blockerTaskID, blockedTaskID workflow.TaskID) error {
+func populateTaskDependencyIdentity(ctx context.Context, q *sqlitegen.Queries, blockerShortID, blockedShortID, projectID *string, workflowID *runtimeids.WorkflowID, blockerTaskID, blockedTaskID workflow.TaskID) error {
 	blocker, err := q.GetTask(ctx, string(blockerTaskID))
 	if err != nil {
 		return fmt.Errorf("load blocker task %q for dependency result: %w", blockerTaskID, err)
@@ -208,7 +209,7 @@ func populateTaskDependencyIdentity(ctx context.Context, q *sqlitegen.Queries, b
 	*blockerShortID = blocker.ShortID
 	*blockedShortID = blocked.ShortID
 	*projectID = blocker.ProjectID
-	*workflowID = workflow.WorkflowID(blocker.WorkflowID)
+	*workflowID = blocker.WorkflowID
 	return nil
 }
 

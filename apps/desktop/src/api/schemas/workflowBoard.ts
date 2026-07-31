@@ -31,6 +31,7 @@ import {
   taskActionsSchema,
   taskStatusSchema,
   workflowPickerItemSchema,
+  workflowIDSchema,
   workspaceSummarySchema,
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
@@ -66,7 +67,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
     scope: z
       .object({
         project_id: z.string().min(1),
-        workflow_id: z.string().min(1).optional(),
+        workflow_id: workflowIDSchema.optional(),
       })
       .strict(),
     matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
@@ -77,7 +78,7 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
         .object({
           task_id: z.string().min(1),
           short_id: z.string().min(1),
-          workflow_id: z.string().min(1),
+          workflow_id: workflowIDSchema,
           workflow_name: z.string().min(1).optional(),
           title: z.string(),
           created_at_unix_ms: z.number(),
@@ -256,7 +257,7 @@ export const projectWorkflowLinksSchema: z.ZodType<readonly ProjectWorkflowLink[
           .object({
             id: z.string(),
             project_id: z.string(),
-            workflow_id: z.string(),
+            workflow_id: workflowIDSchema,
             default: z.boolean(),
           })
           .transform((value) => ({
@@ -329,7 +330,7 @@ function visibleBoardGroups(
 export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
   .object({
     project_id: z.string(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     node_id: z.string(),
     cards: boardCardsSchema,
     previous_page_token: z.string().nullable(),
@@ -375,7 +376,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       summary: z.object({
         id: z.string(),
         project_id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         short_id: z.string(),
         title: z.string(),
         created_at_unix_ms: z.number(),
@@ -386,7 +387,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
         display_name: z.string(),
       }),
       workflow: z.object({
-        workflow_id: nonBlankString,
+        workflow_id: workflowIDSchema,
         display_name: z.string(),
         version: z.number(),
       }),

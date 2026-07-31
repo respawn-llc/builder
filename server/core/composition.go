@@ -111,7 +111,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
 		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event)
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+				if cfg.Settings.Debug {
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+				}
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
+			}
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
@@ -122,10 +127,15 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}),
 	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
-		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
+		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
 			Error: err.Error(),
-		})
+		}); publishErr != nil {
+			if cfg.Settings.Debug {
+				panic(fmt.Sprintf("publish sleep-guard runtime event: %v", publishErr))
+			}
+			fmt.Fprintf(os.Stderr, "publish sleep-guard runtime event: %v\n", publishErr)
+		}
 	})
 	if sleepErr != nil {
 		fmt.Fprintf(os.Stderr, "sleepguard: always-mode acquire failed at startup: %v\n", sleepErr)
@@ -256,6 +266,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
 	}
+	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
 		RuntimeClientFactory: opts.RuntimeClientFactory,
@@ -275,6 +286,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowexecution.CurrentNodeControllerConfig{
 			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
 			Attention:            workflowAttentionFinalizer,
+			AssignmentSteerer:    workflowRuntimeStarter,
 		},
 	)
 	if err != nil {

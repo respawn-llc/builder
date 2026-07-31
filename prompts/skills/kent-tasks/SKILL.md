@@ -47,7 +47,7 @@ kent task dep remove --blocker <task> --blocked <task> [--project <project>] [--
 kent task dep list <task> [--direction blocks|blocked-by] [--project <project>] [--json]
 ```
 
-Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Names and `workflow-...` persistence IDs are not accepted. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
+Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
 
 ## Execution targets
 `kent task show` always reports the source workspace. After target lock it also reports the target mode and execution root; managed targets include requested revision, resolved commit, current named branch when available, and managed worktree.

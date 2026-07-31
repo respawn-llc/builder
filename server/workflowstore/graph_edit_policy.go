@@ -8,6 +8,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type WorkflowGraphEditPolicyImpact struct {
@@ -49,7 +50,7 @@ func (e WorkflowGraphEditPolicyError) Error() string {
 	return strings.Join(messages, "; ")
 }
 
-func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, prepared preparedWorkflowGraphSave) error {
+func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) error {
 	result, err := workflowGraphEditPolicy(ctx, q, workflowID, prepared)
 	if err != nil {
 		return err
@@ -60,7 +61,7 @@ func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, w
 	return nil
 }
 
-func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, prepared preparedWorkflowGraphSave) (WorkflowGraphEditPolicyResult, error) {
+func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) (WorkflowGraphEditPolicyResult, error) {
 	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
@@ -225,12 +226,12 @@ func workflowGraphEdgeIDsSlice(edges []EdgeRecord) []workflow.EdgeID {
 	return ids
 }
 
-func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
 	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, structural)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
-	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, string(workflowID))
+	activeImpact, err := q.GetWorkflowGraphActiveWorkPolicyImpact(ctx, workflowID)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}

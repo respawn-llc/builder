@@ -16,6 +16,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -93,9 +94,10 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 		}, nil
 	}
 	snapshot := definitions[selected.WorkflowID]
+	selectedWorkflowID := selected.WorkflowID
 	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
-	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selected.WorkflowID, labelFilter); err != nil {
+	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selectedWorkflowID, labelFilter); err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
 	return serverapi.WorkflowBoard{
@@ -117,7 +119,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	workflowID := strings.TrimSpace(req.WorkflowID)
+	workflowID := req.WorkflowID
 	nodeID := strings.TrimSpace(req.NodeID)
 	project, err := b.metadata.GetProjectOverview(ctx, projectID)
 	if err != nil {
@@ -238,12 +240,12 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID string, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
+func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
 	if len(taskIDs) == 0 {
 		return map[string][]sessionruntime.TaskExecution{}, nil
 	}
 	snapshots, err := b.authority.CurrentScopedTaskExecutionSnapshots(
-		projectID, workflow.WorkflowID(workflowID), workflowTaskIDs(taskIDs),
+		projectID, workflowID, workflowTaskIDs(taskIDs),
 	)
 	if err != nil {
 		return nil, err
@@ -376,13 +378,13 @@ type boardNodeCardsPageDirection string
 const (
 	boardNodeCardsPageDirectionOlder boardNodeCardsPageDirection = "older"
 	boardNodeCardsPageDirectionNewer boardNodeCardsPageDirection = "newer"
-	boardNodeCardsPageTokenVersion                               = 3
+	boardNodeCardsPageTokenVersion                               = 4
 )
 
 type boardNodeCardsPageTokenPayload struct {
 	Version         int                          `json:"version"`
 	ProjectID       string                       `json:"project_id"`
-	WorkflowID      string                       `json:"workflow_id"`
+	WorkflowID      runtimeids.WorkflowID        `json:"workflow_id"`
 	NodeID          string                       `json:"node_id"`
 	LabelFilter     workflowTaskLabelFilterFacts `json:"label_filter"`
 	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
@@ -390,7 +392,7 @@ type boardNodeCardsPageTokenPayload struct {
 	Direction       boardNodeCardsPageDirection  `json:"direction"`
 }
 
-func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts) (boardNodeCardsPageCursor, error) {
+func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts) (boardNodeCardsPageCursor, error) {
 	if token == nil {
 		return boardNodeCardsPageCursor{direction: boardNodeCardsPageDirectionOlder}, nil
 	}
@@ -412,7 +414,7 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID st
 		!payload.LabelFilter.validCanonical() ||
 		!payload.LabelFilter.equal(labelFilter) ||
 		strings.TrimSpace(payload.ProjectID) == "" ||
-		strings.TrimSpace(payload.WorkflowID) == "" ||
+		payload.WorkflowID.IsZero() ||
 		strings.TrimSpace(payload.NodeID) == "" ||
 		strings.TrimSpace(payload.TaskID) == "" ||
 		payload.TaskID != strings.TrimSpace(payload.TaskID) ||
@@ -430,7 +432,7 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID st
 	}, nil
 }
 
-func boardNodeCardsPageTokens(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, cursor boardNodeCardsPageCursor, tasks []sqlitegen.TaskRecord, hasExtra bool) (*string, *string, error) {
+func boardNodeCardsPageTokens(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, cursor boardNodeCardsPageCursor, tasks []sqlitegen.TaskRecord, hasExtra bool) (*string, *string, error) {
 	if len(tasks) == 0 {
 		return nil, nil, nil
 	}
@@ -470,7 +472,7 @@ func boardNodeCardsPageTokens(projectID string, workflowID string, nodeID string
 	return previousPageToken, nextPageToken, nil
 }
 
-func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
+func boardNodeCardsPageToken(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
 	payload := boardNodeCardsPageTokenPayload{
 		Version:         boardNodeCardsPageTokenVersion,
 		ProjectID:       projectID,
@@ -489,7 +491,7 @@ func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string,
 	return &token, nil
 }
 
-func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[string]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
+func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runtimeids.WorkflowID]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
 	links, err := b.queries.ListProjectWorkflowLinks(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
@@ -498,8 +500,8 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	workflowIDs := make([]string, 0, len(links))
-	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
+	workflowIDs := make([]runtimeids.WorkflowID, 0, len(links))
+	linkByWorkflowID := map[runtimeids.WorkflowID]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
 		if _, exists := linkByWorkflowID[link.WorkflowID]; exists {
 			continue
@@ -507,13 +509,13 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 		linkByWorkflowID[link.WorkflowID] = link
 		workflowIDs = append(workflowIDs, link.WorkflowID)
 	}
-	activityByWorkflowID := map[string]int64{}
+	activityByWorkflowID := map[runtimeids.WorkflowID]int64{}
 	for _, activity := range taskActivityRows {
 		if _, linked := linkByWorkflowID[activity.WorkflowID]; linked {
 			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
-	definitions := make(map[string]definitionSnapshot, len(workflowIDs))
+	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot, len(workflowIDs))
 	picker := make([]serverapi.WorkflowPickerItem, 0, len(workflowIDs))
 	for _, workflowID := range workflowIDs {
 		snapshot, err := b.definitions.snapshot(ctx, workflowID)
@@ -533,7 +535,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 			Version:              snapshot.api.Workflow.Version,
 			IsProjectDefault:     link.IsDefault != 0,
 			ValidForTaskCreation: !validation.HasBlockingErrors(),
-			ValidationErrors:     ValidationErrors(snapshot.api.Workflow.ID, validation.Errors),
+			ValidationErrors:     ValidationErrors(workflow.WorkflowIDPointer(snapshot.api.Workflow.ID), validation.Errors),
 		})
 	}
 	sort.SliceStable(picker, func(i, j int) bool {
@@ -548,7 +550,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[stri
 	return definitions, picker, nil
 }
 
-func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, labelFilter workflowTaskLabelFilterFacts) error {
+func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID runtimeids.WorkflowID, labelFilter workflowTaskLabelFilterFacts) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
 		return err
@@ -591,7 +593,7 @@ func (workflowBoardDefaultSelector) selectFrom(picker []serverapi.WorkflowPicker
 }
 
 type workflowBoardExplicitSelector struct {
-	workflowID string
+	workflowID runtimeids.WorkflowID
 }
 
 func (s workflowBoardExplicitSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
@@ -608,7 +610,7 @@ func workflowBoardSelectorFromRequest(req serverapi.WorkflowBoardRequest) workfl
 	return workflowBoardDefaultSelector{}
 }
 
-func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID string) *serverapi.WorkflowPickerItem {
+func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID runtimeids.WorkflowID) *serverapi.WorkflowPickerItem {
 	for index := range picker {
 		if picker[index].WorkflowID == workflowID {
 			return &picker[index]

@@ -10,12 +10,17 @@ import (
 	"sync"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 
+	"github.com/google/uuid"
 	sqlitedriver "modernc.org/sqlite"
 )
 
 const migrationCurrentInputValuesFunction = "kent_migration_current_input_values_v1"
 const migrationPriorParametersFunction = "kent_migration_prior_transition_parameters_v1"
+const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
+const migrationWorkflowIDBlobFunction = "kent_migration_workflow_id_blob_v1"
+const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
 
 var registerMetadataSQLiteFunctionsOnce sync.Once
 var registerMetadataSQLiteFunctionsErr error
@@ -35,11 +40,115 @@ func registerMetadataSQLiteFunctions() error {
 			7,
 			migrationPriorParameters,
 		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationWorkflowIDBlobFunction,
+			2,
+			migrationWorkflowIDBlob,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationWorkflowIDTextFunction,
+			2,
+			migrationWorkflowIDText,
+		)
 	})
 	if registerMetadataSQLiteFunctionsErr != nil {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationWorkflowIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	workflowID, err := migrationWorkflowIDArgument(args)
+	if err != nil {
+		return nil, err
+	}
+	value := make([]byte, len(workflowID))
+	copy(value, workflowID[:])
+	return value, nil
+}
+
+func migrationWorkflowIDText(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	workflowID, err := migrationWorkflowIDArgument(args)
+	if err != nil {
+		return nil, err
+	}
+	return workflowID.String(), nil
+}
+
+func migrationWorkflowIDArgument(args []driver.Value) (uuid.UUID, error) {
+	if len(args) != 2 {
+		return uuid.Nil, fmt.Errorf("workflow ID migration function requires 2 arguments")
+	}
+	location, err := migrationStringArgument(args[1], "workflow identity location")
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("workflow ID migration failure: %w", err)
+	}
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return uuid.Nil, errors.New("workflow ID migration failure: workflow identity location is required")
+	}
+	raw, err := migrationStringArgument(args[0], "workflow ID")
+	if err != nil {
+		return uuid.Nil, &workflowIdentityMigrationDiagnostic{
+			Location: location,
+			Cause:    err,
+		}
+	}
+	return parseMigrationWorkflowID(raw, location)
+}
+
+type workflowIdentityMigrationDiagnostic struct {
+	Location string
+	Cause    error
+}
+
+func (e *workflowIdentityMigrationDiagnostic) Error() string {
+	return fmt.Sprintf("workflow ID migration failure at %s: %v", e.Location, e.Cause)
+}
+
+func (e *workflowIdentityMigrationDiagnostic) Unwrap() error { return e.Cause }
+
+func parseMigrationWorkflowID(raw string, location string) (uuid.UUID, error) {
+	if parsed, err := runtimeids.ParseCanonicalUUIDv4(raw, "workflow ID"); err == nil {
+		return parsed, nil
+	}
+	const prefix = "workflow-"
+	const canonicalUUIDTextLength = 36
+	var parsed uuid.UUID
+	var err error
+	if len(raw) == len(prefix)+canonicalUUIDTextLength {
+		var canonical [canonicalUUIDTextLength]byte
+		matchesPrefix := true
+		for index := 0; index < len(prefix); index++ {
+			if raw[index] != prefix[index] {
+				matchesPrefix = false
+				break
+			}
+		}
+		if matchesPrefix {
+			for index := range canonical {
+				canonical[index] = raw[len(prefix)+index]
+			}
+			parsed, err = runtimeids.ParseCanonicalUUIDv4(string(canonical[:]), "workflow ID")
+		} else {
+			err = fmt.Errorf("workflow ID must use the %q prefix followed by a canonical UUIDv4", prefix)
+		}
+	} else {
+		err = fmt.Errorf("workflow ID must use the %q prefix followed by a canonical UUIDv4", prefix)
+	}
+	if err != nil {
+		return uuid.Nil, &workflowIdentityMigrationDiagnostic{
+			Location: location,
+			Cause:    fmt.Errorf("must be a canonical UUIDv4 or workflow-prefixed canonical UUIDv4: %w", err),
+		}
+	}
+	return parsed, nil
 }
 
 type migrationGraphEdge struct {
@@ -196,7 +305,10 @@ func migrationPriorParameterRequirements(currentNodeID string, graph []migration
 }
 
 func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
-	const migrationWorkflowID workflow.WorkflowID = "migration-workflow"
+	migrationWorkflowID, err := runtimeids.ParseWorkflowID("00000000-0000-4000-8000-000000000001")
+	if err != nil {
+		return workflow.Definition{}, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
+	}
 	graphByEdgeID := make(map[string]migrationGraphEdge, len(graph))
 	for _, edge := range graph {
 		edgeID := strings.TrimSpace(edge.EdgeID)
@@ -297,7 +409,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 
 func addMigrationWorkflowNode(
 	nodesByID map[workflow.NodeID]workflow.Node,
-	workflowID workflow.WorkflowID,
+	workflowID runtimeids.WorkflowID,
 	nodeID string,
 	nodeKey string,
 	kind workflow.NodeKind,
