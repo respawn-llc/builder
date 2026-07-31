@@ -32,7 +32,7 @@ func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.Project
 	item := serverapi.WorkflowPickerItem{WorkflowID: def.Workflow.ID, DisplayName: def.Workflow.Name, Description: def.Workflow.Description, Version: def.Workflow.Version, IsProjectDefault: link.ID != "" && link.IsDefault != 0, ValidForTaskCreation: link.ID != ""}
 	if validation != nil {
 		item.ValidForTaskCreation = link.ID != "" && !validation.HasBlockingErrors()
-		item.ValidationErrors = ValidationErrors(def.Workflow.ID, validation.Errors)
+		item.ValidationErrors = ValidationErrors(workflow.OptionalWorkflowID(def.Workflow.ID), validation.Errors)
 	}
 	return item
 }

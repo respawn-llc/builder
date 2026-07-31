@@ -108,7 +108,7 @@ const (
 type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
-	WorkflowID        runtimeids.WorkflowID
+	WorkflowID        *runtimeids.WorkflowID
 	NodeID            NodeID
 	TransitionGroupID TransitionGroupID
 	EdgeID            EdgeID

@@ -182,6 +182,32 @@ describe("ApiClient workflow labels", () => {
     ]);
   });
 
+  it("rejects malformed and prefixed Workflow IDs before task RPCs", async () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+
+    await expect(
+      client.createTask({
+        projectID: "project-1",
+        workflowID: "not-a-workflow-id",
+        title: "Ship labels",
+        body: "",
+        sourceWorkspaceID: "workspace-1",
+        labelIDs: [],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        workflowID: "workflow-11111111-1111-4111-8111-111111111111",
+        labelFilter: { kind: "none" },
+        pageSize: 25,
+      }),
+    ).rejects.toThrow();
+
+    expect(transport.calls).toEqual([]);
+  });
+
   it("lists label-filtered task projections with label IDs", async () => {
     const transport = new FakeRpcTransport([
       {

@@ -79,9 +79,8 @@ describe("ApiClient", () => {
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
   });
 
-  it("preserves optional board workflow selectors and normalizes empty slices", async () => {
+  it("preserves absent board workflow selectors and normalizes empty slices", async () => {
     const transport = new FakeRpcTransport([
-      { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
     ]);
@@ -94,21 +93,10 @@ describe("ApiClient", () => {
       groups: [],
       columns: [],
     });
-    await expect(client.getBoard("project-1", " ", { kind: "unlabeled" })).resolves.toMatchObject({
-      selectedWorkflow: null,
-    });
-    expect(transport.calls.slice(0, 2)).toEqual([
+    expect(transport.calls).toEqual([
       {
         method: "workflow.board.get",
         params: { project_id: "project-1", label_filter: { kind: "none" } },
-      },
-      {
-        method: "workflow.board.get",
-        params: {
-          project_id: "project-1",
-          workflow_id: " ",
-          label_filter: { kind: "unlabeled" },
-        },
       },
     ]);
     const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
@@ -139,6 +127,25 @@ describe("ApiClient", () => {
         page_token: null,
       },
     });
+  });
+
+  it("rejects malformed Workflow IDs before direct client RPCs or subscriptions", async () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const prefixedID = "workflow-11111111-1111-4111-8111-111111111111";
+
+    await expect(client.getWorkflow(prefixedID)).rejects.toThrow();
+    await expect(client.previewWorkflowDelete("not-a-workflow-id")).rejects.toThrow();
+    expect(() =>
+      client.subscribeWorkflow(prefixedID, {
+        onEvent: () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      }),
+    ).toThrow();
+
+    expect(transport.calls).toEqual([]);
+    expect(transport.subscriptions).toEqual([]);
   });
 
   it("hides workflow join nodes from board columns and groups", async () => {

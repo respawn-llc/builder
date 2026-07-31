@@ -19,6 +19,13 @@ func TestNewNodeRejectsInvalidKind(t *testing.T) {
 	}
 }
 
+func TestNodeWorkflowIDReturnsNilForAbsentNode(t *testing.T) {
+	var node workflow.Node
+	if workflow.NodeWorkflowID(node) != nil {
+		t.Fatal("NodeWorkflowID(nil) must represent absence with nil")
+	}
+}
+
 func TestNewNodeDropsUnsupportedFieldsForNonExecutableNodes(t *testing.T) {
 	fields := workflow.NodeFields{
 		SubagentRole:   "coder",

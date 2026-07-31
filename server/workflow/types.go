@@ -223,11 +223,18 @@ func (TerminalNode) Kind() NodeKind {
 	return NodeKindTerminal
 }
 
-func NodeWorkflowID(node Node) runtimeids.WorkflowID {
-	if node == nil {
-		return runtimeids.WorkflowID{}
+func OptionalWorkflowID(workflowID runtimeids.WorkflowID) *runtimeids.WorkflowID {
+	if workflowID.IsZero() {
+		return nil
 	}
-	return node.Identity().WorkflowID
+	return &workflowID
+}
+
+func NodeWorkflowID(node Node) *runtimeids.WorkflowID {
+	if node == nil {
+		return nil
+	}
+	return OptionalWorkflowID(node.Identity().WorkflowID)
 }
 
 func NodeIDOf(node Node) NodeID {

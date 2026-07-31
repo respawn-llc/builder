@@ -509,7 +509,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 			Version:              snapshot.api.Workflow.Version,
 			IsProjectDefault:     link.IsDefault != 0,
 			ValidForTaskCreation: !validation.HasBlockingErrors(),
-			ValidationErrors:     ValidationErrors(snapshot.api.Workflow.ID, validation.Errors),
+			ValidationErrors:     ValidationErrors(workflow.OptionalWorkflowID(snapshot.api.Workflow.ID), validation.Errors),
 		})
 	}
 	sort.SliceStable(picker, func(i, j int) bool {

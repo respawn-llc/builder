@@ -256,7 +256,7 @@ func currentFanoutJoinOutgoingTarget(definition workflow.Definition, join workfl
 func currentFanoutJoinTopologyError(definition workflow.Definition, taskID workflow.TaskID) error {
 	diagnostic := workflow.ValidationError{
 		Code:       workflow.CodeInvalidFanoutJoinTopology,
-		WorkflowID: definition.ID,
+		WorkflowID: workflow.OptionalWorkflowID(definition.ID),
 	}
 	if strings.TrimSpace(string(taskID)) != "" {
 		diagnostic.RelatedIDs = []string{string(taskID)}

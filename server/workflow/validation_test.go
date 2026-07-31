@@ -7,6 +7,7 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func TestStartNodeRules(t *testing.T) {
@@ -83,6 +84,55 @@ func TestStartNodeRules(t *testing.T) {
 			})
 
 			assertHasCodes(t, result, tt.code)
+		})
+	}
+}
+
+func TestDefinitionRejectsMissingChildWorkflowIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*workflow.Definition)
+	}{
+		{
+			name: "node",
+			edit: func(def *workflow.Definition) {
+				updateNodeAt(def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
+					identity.WorkflowID = runtimeids.WorkflowID{}
+				})
+			},
+		},
+		{
+			name: "node group",
+			edit: func(def *workflow.Definition) {
+				def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
+					WorkflowID:  def.ID,
+					ID:          "group-test",
+					Key:         "test",
+					DisplayName: "Test",
+				})
+				def.NodeGroups[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+		{
+			name: "transition group",
+			edit: func(def *workflow.Definition) {
+				def.TransitionGroups[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+		{
+			name: "edge",
+			edit: func(def *workflow.Definition) {
+				def.Edges[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := validWorkflow(t)
+			tt.edit(&def)
+
+			assertHasCodes(t, workflow.ValidateDefinition(def, workflow.ValidationOptions{}), workflow.CodeMissingWorkflowID)
 		})
 	}
 }

@@ -349,7 +349,7 @@ type ListWorkflowsResult struct {
 
 type workflowListPageCursor struct {
 	activityAtUnixMs  *int64
-	workflowID        runtimeids.WorkflowID
+	workflowID        *runtimeids.WorkflowID
 	projectDefault    *int64
 	projectName       *string
 	projectID         *string
@@ -362,7 +362,7 @@ type workflowListPageCursor struct {
 type workflowListPageTokenPayload struct {
 	Version           int                    `json:"version"`
 	ActivityAtUnixMs  *int64                 `json:"activity_at_unix_ms,omitempty"`
-	WorkflowID        runtimeids.WorkflowID  `json:"workflow_id"`
+	WorkflowID        *runtimeids.WorkflowID `json:"workflow_id"`
 	ProjectDefault    *int64                 `json:"project_default,omitempty"`
 	ProjectName       *string                `json:"project_name,omitempty"`
 	ProjectID         *string                `json:"project_id,omitempty"`
@@ -480,7 +480,7 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 		SearchQuery:            query,
 		CursorActive:           cursorActive,
 		CursorActivityAtUnixMs: cursorActivityAtUnixMs,
-		CursorWorkflowID:       optionalWorkflowID(cursor.workflowID),
+		CursorWorkflowID:       cursor.workflowID,
 		CursorProjectDefault:   cursorProjectDefault,
 		CursorProjectName:      cursorProjectName,
 	})
@@ -1086,7 +1086,7 @@ func parseWorkflowListPageToken(token string) (workflowListPageCursor, error) {
 		strings.TrimSpace(payload.FilterFingerprint) == "" {
 		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
 	}
-	if payload.WorkflowID.IsZero() {
+	if payload.WorkflowID == nil || payload.WorkflowID.IsZero() {
 		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
 	}
 	if payload.ProjectID == nil && (payload.ActivityAtUnixMs == nil || payload.ProjectDefault != nil || payload.ProjectName != nil) {
@@ -1131,7 +1131,7 @@ func workflowListPageToken(row workflowRecordRow, projectID *string, workflowID 
 	payload := workflowListPageTokenPayload{
 		Version:          workflowListPageTokenVersion,
 		ActivityAtUnixMs: row.ActivityAtUnixMs,
-		WorkflowID:       row.ID,
+		WorkflowID:       &row.ID,
 		ProjectID:        projectID,
 		FilterWorkflowID: workflowID,
 		SearchQuery:      query,
@@ -1188,13 +1188,6 @@ func sqliteLowerASCII(value string) string {
 		}
 	}
 	return string(bytes)
-}
-
-func optionalWorkflowID(value runtimeids.WorkflowID) *runtimeids.WorkflowID {
-	if value.IsZero() {
-		return nil
-	}
-	return &value
 }
 
 func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, groupID string, groupKey string) (string, error) {
