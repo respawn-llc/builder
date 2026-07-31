@@ -63,7 +63,7 @@ func TestOpenCreatesTaskDependencySchema(t *testing.T) {
 		t.Fatalf("dependency rows after task cascade = %d, want 0", remaining)
 	}
 
-	migration, err := fs.ReadFile(migrationsFS, "migrations/00064_task_dependencies.up.sql")
+	migration, err := fs.ReadFile(migrationsFS, "migrations/00065_task_dependencies.up.sql")
 	if err != nil {
 		t.Fatalf("read dependency migration: %v", err)
 	}
