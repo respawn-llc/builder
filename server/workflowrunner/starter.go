@@ -88,7 +88,13 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	}, nil
 }
 
-func (s *Starter) StartCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+func (s *Starter) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+) error {
 	if s.closed.Load() {
 		return errors.New("workflow runtime starter closed")
 	}
@@ -106,13 +112,19 @@ func (s *Starter) StartCurrentNode(ctx context.Context, reference workflow.Curre
 		if err := s.validateRole(input.Node.SubagentRole); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, lease, controller)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
 }
 
-func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore.CurrentNodeStartContext, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+func (s *Starter) startCurrentNodeAgent(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+) error {
 	root, err := requireCurrentNodeExecutionRoot(input)
 	if err != nil {
 		return err
@@ -174,7 +186,16 @@ func (s *Starter) startCurrentNodeAgent(ctx context.Context, input workflowstore
 	if err := s.applyCurrentNodeSessionExecutionTarget(ctx, input, plan.Descriptor); err != nil {
 		return cleanup(err)
 	}
-	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(input, lease, mode, s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts, plan.ActiveSettings.Workflow.UseRequiredToolCalls, controller, s.store)
+	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
+		input,
+		lease,
+		taskPromptDelivery,
+		mode,
+		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+		plan.ActiveSettings.Workflow.UseRequiredToolCalls,
+		controller,
+		s.store,
+	)
 	if err != nil {
 		return cleanup(err)
 	}

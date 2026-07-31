@@ -59,13 +59,16 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	if _, _, err := engine.compactNow(context.Background(), "compact", compactionModeManual, compactionInstructionsInput{}, false); err != nil {
 		t.Fatalf("compact workflow context: %v", err)
 	}
+	expectedIdentity := workflowruntime.CurrentNodePromptIdentity(
+		mustTestCurrentNodeReference(t, "task", "node", &branchKey),
+	)
 	workflowModes := 0
 	for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.MessageType != nil &&
 			*item.MessageType == llm.MessageTypeWorkflowMode {
-			if item.SourcePath == nil || *item.SourcePath != scopeID.String() {
-				t.Fatalf("workflow replacement source identity = %+v, want exact scope %q", item, scopeID)
+			if item.SourcePath == nil || *item.SourcePath != expectedIdentity {
+				t.Fatalf("workflow replacement source identity = %+v, want Current Node identity %q", item, expectedIdentity)
 			}
 			workflowModes++
 		}
@@ -149,7 +152,9 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 				},
 				Config{Model: "gpt-5"},
 			)
-			currentNodeIdentity := scopeID.String()
+			currentNodeIdentity := workflowruntime.CurrentNodePromptIdentity(
+				mustTestCurrentNodeReference(t, "task", "node", &currentBranchKey),
+			)
 			existingIdentity := "previous-task/previous-node"
 			if test.existingCurrentNode {
 				existingIdentity = currentNodeIdentity

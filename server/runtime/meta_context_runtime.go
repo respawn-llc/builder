@@ -95,6 +95,8 @@ type workflowTaskPromptTrigger uint8
 
 const (
 	workflowTaskPromptTriggerUnknown workflowTaskPromptTrigger = iota
+	workflowTaskPromptTriggerAssignmentDelivery
+	workflowTaskPromptTriggerResumeDelivery
 	workflowTaskPromptTriggerTaskDelivery
 	workflowTaskPromptTriggerCompaction
 )
@@ -118,7 +120,9 @@ func selectWorkflowTaskPrompt(items []llm.ResponseItem, currentNodeIdentity stri
 	}
 	sameRun := sameMetaContextIdentity(current, desired)
 	switch trigger {
-	case workflowTaskPromptTriggerTaskDelivery:
+	case workflowTaskPromptTriggerAssignmentDelivery:
+		return prompts.WorkflowTaskPromptReassignment, true
+	case workflowTaskPromptTriggerResumeDelivery, workflowTaskPromptTriggerTaskDelivery:
 		if sameRun {
 			return prompts.WorkflowTaskPromptInitialAssignment, false
 		}
@@ -244,37 +248,39 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if !e.workflowPromptActive() {
 		return nil
 	}
-	prompt, configured := e.workflowPrompt()
-	if !configured {
-		return errors.New("workflow prompt is unavailable")
-	}
-	kind, shouldInject := selectWorkflowTaskPrompt(
-		e.transcriptRuntimeState().SnapshotItems(),
-		prompt.Identity,
-		workflowTaskPromptTriggerTaskDelivery,
-	)
-	if !shouldInject {
-		return nil
-	}
-	mode, err := e.workflowCompletionMode(ctx)
-	if err != nil {
-		return err
-	}
-	commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
-	if err != nil {
-		return err
-	}
-	metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(metaContextBuildOptions{
-		IncludeWorkflow:          true,
-		WorkflowCompletionMode:   mode,
-		WorkflowPrompt:           prompt,
-		WorkflowTaskCommentCount: commentCount,
-		WorkflowTaskPromptKind:   kind,
+	return e.workflowDelivery.apply(workflowTaskPromptTriggerTaskDelivery, func(trigger workflowTaskPromptTrigger) error {
+		prompt, configured := e.workflowPrompt()
+		if !configured {
+			return errors.New("workflow prompt is unavailable")
+		}
+		kind, shouldInject := selectWorkflowTaskPrompt(
+			e.transcriptRuntimeState().SnapshotItems(),
+			prompt.Identity,
+			trigger,
+		)
+		if !shouldInject {
+			return nil
+		}
+		mode, err := e.workflowCompletionMode(ctx)
+		if err != nil {
+			return err
+		}
+		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
+		if err != nil {
+			return err
+		}
+		metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(metaContextBuildOptions{
+			IncludeWorkflow:          true,
+			WorkflowCompletionMode:   mode,
+			WorkflowPrompt:           prompt,
+			WorkflowTaskCommentCount: commentCount,
+			WorkflowTaskPromptKind:   kind,
+		})
+		if err != nil {
+			return err
+		}
+		return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
 	})
-	if err != nil {
-		return err
-	}
-	return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
 }
 
 func roleOrUser(role *llm.Role) llm.Role {
@@ -303,7 +309,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		kind, shouldInject := selectWorkflowTaskPrompt(
 			e.transcriptRuntimeState().SnapshotItems(),
 			prompt.Identity,
-			workflowTaskPromptTriggerCompaction,
+			e.workflowDelivery.trigger(workflowTaskPromptTriggerCompaction),
 		)
 		if !shouldInject {
 			panic("build compaction meta context: active workflow did not select a workflow task prompt")

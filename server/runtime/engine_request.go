@@ -212,7 +212,7 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 	}
 	execution := e.cfg.CurrentNodeExecution
 	return &workflowruntime.PromptContract{
-		Identity:               execution.ScopeID.String(),
+		Identity:               workflowruntime.CurrentNodePromptIdentity(execution.Instructions.CurrentNode),
 		CompletionMode:         execution.CompletionMode,
 		UseAutomaticToolChoice: execution.UseAutomaticToolChoice,
 		Instructions:           execution.Instructions,
