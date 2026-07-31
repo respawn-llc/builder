@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   infiniteQueryOptions,
   keepPreviousData,
@@ -37,9 +37,12 @@ export function useProjectPages() {
   });
 }
 
-export function useGlobalAttentionPages() {
+export function useGlobalAttentionPages(enabled = true) {
   const { api } = useAppServices();
-  return useInfiniteQuery(globalAttentionQueryOptions(api));
+  return useInfiniteQuery({
+    ...globalAttentionQueryOptions(api),
+    enabled,
+  });
 }
 
 export function useSidebarGlobalAttentionPages() {
@@ -55,11 +58,13 @@ export function useGlobalAttentionEvents() {
   const { api, logger } = useAppServices();
   const connection = useConnectionSnapshot();
   const queryClient = useQueryClient();
+  const [openGeneration, setOpenGeneration] = useState<number | null>(null);
 
   useEffect(() => {
     if (connection.phase !== "connected") {
       return;
     }
+    const subscriptionGeneration = connection.generation;
     let refreshFrame: number | null = null;
     let subscriptionLifecycle: GlobalAttentionSubscriptionLifecycle = "initial";
     const refreshAttention = () => {
@@ -91,6 +96,7 @@ export function useGlobalAttentionEvents() {
       onOpen() {
         const shouldReconcile = subscriptionLifecycle !== "initial";
         subscriptionLifecycle = "open";
+        setOpenGeneration(subscriptionGeneration);
         if (shouldReconcile) {
           refreshAttention();
         }
@@ -121,6 +127,7 @@ export function useGlobalAttentionEvents() {
       subscription.close();
     };
   }, [api, connection.generation, connection.phase, logger, queryClient]);
+  return connection.phase === "connected" && openGeneration === connection.generation;
 }
 
 type GlobalAttentionSubscriptionLifecycle = "initial" | "open" | "recovery-pending";

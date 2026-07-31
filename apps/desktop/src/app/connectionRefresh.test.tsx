@@ -33,11 +33,9 @@ describe("application reconnect attention refresh", () => {
     await flushQueuedWork();
 
     await waitFor(() => {
-      expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
-    });
-    await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
     });
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(0);
     await waitFor(() => {
       expect(screen.getByTestId("home-route-root")).toBeInTheDocument();
     });
@@ -47,7 +45,9 @@ describe("application reconnect attention refresh", () => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
       await waitForMacrotask();
     });
-    expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
+    await waitFor(() => {
+      expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
+    });
 
     await act(async () => {
       services.transport.connection.set("disconnected");
@@ -65,16 +65,16 @@ describe("application reconnect attention refresh", () => {
     await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
     });
-    await waitFor(() => {
-      expect(workflowAttentionCalls(services.transport)).toHaveLength(2);
-    });
-    await flushQueuedWork();
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(1);
 
     await act(async () => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
       await waitForMacrotask();
     });
-    expect(workflowAttentionCalls(services.transport)).toHaveLength(2);
+    await waitFor(() => {
+      expect(workflowAttentionCalls(services.transport)).toHaveLength(2);
+    });
+    await flushQueuedWork();
   });
 });
 

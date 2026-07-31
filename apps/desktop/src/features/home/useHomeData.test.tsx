@@ -24,11 +24,14 @@ describe("Home global attention data", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads once before opening the stream, refreshes for events, and reconciles after recovery", async () => {
+  it("opens the stream before the initial attention load, refreshes for events, and reconciles after recovery", async () => {
     const services = createAttentionServices();
     renderHome(services, <HomeAttentionEventsHarness />);
 
-    await expectAttentionCalls(services.transport, 1);
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toHaveLength(1);
+    });
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(0);
 
     act(() => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
@@ -57,7 +60,10 @@ describe("Home global attention data", () => {
     const services = createAttentionServices();
     renderHome(services, <HomeAttentionEventsHarness />);
 
-    await expectAttentionCalls(services.transport, 1);
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toHaveLength(1);
+    });
+    expect(workflowAttentionCalls(services.transport)).toHaveLength(0);
 
     act(() => {
       services.transport.fail(
@@ -66,19 +72,21 @@ describe("Home global attention data", () => {
       );
     });
     await flushQueuedWork();
-    expect(attentionPageTokens(services.transport)).toEqual([""]);
+    expect(attentionPageTokens(services.transport)).toEqual([]);
 
     act(() => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
     });
-    await expectAttentionCalls(services.transport, 2);
+    await expectAttentionCalls(services.transport, 1);
   });
 
   it("reconciles after a decoder error while the Project stream remains open", async () => {
     const services = createAttentionServices();
     renderHome(services, <HomeAttentionEventsHarness />);
 
-    await expectAttentionCalls(services.transport, 1);
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toHaveLength(1);
+    });
     act(() => {
       services.transport.open(workflowAttentionRpcMethods.subscribeProject);
     });
@@ -208,8 +216,8 @@ function renderHome(services: TestAppServices, children: ReactNode) {
 }
 
 function HomeAttentionEventsHarness() {
-  useGlobalAttentionPages();
-  useGlobalAttentionEvents();
+  const attentionSubscriptionReady = useGlobalAttentionEvents();
+  useGlobalAttentionPages(attentionSubscriptionReady);
   return null;
 }
 
