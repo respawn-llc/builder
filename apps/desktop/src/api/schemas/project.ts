@@ -96,7 +96,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .object({
     project_id: z.string(),
     workspace_id: z.string(),
-    unlinked: z.boolean(),
     blockers: z
       .array(
         z.object({
@@ -112,7 +111,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .transform((value) => ({
     projectID: value.project_id,
     workspaceID: value.workspace_id,
-    unlinked: value.unlinked,
     blockers: value.blockers,
     project: value.project ?? null,
   }));
