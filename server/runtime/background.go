@@ -205,12 +205,12 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
+		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
 		pending := b.DrainPendingNotices()
 		if len(pending) == 0 {
 			return nil
-		}
-		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-			return err
 		}
 		if err := b.engine.steer(stepID, pending...); err != nil {
 			return err
@@ -219,6 +219,9 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		assistant = msg
 		return runErr
 	})
+	if err != nil && b.HasPendingNotices() {
+		b.clearScheduled()
+	}
 	if errors.Is(err, ErrAgentBusy) {
 		b.clearScheduled()
 		return llm.Message{}, nil
