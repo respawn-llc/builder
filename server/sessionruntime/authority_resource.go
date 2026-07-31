@@ -857,7 +857,7 @@ func (a *Authority) RunCurrentAgentExecution(
 		return errors.New("agent runtime callback is required")
 	}
 	submittedTurn := make(chan SubmittedTurnOutcome, 1)
-	_, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
+	handle, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
 		Descriptor: descriptor,
 		Resource:   CurrentAgentResource{},
 		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
@@ -876,7 +876,12 @@ func (a *Authority) RunCurrentAgentExecution(
 		return context.Cause(ctx)
 	}
 	if outcome.Err != nil {
-		return outcome.Err
+		_, waitErr := handle.Wait(context.Background())
+		return errors.Join(outcome.Err, waitErr)
+	}
+	if !outcome.Continues {
+		_, waitErr := handle.Wait(context.Background())
+		return waitErr
 	}
 	return nil
 }
