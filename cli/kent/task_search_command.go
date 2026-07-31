@@ -19,7 +19,7 @@ func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	contextSize := fs.Int("context", serverapi.TaskSearchDefaultContext, "context size for each matching source")
 	includeComments := fs.Bool("include-comments", false, "include Task Comments in the search")
 	pageSize := fs.Int("page-size", serverapi.TaskSearchDefaultPageSize, "maximum hits to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task search response")
+	offset := fs.Int("offset", 0, "zero-based hit offset")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	var projectFlags repeatedStringFlag
 	var statusFlags repeatedStringFlag
@@ -53,8 +53,8 @@ func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		StatusKinds:     statusKinds,
 		PageSize:        *pageSize,
 	}
-	if flagWasProvided(fs, "page-token") {
-		request.PageToken = pageToken
+	if flagWasProvided(fs, "offset") {
+		request.Offset = offset
 	}
 	if err := validateTaskSearchCommandRequest(request); err != nil {
 		writeTaskSearchError(stderr, err)
@@ -76,13 +76,7 @@ func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func validateTaskSearchCommandRequest(request serverapi.TaskSearchRequest) error {
-	pageToken := request.PageToken
-	request.PageToken = nil
-	if err := request.Validate(); err != nil {
-		return err
-	}
-	request.PageToken = pageToken
-	return nil
+	return request.Validate()
 }
 
 func resolveTaskSearchProjectIDs(ctx context.Context, cfg config.App, remote workflowCommandRemote, refs []string) ([]string, error) {
@@ -136,8 +130,8 @@ func writeTaskSearchResponse(stdout io.Writer, stderr io.Writer, response server
 			return 1
 		}
 	}
-	if response.NextPageToken != nil {
-		if err := writeNextPageToken(stderr, *response.NextPageToken); err != nil {
+	if response.NextOffset != nil {
+		if err := writeNextOffset(stderr, *response.NextOffset); err != nil {
 			return 1
 		}
 	}
@@ -151,9 +145,6 @@ func writeTaskSearchError(stderr io.Writer, err error) int {
 		case serverapi.TaskSearchErrorReasonNormalizedTooShort:
 			fmt.Fprintln(stderr, "task search query is too short after normalization")
 			return 2
-		case serverapi.TaskSearchErrorReasonInvalidCursor:
-			fmt.Fprintln(stderr, "task search page token is invalid")
-			return 1
 		}
 	}
 	fmt.Fprintln(stderr, err)

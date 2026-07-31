@@ -114,9 +114,7 @@ type ListTaskSearchPageDescriptorsParams struct {
 	ProjectIdsJson            sql.NullString
 	StatusKindsJson           sql.NullString
 	ContextClusters           int64
-	CursorOrdinal             sql.NullInt64
-	CursorWeightedRank        sql.NullFloat64
-	CursorTaskID              sql.NullString
+	OffsetRows                int64
 	LimitRows                 int64
 	LiveTaskStatesJson        string
 }
@@ -152,13 +150,11 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.ProjectIdsJson,
 		arg.StatusKindsJson,
 		arg.ContextClusters,
-		arg.CursorOrdinal,
-		arg.CursorWeightedRank,
-		arg.CursorTaskID,
+		arg.OffsetRows,
 		arg.LimitRows,
 		arg.LiveTaskStatesJson,
 	)
-	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 16)
+	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 11)
 	if err != nil {
 		return nil, err
 	}
@@ -185,15 +181,15 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 			&item.SourceOrdinal,
 			&item.TaskWeightedRank,
 			&item.RawSnippet,
-		), listTaskSearchPageDescriptors, 16); err != nil {
+		), listTaskSearchPageDescriptors, 11); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 16); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 11); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 16); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 11); err != nil {
 		return nil, err
 	}
 	return items, nil

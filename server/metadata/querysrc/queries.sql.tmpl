@@ -3506,11 +3506,9 @@ args AS (
         CAST(?6 AS TEXT) AS project_ids_json,
         CAST(?7 AS TEXT) AS status_kinds_json,
         CAST(?8 AS INTEGER) AS context_clusters,
-        CAST(?9 AS INTEGER) AS cursor_ordinal,
-        CAST(?10 AS REAL) AS cursor_weighted_rank,
-        CAST(?11 AS TEXT) AS cursor_task_id,
-        CAST(?12 AS INTEGER) AS limit_rows,
-        CAST(?13 AS TEXT) AS live_task_states_json
+        CAST(?9 AS INTEGER) AS offset_rows,
+        CAST(?10 AS INTEGER) AS limit_rows,
+        CAST(?11 AS TEXT) AS live_task_states_json
 ),
 {{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
 matching_sources AS (
@@ -3633,16 +3631,14 @@ ranked_sources AS (
 ),
 rounds AS (
     SELECT
-        COALESCE(args.cursor_ordinal, 1) AS ordinal,
-        0 AS lookahead_count
+        1 AS ordinal
     FROM args
     UNION ALL
     SELECT
-        rounds.ordinal + 1,
-        rounds.lookahead_count + 1
+        rounds.ordinal + 1
     FROM rounds
     CROSS JOIN args
-    WHERE rounds.lookahead_count < args.limit_rows
+    WHERE rounds.ordinal < args.offset_rows + args.limit_rows
 )
 SELECT
     ranked_sources.task_id,
@@ -3668,22 +3664,11 @@ JOIN ranked_sources
   ON rounds.ordinal > ranked_sources.source_ordinal_before
  AND rounds.ordinal <= ranked_sources.source_ordinal_before + ranked_sources.source_hit_count
 CROSS JOIN args
-WHERE args.cursor_ordinal IS NULL
-   OR rounds.ordinal > args.cursor_ordinal
-   OR (
-       rounds.ordinal = args.cursor_ordinal
-       AND (
-           ranked_sources.task_weighted_rank < args.cursor_weighted_rank
-           OR (
-               ranked_sources.task_weighted_rank = args.cursor_weighted_rank
-               AND ranked_sources.task_id > args.cursor_task_id
-           )
-       )
-   )
 ORDER BY
     rounds.ordinal ASC,
     ranked_sources.task_weighted_rank DESC,
     ranked_sources.task_id ASC
-LIMIT (SELECT limit_rows FROM args);
+LIMIT (SELECT limit_rows FROM args)
+OFFSET (SELECT offset_rows FROM args);
 {{end}}
 {{if .IncludeTaskSearchPageDescriptors}}{{template "taskSearchPageDescriptors" .}}{{end}}

@@ -338,7 +338,7 @@ Literal search is the default. It ignores search operators and requires at least
 kent task search "RetryPolicy" --case-sensitive --include-comments
 ```
 
-`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget, and use the opaque `--page-token` reported for the next breadth-first result page. `--json` returns grouped structured results.
+`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget. Continue a breadth-first result stream with the reported zero-based `--offset`; index changes between requests can repeat or skip hits. `--json` returns grouped structured results.
 
 ```bash
 kent task search 'title:"retry policy"' --fts5 --page-size 20 --json

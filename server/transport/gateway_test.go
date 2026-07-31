@@ -639,7 +639,7 @@ func TestGatewayTaskSearchDispatchesIndexedResponseAndTypedValidationError(t *te
 		len(response.Groups[0].Hits) != 1 ||
 		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody ||
 		response.Groups[0].Hits[0].Literal == nil ||
-		response.NextPageToken != nil {
+		response.NextOffset != nil {
 		t.Fatalf("indexed search response = %+v", response)
 	}
 

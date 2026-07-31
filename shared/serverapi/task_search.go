@@ -47,7 +47,7 @@ type TaskSearchRequest struct {
 	ProjectIDs      []string                 `json:"project_ids,omitempty"`
 	StatusKinds     []WorkflowTaskStatusKind `json:"status_kinds,omitempty"`
 	PageSize        int                      `json:"page_size"`
-	PageToken       *string                  `json:"page_token,omitempty"`
+	Offset          *int                     `json:"offset,omitempty"`
 }
 
 func (r TaskSearchRequest) Validate() error {
@@ -75,8 +75,8 @@ func (r TaskSearchRequest) Validate() error {
 	if r.PageSize < 1 || r.PageSize > TaskSearchMaxPageSize {
 		return taskSearchFieldError("page_size", "page_size is out of range")
 	}
-	if r.PageToken != nil && (strings.TrimSpace(*r.PageToken) == "" || strings.TrimSpace(*r.PageToken) != *r.PageToken) {
-		return taskSearchFieldError("page_token", "page_token is invalid")
+	if r.Offset != nil && *r.Offset < 0 {
+		return taskSearchFieldError("offset", "offset must be non-negative")
 	}
 	for index, projectID := range r.ProjectIDs {
 		if strings.TrimSpace(projectID) == "" || strings.TrimSpace(projectID) != projectID {
@@ -98,9 +98,9 @@ func (r TaskSearchRequest) Validate() error {
 }
 
 type TaskSearchResponse struct {
-	Mode          TaskSearchMode    `json:"mode"`
-	Groups        []TaskSearchGroup `json:"groups"`
-	NextPageToken *string           `json:"next_page_token,omitempty"`
+	Mode       TaskSearchMode    `json:"mode"`
+	Groups     []TaskSearchGroup `json:"groups"`
+	NextOffset *int              `json:"next_offset,omitempty"`
 }
 
 type TaskSearchGroup struct {
@@ -146,10 +146,8 @@ func (r TaskSearchResponse) Validate() error {
 	if r.Groups == nil {
 		return errors.New("task search response groups are required")
 	}
-	if r.NextPageToken != nil {
-		if err := validateTaskSearchResponseString("next page token", *r.NextPageToken); err != nil {
-			return err
-		}
+	if r.NextOffset != nil && *r.NextOffset <= 0 {
+		return errors.New("task search response next offset is invalid")
 	}
 	groupTaskIDs := make(map[string]struct{}, len(r.Groups))
 	for groupIndex, group := range r.Groups {
@@ -231,7 +229,6 @@ type TaskSearchErrorReason string
 
 const (
 	TaskSearchErrorReasonNormalizedTooShort TaskSearchErrorReason = "normalized_too_short"
-	TaskSearchErrorReasonInvalidCursor      TaskSearchErrorReason = "invalid_cursor"
 )
 
 type TaskSearchError struct {
@@ -247,8 +244,7 @@ func (e *TaskSearchError) Error() string {
 
 func (e TaskSearchError) Validate() error {
 	switch e.Reason {
-	case TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonInvalidCursor:
+	case TaskSearchErrorReasonNormalizedTooShort:
 		return nil
 	default:
 		return errors.New("task search error reason is invalid")

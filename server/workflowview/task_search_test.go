@@ -489,7 +489,7 @@ func assertTaskSearchEmpty(t *testing.T, ctx context.Context, search *TaskSearch
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(response.Groups) != 0 || response.NextPageToken != nil {
+	if len(response.Groups) != 0 || response.NextOffset != nil {
 		t.Fatalf("empty search response = %+v", response)
 	}
 }

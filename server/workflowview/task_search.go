@@ -2,17 +2,10 @@ package workflowview
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
 	"strings"
 
 	"core/server/metadata"
@@ -27,33 +20,18 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const taskSearchPageTokenVersion = 2
-
 type TaskSearch struct {
 	metadata  *metadata.Store
 	queries   *sqlitegen.Queries
 	projector *TaskProjector
 	authority *sessionruntime.Authority
 	permit    *workflowexecution.MutationPermit
-	tokens    *taskSearchPageTokenCodec
 }
 
 type taskSearchReadSnapshot struct {
 	queries       *sqlitegen.Queries
 	liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
 	close         func() error
-}
-
-type taskSearchPageTokenCodec struct {
-	aead cipher.AEAD
-}
-
-type taskSearchPageToken struct {
-	Version     int    `json:"version"`
-	Fingerprint string `json:"fingerprint"`
-	Ordinal     int64  `json:"ordinal"`
-	RankBits    uint64 `json:"rank_bits"`
-	TaskID      string `json:"task_id"`
 }
 
 func NewTaskSearch(
@@ -72,22 +50,17 @@ func NewTaskSearch(
 	case permit == nil:
 		return nil, errors.New("workflow mutation permit is required")
 	}
-	tokens, err := newTaskSearchPageTokenCodec()
-	if err != nil {
-		return nil, fmt.Errorf("create task search page-token codec: %w", err)
-	}
 	return &TaskSearch{
 		metadata:  metadataStore,
 		queries:   metadataStore.Queries(),
 		projector: projector,
 		authority: authority,
 		permit:    permit,
-		tokens:    tokens,
 	}, nil
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil || s.permit == nil || s.tokens == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil || s.permit == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -96,13 +69,9 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err := context.Cause(ctx); err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	fingerprint, err := taskSearchRequestFingerprint(req)
-	if err != nil {
-		return serverapi.TaskSearchResponse{}, err
-	}
-	cursor, hasCursor, err := s.tokens.parse(req.PageToken, fingerprint)
-	if err != nil {
-		return serverapi.TaskSearchResponse{}, err
+	offset := 0
+	if req.Offset != nil {
+		offset = *req.Offset
 	}
 	snapshot, err := s.captureReadSnapshot(ctx, req)
 	if err != nil {
@@ -122,7 +91,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveSnapshots, req, cursor, hasCursor)
+	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveSnapshots, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -137,22 +106,12 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	var next *string
+	var next *int
 	if hasNext && len(rows) > 0 {
-		last := rows[len(rows)-1]
-		encoded, encodeErr := s.tokens.encode(taskSearchPageToken{
-			Version:     taskSearchPageTokenVersion,
-			Fingerprint: fingerprint,
-			Ordinal:     last.Ordinal,
-			RankBits:    math.Float64bits(last.TaskWeightedRank),
-			TaskID:      last.TaskID,
-		})
-		if encodeErr != nil {
-			return serverapi.TaskSearchResponse{}, encodeErr
-		}
-		next = &encoded
+		value := offset + len(rows)
+		next = &value
 	}
-	response = serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextPageToken: next}
+	response = serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextOffset: next}
 	if err := response.Validate(); err != nil {
 		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
 	}
@@ -233,7 +192,7 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, cursor taskSearchPageToken, hasCursor bool) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
+func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, offset int) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
 	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(liveSnapshots)
 	if err != nil {
 		return nil, err
@@ -260,14 +219,6 @@ func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, 
 		candidateExpression = matcher.CandidateExpression()
 		caseMode = int64(mode)
 	}
-	cursorOrdinal := sql.NullInt64{}
-	cursorRank := sql.NullFloat64{}
-	cursorTaskID := sql.NullString{}
-	if hasCursor {
-		cursorOrdinal = sql.NullInt64{Int64: cursor.Ordinal, Valid: true}
-		cursorRank = sql.NullFloat64{Float64: math.Float64frombits(cursor.RankBits), Valid: true}
-		cursorTaskID = sql.NullString{String: cursor.TaskID, Valid: true}
-	}
 	return queries.ListTaskSearchPageDescriptors(ctx, sqlitegen.ListTaskSearchPageDescriptorsParams{
 		Mode:                string(req.Mode),
 		CandidateExpression: candidateExpression,
@@ -277,9 +228,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, 
 		ProjectIdsJson:      projectIDsJSON,
 		StatusKindsJson:     statusKindsJSON,
 		ContextClusters:     int64(req.Context),
-		CursorOrdinal:       cursorOrdinal,
-		CursorWeightedRank:  cursorRank,
-		CursorTaskID:        cursorTaskID,
+		OffsetRows:          int64(offset),
 		LimitRows:           int64(req.PageSize + 1),
 		LiveTaskStatesJson:  liveTaskStatesJSON,
 	})
@@ -431,42 +380,6 @@ func taskSearchFTS5OperationalError(err error) error {
 	return err
 }
 
-func taskSearchRequestFingerprint(req serverapi.TaskSearchRequest) (string, error) {
-	payload := struct {
-		Mode               serverapi.TaskSearchMode `json:"mode"`
-		Query              string                   `json:"query"`
-		Context            int                      `json:"context"`
-		CaseSensitive      bool                     `json:"case_sensitive"`
-		IncludeComments    bool                     `json:"include_comments"`
-		ProjectIDs         []string                 `json:"project_ids"`
-		StatusKinds        []string                 `json:"status_kinds"`
-		StatusModelVersion int                      `json:"status_model_version"`
-		Normalization      string                   `json:"normalization"`
-		SparseDocument     string                   `json:"sparse_document"`
-		Ranking            string                   `json:"ranking"`
-		PageTokenVersion   int                      `json:"page_token_version"`
-	}{
-		Mode:               req.Mode,
-		Query:              req.Query,
-		Context:            req.Context,
-		CaseSensitive:      req.CaseSensitive,
-		IncludeComments:    req.IncludeComments,
-		ProjectIDs:         taskSearchProjectIDs(req),
-		StatusKinds:        taskSearchStatusKinds(req),
-		StatusModelVersion: workflowTaskStatusModelVersion,
-		Normalization:      tasksearchtext.NormalizationContractVersion,
-		SparseDocument:     serverapi.TaskSearchSparseDocumentContractVersion,
-		Ranking:            serverapi.TaskSearchRankingContractVersion,
-		PageTokenVersion:   taskSearchPageTokenVersion,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task search fingerprint: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
-}
-
 func taskSearchProjectIDs(req serverapi.TaskSearchRequest) []string {
 	return append([]string{}, req.ProjectIDs...)
 }
@@ -477,71 +390,4 @@ func taskSearchStatusKinds(req serverapi.TaskSearchRequest) []string {
 		statuses = append(statuses, string(status))
 	}
 	return statuses
-}
-
-func newTaskSearchPageTokenCodec() (*taskSearchPageTokenCodec, error) {
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return nil, fmt.Errorf("generate cursor encryption key: %w", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("initialize cursor cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("initialize cursor authenticated encryption: %w", err)
-	}
-	return &taskSearchPageTokenCodec{aead: aead}, nil
-}
-
-func (c *taskSearchPageTokenCodec) parse(raw *string, fingerprint string) (taskSearchPageToken, bool, error) {
-	if raw == nil {
-		return taskSearchPageToken{}, false, nil
-	}
-	if c == nil || c.aead == nil {
-		return taskSearchPageToken{}, false, errors.New("task search page-token codec is required")
-	}
-	sealed, err := base64.RawURLEncoding.DecodeString(*raw)
-	if err != nil {
-		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
-	}
-	nonceSize := c.aead.NonceSize()
-	if len(sealed) < nonceSize {
-		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
-	}
-	decoded, err := c.aead.Open(nil, sealed[:nonceSize], sealed[nonceSize:], nil)
-	if err != nil {
-		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
-	}
-	var token taskSearchPageToken
-	if err := json.Unmarshal(decoded, &token); err != nil {
-		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
-	}
-	rank := math.Float64frombits(token.RankBits)
-	if token.Version != taskSearchPageTokenVersion ||
-		token.Fingerprint != fingerprint ||
-		token.Ordinal < 1 ||
-		math.IsInf(rank, 0) ||
-		math.IsNaN(rank) ||
-		strings.TrimSpace(token.TaskID) == "" ||
-		strings.TrimSpace(token.TaskID) != token.TaskID {
-		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
-	}
-	return token, true, nil
-}
-
-func (c *taskSearchPageTokenCodec) encode(token taskSearchPageToken) (string, error) {
-	if c == nil || c.aead == nil {
-		return "", errors.New("task search page-token codec is required")
-	}
-	raw, err := json.Marshal(token)
-	if err != nil {
-		return "", fmt.Errorf("marshal task search cursor: %w", err)
-	}
-	nonce := make([]byte, c.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("generate task search cursor nonce: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(c.aead.Seal(nonce, nonce, raw, nil)), nil
 }

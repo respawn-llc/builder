@@ -20,11 +20,14 @@
 - Search pagination is breadth-first by per-Task hit ordinal: every matching Task's first hit precedes any Task's second hit, and so on. Later pages may repeat a Task with later hits.
 - Each hit ordinal is 1-based. Each page selects hits in breadth-first order and then groups the selected hits by Task. Task groups follow the order of their first selected hit. Hits inside a group retain their absolute per-Task order.
 - Equal-rank Comment hits use newest-first creation time. Equal creation times use persistent Comment ID descending as the final Comment tie-breaker.
-- `--page-size` defaults to `100` and accepts `1..100`. `--page-token` is an opaque cursor tied to every search choice and to the matching, status, source, and ranking contracts.
+- `--page-size` defaults to `100` and accepts `1..100`. `--offset` is a zero-based hit offset and defaults to `0`. A supplied offset must be non-negative.
+- When more hits exist, `next_offset` equals the request offset plus the number of returned hits. A continuation repeats the same search choices with that offset.
+- When more hits exist, the CLI writes `Next offset: `<n>`` to standard error after either plain or JSON output.
+- Search does not retain or persist pagination state between requests. A changed result set can make a later offset repeat or skip hits.
 - Plain output renders `SHORT-ID: title`, unlabeled title/body hit lines, a lowercase `comments:` heading only when the page contains Comment hits for that Task, Comment hit lines, and `[N more hits]` when later hits remain. It exposes no line numbers, persistent Comment IDs, status, workflow, score, author, or date.
 - Plain literal hits use `…` only on a side with omitted source text. Plain output trims fragment edges, folds Unicode whitespace runs to one ASCII space, never terminal-width-truncates, and emits each hit as one physical terminal line; structured output preserves the original segments.
 - A valid empty search prints `No matches.` and succeeds.
-- JSON output is an object with `mode`, `groups`, and optional `next_page_token`. `mode` is the discriminator and is either `literal` or `fts5`. Empty results use `groups: []`; an absent continuation token is omitted.
+- JSON output is an object with `mode`, `groups`, and optional `next_offset`. `mode` is the discriminator and is either `literal` or `fts5`. Empty results use `groups: []`; an absent next offset is omitted.
 - Each JSON group has exactly `project_id`, `project_key`, `task_id`, `short_id`, `workflow_id`, `title`, `status`, `total_hit_count`, and `hits`.
 - Each JSON `status` has `kind`, `native_state`, optional `node_ids`, and optional `attention_types`.
 - Each JSON hit has exactly `ordinal`, `source`, and one mode payload. `source` has `kind` and optional `comment_id`. `source.kind` is `title`, `body`, or `comment`. Comment hits include `comment_id`; title and body hits omit it.
@@ -32,7 +35,7 @@
 - Raw-mode hits have `fts5` and omit `literal`. `fts5` has `snippet`.
 - JSON output does not expose ranking scores or a flat duplicate hit list.
 - Query validation trims Unicode whitespace from the one positional argument, preserves interior query text, and limits it to `4096` Unicode code points. A literal query must contain at least one searchable trigram after search normalization. A raw expression follows FTS5 behavior for shorter terms.
-- Command-local validation failures use exit code `2`. These include missing or extra positional queries, blank or overlong queries, malformed or unknown flags, invalid `--status`, invalid `--context`, invalid `--page-size`, invalid flag combinations, and normalized-too-short literal queries. An unresolved Project selector, invalid cursor, transport failure, schema or index failure, database busy or interruption, and every raw FTS5 evaluation failure use exit code `1`.
+- Command-local validation failures use exit code `2`. These include missing or extra positional queries, blank or overlong queries, malformed or unknown flags, invalid `--status`, invalid `--context`, invalid `--page-size`, invalid `--offset`, invalid flag combinations, and normalized-too-short literal queries. An unresolved Project selector, transport failure, schema or index failure, database busy or interruption, and every raw FTS5 evaluation failure use exit code `1`.
 - SQLite reports malformed raw FTS5 syntax and some FTS schema or configuration failures through the same runtime error class. Kent therefore reports every raw FTS5 SQLite evaluation error as one generic operational failure with exit code `1`.
 - Search uses the same authoritative Task status as Task lists and Task detail.
 - Each response is point-in-time consistent for matching text, counts, filters, and Task metadata, and combines that data with one current view of live Task activity. A concurrent change appears wholly before or after the response, never as mixed state.

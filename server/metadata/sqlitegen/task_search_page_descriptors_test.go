@@ -81,9 +81,7 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 		t.Fatalf("first raw page = %+v, want title ordinal 1", firstPage)
 	}
 	nextPageParams := firstPageParams
-	nextPageParams.CursorOrdinal = sql.NullInt64{Int64: firstPage[0].Ordinal, Valid: true}
-	nextPageParams.CursorWeightedRank = sql.NullFloat64{Float64: firstPage[0].TaskWeightedRank, Valid: true}
-	nextPageParams.CursorTaskID = sql.NullString{String: firstPage[0].TaskID, Valid: true}
+	nextPageParams.OffsetRows = 1
 	nextPage, err := New(db).ListTaskSearchPageDescriptors(t.Context(), nextPageParams)
 	if err != nil {
 		t.Fatalf("ListTaskSearchPageDescriptors raw continuation: %v", err)
@@ -110,7 +108,83 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 	}
 }
 
-func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNewestCommentsAndKeysets(t *testing.T) {
+func TestListTaskSearchPageDescriptorsFiltersCanonicalDocumentsBeforeTaskWinnerSelection(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	createTaskSearchPageDescriptorFilteringFixture(t, db)
+
+	matcher, err := tasksearchtext.NewLiteralMatcher("foo", tasksearchtext.LiteralCaseSensitive)
+	if err != nil {
+		t.Fatalf("NewLiteralMatcher: %v", err)
+	}
+	params := taskSearchPageDescriptorParams(
+		"literal",
+		matcher.CandidateExpression(),
+		"foo",
+		int64(tasksearchtext.LiteralCaseSensitive),
+	)
+	params.IncludeComments = 0
+	rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors canonical literal: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("canonical literal descriptors = %+v, want three surviving source hits", rows)
+	}
+	for index, want := range []struct {
+		taskID     string
+		sourceKind string
+		ordinal    int64
+	}{
+		{taskID: "task-strong", sourceKind: "title", ordinal: 1},
+		{taskID: "task-body", sourceKind: "body", ordinal: 1},
+		{taskID: "task-strong", sourceKind: "body", ordinal: 2},
+	} {
+		got := rows[index]
+		if got.TaskID != want.taskID || got.SourceKind != want.sourceKind || got.Ordinal != want.ordinal {
+			t.Fatalf("canonical literal descriptor %d = %+v, want %+v", index, got, want)
+		}
+		if got.TaskID == "task-false-positive" {
+			t.Fatal("case-insensitive FTS candidate without a canonical case-sensitive match survived")
+		}
+	}
+
+	firstPageParams := params
+	firstPageParams.LimitRows = 1
+	firstPage, err := New(db).ListTaskSearchPageDescriptors(t.Context(), firstPageParams)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors canonical first page: %v", err)
+	}
+	if len(firstPage) != 1 || firstPage[0].TaskID != "task-strong" || firstPage[0].SourceKind != "title" || firstPage[0].Ordinal != 1 {
+		t.Fatalf("canonical first page = %+v, want task-strong title ordinal 1", firstPage)
+	}
+	secondPageParams := firstPageParams
+	secondPageParams.OffsetRows = 1
+	secondPage, err := New(db).ListTaskSearchPageDescriptors(t.Context(), secondPageParams)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors canonical continuation: %v", err)
+	}
+	if len(secondPage) != 1 || secondPage[0].TaskID != "task-body" || secondPage[0].SourceKind != "body" || secondPage[0].Ordinal != 1 {
+		t.Fatalf("canonical continuation = %+v, want task-body body ordinal 1", secondPage)
+	}
+	thirdPageParams := secondPageParams
+	thirdPageParams.OffsetRows = 2
+	thirdPage, err := New(db).ListTaskSearchPageDescriptors(t.Context(), thirdPageParams)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors canonical second continuation: %v", err)
+	}
+	if len(thirdPage) != 1 || thirdPage[0].TaskID != "task-strong" || thirdPage[0].SourceKind != "body" || thirdPage[0].Ordinal != 2 {
+		t.Fatalf("canonical second continuation = %+v, want task-strong body ordinal 2", thirdPage)
+	}
+
+	requireTaskSearchDescriptorProgramFiltersFTSFirst(
+		t,
+		db,
+		queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
+	)
+}
+
+func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNewestCommentsAndOffsets(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFilteringFixture(t, db)
@@ -187,20 +261,18 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 	params.LimitRows = 1
 	first, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
-		t.Fatalf("ListTaskSearchPageDescriptors keyset first page: %v", err)
+		t.Fatalf("ListTaskSearchPageDescriptors offset first page: %v", err)
 	}
 	if len(first) != 1 || first[0].TaskID != "task-a" || first[0].Ordinal != 1 {
-		t.Fatalf("keyset first page = %+v, want task-a ordinal 1", first)
+		t.Fatalf("offset first page = %+v, want task-a ordinal 1", first)
 	}
-	params.CursorOrdinal = sql.NullInt64{Int64: first[0].Ordinal, Valid: true}
-	params.CursorWeightedRank = sql.NullFloat64{Float64: first[0].TaskWeightedRank, Valid: true}
-	params.CursorTaskID = sql.NullString{String: first[0].TaskID, Valid: true}
+	params.OffsetRows = 1
 	second, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
-		t.Fatalf("ListTaskSearchPageDescriptors keyset second page: %v", err)
+		t.Fatalf("ListTaskSearchPageDescriptors offset second page: %v", err)
 	}
 	if len(second) != 1 || second[0].TaskID != "task-c" || second[0].Ordinal != 1 {
-		t.Fatalf("keyset second page = %+v, want task-c ordinal 1", second)
+		t.Fatalf("offset second page = %+v, want task-c ordinal 1", second)
 	}
 	if second[0].TaskWeightedRank != first[0].TaskWeightedRank {
 		t.Fatalf(
@@ -326,9 +398,7 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		ProjectIdsJson:      sql.NullString{},
 		StatusKindsJson:     sql.NullString{},
 		ContextClusters:     20,
-		CursorOrdinal:       sql.NullInt64{},
-		CursorWeightedRank:  sql.NullFloat64{},
-		CursorTaskID:        sql.NullString{},
+		OffsetRows:          0,
 		LimitRows:           100,
 		LiveTaskStatesJson:  "[]",
 	}
@@ -344,9 +414,7 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.ProjectIdsJson,
 		params.StatusKindsJson,
 		params.ContextClusters,
-		params.CursorOrdinal,
-		params.CursorWeightedRank,
-		params.CursorTaskID,
+		params.OffsetRows,
 		params.LimitRows,
 		params.LiveTaskStatesJson,
 	}
@@ -475,11 +543,15 @@ CREATE VIRTUAL TABLE task_search_fts USING fts5(
 
 INSERT INTO projects (id, project_key) VALUES
     ('project-a', 'AAA'),
-    ('project-b', 'BBB');
+    ('project-b', 'BBB'),
+    ('project-c', 'CCC');
 INSERT INTO task_records (id, project_id, short_id, workflow_id, title) VALUES
     ('task-a', 'project-a', 'AAA-1', 'workflow-1', 'Task A'),
     ('task-b', 'project-a', 'AAA-2', 'workflow-1', 'Task B'),
-    ('task-c', 'project-b', 'BBB-1', 'workflow-1', 'Task C');
+    ('task-c', 'project-b', 'BBB-1', 'workflow-1', 'Task C'),
+    ('task-strong', 'project-c', 'CCC-1', 'workflow-1', 'Strong Task'),
+    ('task-body', 'project-c', 'CCC-2', 'workflow-1', 'Body Task'),
+    ('task-false-positive', 'project-c', 'CCC-3', 'workflow-1', 'False Positive Task');
 INSERT INTO workflow_task_status_records (
     task_id,
     is_done,
@@ -490,7 +562,10 @@ INSERT INTO workflow_task_status_records (
 ) VALUES
     ('task-a', 1, 'done', '[]', 1, '[]'),
     ('task-b', 0, 'backlog', '[]', 7, '[]'),
-    ('task-c', 1, 'done', '[]', 1, '[]');
+    ('task-c', 1, 'done', '[]', 1, '[]'),
+    ('task-strong', 0, 'backlog', '[]', 7, '[]'),
+    ('task-body', 0, 'backlog', '[]', 7, '[]'),
+    ('task-false-positive', 0, 'backlog', '[]', 7, '[]');
 INSERT INTO task_comments (id, task_id, created_at_unix_ms) VALUES
     ('comment-old', 'task-a', 1),
     ('comment-new', 'task-a', 2);
@@ -499,19 +574,34 @@ INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind
     (2, NULL, 'comment-old', 'comment'),
     (3, NULL, 'comment-new', 'comment'),
     (4, 'task-b', NULL, 'body'),
-    (5, 'task-c', NULL, 'body');
+    (5, 'task-c', NULL, 'body'),
+    (6, 'task-strong', NULL, 'title'),
+    (7, 'task-strong', NULL, 'body'),
+    (8, 'task-body', NULL, 'title'),
+    (9, 'task-body', NULL, 'body'),
+    (10, 'task-false-positive', NULL, 'title');
 INSERT INTO task_search_content (document_id, title, body, comment) VALUES
     (1, NULL, 'needle', NULL),
     (2, NULL, NULL, 'needle'),
     (3, NULL, NULL, 'needle'),
     (4, NULL, 'needle', NULL),
-    (5, NULL, 'needle', NULL);
+    (5, NULL, 'needle', NULL),
+    (6, 'foo', NULL, NULL),
+    (7, NULL, 'foo', NULL),
+    (8, 'FOO', NULL, NULL),
+    (9, NULL, 'foo', NULL),
+    (10, 'FOO', NULL, NULL);
 INSERT INTO task_search_fts (rowid, title, body, comment) VALUES
     (1, NULL, 'needle', NULL),
     (2, NULL, NULL, 'needle'),
     (3, NULL, NULL, 'needle'),
     (4, NULL, 'needle', NULL),
-    (5, NULL, 'needle', NULL);`); err != nil {
+    (5, NULL, 'needle', NULL),
+    (6, 'foo', NULL, NULL),
+    (7, NULL, 'foo', NULL),
+    (8, 'FOO', NULL, NULL),
+    (9, NULL, 'foo', NULL),
+    (10, 'FOO', NULL, NULL);`); err != nil {
 		t.Fatalf("create task-search descriptor filtering fixture: %v", err)
 	}
 }
@@ -643,20 +733,81 @@ VALUES (?, NULL, 'needle', NULL)`)
 	}
 }
 
+func requireTaskSearchDescriptorProgramFiltersFTSFirst(t *testing.T, db *sql.DB, instructions []sqliteInstruction) {
+	t.Helper()
+	relationRoots := taskSearchDescriptorSourceRelationRoots(t, db)
+	relationCursors := make(map[int64]string, len(relationRoots))
+	for _, instruction := range instructions {
+		switch instruction.Opcode {
+		case sqliteOpcodeOpenRead:
+			if relationName, ok := relationRoots[instruction.P2]; ok {
+				relationCursors[instruction.P1] = relationName
+			}
+		case sqliteOpcodeVFilter:
+			return
+		case sqliteOpcodeRewind, sqliteOpcodeNext, sqliteOpcodePrev:
+			if relationName, ok := relationCursors[instruction.P1]; ok {
+				t.Fatalf(
+					"task-search descriptor query traversed source relation %q before FTS filtering: %+v",
+					relationName,
+					instructions,
+				)
+			}
+		}
+	}
+	t.Fatalf("task-search descriptor query did not filter the FTS virtual table: %+v", instructions)
+}
+
+func taskSearchDescriptorSourceRelationRoots(t *testing.T, db *sql.DB) map[int64]string {
+	t.Helper()
+	rows, err := db.Query(`
+SELECT rootpage, name
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name IN (
+      'projects',
+      'task_records',
+      'workflow_task_status_records',
+      'task_comments',
+      'task_search_documents',
+      'task_search_content'
+  )`)
+	if err != nil {
+		t.Fatalf("resolve task-search source relation roots: %v", err)
+	}
+	defer closeQueryRows(t, rows)
+	roots := map[int64]string{}
+	for rows.Next() {
+		var rootPage int64
+		var relationName string
+		if err := rows.Scan(&rootPage, &relationName); err != nil {
+			t.Fatalf("scan task-search source relation root: %v", err)
+		}
+		roots[rootPage] = relationName
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate task-search source relation roots: %v", err)
+	}
+	if len(roots) != 6 {
+		t.Fatalf("task-search source relation roots = %v, want 6", roots)
+	}
+	return roots
+}
+
 func executeTaskSearchDescriptorPageWithCacheMeasurement(
 	t *testing.T,
 	db *sql.DB,
 	params ListTaskSearchPageDescriptorsParams,
 ) ([]ListTaskSearchPageDescriptorsRow, int) {
 	t.Helper()
-	connection, err := db.Conn(t.Context())
-	if err != nil {
-		t.Fatalf("acquire descriptor measurement connection: %v", err)
-	}
-	defer connection.Close()
 	cacheHits := func(reset bool) int {
+		connection, err := db.Conn(t.Context())
+		if err != nil {
+			t.Fatalf("acquire descriptor measurement connection: %v", err)
+		}
+		defer connection.Close()
 		var hits int
-		err := connection.Raw(func(driverConnection any) error {
+		err = connection.Raw(func(driverConnection any) error {
 			status, ok := driverConnection.(sqlitedriver.DBStatus)
 			if !ok {
 				return fmt.Errorf("sqlite driver connection %T does not expose DB status", driverConnection)
@@ -671,40 +822,9 @@ func executeTaskSearchDescriptorPageWithCacheMeasurement(
 		return hits
 	}
 	cacheHits(true)
-	rows, err := connection.QueryContext(t.Context(), listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...)
+	descriptors, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
 	if err != nil {
 		t.Fatalf("execute descriptor page: %v", err)
-	}
-	defer closeQueryRows(t, rows)
-	var descriptors []ListTaskSearchPageDescriptorsRow
-	for rows.Next() {
-		var descriptor ListTaskSearchPageDescriptorsRow
-		if err := rows.Scan(
-			&descriptor.TaskID,
-			&descriptor.ProjectID,
-			&descriptor.ProjectKey,
-			&descriptor.ShortID,
-			&descriptor.WorkflowID,
-			&descriptor.TaskTitle,
-			&descriptor.IsDone,
-			&descriptor.StatusKind,
-			&descriptor.NodeIdsJson,
-			&descriptor.AttentionTypesJson,
-			&descriptor.DocumentID,
-			&descriptor.SourceKind,
-			&descriptor.CommentID,
-			&descriptor.TotalHitCount,
-			&descriptor.Ordinal,
-			&descriptor.SourceOrdinal,
-			&descriptor.TaskWeightedRank,
-			&descriptor.RawSnippet,
-		); err != nil {
-			t.Fatalf("scan descriptor page: %v", err)
-		}
-		descriptors = append(descriptors, descriptor)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate descriptor page: %v", err)
 	}
 	return descriptors, cacheHits(false)
 }

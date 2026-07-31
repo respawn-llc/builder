@@ -39,9 +39,9 @@ func (r *taskSearchCommandRemote) Close() error {
 }
 
 func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing.T) {
-	nextPageToken := "opaque-next-page"
+	nextOffset := 6
 	response := taskSearchTestResponse(serverapi.TaskSearchModeFTS5)
-	response.NextPageToken = &nextPageToken
+	response.NextOffset = &nextOffset
 	remote := &taskSearchCommandRemote{response: response}
 	installWorkflowCommandRemote(t, remote)
 
@@ -59,7 +59,7 @@ func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing
 			"--project", "project-a",
 			"--project", "project-b",
 			"--page-size", "2",
-			"--page-token", "opaque-token",
+			"--offset", "4",
 			"--json",
 		},
 		&stdout,
@@ -79,8 +79,8 @@ func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing
 			serverapi.WorkflowTaskStatusKindBacklog,
 			serverapi.WorkflowTaskStatusKindDone,
 		},
-		PageSize:  2,
-		PageToken: pointerTo("opaque-token"),
+		PageSize: 2,
+		Offset:   pointerTo(4),
 	}
 	if !reflect.DeepEqual(remote.requests, []serverapi.TaskSearchRequest{wantRequest}) {
 		t.Fatalf("search requests = %#v, want %#v", remote.requests, []serverapi.TaskSearchRequest{wantRequest})
@@ -92,15 +92,15 @@ func TestTaskSearchBuildsCanonicalRequestAndPassesJSONResponseThrough(t *testing
 	if !reflect.DeepEqual(output, response) {
 		t.Fatalf("JSON output = %#v, want %#v", output, response)
 	}
-	if stderr.String() != nextPageTokenLine(nextPageToken)+"\n" {
-		t.Fatalf("next-page diagnostic = %q", stderr.String())
+	if stderr.String() != nextOffsetLine(nextOffset)+"\n" {
+		t.Fatalf("next-offset diagnostic = %q", stderr.String())
 	}
 }
 
 func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {
-	nextPageToken := "opaque-next-page"
+	nextOffset := 100
 	response := taskSearchTestResponse(serverapi.TaskSearchModeLiteral)
-	response.NextPageToken = &nextPageToken
+	response.NextOffset = &nextOffset
 	remote := &taskSearchCommandRemote{response: response}
 	installWorkflowCommandRemote(t, remote)
 
@@ -124,8 +124,8 @@ func TestTaskSearchUsesLiteralDefaultsAndTrimsOnlyQueryEdges(t *testing.T) {
 	if !reflect.DeepEqual(remote.requests, []serverapi.TaskSearchRequest{wantRequest}) {
 		t.Fatalf("search requests = %#v, want %#v", remote.requests, []serverapi.TaskSearchRequest{wantRequest})
 	}
-	if stderr.String() != nextPageTokenLine(nextPageToken)+"\n" {
-		t.Fatalf("next-page diagnostic = %q", stderr.String())
+	if stderr.String() != nextOffsetLine(nextOffset)+"\n" {
+		t.Fatalf("next-offset diagnostic = %q", stderr.String())
 	}
 }
 
@@ -194,11 +194,6 @@ func TestTaskSearchMapsTypedSearchFailuresToSpecifiedExitClasses(t *testing.T) {
 			err:      errors.New("task search FTS5 query could not be evaluated"),
 			exitCode: 1,
 		},
-		{
-			name:     "invalid cursor remains operational",
-			err:      &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor},
-			exitCode: 1,
-		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			remote := &taskSearchCommandRemote{
@@ -244,6 +239,27 @@ func TestTaskSearchRejectsInvalidFlagCombinationBeforeOpeningRemote(t *testing.T
 	}
 }
 
+func TestTaskSearchRejectsNegativeOffsetBeforeOpeningRemote(t *testing.T) {
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, nil, errors.New("remote should not open")
+	}
+	t.Cleanup(func() {
+		workflowCommandRemoteOpener = previous
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"search", "needle", "--offset", "-1"},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q", exitCode, stderr.String())
+	}
+}
+
 func taskSearchTestResponse(mode serverapi.TaskSearchMode) serverapi.TaskSearchResponse {
 	hit := serverapi.TaskSearchHit{
 		Ordinal: 1,
@@ -273,6 +289,6 @@ func taskSearchTestResponse(mode serverapi.TaskSearchMode) serverapi.TaskSearchR
 	}
 }
 
-func pointerTo(value string) *string {
+func pointerTo(value int) *int {
 	return &value
 }

@@ -59,13 +59,12 @@ func TestTaskSearchRequestValidation(t *testing.T) {
 	}
 }
 
-func TestTaskSearchRequestRequiresCanonicalContinuationAndStatusFilters(t *testing.T) {
-	for _, token := range []string{"", " token"} {
-		request := validTaskSearchRequest()
-		request.PageToken = &token
-		if err := request.Validate(); err == nil {
-			t.Fatalf("request with invalid page token %q validated", token)
-		}
+func TestTaskSearchRequestRequiresNonNegativeOffsetAndCanonicalStatusFilters(t *testing.T) {
+	negative := -1
+	request := validTaskSearchRequest()
+	request.Offset = &negative
+	if err := request.Validate(); err == nil {
+		t.Fatal("request with a negative offset validated")
 	}
 	for _, statuses := range [][]WorkflowTaskStatusKind{
 		{WorkflowTaskStatusKindDone, WorkflowTaskStatusKindBacklog},
@@ -77,6 +76,45 @@ func TestTaskSearchRequestRequiresCanonicalContinuationAndStatusFilters(t *testi
 		if err := request.Validate(); err == nil {
 			t.Fatalf("request with invalid status filters %v validated", statuses)
 		}
+	}
+}
+
+func TestTaskSearchPaginationJSONUsesNullableNumericOffsets(t *testing.T) {
+	offset := 0
+	nextOffset := 100
+	request := validTaskSearchRequest()
+	request.Offset = &offset
+	response := validTaskSearchResponse()
+	response.NextOffset = &nextOffset
+
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal task search request: %v", err)
+	}
+	var requestShape map[string]any
+	if err := json.Unmarshal(requestJSON, &requestShape); err != nil {
+		t.Fatalf("decode task search request: %v", err)
+	}
+	if requestShape["offset"] != float64(offset) {
+		t.Fatalf("request JSON = %s", requestJSON)
+	}
+	if _, exists := requestShape["page_token"]; exists {
+		t.Fatalf("request JSON retains page_token: %s", requestJSON)
+	}
+
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal task search response: %v", err)
+	}
+	var responseShape map[string]any
+	if err := json.Unmarshal(responseJSON, &responseShape); err != nil {
+		t.Fatalf("decode task search response: %v", err)
+	}
+	if responseShape["next_offset"] != float64(nextOffset) {
+		t.Fatalf("response JSON = %s", responseJSON)
+	}
+	if _, exists := responseShape["next_page_token"]; exists {
+		t.Fatalf("response JSON retains next_page_token: %s", responseJSON)
 	}
 }
 
@@ -106,7 +144,7 @@ func TestTaskSearchRequestPinsDefaultsAndBounds(t *testing.T) {
 	}
 }
 
-func TestTaskSearchCursorContractVersionsArePinned(t *testing.T) {
+func TestTaskSearchReadContractVersionsArePinned(t *testing.T) {
 	if TaskSearchSparseDocumentContractVersion != "kent-task-search-sparse-document-v1" {
 		t.Fatalf("sparse document contract version = %q", TaskSearchSparseDocumentContractVersion)
 	}
@@ -172,8 +210,11 @@ func TestTaskSearchResponseJSONAndTaggedHits(t *testing.T) {
 	if err := json.Unmarshal(encoded, &shape); err != nil {
 		t.Fatalf("unmarshal task search response: %v", err)
 	}
+	if _, exists := shape["next_offset"]; exists {
+		t.Fatalf("response unexpectedly has absent next_offset: %s", encoded)
+	}
 	if _, exists := shape["next_page_token"]; exists {
-		t.Fatalf("response unexpectedly has absent next_page_token: %s", encoded)
+		t.Fatalf("response retains obsolete next_page_token: %s", encoded)
 	}
 	if _, exists := shape["hits"]; exists {
 		t.Fatalf("response unexpectedly has flat hits: %s", encoded)
@@ -241,10 +282,10 @@ func TestTaskSearchResponseJSONAndTaggedHits(t *testing.T) {
 
 func TestTaskSearchResponseRoundTripsRawGroupedJSON(t *testing.T) {
 	commentID := "comment-1"
-	nextPageToken := "opaque-token"
+	nextOffset := 7
 	response := validTaskSearchResponse()
 	response.Mode = TaskSearchModeFTS5
-	response.NextPageToken = &nextPageToken
+	response.NextOffset = &nextOffset
 	response.Groups[0].Hits[0] = TaskSearchHit{
 		Ordinal: 1,
 		Source:  TaskSearchSource{Kind: TaskSearchSourceKindComment, CommentID: &commentID},
@@ -270,7 +311,6 @@ func TestTaskSearchResponseRoundTripsRawGroupedJSON(t *testing.T) {
 func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 	for _, reason := range []TaskSearchErrorReason{
 		TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonInvalidCursor,
 	} {
 		source := TaskSearchError{Reason: reason}
 		if err := source.Validate(); err != nil {
@@ -296,7 +336,6 @@ func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 func TestTaskSearchErrorRPCRoundTripsEveryTypedReason(t *testing.T) {
 	for _, reason := range []TaskSearchErrorReason{
 		TaskSearchErrorReasonNormalizedTooShort,
-		TaskSearchErrorReasonInvalidCursor,
 	} {
 		source := &TaskSearchError{Reason: reason}
 		decodedErr := DecodeTaskSearchError(mustRPCErrorData(t, source), source.Error())
@@ -416,12 +455,12 @@ func TestTaskSearchResponseRequiresUniqueTaskGroups(t *testing.T) {
 	}
 }
 
-func TestTaskSearchResponseRejectsBlankContinuationToken(t *testing.T) {
-	for _, token := range []string{"", " token"} {
+func TestTaskSearchResponseRejectsInvalidNextOffset(t *testing.T) {
+	for _, offset := range []int{-1, 0} {
 		response := validTaskSearchResponse()
-		response.NextPageToken = &token
+		response.NextOffset = &offset
 		if err := response.Validate(); err == nil {
-			t.Fatalf("response with invalid next page token %q validated", token)
+			t.Fatalf("response with invalid next offset %d validated", offset)
 		}
 	}
 }

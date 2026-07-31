@@ -21,6 +21,7 @@ const (
 
 type sqliteInstruction struct {
 	Opcode sqliteOpcode
+	P1     int64
 	P2     int64
 }
 
@@ -89,7 +90,7 @@ func queryProgram(t *testing.T, db *sql.DB, query string, args ...any) []sqliteI
 		if err := rows.Scan(&address, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
 			t.Fatalf("scan query program: %v", err)
 		}
-		instructions = append(instructions, sqliteInstruction{Opcode: sqliteOpcode(opcode), P2: p2})
+		instructions = append(instructions, sqliteInstruction{Opcode: sqliteOpcode(opcode), P1: p1, P2: p2})
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query program: %v", err)
