@@ -1,8 +1,14 @@
 import { useEffect } from "react";
-import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  infiniteQueryOptions,
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 
+import { ContractError, errorMessage } from "@/api";
 import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
-import { errorMessage } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -33,12 +39,15 @@ export function useProjectPages() {
 
 export function useGlobalAttentionPages() {
   const { api } = useAppServices();
+  return useInfiniteQuery(globalAttentionQueryOptions(api));
+}
+
+export function useSidebarGlobalAttentionPages() {
+  const { api } = useAppServices();
   return useInfiniteQuery({
-    queryKey: queryKeys.attention,
-    queryFn: async ({ pageParam }) => api.listAttention(pageParam),
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
-    placeholderData: keepPreviousData,
+    ...globalAttentionQueryOptions(api),
+    refetchOnMount: (query) =>
+      query.observers.filter((observer) => observer.getCurrentResult().isEnabled).length <= 1,
   });
 }
 
@@ -52,6 +61,7 @@ export function useGlobalAttentionEvents() {
       return;
     }
     let refreshFrame: number | null = null;
+    let subscriptionLifecycle: GlobalAttentionSubscriptionLifecycle = "initial";
     const refreshAttention = () => {
       if (refreshFrame !== null) {
         return;
@@ -74,9 +84,16 @@ export function useGlobalAttentionEvents() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" });
       void queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" });
     };
+    const logSubscriptionWarning = (message: string, error: Error) => {
+      void logger.append("warn", message, { error: errorMessage(error) });
+    };
     const subscription = api.subscribeProject("", {
       onOpen() {
-        refreshAttention();
+        const shouldReconcile = subscriptionLifecycle !== "initial";
+        subscriptionLifecycle = "open";
+        if (shouldReconcile) {
+          refreshAttention();
+        }
       },
       onEvent(event) {
         refreshQuestionTask(event);
@@ -88,8 +105,13 @@ export function useGlobalAttentionEvents() {
         return;
       },
       onError(error) {
-        refreshAttention();
-        void logger.append("warn", "Global attention subscription failed.", { error: errorMessage(error) });
+        if (error instanceof ContractError) {
+          refreshAttention();
+          logSubscriptionWarning("Global attention event payload failed.", error);
+          return;
+        }
+        subscriptionLifecycle = "recovery-pending";
+        logSubscriptionWarning("Global attention subscription failed.", error);
       },
     });
     return () => {
@@ -100,6 +122,8 @@ export function useGlobalAttentionEvents() {
     };
   }, [api, connection.generation, connection.phase, logger, queryClient]);
 }
+
+type GlobalAttentionSubscriptionLifecycle = "initial" | "open" | "recovery-pending";
 
 export function useProjectCreationEvents(onCreated: (binding: NativeProjectBinding) => void) {
   const { logger, nativeBridge } = useAppServices();
@@ -163,3 +187,13 @@ export type WorkspaceAttachInput = Readonly<{
   projectID: string;
   workspaceRoot: string;
 }>;
+
+function globalAttentionQueryOptions(api: AppServices["api"]) {
+  return infiniteQueryOptions({
+    queryKey: queryKeys.attention,
+    queryFn: async ({ pageParam }) => api.listAttention(pageParam),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+    placeholderData: keepPreviousData,
+  });
+}
