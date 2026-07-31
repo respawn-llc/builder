@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/workflowkey"
 )
@@ -620,11 +621,40 @@ func (s *validationState) validateRuntimeSupport() {
 		if sourceExists {
 			sourceKind = source.Kind()
 		}
-		s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
+		contextSource, contextSourceValid := s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
+		if edge.ContextMode == ContextModeContinueSession && contextSourceValid {
+			selectedSource, selectedSourceExists := s.contextSourceNode(contextSource, source, sourceExists, target, targetExists)
+			if selectedSourceExists && targetExists &&
+				selectedSource.Kind() == NodeKindAgent && target.Kind() == NodeKindAgent &&
+				!sameAgentRoleIdentity(NodeSubagentRole(selectedSource), NodeSubagentRole(target)) {
+				s.addSemantic(CodeInvalidContinueSessionRole, "continue_session requires source and target agent nodes to use the same normalized subagent role", ref)
+			}
+		}
 		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{SourceKind: sourceKind, ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
 			s.addSemantic(issue.Code, issue.Message, ref)
 		}
 	}
+}
+
+type agentRoleIdentity struct {
+	value string
+}
+
+func sameAgentRoleIdentity(left, right string) bool {
+	leftIdentity, leftValid := canonicalAgentRoleIdentity(left)
+	rightIdentity, rightValid := canonicalAgentRoleIdentity(right)
+	return leftValid && rightValid && leftIdentity == rightIdentity
+}
+
+func canonicalAgentRoleIdentity(raw string) (agentRoleIdentity, bool) {
+	if strings.EqualFold(strings.TrimSpace(raw), DefaultAgentRole) {
+		return agentRoleIdentity{value: DefaultAgentRole}, true
+	}
+	normalized := config.NormalizeSubagentSelector(raw)
+	if normalized == "" {
+		return agentRoleIdentity{}, false
+	}
+	return agentRoleIdentity{value: normalized}, true
 }
 
 func (s *validationState) validateContextSource(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, ref ValidationError) (ContextSource, bool) {
@@ -708,6 +738,24 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 	default:
 		s.addSemantic(CodeInvalidContextSource, "context source kind is invalid", ref)
 		return contextSource, false
+	}
+}
+
+func (s *validationState) contextSourceNode(contextSource ContextSource, immediate Node, immediateExists bool, target Node, targetExists bool) (Node, bool) {
+	switch contextSource.Kind {
+	case ContextSourceImmediateSource:
+		return immediate, immediateExists
+	case ContextSourceSelectedNode:
+		nodeID, exists := s.nodeKeys[contextSource.NodeKey]
+		if !exists {
+			return nil, false
+		}
+		node, exists := s.nodesByID[nodeID]
+		return node, exists
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+		return target, targetExists
+	default:
+		return nil, false
 	}
 }
 

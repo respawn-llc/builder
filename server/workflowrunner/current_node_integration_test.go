@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtimewire"
+	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -109,6 +110,11 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		Settings:    config.Settings{Model: "workflow-coder"},
 		Sources:     map[string]string{"model": "test"},
 	}
+	cfg.Settings.Subagents["reviewer"] = config.SubagentRole{
+		Description: "Reviewer",
+		Settings:    config.Settings{Model: "workflow-reviewer"},
+		Sources:     map[string]string{"model": "test"},
+	}
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("open metadata: %v", err)
@@ -121,7 +127,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "RUN"); err != nil {
 		t.Fatalf("set project key: %v", err)
 	}
-	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder", "reviewer")))
 	if err != nil {
 		t.Fatalf("new workflow store: %v", err)
 	}
@@ -326,6 +332,25 @@ func (f *currentNodeRunnerFixture) runtimeRequests() []runtimewire.RuntimeClient
 	return append([]runtimewire.RuntimeClientRequest(nil), f.clientRequests...)
 }
 
+func (f *currentNodeRunnerFixture) onlyProjectSessionMeta(t *testing.T) session.Meta {
+	t.Helper()
+	sessionIDs, err := f.metadata.ListProjectSessionIDs(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("list project sessions: %v", err)
+	}
+	if len(sessionIDs) != 1 {
+		t.Fatalf("project Session IDs = %+v, want exactly one", sessionIDs)
+	}
+	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionIDs[0])
+	if err != nil {
+		t.Fatalf("resolve project Session: %v", err)
+	}
+	if record.Meta == nil {
+		t.Fatal("resolved project Session metadata is absent")
+	}
+	return *record.Meta
+}
+
 func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int) []llm.Request {
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
@@ -371,6 +396,10 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	if len(modelRequests) != 1 || modelRequests[0].StructuredOutput == nil {
 		t.Fatalf("model requests = %+v, want structured Current Node completion contract", modelRequests)
 	}
+	meta := f.onlyProjectSessionMeta(t)
+	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "coder" {
+		t.Fatalf("fresh workflow Session continuation = %+v, want persisted coder identity", meta.Continuation)
+	}
 }
 
 func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
@@ -408,6 +437,44 @@ func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testin
 	f.startTask(t, task)
 
 	requireToolCompletionRequests(t, f.waitForModelRequests(t, 2))
+}
+
+func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next","commentary":"first done"}`),
+			},
+		),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Compact role boundary",
+		workflow.ContextModeCompactAndContinueSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	f.waitForModelRequests(t, 2)
+
+	requests := f.runtimeRequests()
+	if len(requests) != 2 || requests[0].ActiveSettings.Model != "workflow-coder" || requests[1].ActiveSettings.Model != "workflow-reviewer" {
+		t.Fatalf("runtime role models = %+v, want coder then reviewer", requests)
+	}
+	meta := f.onlyProjectSessionMeta(t)
+	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "reviewer" {
+		t.Fatalf("compacted workflow Session continuation = %+v, want persisted reviewer identity", meta.Continuation)
+	}
+	if meta.PromptCacheLineageGeneration != 1 {
+		t.Fatalf("compacted workflow Session cache lineage = %d, want 1", meta.PromptCacheLineageGeneration)
+	}
 }
 
 func TestResumeRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {

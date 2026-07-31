@@ -31,6 +31,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -207,8 +208,7 @@ func (s *Starter) startCurrentNodeAgent(
 		Settings: plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(plan.EnabledTools), Workdir: root.EffectiveRoot(),
 		ManagedWorktreePathContext: pathContext, Sources: plan.Source.Sources, Headless: true, Client: client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
-		SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny(),
-		StartLogLines:                       []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, plan.Descriptor.SessionID(), input.Node.ID, root.EffectiveRoot(), plan.ActiveSettings.Model)},
+		StartLogLines: []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, plan.Descriptor.SessionID(), input.Node.ID, root.EffectiveRoot(), plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
 			if s.attention == nil {
 				return
@@ -261,7 +261,11 @@ func (s *Starter) planCurrentNodeSession(ctx context.Context, input workflowstor
 		return launch.SessionPlan{}, false, err
 	}
 	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
-	plan, err := planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: intent, SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny()})
+	plan, err := planner.PlanSession(ctx, launch.SessionRequest{
+		Mode:                                launch.ModeHeadless,
+		Intent:                              intent,
+		SkipContinuationAgentRoleValidation: input.ContextMode == workflow.ContextModeCompactAndContinueSession,
+	})
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
@@ -274,13 +278,65 @@ func (s *Starter) planCurrentNodeSession(ctx context.Context, input workflowstor
 		}); err != nil {
 			return launch.SessionPlan{}, disposable, err
 		}
-		plan, err = planner.PlanSession(ctx, launch.SessionRequest{Mode: launch.ModeHeadless, Intent: serverapi.OpenExistingSessionLaunchIntent(plan.Descriptor.SessionID()), SkipContinuationAgentRoleValidation: workflowPromptOverrides(input.Node.SubagentRole).HasAny()})
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
+			Mode:   launch.ModeHeadless,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(plan.Descriptor.SessionID()),
+		})
 		if err != nil {
 			return launch.SessionPlan{}, disposable, err
 		}
 	}
-	plan, _, err = applyWorkflowSessionPromptOverridesForRole(plan, input.Node.SubagentRole)
+	if err := validateRetainedWorkflowSessionAgentRole(input, plan); err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	err = s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+		var applyErr error
+		plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
+			plan,
+			store,
+			workflowPromptOverrides(input.Node.SubagentRole),
+			auth.EmptyState(),
+			launch.RunPromptOverrideOptions{},
+		)
+		return applyErr
+	})
 	return plan, disposable, err
+}
+
+func validateRetainedWorkflowSessionAgentRole(input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan) error {
+	if input.CurrentNode.SessionID == nil || input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+		return nil
+	}
+	roleOverride, err := workflowPromptOverrides(input.Node.SubagentRole).AgentRoleOverride()
+	if err != nil {
+		return err
+	}
+	var requestedRole *string
+	if roleOverride.Present && !roleOverride.Default {
+		requestedRole = &roleOverride.Role
+	}
+	var retainedRole *string
+	if plan.Continuation != nil {
+		retainedRole = plan.Continuation.AgentRole
+	}
+	if textutil.EqualOptional(retainedRole, requestedRole) {
+		return nil
+	}
+	retainedName := workflow.DefaultAgentRole
+	if retainedRole != nil {
+		retainedName = *retainedRole
+	}
+	requestedName := workflow.DefaultAgentRole
+	if requestedRole != nil {
+		requestedName = *requestedRole
+	}
+	return fmt.Errorf(
+		"%w: session_id=%s current=%q requested=%q",
+		launch.ErrLockedAgentRoleChange,
+		plan.Descriptor.SessionID(),
+		retainedName,
+		requestedName,
+	)
 }
 
 func (s *Starter) currentNodeSessionIntent(input workflowstore.CurrentNodeStartContext, containerDir string) (serverapi.SessionLaunchIntent, bool, error) {
@@ -476,33 +532,6 @@ func workflowPromptOverrides(role string) serverapi.RunPromptOverrides {
 		return serverapi.RunPromptOverrides{}
 	}
 	return serverapi.RunPromptOverrides{AgentRole: &role}
-}
-
-func applyWorkflowSessionPromptOverridesForRole(plan launch.SessionPlan, roleName string) (launch.SessionPlan, []string, error) {
-	overrides := workflowPromptOverrides(roleName)
-	prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{WorkspaceRoot: plan.WorkspaceRoot, Settings: plan.BaseSettings, Source: plan.BaseSource}, overrides, auth.EmptyState(), launch.RunPromptPreparationContext{ModelLock: plan.Locked, ToolLock: plan.Locked, OmittedTarget: &launch.PreparedBaseTarget{Settings: plan.ActiveSettings, Source: plan.Source, EnabledTools: plan.EnabledTools}})
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	role, err := overrides.AgentRoleOverride()
-	if err != nil {
-		return launch.SessionPlan{}, nil, err
-	}
-	if !role.Present || role.Default {
-		if prepared.BaseTarget == nil {
-			return launch.SessionPlan{}, nil, errors.New("prepared workflow base target is required")
-		}
-		plan.ActiveSettings, plan.Source, plan.EnabledTools = prepared.BaseTarget.Settings, prepared.BaseTarget.Source, append([]toolspec.ID(nil), prepared.BaseTarget.EnabledTools...)
-		return plan, nil, nil
-	}
-	if prepared.NamedTarget == nil {
-		return launch.SessionPlan{}, nil, errors.New("prepared workflow role target is required")
-	}
-	plan.ActiveSettings, plan.Source, plan.EnabledTools = prepared.NamedTarget.Settings, prepared.NamedTarget.Source, append([]toolspec.ID(nil), prepared.NamedTarget.EnabledTools...)
-	if prepared.NamedTarget.Warning == nil {
-		return plan, nil, nil
-	}
-	return plan, []string{*prepared.NamedTarget.Warning}, nil
 }
 
 func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID string) (string, error) {
