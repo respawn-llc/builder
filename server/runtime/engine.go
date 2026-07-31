@@ -198,6 +198,7 @@ type Engine struct {
 	transcriptState    *transcriptRuntimeState
 	lockedState        *lockedContractState
 	modelRequestsState *modelRequestRuntimeState
+	workflowDelivery   *workflowPromptDeliveryState
 	compactionPlanner  *compactionPlanner
 	collaboratorsOnce  sync.Once
 
@@ -294,6 +295,7 @@ func New(
 		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
 		lockedState:        newLockedContractState(),
 		modelRequestsState: newModelRequestRuntimeState(),
+		workflowDelivery:   newWorkflowPromptDeliveryState(cfg.CurrentNodeExecution),
 		compactionPlanner:  newCompactionPlanner(),
 	}
 	eng.ensureLifecycle()
@@ -827,6 +829,13 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 			enabled := !e.cfg.HeadlessMode && e.cfg.ToolPreambles
 			return &enabled
 		}(),
+	}
+	if prompt, configured := e.workflowPrompt(); configured {
+		mode, err := workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+		if err != nil {
+			return session.LockedContract{}, err
+		}
+		lock.WorkflowCompletionMode = &mode
 	}
 	if hasProviderContract {
 		lock.ProviderContract = llm.LockedProviderCapabilitiesFromContract(providerContract)

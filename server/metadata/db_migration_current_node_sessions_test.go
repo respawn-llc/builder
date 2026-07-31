@@ -302,7 +302,7 @@ INSERT INTO task_transition_edges (
     1,
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]',
-    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"node_output_values":{"plan":{"summary":"frozen plan"}}}'
+    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"source_session_id":"550e8400-e29b-41d4-a716-446655440002","node_output_values":{"plan":{"summary":"frozen plan"}}}'
 )`)
 	execSeed(t, db, "conflicting active terminal placement", workflowSeedPlacementSQL,
 		"placement-pending-approval-terminal",
@@ -379,7 +379,7 @@ SELECT
     json_extract(branch.target_snapshot_json, '$.entered_by_edge_id'),
     json_extract(branch.target_snapshot_json, '$.display_name'),
     json_extract(branch.target_snapshot_json, '$.current_input_values'),
-    json_extract(branch.target_snapshot_json, '$.prior_node_values'),
+    json_extract(branch.target_snapshot_json, '$.prior_values'),
     COALESCE(json_extract(branch.target_snapshot_json, '$.session_id'), ''),
     COALESCE(json_extract(branch.target_snapshot_json, '$.scheduling_state'), ''),
     json_extract(branch.effective_edge_configuration_json, '$.id'),
@@ -443,7 +443,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		targetEnteredByEdgeID != "transition-edge-pending-approval-migration" ||
 		targetDisplayName != "Done" ||
 		targetInputs != `{"summary":"done"}` ||
-		targetPriorValues != `{"plan":{"summary":"frozen plan"}}` ||
+		targetPriorValues != `{"transition_parameters":{}}` ||
 		targetSessionID != "" ||
 		targetSchedulingState != "" ||
 		edgeID != "transition-edge-pending-approval-migration" ||

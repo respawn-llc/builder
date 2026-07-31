@@ -29,7 +29,6 @@ func TestFinalizerMaterializesCurrentDurableNotificationsWithoutLivePublication(
 		CurrentNode:      currentNode,
 		ProjectID:        "project-1",
 		WorkflowID:       "workflow-1",
-		Message:          "Current Node interrupted",
 		Reason:           "server_restart",
 		OccurredAtUnixMs: 2,
 	}

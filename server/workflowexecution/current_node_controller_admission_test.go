@@ -12,6 +12,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 
@@ -196,6 +197,42 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 		_, interrupted := store.interruption(first)
 		return interrupted
 	}, "failed resumed branch was not durably interrupted")
+}
+
+func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-prompt-delivery", "node-review")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{{
+		Reference: reference,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	resumed, err := controller.ResumeTask(context.Background(), reference.TaskID)
+	if err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	if len(resumed) != 1 || !resumed[0].Reference.Equal(reference) {
+		t.Fatalf("resumed Current Nodes = %+v, want %v", resumed, reference)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return len(runner.promptDeliveries()) == 1
+	}, "resumed Current Node did not reach runner")
+	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
+		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
+		t.Fatalf("runner prompt deliveries = %+v, want Resume", deliveries)
+	}
 }
 
 func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSiblings(t *testing.T) {

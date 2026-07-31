@@ -72,6 +72,9 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(in.Path, resolved.real) {
+		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
+	}
 	unlock := tools.LockFSGuardPaths([]string{resolved.real})
 	defer unlock()
 	if err := t.apply(ctx, resolved, in); err != nil {
@@ -81,11 +84,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if resolved.symlink {
 		message = "ok; warning: edited through symlink, real path is " + resolved.real + "; use that path directly next time"
 	}
-	result := editSuccessResult(c, message)
-	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.WarnsFor(in.Path, resolved.real) {
-		result.ModelWarnings = []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()}
-	}
-	return result, nil
+	return editSuccessResult(c, message), nil
 }
 
 func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput) error {

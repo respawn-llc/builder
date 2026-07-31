@@ -25,9 +25,32 @@ func TestMigratedSerialApprovalFanoutAppliesFrozenTargetBranches(t *testing.T) {
 	databasePath := filepath.Join(root, "db", "main.sqlite3")
 	db := openLegacyCurrentStateMigrationDatabase(t, root, databasePath)
 	now := time.Now().UTC().UnixMilli()
+	const sourceSessionID = "550e8400-e29b-41d4-a716-446655440091"
 	execLegacyMigrationSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('project-migrated-approval-fanout', 'Project', ?, ?, '{}')`, now, now)
+	execLegacyMigrationSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'workspace-migrated-approval-fanout',
+    'project-migrated-approval-fanout',
+    '/workspace-migrated-approval-fanout',
+    '{}',
+    ?,
+    ?
+)`, now, now)
+	execLegacyMigrationSeed(t, db, "session", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    ?,
+    'project-migrated-approval-fanout',
+    'workspace-migrated-approval-fanout',
+    ?,
+    ?,
+    ?
+)`, sourceSessionID, "sessions/"+sourceSessionID, now, now)
 	execLegacyMigrationSeed(t, db, "workflow", `
 INSERT INTO workflows (id, name, description, version, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('workflow-migrated-approval-fanout', 'Workflow', '', 1, ?, ?)`, now, now)
@@ -52,7 +75,7 @@ INSERT INTO workflow_edges (
 ) VALUES
     ('edge-start', 'group-start', 'start', 'node-source', 0, 'new_session', '[]', '[]'),
     ('edge-fanout-a', 'group-fanout', 'split_a', 'node-target-a', 1, 'new_session', '[]', '[]'),
-    ('edge-fanout-b', 'group-fanout', 'split_b', 'node-target-b', 1, 'new_session', '[]', '[]')`)
+    ('edge-fanout-b', 'group-fanout', 'split_b', 'node-target-b', 1, 'continue_session', '[]', '[]')`)
 	execLegacyMigrationSeed(t, db, "workflow link", `
 INSERT INTO project_workflow_links (
     id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms
@@ -88,6 +111,20 @@ INSERT INTO task_node_placements (
     ?,
     ?
 )`, now, now)
+	execLegacyMigrationSeed(t, db, "approval source run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen,
+    created_at_unix_ms, updated_at_unix_ms, started_at_unix_ms, completed_at_unix_ms
+) VALUES (
+    'run-migrated-approval-fanout',
+    'placement-migrated-approval-fanout',
+    ?,
+    1,
+    ?,
+    ?,
+    ?,
+    ?
+)`, sourceSessionID, now, now+1, now, now+1)
 	execLegacyMigrationSeed(t, db, "source entering transition", `
 INSERT INTO task_transitions (
     id, task_id, source_node_key, source_node_display_name,
@@ -134,12 +171,13 @@ INSERT INTO task_transition_edges (
 )`)
 	execLegacyMigrationSeed(t, db, "approval transition", `
 INSERT INTO task_transitions (
-    id, task_id, source_placement_id, source_node_key, source_node_display_name,
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
     transition_id, transition_display_name, workflow_revision_seen, actor, state,
     commentary, output_values_json, created_at_unix_ms
 ) VALUES (
     'transition-migrated-approval-fanout',
     'task-migrated-approval-fanout',
+    'run-migrated-approval-fanout',
     'placement-migrated-approval-fanout',
     'source',
     'Source',
@@ -158,22 +196,27 @@ INSERT INTO task_transitions (
 		key    string
 		nodeID string
 		name   string
+		mode   string
 	}{
-		{"transition-edge-migrated-a", "edge-fanout-a", "split_a", "node-target-a", "Target A"},
-		{"transition-edge-migrated-b", "edge-fanout-b", "split_b", "node-target-b", "Target B"},
+		{"transition-edge-migrated-a", "edge-fanout-a", "split_a", "node-target-a", "Target A", "new_session"},
+		{"transition-edge-migrated-b", "edge-fanout-b", "split_b", "node-target-b", "Target B", "continue_session"},
 	} {
 		execLegacyMigrationSeed(t, db, "approval transition edge", `
 INSERT INTO task_transition_edges (
     id, task_transition_id, workflow_edge_id, edge_key,
     target_node_id, target_node_key, target_node_display_name, target_node_kind,
     state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
-) VALUES (?, 'transition-migrated-approval-fanout', ?, ?, ?, ?, ?, 'agent', 'pending', 'new_session', 1, '[]', '[]', '{}')`,
+) VALUES (?, 'transition-migrated-approval-fanout', ?, ?, ?, ?, ?, 'agent', 'pending', ?, 1, '[]', '[]', json_object(
+    'source_session_id', ?
+))`,
 			target.id,
 			target.edgeID,
 			target.key,
 			target.nodeID,
 			target.key,
 			target.name,
+			target.mode,
+			sourceSessionID,
 		)
 	}
 	execLegacyMigrationSeed(t, db, "delete mutable approval graph", `
@@ -201,10 +244,28 @@ WHERE id = 'group-fanout'`)
 		t.Fatalf("migrated approvals = %+v, want one two-branch approval", approvals)
 	}
 	approval := approvals[0]
+	if approval.SourceSessionID == nil || approval.SourceSessionID.String() != sourceSessionID {
+		t.Fatalf("migrated approval source Session = %v, want %q", approval.SourceSessionID, sourceSessionID)
+	}
 	for _, branch := range approval.Branches {
 		targetBranchKey, branchScoped := branch.Target.CurrentNode.Reference.TransitionBranchKey()
 		if !branchScoped || targetBranchKey != branch.TransitionBranchKey {
 			t.Fatalf("migrated approval branch = %+v, want target scoped to frozen branch key", branch)
+		}
+		switch branch.TransitionBranchKey {
+		case "split_a":
+			if branch.Target.CurrentNode.SessionID != nil || branch.ContextSourceResolution.SessionID != nil {
+				t.Fatalf("migrated new-session branch = %+v, want no retained Session", branch)
+			}
+		case "split_b":
+			if branch.Target.CurrentNode.SessionID == nil ||
+				branch.Target.CurrentNode.SessionID.String() != sourceSessionID ||
+				branch.ContextSourceResolution.SessionID == nil ||
+				branch.ContextSourceResolution.SessionID.String() != sourceSessionID {
+				t.Fatalf("migrated continuation branch = %+v, want retained Session %q", branch, sourceSessionID)
+			}
+		default:
+			t.Fatalf("migrated unexpected approval branch = %+v", branch)
 		}
 	}
 
@@ -218,6 +279,19 @@ WHERE id = 'group-fanout'`)
 	for _, target := range applied.Mutation.Created {
 		if !target.Reference.IsBranchScoped() {
 			t.Fatalf("applied migrated target = %+v, want branch-scoped current node", target)
+		}
+		branchKey, _ := target.Reference.TransitionBranchKey()
+		switch branchKey {
+		case "split_a":
+			if target.SessionID != nil {
+				t.Fatalf("applied migrated new-session target = %+v, want no retained Session", target)
+			}
+		case "split_b":
+			if target.SessionID == nil || target.SessionID.String() != sourceSessionID {
+				t.Fatalf("applied migrated continuation target = %+v, want Session %q", target, sourceSessionID)
+			}
+		default:
+			t.Fatalf("applied migrated unexpected target = %+v", target)
 		}
 	}
 }

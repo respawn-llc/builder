@@ -17,7 +17,6 @@ const (
 	uiInputModeGoal              uiInputMode = "goal"
 	uiInputModeWorktree          uiInputMode = "worktree"
 	uiInputModeRollbackSelection uiInputMode = "rollback_selection"
-	uiInputModeRollbackEdit      uiInputMode = "rollback_edit"
 	uiInputModeProcessList       uiInputMode = "process_list"
 )
 
@@ -61,7 +60,6 @@ const (
 	uiRollbackPhaseAwaitingNewest         uiRollbackPhase = "awaiting_newest"
 	uiRollbackPhaseAwaitingOlderCandidate uiRollbackPhase = "awaiting_older_candidate"
 	uiRollbackPhaseSelection              uiRollbackPhase = "selection"
-	uiRollbackPhaseEditing                uiRollbackPhase = "editing"
 )
 
 type rollbackCandidate struct {
@@ -85,7 +83,6 @@ type uiRollbackState struct {
 	candidates                []rollbackCandidate
 	selectedTargetID          *string
 	activationTargetID        *string
-	editingCandidate          *rollbackCandidate
 	pendingNavigation         *uiRollbackPageNavigation
 }
 
@@ -118,12 +115,8 @@ func (s uiRollbackState) isSelecting() bool {
 	return s.phase == uiRollbackPhaseSelection
 }
 
-func (s uiRollbackState) isEditing() bool {
-	return s.phase == uiRollbackPhaseEditing
-}
-
 func (s uiRollbackState) isActive() bool {
-	return s.isSelecting() || s.isEditing()
+	return s.isSelecting()
 }
 
 func (s uiRollbackState) isAwaitingNewest() bool {
@@ -195,7 +188,7 @@ func (m *uiModel) askReadyForInteraction() bool {
 }
 
 func (mode uiInputMode) showsMainInput() bool {
-	return mode == uiInputModeMain || mode == uiInputModeRollbackEdit
+	return mode == uiInputModeMain
 }
 
 func (mode uiInputMode) showsAskInput() bool {

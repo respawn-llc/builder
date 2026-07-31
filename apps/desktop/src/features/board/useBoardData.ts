@@ -260,7 +260,7 @@ export function useBoardTaskActions() {
   }
   const interruptMutation = useMutation({
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
-    onSuccess: refresh,
+    onSettled: refresh,
   });
   const resumeMutation = useMutation({
     mutationFn: async (taskID: string) => api.resumeTask(taskID),

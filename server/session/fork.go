@@ -358,6 +358,10 @@ func cloneLockedContract(in *LockedContract) *LockedContract {
 		toolPreambles := *in.ToolPreambles
 		copyLocked.ToolPreambles = &toolPreambles
 	}
+	if in.WorkflowCompletionMode != nil {
+		mode := *in.WorkflowCompletionMode
+		copyLocked.WorkflowCompletionMode = &mode
+	}
 	copyLocked.ProviderContract.SupportsProviderVerbosity = textutil.Pointer(in.ProviderContract.SupportsProviderVerbosity)
 	copyLocked.SystemPrompt = strings.TrimSpace(in.SystemPrompt)
 	copyLocked.ReviewerPrompt = strings.TrimSpace(in.ReviewerPrompt)

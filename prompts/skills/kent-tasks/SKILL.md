@@ -32,7 +32,7 @@ Authoritative command details are always the live CLI:
 kent task --help
 ```
 
-Args marked with `[]` are optional and attempt to resolve the current directory's project, that project's task workflow, or the current session ID as appropriate.
+Args marked with `[]` are optional and attempt to resolve the current directory's project, that project's task workflow, or the current session ID as appropriate. `--json` is **very verbose**, only use it for automation or if the regular outputs are not sufficient.
 
 Create task records against a linked/default workflow and project, then inspect them:
 

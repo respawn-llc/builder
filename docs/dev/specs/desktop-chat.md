@@ -87,7 +87,7 @@
 - Agent choices show role, effective model, and Thinking effort, without role descriptions or provider. Changing Agent preserves compatible explicit settings and resets incompatible settings to that role's authoritative baseline without confirmation or notification.
 - Supervisor has exactly `Off`, `After edits`, and `Always`, with descriptions `No automatic review`, `Review turns that changed files`, and `Review every completed turn`.
 - Thinking follows the server-provided ordered values. Enumerated values use a stepped control and display the exact chosen value; Low is gray, Medium and High use the primary tone, and Xhigh, Max, and Ultra use the secondary tone. Unsupported Thinking is omitted. A supported non-enumerated value uses an input and Apply action. Rejected input remains entered and shows notification feedback.
-- Fast mode is omitted when unsupported. Questions remains visible, off, and unavailable with `Unavailable for this Agent` when the selected Agent lacks that capability. Required Auto-compaction remains on and unavailable; Manual-only compaction shows its stored value but is unavailable because it cannot run automatically.
+- Fast mode is omitted when unsupported. Questions remains visible, off, and unavailable with `Unavailable for this Agent` when the selected Agent lacks that capability. Required Auto-compaction remains on and unavailable. When compaction is disabled by Session policy, Auto-compaction shows its stored value but is unavailable.
 - Before a new Session's first prompt, all settings and message text are one draft. The first prompt creates the Session and applies the complete draft atomically. After that, Agent is locked and other changes apply through normal runtime controls.
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
@@ -98,15 +98,110 @@
 ## Composer And Pending Work
 
 - Send starts a user turn while idle and Steers the active turn while work is running. A Steer takes effect at the next safe step boundary. Queue is a separate action that starts after active work completes; when idle, queued work starts immediately.
-- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion. Stop has no shortcut.
+- `Enter` sends or Steers, `Ctrl+Enter` Queues, and `Shift+Enter` inserts a newline. Tab keeps normal focus navigation except that it accepts an active workspace-path suggestion.
+- `/compact` runs manual context compaction. Text after the command is optional compaction guidance and follows the same behavior as the terminal command.
+- When no Agent Step is active, `/compact` requests compaction immediately.
+- During an Agent Step, `/compact` enters the ordinary Steer path. Pending Work shows the exact slash form, including guidance, and the typed compaction intent executes after the current Agent Step and before the next Agent Step. It does not wait for turn completion and is never sent to the model.
+- Ctrl+C is never a Desktop Stop shortcut.
+- On macOS, Command-period stops the current Session's stoppable active work immediately.
+- On Windows and Linux, an Escape handled by the current temporary surface performs only that surface's local action. The first otherwise-unhandled Escape arms Stop for two seconds. A second otherwise-unhandled Escape within that window stops the current Session's stoppable active work.
+- The Windows/Linux Stop arm has no visual or notification feedback. Timeout, any non-Escape keyboard or pointer action, route or focus change, disconnection, or work completion clears it.
 - Queue has no visible button. While work is running and an empty composer can queue work, its placeholder is `Ctrl+Enter to queue`.
 - While work runs, an icon-only Stop action is visible beside Send/Steer. Stop clears all Queue and Steer items.
 - The composer grows to one-third of available Chat height, then scrolls internally. Up and Down recall prompt history only at whole-buffer boundaries; returning below the newest history item restores the pre-history draft, and editing recalled text detaches it from history.
 - `@` path suggestions search the Session effective working directory. They include files, derived directories, and hidden paths; exclude `.git`; preserve server fuzzy order; and never scan the desktop filesystem or transfer the whole repository.
 - At most seven path suggestions are visible. Up and Down select them; Enter, Tab, or pointer activation inserts the exact `@`-prefixed repository-relative path, with `/` for a directory, without sending. Escape hides suggestions until the query changes.
 - Pending Work appears behind the composer's top edge only while Queue or Steer items remain. It is an unlabeled, scrollable sheet no taller than about five two-line items, with Queue items first in first-in-first-out order, then Steer items in first-in-first-out order. Each item shows no more than two lines and has an accessible Discard action.
+- Manual compaction requested during an Agent Step is an ordinary Steer item in this sheet. Repeated requests remain separate items and Desktop does not deduplicate them.
+- Discarding or stopping a pending compaction restores its exact displayed slash command to the initiating composer, including optional guidance. Button-origin compaction restores `/compact`. Other clients observe only the authoritative removal.
 - Pending Work has no edit, reorder, submit-now, clear-all, full-text preview, or secondary detail view. On successful discard, text returns only to the initiating client's composer: verbatim into an empty composer, otherwise after one newline. Failed discard leaves both item and composer unchanged and shows notification feedback.
 - The Pending Work sheet preserves its position while inspecting older items and follows additions only at its newest edge. Stop restores cleared items only to the initiating composer, in displayed order separated by one newline; other clients see only their removal.
+
+## Context And Compaction
+
+- A Context meter remains available below the editor and while a Question or Approval replaces the editor. Its normal compact trigger shows used-context percentage beside a 20px circular used-context meter.
+- Before a lazy New Chat materializes its Session, the Context trigger shows `0%` used and an empty ring. Its pop-up shows the draft Agent's configured context window and automatic-compaction threshold, the draft Auto-compaction state, and zero completed compactions.
+- The server-owned lazy Chat draft supplies those pre-Session Context facts. Changing the draft Agent or another setting that changes the effective context contract updates them.
+- Before the first Agent Step, `Compact` is unavailable with an accessible explanation. A pre-Session `/compact` remains a known command, creates no Session, and surfaces the typed unavailable/too-soon failure.
+- Clicking or tapping the Context meter opens a compact pop-up with detailed context-window usage and a `Compact` action. When normal browser focus is on the meter, its ordinary button Enter and Space behavior also opens the pop-up; these keys are not Context shortcuts elsewhere.
+- Escape or clicking away closes the Context pop-up.
+- The pop-up shows remaining-context percentage and tokens against the complete context window, the automatic-compaction threshold in tokens and percentage, whether Auto-compaction is on or off, and the completed compaction count.
+- The pop-up omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown.
+- The Context details are four plain-text lines. Important labels and numeric values use bold primary text; connective and explanatory text stays muted.
+- The pop-up has no chips, badges, statistic cards, inset items, or other secondary containers.
+- A bottom row contains one wide progress bar and the `Compact` action. The bar visualizes used context exactly like the TUI meter, while the text states remaining context.
+- The progress fill uses one fixed smooth gradient from Success through Warning to Error across the complete 0–100% range. Current usage clips the revealed gradient; the unused track stays muted.
+- The progress bar never recolors its complete fill when usage crosses a threshold.
+- Authoritative usage changes animate the progress value. Reduced motion applies the new value immediately.
+- The pop-up has no compaction-guidance field. Its `Compact` action is equivalent to `/compact` with no guidance.
+- Activating `Compact` closes the Context pop-up and uses the same immediate-or-Steer flow as `/compact`. Every other transient surface that initiates manual compaction also closes after accepting the action.
+- Manual compaction guidance is available only through `/compact <guidance>`.
+- While any compaction is active, the compact Context meter replaces its ordinary percentage and ring with a secondary-tone spinner and `Compacting` in the same trigger footprint.
+- The compacting Context trigger remains interactive and can open the Context pop-up. The pop-up keeps the last authoritative usage values visible until new usage arrives.
+- Automatic compaction does not close an already-open Context pop-up. While compaction remains active, an open pop-up keeps its usage details visible and disables `Compact`.
+- Desktop never starts or queues another compaction after it knows compaction is active. A raced button activation or `/compact` request still reaches the server admission contract and surfaces its typed rejection.
+- Repeated manual compaction requests made before the first request starts remain separate Steer items. When those items drain, the first eligible request may compact and every later ineligible request fails independently.
+- A failed pending or immediate manual-compaction request leaves no pending item. Desktop shows a Sonner error unless an authoritative durable transcript error is explicitly reported as the owner of that failure; Desktop never synthesizes a transcript row.
+- Desktop keeps no local post-compaction cooldown or Agent-Step counter. The server rejects a manual compaction before an Agent Step boundary has occurred since Session creation or the latest successful compaction, and Desktop surfaces that typed error.
+- Successful user-requested compaction is silent while the Desktop window is focused.
+- When the Desktop window is unfocused, successful user-requested compaction sends a system notification only after its following Pending Work drain is idle. Activation focuses Desktop and opens the owning Session at its latest content.
+- Automatic, pre-submit, and handoff compaction do not send this completion notification.
+- When Session policy disables compaction, the pop-up replaces the threshold and Auto-compaction lines with truthful disabled and unavailable text, and its `Compact` action is unavailable.
+- In that policy state, `/compact` remains a known command and surfaces the server's typed disabled-policy failure instead of becoming an ordinary user message.
+- Context and compaction lifecycle create no transcript status rows.
+
+## Questions And Approvals
+
+- An active Question or Approval replaces the normal text-editor area inside the same composer island. The ordinary message/settings draft remains preserved but hidden. Settings, Context, and Stop remain available.
+- The ordinary status line and bottom action row stay present beneath the picker. Stop remains visible while the runtime awaits prompts.
+- Questions and Approvals use one shared prompt-picker interaction and visual language. Their server-provided option kinds differ, but Desktop does not create separate form architectures.
+- The picker shows one pending prompt at a time. It has no tabs, question-title synthesis, or duplicated question previews.
+- The current question is Markdown above a compact navigation line. The line has previous/next chevrons around the current question position. Answer options appear below the navigation line.
+- The navigation line shows only the current position as `Question X of Y`. It has no answered count or aggregate completion indicator.
+- The navigation line also has a trailing compact error-colored `×` with accessible name `Decline to answer` and tooltip `Decline to answer (Ctrl+D)`.
+- The picker expands upward through available Chat space. One UI-kit scroll region contains the Markdown question, navigation line, and every answer option. Large questions and large option sets scroll together in that region.
+- Each answer is a full-width radio option using the Workflow Editor execution-mode visual pattern. Question and answer content use the shared safe Markdown renderer.
+- The selected option's answer text uses the primary tone.
+- A recommended option has an inline outlined badge immediately after its rendered answer text. The badge border and text use the success tone; the answer itself does not turn success-colored.
+- A server-recommended option begins selected but not confirmed. Selection and confirmation are separate local draft states.
+- When the server provides no recommended option, no answer starts selected.
+- Answered versus unanswered is completely hidden from the user. It exists only to decide navigation and when the batch is ready to submit.
+- The picker has no Confirm or Answer button.
+- Pointer activation of a suggested answer confirms it immediately, including any current optional commentary.
+- Keyboard movement within the radio group changes selection without confirming. Enter confirms the selected suggested answer.
+- Tab and Shift+Tab switch only between the answer-picker area and the freeform field. They do not traverse the picker navigation or the composer's bottom controls.
+- Outside the freeform field, Left/Right changes the visible prompt circularly and Up/Down changes the vertical radio selection. Inside the freeform field, arrow keys edit text normally.
+- While the freeform field is active, Enter confirms only when the current selection and freeform content form a valid answer. Otherwise Enter has no effect. Shift+Enter inserts a newline.
+- Previous/next navigation may visit prompts without confirming them and preserves each prompt's selected option and freeform/commentary draft.
+- Provisionally, changing an answered prompt's selected option or commentary marks it unanswered until it is confirmed again. The mandatory browser acceptance fixture owns the final verdict on this behavior.
+- Confirming an answer marks that prompt answered and moves to the next unresolved prompt in server order, wrapping when necessary. No answer RPC is sent while any prompt in the batch remains unresolved.
+- `Decline to answer` immediately marks the current prompt Declined in the local batch draft, makes its options and freeform field read-only, and moves to the next unresolved prompt. It has no confirmation or undo.
+- A declined prompt remains in the `Question X of Y` sequence and is visibly read-only when revisited.
+- Declined is distinct from an ordinary Question's `Neither` answer and an Approval's `Deny` decision.
+- While the answer-picker area is active, Ctrl+D activates the same immediate `Decline to answer` action as the visible `×`.
+- Escape never declines a prompt. The explicit `×` and its Ctrl+D shortcut are the only per-prompt decline actions. On Windows and Linux, otherwise-unhandled Escape follows the whole-Session Stop arming contract.
+- Decline follows the shared prompt-cancellation transcript contract. An ordinary Question remains an error/canceled Ask Question tool row instead of becoming a completed answered Question. Desktop adds no synthetic user message, and a declined Approval adds no separate decision row.
+- When the final unresolved prompt becomes answered or declined, Desktop sends the complete typed answer batch to the server.
+- Ordinary Questions with at least one suggested answer include the same `Neither` freeform option used by Task Detail. A Question with no suggestions has only the freeform response and does not offer `Neither`. The freeform/commentary field is always visible below the options and is preserved independently for each prompt.
+- The freeform/commentary field is pinned below the main picker scroll region. It has a three-line minimum, grows through seven lines, and then scrolls internally.
+- For a suggested answer, freeform text is optional commentary. For `Neither`, at least one non-whitespace character is required.
+- Confirming a blank `Neither` selection only focuses the freeform field; it does not mark the prompt answered or advance.
+- Pointer activation of `Neither` with nonblank freeform confirms immediately. With blank freeform, it selects `Neither` and focuses the field without confirming.
+- Enter while `Neither` is selected follows the same rule: nonblank freeform confirms; blank freeform only focuses the field.
+- Approvals use the same picker, navigation, selection, commentary, confirmation, and batch-submission behavior. They render only their server-provided approval decisions.
+- The answer-selection drafts and unresolved/answered/declined markers are transient UI form state. They survive navigation only while the picker remains open. Leaving the Chat destination, losing the server connection, refreshing the browser, or relaunching Desktop discards them. Pending prompt identity and final resolution remain server-authoritative.
+- One picker batch contains the pending prompts with the same server-provided Step identity, in server order. Desktop introduces no second batch identifier. If more than one Step has pending prompts, the earliest batch is shown first.
+- A resolved-prompt broadcast discards that prompt's local answer draft and removes the prompt from the picker sequence. If the current prompt resolves elsewhere, the picker moves to the next remaining prompt. If none remain, it closes.
+- Externally resolved prompts disappear silently as though they were never members of the local picker. Desktop does not show Sonner feedback, a disabled item, or another residual picker state.
+- Resolved broadcasts do not carry the submitted answer. Desktop does not extend that contract, display a selected answer, or leave a placeholder/collapsed answer item for an externally resolved prompt.
+- If a batch response reports prompt IDs that are no longer pending, Desktop removes those prompts and keeps the server result for the still-pending submitted prompts. An all-stale response closes the picker without retrying or replaying local answers.
+- Stop interrupts the active run, cancels the complete pending prompt batch through runtime interrupt semantics, discards its transient answer drafts, closes the picker, and restores the ordinary hidden composer draft.
+- Ordinary-Session Questions and Approvals use the shared Desktop attention-notification behavior. The notification target opens the owning Session and picker. Desktop suppresses the duplicate in-app notification only while that Session Chat and picker are already the focused destination.
+- Desktop requires one typed batch-answer operation for this picker. It does not redesign the runtime's existing parallel prompt/tool-call architecture or submit each answer before the batch is complete.
+- The implementation work that owns this picker and batch-answer operation has a mandatory browser acceptance fixture. The fixture is developer-only, uses synthetic generated prompt batches, and continuously presents new Questions and Approvals after each completed batch until its browser tab closes.
+- Agent QA uses the fixture first to verify layout, Markdown, navigation, selection versus confirmation, recommendation styling, freeform/commentary, keyboard and pointer behavior, scrolling, batch submission, and repeated-run stability.
+- After preliminary QA passes, the agent opens the fixture for the user and asks for an explicit Approve or Reject decision with concrete findings. Silence, indirect feedback, screenshots, and agent judgment are not acceptance.
+- A rejection keeps the implementation work incomplete. The findings are addressed, preliminary QA is repeated, and the browser acceptance request is presented again. The complete Questions/Approvals work cannot pass its acceptance gate without explicit user approval.
 
 ## Desktop Exceptions
 

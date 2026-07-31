@@ -12,11 +12,11 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/session"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -125,12 +125,17 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		return nil, errors.New("headless run prompt requires a session runtime authority")
 	}
 	sessionID := plan.Descriptor.SessionID()
-	workdir := headlessRuntimeWorkdir(plan)
+	executionTarget := clientui.NormalizeSessionExecutionTarget(plan.ExecutionTarget)
+	workdir := executionTarget.EffectiveWorkdir
+	if strings.TrimSpace(workdir) == "" {
+		return nil, fmt.Errorf("headless session %q execution target effective workdir is required", sessionID)
+	}
+	if strings.TrimSpace(executionTarget.WorkspaceRoot) == "" {
+		return nil, fmt.Errorf("headless session %q execution target workspace root is required", sessionID)
+	}
 	var currentWorktreeRoot *string
-	if plan.WorktreeReminder != nil &&
-		plan.WorktreeReminder.Mode == session.WorktreeReminderModeEnter &&
-		strings.TrimSpace(plan.WorktreeReminder.WorktreePath) != "" {
-		root := plan.WorktreeReminder.WorktreePath
+	if executionTarget.Worktree != nil && strings.TrimSpace(executionTarget.Worktree.Root) != "" {
+		root := executionTarget.Worktree.Root
 		currentWorktreeRoot = &root
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
@@ -142,7 +147,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		managedWorktreePathContext = context
 	}
 	startLogLines := []string{
-		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
+		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, executionTarget.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
 		fmt.Sprintf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig),
 	}
 	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
@@ -229,20 +234,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	prepared.handle = handle
 	return prepared, nil
-}
-
-func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
-	if plan.WorktreeReminder != nil {
-		effectiveCwd := strings.TrimSpace(plan.WorktreeReminder.EffectiveCwd)
-		if effectiveCwd != "" {
-			return effectiveCwd
-		}
-		worktreePath := strings.TrimSpace(plan.WorktreeReminder.WorktreePath)
-		if worktreePath != "" {
-			return worktreePath
-		}
-	}
-	return strings.TrimSpace(plan.WorkspaceRoot)
 }
 
 func preservePresentAssistantContent(current string, message llm.Message) string {

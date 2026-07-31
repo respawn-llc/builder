@@ -21,8 +21,7 @@ const (
 	WorkflowRequestErrorTooLong      = "workflow.request.too_long"
 )
 
-const WorkflowListMaxPageSize = 100
-const WorkflowTaskListMaxPageSize = 100
+const WorkflowPaginationMaxLimit = 100
 const WorkflowTaskListMaxSortSelectors = 5
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
@@ -380,17 +379,17 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowListRequest struct {
-	PageSize   int     `json:"page_size,omitempty"`
-	PageToken  string  `json:"page_token,omitempty"`
+	Offset     *int    `json:"offset,omitempty"`
+	Limit      *int    `json:"limit,omitempty"`
 	Query      string  `json:"query,omitempty"`
 	ProjectID  *string `json:"project_id,omitempty"`
 	WorkflowID *string `json:"workflow_id,omitempty"`
 }
 
 type WorkflowListResponse struct {
-	Workflows     []WorkflowRecord `json:"workflows"`
-	ProjectID     *string          `json:"project_id,omitempty"`
-	NextPageToken string           `json:"next_page_token,omitempty"`
+	Workflows  []WorkflowRecord `json:"workflows"`
+	ProjectID  *string          `json:"project_id,omitempty"`
+	NextOffset *int             `json:"next_offset,omitempty"`
 }
 
 type WorkflowGetRequest struct {
@@ -982,9 +981,11 @@ type WorkflowAttentionItem struct {
 	TaskID                 string                             `json:"task_id"`
 	TaskShortID            string                             `json:"task_short_id"`
 	TaskTitle              string                             `json:"task_title"`
+	Message                *string                            `json:"message,omitempty"`
 	ApprovalID             *string                            `json:"approval_id,omitempty"`
 	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
 	SessionID              *string                            `json:"session_id,omitempty"`
+	DetailJSON             *string                            `json:"detail_json,omitempty"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
@@ -1047,14 +1048,14 @@ type WorkflowTaskCommentAddResponse struct {
 }
 
 type WorkflowTaskCommentListRequest struct {
-	TaskID    string `json:"task_id"`
-	PageSize  int    `json:"page_size,omitempty"`
-	PageToken string `json:"page_token,omitempty"`
+	TaskID string `json:"task_id"`
+	Offset *int   `json:"offset,omitempty"`
+	Limit  *int   `json:"limit,omitempty"`
 }
 
 type WorkflowTaskCommentListResponse struct {
-	Comments      []WorkflowTaskComment `json:"comments"`
-	NextPageToken string                `json:"next_page_token,omitempty"`
+	Comments   []WorkflowTaskComment `json:"comments"`
+	NextOffset *int                  `json:"next_offset,omitempty"`
 }
 
 type WorkflowTaskCommentReplaceRequest struct {
@@ -1157,8 +1158,8 @@ type WorkflowTaskListRequest struct {
 	AttentionKinds []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
 	LabelFilter    WorkflowTaskLabelFilter     `json:"label_filter"`
 	Sort           []WorkflowTaskListSort      `json:"sort,omitempty"`
-	PageSize       int                         `json:"page_size"`
-	PageToken      string                      `json:"page_token,omitempty"`
+	Offset         *int                        `json:"offset,omitempty"`
+	Limit          *int                        `json:"limit,omitempty"`
 }
 
 type WorkflowTaskListScope struct {
@@ -1177,7 +1178,7 @@ const (
 type WorkflowTaskListResponse struct {
 	Scope                       WorkflowTaskListScope                       `json:"scope"`
 	MatchingWorkflowCardinality WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	NextPageToken               *string                                     `json:"next_page_token,omitempty"`
+	NextOffset                  *int                                        `json:"next_offset,omitempty"`
 	GeneratedAtUnixMs           int64                                       `json:"generated_at_unix_ms"`
 	Tasks                       []WorkflowTaskListItem                      `json:"tasks"`
 }
@@ -1698,14 +1699,8 @@ func (r WorkflowUpdateRequest) Validate() error {
 }
 
 func (r WorkflowListRequest) Validate() error {
-	if r.PageSize < 0 {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "page_size", Message: "page_size must be non-negative"}
-	}
-	if r.PageSize > WorkflowListMaxPageSize {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowListMaxPageSize))
-	}
-	if r.PageToken != strings.TrimSpace(r.PageToken) {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
+		return err
 	}
 	if r.ProjectID != nil {
 		if err := validateRequired("project_id", *r.ProjectID); err != nil {
@@ -1718,6 +1713,29 @@ func (r WorkflowListRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+type WorkflowOffsetWindow struct {
+	Offset int
+	Limit  int
+}
+
+func ResolveWorkflowOffsetWindow(offset *int, limit *int) (WorkflowOffsetWindow, error) {
+	resolvedOffset := 0
+	if offset != nil {
+		if *offset < 0 {
+			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
+		}
+		resolvedOffset = *offset
+	}
+	resolvedLimit := WorkflowPaginationMaxLimit
+	if limit != nil {
+		if *limit < 1 || *limit > WorkflowPaginationMaxLimit {
+			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "limit", fmt.Sprintf("limit must be between 1 and %d", WorkflowPaginationMaxLimit))
+		}
+		resolvedLimit = *limit
+	}
+	return WorkflowOffsetWindow{Offset: resolvedOffset, Limit: resolvedLimit}, nil
 }
 
 func (r WorkflowGetRequest) Validate() error {
@@ -2259,6 +2277,9 @@ func (r WorkflowAttentionItem) Validate() error {
 	}
 	switch r.Kind {
 	case "question":
+		if err := validateRequiredAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("question_id", r.QuestionID); err != nil {
 			return err
 		}
@@ -2282,8 +2303,12 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "approval":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("approval_id", r.ApprovalID); err != nil {
 			return err
 		}
@@ -2300,17 +2325,26 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
 			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
-	case "interrupted":
+	case "interrupted_current_node":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if r.CurrentNode == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "current_node", "current_node is required")
 		}
 		if err := validateWorkflowTaskCurrentNode(*r.CurrentNode); err != nil {
 			return err
 		}
+		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
+			return err
+		}
+		if err := validateOptionalAttentionInterruptionDetailJSON("detail_json", r.DetailJSON); err != nil {
+			return err
+		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
-			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
@@ -2318,7 +2352,7 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted")
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_current_node")
 	}
 }
 
@@ -2388,6 +2422,33 @@ func validateOptionalAttentionString(field string, value *string) error {
 	}
 	if strings.TrimSpace(*value) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be non-blank when present")
+	}
+	return nil
+}
+
+type workflowAttentionInterruptionDetailSchema struct {
+	Code   string             `json:"code"`
+	Fields map[string]*string `json:"fields"`
+}
+
+func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
+	if err := validateOptionalAttentionString(field, value); err != nil || value == nil {
+		return err
+	}
+	var detail workflowAttentionInterruptionDetailSchema
+	if err := protocol.DecodeStrictJSON([]byte(*value), &detail); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must match the current Node interruption detail schema")
+	}
+	if strings.TrimSpace(detail.Code) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" code must be non-blank")
+	}
+	for name, value := range detail.Fields {
+		if strings.TrimSpace(name) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" field names must be non-blank")
+		}
+		if value == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" values must be strings")
+		}
 	}
 	return nil
 }
@@ -2673,24 +2734,12 @@ func validateWorkflowTaskCommentAuthorKind(author string) error {
 	}
 }
 
-// WorkflowTaskCommentListMaxPageSize bounds a single comment page so a
-// client-supplied page_size cannot drive an oversized storage query/response.
-const WorkflowTaskCommentListMaxPageSize = 100
-
 func (r WorkflowTaskCommentListRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if r.PageSize > WorkflowTaskCommentListMaxPageSize {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowTaskCommentListMaxPageSize))
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
-	}
-	return nil
+	_, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit)
+	return err
 }
 
 func (r WorkflowTaskCommentReplaceRequest) Validate() error {
@@ -2746,12 +2795,8 @@ func (r WorkflowTaskListRequest) ValidateRPC() error {
 }
 
 func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
-	if r.ProjectID == nil && strings.TrimSpace(r.PageToken) == "" {
-		message := "project_id is required on the first page"
-		if r.WorkflowID != nil {
-			message = "project_id is required when workflow_id is selected"
-		}
-		return workflowRequestError(WorkflowRequestErrorRequired, "project_id", message)
+	if r.ProjectID == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "project_id", "project_id is required")
 	}
 	for _, scope := range []struct {
 		field string
@@ -2764,14 +2809,8 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 			return err
 		}
 	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if r.PageSize > WorkflowTaskListMaxPageSize {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowTaskListMaxPageSize))
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
+		return err
 	}
 	return nil
 }

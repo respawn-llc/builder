@@ -6,14 +6,13 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 type taskListOutput struct {
 	ProjectID                   string                                                `json:"project_id"`
 	WorkflowID                  *string                                               `json:"workflow_id,omitempty"`
 	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	NextPageToken               *string                                               `json:"next_page_token,omitempty"`
+	NextOffset                  *int                                                  `json:"next_offset,omitempty"`
 	Tasks                       []taskListItem                                        `json:"tasks"`
 }
 
@@ -43,17 +42,9 @@ type taskListRenderItem struct {
 }
 
 type taskListExpectedScope struct {
-	ProjectID     string
-	WorkflowID    *string
-	WorkflowOwner taskListExpectedWorkflowOwner
+	ProjectID  string
+	WorkflowID *string
 }
-
-type taskListExpectedWorkflowOwner uint8
-
-const (
-	taskListExpectedWorkflowFromRequest taskListExpectedWorkflowOwner = iota
-	taskListExpectedWorkflowFromToken
-)
 
 func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope) (taskListProjection, error) {
 	if strings.TrimSpace(expectedScope.ProjectID) == "" || strings.TrimSpace(expectedScope.ProjectID) != expectedScope.ProjectID {
@@ -65,20 +56,11 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	if resp.Scope.ProjectID != expectedScope.ProjectID {
 		return taskListProjection{}, fmt.Errorf("task list response project %q does not match requested project %q", resp.Scope.ProjectID, expectedScope.ProjectID)
 	}
-	switch expectedScope.WorkflowOwner {
-	case taskListExpectedWorkflowFromRequest:
-		if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
-			return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
-		}
-		if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
-			return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
-		}
-	case taskListExpectedWorkflowFromToken:
-		if expectedScope.WorkflowID != nil {
-			return taskListProjection{}, errors.New("task list token-owned workflow scope cannot include an explicit workflow_id")
-		}
-	default:
-		return taskListProjection{}, errors.New("task list request has invalid workflow scope ownership")
+	if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
+		return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
+	}
+	if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
+		return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
 	}
 	switch resp.MatchingWorkflowCardinality {
 	case serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
@@ -114,8 +96,7 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		if selectedWorkflowID != nil && workflowID != *selectedWorkflowID {
 			return taskListProjection{}, fmt.Errorf("task list response task %q workflow %q does not match selected workflow %q", task.TaskID, workflowID, *selectedWorkflowID)
 		}
-		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne &&
-			expectedScope.WorkflowOwner == taskListExpectedWorkflowFromRequest {
+		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
 			if soleWorkflowID == nil {
 				value := workflowID
 				soleWorkflowID = &value
@@ -170,7 +151,7 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			ProjectID:                   resp.Scope.ProjectID,
 			WorkflowID:                  selectedWorkflowID,
 			MatchingWorkflowCardinality: resp.MatchingWorkflowCardinality,
-			NextPageToken:               textutil.Pointer(resp.NextPageToken),
+			NextOffset:                  resp.NextOffset,
 			Tasks:                       items,
 		},
 		Rows: rows,

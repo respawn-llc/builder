@@ -11,14 +11,14 @@ import (
 	"core/shared/serverapi"
 )
 
-const taskListDefaultPageSize = 100
+const taskListDefaultLimit = 100
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
 	workflowID := fs.String("workflow", "", "workflow UUID")
-	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task list response")
+	offset := fs.Int("offset", 0, "zero-based task offset")
+	limit := fs.Int("limit", taskListDefaultLimit, "maximum tasks to print")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
 	var attentionFlags repeatedStringFlag
@@ -39,10 +39,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	if len(fs.Args()) != 0 {
 		fmt.Fprintln(stderr, "task list does not accept positional arguments")
-		return 2
-	}
-	if *pageSize < 1 {
-		fmt.Fprintln(stderr, "task list requires --page-size to be positive")
 		return 2
 	}
 	columnKeys, err := parseTaskListFilterValues([]string(columnFlags), "column")
@@ -120,8 +116,8 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			StatusKinds:    statusKinds,
 			AttentionKinds: attentionKinds,
 			Sort:           sortSelectors,
-			PageSize:       *pageSize,
-			PageToken:      *pageToken,
+			Offset:         offset,
+			Limit:          limit,
 		}
 		resp, err := workflowTaskList(context.Background(), remote, request)
 		if err != nil {
@@ -137,8 +133,8 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				ExcludedLabelSelectors: append([]string(nil), notLabelFlags...),
 				LabelMatch:             recoveryLabelMatch,
 				Unlabeled:              *unlabeled,
-				PageSize:               *pageSize,
-				PageToken:              *pageToken,
+				Offset:                 *offset,
+				Limit:                  *limit,
 				JSON:                   *jsonOut,
 			})
 			return 1
@@ -146,9 +142,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		expectedScope := taskListExpectedScope{
 			ProjectID:  projectID,
 			WorkflowID: selectedWorkflowID,
-		}
-		if selectedWorkflowID == nil && strings.TrimSpace(*pageToken) != "" {
-			expectedScope.WorkflowOwner = taskListExpectedWorkflowFromToken
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})
@@ -220,8 +213,8 @@ func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writ
 			fmt.Fprintln(stdout)
 		}
 	}
-	if resp.NextPageToken != nil {
-		if err := writeNextPageToken(stderr, *resp.NextPageToken); err != nil {
+	if resp.NextOffset != nil {
+		if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
 			return 1
 		}
 	}

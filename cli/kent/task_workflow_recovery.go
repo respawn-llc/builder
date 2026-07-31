@@ -21,8 +21,8 @@ type taskListCommandContext struct {
 	ExcludedLabelSelectors []string
 	LabelMatch             *serverapi.WorkflowTaskNamedLabelFilterMode
 	Unlabeled              bool
-	PageSize               int
-	PageToken              string
+	Offset                 int
+	Limit                  int
 	JSON                   bool
 }
 
@@ -184,7 +184,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		}
 		recovery.Commands = append(
 			taskWorkflowNoLinksPreparationCommands(commandContext.projectRef),
-			commandContext.retryCommand(nil, true),
+			commandContext.retryCommand(nil),
 		)
 	case taskWorkflowRecoveryWorkflowNotLinked:
 		if selectedWorkflowID == nil || failure.workflowID == nil {
@@ -200,7 +200,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder, false),
+			commandContext.retryCommand(&workflowPlaceholder),
 			{Kind: taskWorkflowRecoveryCommandLinkSelectedWorkflow, Args: []string{config.Command, "workflow", "link", commandContext.projectRef, selected}},
 		}
 	case taskWorkflowRecoveryWorkflowRequiredColumns:
@@ -210,7 +210,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder, false),
+			commandContext.retryCommand(&workflowPlaceholder),
 		}
 	case taskWorkflowRecoveryAmbiguousWithoutDefault:
 		if commandContext.create == nil || failure.workflowID != nil || selectedWorkflowID != nil {
@@ -219,7 +219,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		workflowPlaceholder := "<uuid>"
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommand(&workflowPlaceholder, false),
+			commandContext.retryCommand(&workflowPlaceholder),
 			{Kind: taskWorkflowRecoveryCommandSetDefaultWorkflow, Args: []string{config.Command, "workflow", "default", commandContext.projectRef, "<uuid>"}},
 		}
 	default:
@@ -228,11 +228,11 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 	return recovery, nil
 }
 
-func (c taskWorkflowRecoveryContext) retryCommand(workflowID *string, preservePageToken bool) taskWorkflowRecoveryCommand {
+func (c taskWorkflowRecoveryContext) retryCommand(workflowID *string) taskWorkflowRecoveryCommand {
 	if c.list != nil {
 		return taskWorkflowRecoveryCommand{
 			Kind: taskWorkflowRecoveryCommandRetryTaskList,
-			Args: taskListRetryCommandArgs(*c.list, workflowID, preservePageToken),
+			Args: taskListRetryCommandArgs(*c.list, workflowID),
 		}
 	}
 	return taskWorkflowRecoveryCommand{
@@ -283,7 +283,7 @@ func taskCreateRetryCommandArgs(commandContext taskCreateCommandContext, workflo
 	return args
 }
 
-func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *string, preservePageToken bool) []string {
+func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *string) []string {
 	args := []string{config.Command, "task", "list", "--project", commandContext.ProjectRef}
 	if workflowID != nil {
 		args = append(args, "--workflow", *workflowID)
@@ -312,10 +312,7 @@ func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID 
 	if commandContext.Unlabeled {
 		args = append(args, "--unlabeled")
 	}
-	args = append(args, "--page-size", fmt.Sprintf("%d", commandContext.PageSize))
-	if preservePageToken && strings.TrimSpace(commandContext.PageToken) != "" {
-		args = append(args, "--page-token", commandContext.PageToken)
-	}
+	args = append(args, "--limit", fmt.Sprintf("%d", commandContext.Limit))
 	if commandContext.JSON {
 		args = append(args, "--json")
 	}

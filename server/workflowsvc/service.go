@@ -3,10 +3,8 @@ package workflowsvc
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -259,14 +257,18 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.WorkflowListResponse{}, err
+	}
 	var workflowID *workflow.WorkflowID
 	if req.WorkflowID != nil {
 		value := workflow.WorkflowID(*req.WorkflowID)
 		workflowID = &value
 	}
 	rows, err := s.store.ListWorkflows(ctx, workflowstore.ListWorkflowsRequest{
-		PageSize:   req.PageSize,
-		PageToken:  req.PageToken,
+		Offset:     window.Offset,
+		Limit:      window.Limit,
 		Query:      req.Query,
 		ProjectID:  req.ProjectID,
 		WorkflowID: workflowID,
@@ -278,7 +280,7 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	for _, row := range rows.Workflows {
 		out = append(out, workflowRecord(row))
 	}
-	return serverapi.WorkflowListResponse{Workflows: out, ProjectID: rows.ProjectID, NextPageToken: rows.NextPageToken}, nil
+	return serverapi.WorkflowListResponse{Workflows: out, ProjectID: rows.ProjectID, NextOffset: rows.NextOffset}, nil
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
@@ -296,7 +298,7 @@ func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNod
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	})
 	if err != nil {
@@ -310,7 +312,7 @@ func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	})
 	if err != nil {
@@ -325,7 +327,7 @@ func (s *Service) AddWorkflowNodeGroup(ctx context.Context, req serverapi.Workfl
 		return serverapi.WorkflowNodeGroupResponse{}, err
 	}
 	var group workflowstore.NodeGroupRecord
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		var storeRevision int64
 		var err error
 		group, storeRevision, err = s.store.AddNodeGroup(ctx, workflowstore.NodeGroupRecord{ID: req.GroupID, WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.GroupKey), DisplayName: req.DisplayName, SortOrder: int64(req.SortOrder)})
@@ -343,7 +345,7 @@ func (s *Service) UpdateWorkflowNodeGroup(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowNodeGroupResponse{}, err
 	}
 	var group workflowstore.NodeGroupRecord
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		var storeRevision int64
 		var err error
 		group, storeRevision, err = s.store.UpdateNodeGroup(ctx, workflowstore.NodeGroupRecord{ID: req.GroupID, WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.GroupKey), DisplayName: req.DisplayName, SortOrder: int64(req.SortOrder)})
@@ -360,7 +362,7 @@ func (s *Service) DeleteWorkflowNodeGroup(ctx context.Context, req serverapi.Wor
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	if _, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (struct{}, error) {
+	if _, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (struct{}, error) {
 		_, err := s.store.DeleteNodeGroup(ctx, workflow.WorkflowID(req.WorkflowID), req.GroupID)
 		return struct{}{}, err
 	}); err != nil {
@@ -374,7 +376,7 @@ func (s *Service) AddWorkflowTransitionGroup(ctx context.Context, req serverapi.
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTransitionGroupAddResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(req.GroupID), WorkflowID: workflow.WorkflowID(req.WorkflowID), SourceNodeID: workflow.NodeID(req.SourceNodeID), TransitionID: workflow.TransitionID(req.TransitionID), DisplayName: req.DisplayName, Description: req.Description})
 	})
 	if err != nil {
@@ -388,7 +390,7 @@ func (s *Service) UpdateWorkflowTransitionGroup(ctx context.Context, req servera
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTransitionGroupUpdateResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.UpdateTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(req.GroupID), WorkflowID: workflow.WorkflowID(req.WorkflowID), SourceNodeID: workflow.NodeID(req.SourceNodeID), TransitionID: workflow.TransitionID(req.TransitionID), DisplayName: req.DisplayName, Description: req.Description})
 	})
 	if err != nil {
@@ -402,7 +404,7 @@ func (s *Service) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdg
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(req.EdgeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID), Key: workflow.ModelKey(req.Key), TargetNodeID: workflow.NodeID(req.TargetNodeID), RequiresApproval: req.RequiresApproval, ContextMode: workflow.ContextMode(req.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}), PromptTemplate: req.PromptTemplate, Parameters: domainParameters(req.Parameters)})
 	})
 	if err != nil {
@@ -416,7 +418,7 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
-	revision, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (int64, error) {
+	revision, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (int64, error) {
 		return s.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(req.EdgeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID), Key: workflow.ModelKey(req.Key), TargetNodeID: workflow.NodeID(req.TargetNodeID), RequiresApproval: req.RequiresApproval, ContextMode: workflow.ContextMode(req.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}), PromptTemplate: req.PromptTemplate, Parameters: domainParameters(req.Parameters)})
 	})
 	if err != nil {
@@ -516,17 +518,12 @@ func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID w
 	return nil
 }
 
-func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID workflow.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
+func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, mutation func(context.Context) (T, error)) (T, error) {
 	var result T
 	if service == nil {
 		return result, errors.New("workflow service is required")
 	}
-	return workflowexecution.RunMutation(ctx, service.mutationPermit, func(ctx context.Context) (T, error) {
-		if err := service.ensureWorkflowTasksQuiescent(ctx, workflowID); err != nil {
-			return result, err
-		}
-		return mutation(ctx)
-	})
+	return workflowexecution.RunMutation(ctx, service.mutationPermit, mutation)
 }
 
 func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
@@ -645,7 +642,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
-	result, err := runWorkflowGraphMutation(ctx, s, workflow.WorkflowID(req.WorkflowID), func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+	result, err := runWorkflowGraphMutation(ctx, s, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
 		return s.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation))
 	})
 	if err != nil {
@@ -1394,55 +1391,25 @@ func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	pageSize := req.PageSize
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	cursor, err := parseCommentPageToken(req.PageToken)
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), cursor, pageSize+1)
+	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), window.Offset, window.Limit+1)
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	nextPageToken := ""
-	if len(comments) > pageSize {
-		comments = comments[:pageSize]
-		nextPageToken = commentPageToken(comments[len(comments)-1])
+	var nextOffset *int
+	if len(comments) > window.Limit {
+		comments = comments[:window.Limit]
+		value := window.Offset + len(comments)
+		nextOffset = &value
 	}
 	out := make([]serverapi.WorkflowTaskComment, 0, len(comments))
 	for _, comment := range comments {
 		out = append(out, commentRecord(comment))
 	}
-	return serverapi.WorkflowTaskCommentListResponse{Comments: out, NextPageToken: nextPageToken}, nil
-}
-
-// parseCommentPageToken decodes a stable keyset cursor (created_at|base64(id)),
-// mirroring the task-activity page token so concurrent comment inserts/deletes
-// can't shift an in-flight infinite-scroll page.
-func parseCommentPageToken(token string) (workflowstore.CommentPageCursor, error) {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return workflowstore.CommentPageCursor{}, nil
-	}
-	timestampPart, encodedID, ok := strings.Cut(trimmed, "|")
-	if !ok {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	createdAt, err := strconv.ParseInt(timestampPart, 10, 64)
-	if err != nil || createdAt < 0 {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	decodedID, err := base64.RawURLEncoding.DecodeString(encodedID)
-	if err != nil || strings.TrimSpace(string(decodedID)) == "" {
-		return workflowstore.CommentPageCursor{}, errors.New("page_token is invalid")
-	}
-	return workflowstore.CommentPageCursor{CreatedAtUnixMs: createdAt, ID: string(decodedID), HasValue: true}, nil
-}
-
-func commentPageToken(comment workflowstore.CommentRecord) string {
-	return strconv.FormatInt(comment.CreatedAt, 10) + "|" + base64.RawURLEncoding.EncodeToString([]byte(comment.ID))
+	return serverapi.WorkflowTaskCommentListResponse{Comments: out, NextOffset: nextOffset}, nil
 }
 
 func (s *Service) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentReplaceRequest) error {

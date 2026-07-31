@@ -2,7 +2,7 @@ Usage of kent workflow:
   kent workflow create [--description <text>] [--json] <name>
   kent workflow delete <workflow> [--confirm] [--json]
   kent workflow update <workflow> [--name <name>] [--description <text>] [--execution-target ask-on-first-execution|none|head|default-branch|ref:<revision>] [--json]
-  kent workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]
+  kent workflow list [--project <path-or-id>] [--offset <n>] [--limit <n>] [--json]
   kent workflow node add <workflow> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow edge add <workflow> --from <source-node-key> --transition <transition-key> --edge-key <edge-key> --to <target-node-key> --context new_session|continue_session|compact_and_continue_session [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]

@@ -46,7 +46,7 @@ For validation modes, use `draft` while authoring, `task_creation` before creati
 To understand what `--agent` roles are available (the reminder in your memory might not list all of them), inspect the repo-local and user global `config.toml` files. More info in the `kent-dogfooding` skill.
 
 Important CLI behavior:
-- Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context.
+- Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context. `--json` is **very verbose**, avoid it except for scripting.
 - `workflow create` auto-creates the initial backlog/start and done/terminal shape; inspect after create before adding duplicate start or terminal nodes.
 - Workflow selectors use bare canonical UUIDv4 values emitted by the CLI. Names and `workflow-...` persistence IDs are rejected.
 - `workflow list --project <path-or-id>` discovers linked workflows with the default first. `workflow inspect <uuid> --summary` reads metadata without loading the graph.

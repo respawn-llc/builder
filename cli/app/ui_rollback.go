@@ -478,32 +478,6 @@ func (m *uiModel) rollbackDetailPageLoadFailed(request clientui.TranscriptPageRe
 	}
 }
 
-func (m *uiModel) beginRollbackEditing() bool {
-	selected, _, ok := m.selectedRollbackCandidate()
-	if !ok || !m.rollback.isSelecting() || m.rollback.pendingNavigation != nil {
-		return false
-	}
-	selectedCopy := selected
-	m.rollback.editingCandidate = &selectedCopy
-	m.rollback.phase = uiRollbackPhaseEditing
-	m.setInputMode(uiInputModeRollbackEdit)
-	m.replaceMainInputAtEnd(selected.Text)
-	m.applyRollbackSelectionHighlight()
-	return true
-}
-
-func (m *uiModel) cancelRollbackEditingBackToSelection() bool {
-	if m == nil || !m.rollback.isEditing() {
-		return false
-	}
-	m.rollback.editingCandidate = nil
-	m.rollback.phase = uiRollbackPhaseSelection
-	m.setInputMode(uiInputModeRollbackSelection)
-	m.replaceMainInput("", 0)
-	m.applyRollbackSelectionHighlight()
-	return len(m.rollback.candidates) > 0
-}
-
 func (m *uiModel) selectedRollbackCandidate() (rollbackCandidate, int, bool) {
 	if m == nil || m.rollback.selectedTargetID == nil {
 		return rollbackCandidate{}, 0, false
@@ -557,8 +531,7 @@ func (m *uiModel) discardRollbackStateForSessionReplacement() tea.Cmd {
 		return nil
 	}
 	wasRollback := m.rollback.isActive() || m.rollback.isAwaitingActivation() ||
-		m.inputMode() == uiInputModeRollbackSelection ||
-		m.inputMode() == uiInputModeRollbackEdit
+		m.inputMode() == uiInputModeRollbackSelection
 	closeCmd := m.popRollbackOverlay()
 	m.rollback = uiRollbackState{phase: uiRollbackPhaseInactive}
 	if wasRollback {

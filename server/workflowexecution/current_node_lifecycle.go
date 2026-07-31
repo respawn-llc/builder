@@ -7,6 +7,7 @@ import (
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 )
 
@@ -19,7 +20,10 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 		return 0, errors.New("current node workflow controller is required")
 	}
 	recovered, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
-		return c.store.RecoverExecutableCurrentNodes(ctx, ReasonCurrentNodeStartupRecovery, workflow.CurrentNodeInterruptionDetail{})
+		return c.store.RecoverExecutableCurrentNodes(ctx, ReasonCurrentNodeStartupRecovery, workflow.CurrentNodeInterruptionDetail{
+			Code:   string(ReasonCurrentNodeStartupRecovery),
+			Fields: map[string]string{},
+		})
 	})
 	if err != nil {
 		return 0, err
@@ -57,7 +61,9 @@ func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(started.Mutation.Created[0].Reference); err != nil {
+		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
+			reference: started.Mutation.Created[0].Reference,
+		}); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		return started, nil
@@ -92,7 +98,10 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 				resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
 			}
 			c.mu.Lock()
-			queueErr := c.queueExplicitStartLocked(currentNode.Reference)
+			queueErr := c.queueExplicitStartLocked(currentNodeQueuedStart{
+				reference:          currentNode.Reference,
+				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			})
 			c.mu.Unlock()
 			if queueErr != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", currentNode.Reference, queueErr))
@@ -156,7 +165,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 				return applied, nil
 			}
 			for _, start := range starts {
-				if err := c.queueExplicitStartLocked(start.reference); err != nil {
+				if err := c.queueExplicitStartLocked(start); err != nil {
 					return workflowstore.PendingApprovalApplyResult{}, err
 				}
 			}
@@ -209,7 +218,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, start := range starts {
-			if err := c.queueExplicitStartLocked(start.reference); err != nil {
+			if err := c.queueExplicitStartLocked(start); err != nil {
 				return workflowstore.ManualMoveResult{}, err
 			}
 		}
@@ -293,8 +302,8 @@ func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (boo
 			return false, nil
 		}
 	}
-	for _, reference := range c.explicitQueue {
-		if reference.TaskID == taskID {
+	for _, start := range c.explicitQueue {
+		if start.reference.TaskID == taskID {
 			return false, nil
 		}
 	}

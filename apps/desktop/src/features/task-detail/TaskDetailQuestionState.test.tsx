@@ -186,6 +186,7 @@ describe("questionPresentation", () => {
 
     renderQuestionForm(attention, presentation, selection, answerQuestion);
 
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox"), "freeform");
     await user.click(screen.getByRole("button"));
     await waitFor(() => {

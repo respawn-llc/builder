@@ -358,13 +358,12 @@ const attentionItemBaseWireSchema = z.object({
   task_id: nonBlankString,
   task_short_id: nonBlankString,
   task_title: nonBlankString,
-  message: z.string(),
   occurred_at_unix_ms: z.number(),
 });
 
 type AttentionItemBase = Pick<
   QuestionAttentionItem,
-  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "message" | "occurredAt"
+  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "occurredAt"
 >;
 
 function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSchema>): AttentionItemBase {
@@ -375,7 +374,6 @@ function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSche
     taskID: value.task_id,
     taskShortID: value.task_short_id,
     taskTitle: value.task_title,
-    message: value.message,
     occurredAt: value.occurred_at_unix_ms,
   };
 }
@@ -430,6 +428,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
       question_id: nonBlankString,
+      message: nonBlankString,
       suggestions: stringList,
       recommended_option_index: nullablePositiveInteger,
       question: questionPromptSchema.nullish(),
@@ -441,6 +440,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       currentNode: value.current_node,
       sessionID: value.session_id,
       questionID: value.question_id,
+      message: value.message,
       suggestions: value.suggestions,
       recommendedOptionIndex: value.recommended_option_index,
       question: value.question ?? null,
@@ -450,6 +450,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: z.literal("approval"),
       approval_id: nonBlankString,
       approval_snapshot: approvalSnapshotSchema,
+      message: nullableNonBlankString,
     })
     .strict()
     .transform((value): ApprovalAttentionItem => ({
@@ -457,6 +458,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: value.kind,
       approvalID: value.approval_id,
       approvalSnapshot: value.approval_snapshot,
+      message: value.message,
     })),
   attentionItemBaseWireSchema
     .extend({
@@ -464,6 +466,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
       detail_json: nullableNonBlankString,
+      message: nullableNonBlankString,
     })
     .strict()
     .transform((value): InterruptedCurrentNodeAttentionItem => ({
@@ -472,6 +475,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       currentNode: value.current_node,
       sessionID: value.session_id,
       detailJSON: value.detail_json,
+      message: value.message,
     })),
 ]);
 

@@ -22,7 +22,13 @@ const reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workf
 // controller mutation permit. The runner owns slow launch preparation; the
 // controller owns its gate and live-scope registration.
 type CurrentNodeRunner interface {
-	StartCurrentNode(context.Context, workflow.CurrentNodeReference, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error
+	StartCurrentNode(
+		context.Context,
+		workflow.CurrentNodeReference,
+		workflowruntime.TaskPromptDelivery,
+		sessionruntime.WorkflowExecutionLease,
+		workflowruntime.Controller,
+	) error
 }
 
 type CurrentNodeControllerConfig struct {
@@ -115,7 +121,7 @@ type CurrentNodeController struct {
 	completed             map[runtimeids.ExecutionScopeID]struct{}
 	violations            map[runtimeids.ExecutionScopeID]int64
 	heldStarts            map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart
-	explicitQueue         []workflow.CurrentNodeReference
+	explicitQueue         []currentNodeQueuedStart
 	explicitQueued        map[workflow.CurrentNodeReferenceKey]struct{}
 	explicitReservations  map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
 	automaticQueue        []CurrentNodeAutomaticIntent
@@ -540,8 +546,8 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	for _, start := range c.automaticReservations {
 		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{CurrentNode: start.reference})
 	}
-	for _, reference := range c.explicitQueue {
-		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: reference})
+	for _, start := range c.explicitQueue {
+		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: start.reference})
 	}
 	for _, start := range c.explicitReservations {
 		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: start.reference})

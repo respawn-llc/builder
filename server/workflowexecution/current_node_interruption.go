@@ -108,7 +108,8 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			}
 
 			explicitQueue := c.explicitQueue[:0]
-			for _, reference := range c.explicitQueue {
+			for _, start := range c.explicitQueue {
+				reference := start.reference
 				if reference.TaskID == selector.TaskID {
 					key, keyErr := reference.Key()
 					if keyErr != nil {
@@ -118,7 +119,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					references = append(references, reference)
 					continue
 				}
-				explicitQueue = append(explicitQueue, reference)
+				explicitQueue = append(explicitQueue, start)
 			}
 			c.explicitQueue = explicitQueue
 

@@ -58,6 +58,14 @@ func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Contex
 	return metadata.PromptHistoryRecord{}, false, ctx.Err()
 }
 
+type fixedSessionExecutionTargetResolver struct {
+	target clientui.SessionExecutionTarget
+}
+
+func (r fixedSessionExecutionTargetResolver) ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error) {
+	return r.target, nil
+}
+
 type headlessLaunchArtifactSnapshot struct {
 	SessionIDs       []string
 	SessionArtifacts []string
@@ -259,6 +267,11 @@ func newTestHeadlessSessionLaunch(
 		ContainerDir:      containerDir,
 		StoreOptions:      persistence.Options(),
 		PersistedSessions: persistence,
+		ExecutionTargets: fixedSessionExecutionTargetResolver{target: clientui.SessionExecutionTarget{
+			WorkspaceRoot:    cfg.WorkspaceRoot,
+			CwdRelpath:       ".",
+			EffectiveWorkdir: cfg.WorkspaceRoot,
+		}},
 	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
 }
 
@@ -315,27 +328,217 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 	}
 }
 
-func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", sessioncontract.SessionCategorySubagent, persistence.Options()...)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
+func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsumed(t *testing.T) {
+	t.Setenv("KENT_REVIEWER_FREQUENCY", "off")
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	managedBase := filepath.Join(root, "worktrees")
+	worktreeRoot := filepath.Join(managedBase, "task")
+	worktreeSubdir := filepath.Join(worktreeRoot, "pkg")
+	for _, dir := range []string{workspace, worktreeSubdir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
 	}
-	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	parent, err := session.Create(
+		containerDir,
+		filepath.Base(containerDir),
+		workspace,
+		sessioncontract.SessionCategoryMain,
+		meta.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create parent: %v", err)
+	}
+	if err := parent.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable parent: %v", err)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktree: %v", err)
+	}
+	canonicalWorktreeSubdir, err := config.CanonicalWorkspaceRoot(worktreeSubdir)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktree subdir: %v", err)
+	}
+	if err := meta.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:              "worktree-task",
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   canonicalWorktreeRoot,
+		DisplayName:     "task",
+		Availability:    "available",
+		GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if err := meta.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+		SessionID:  parent.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-task"},
+		CwdRelpath: "pkg",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
+	}
+	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
-			WorktreePath:  "/tmp/worktree",
-			WorkspaceRoot: "/tmp/workspace",
-			EffectiveCwd:  "/tmp/worktree/pkg",
+			Branch:        session.OptionalWorktreeBranch("task"),
+			WorktreePath:  canonicalWorktreeRoot,
+			WorkspaceRoot: workspace,
+			EffectiveCwd:  canonicalWorktreeSubdir,
 		},
 	}); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
+		t.Fatalf("SetWorktreeReminderState parent: %v", err)
+	}
+	if err := parent.SetWorktreeReminderState(nil); err != nil {
+		t.Fatalf("consume parent worktree reminder: %v", err)
+	}
+	if parent.Meta().WorktreeReminder != nil {
+		t.Fatalf("parent worktree reminder = %+v, want consumed reminder", parent.Meta().WorktreeReminder)
 	}
 
-	got := headlessRuntimeWorkdir(launch.SessionPlan{WorktreeReminder: store.Meta().WorktreeReminder, WorkspaceRoot: "/tmp/workspace"})
-	if got != "/tmp/worktree/pkg" {
-		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree/pkg", got)
+	patchTarget := filepath.Join(canonicalWorktreeSubdir, "probe.txt")
+	patchArgs, err := json.Marshal(map[string]any{"patch": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: " + patchTarget,
+		"+inherited target",
+		"*** End Patch",
+		"",
+	}, "\n")})
+	if err != nil {
+		t.Fatalf("marshal patch arguments: %v", err)
 	}
+	patchOutput := make(chan string, 1)
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		switch providerCalls.Add(1) {
+		case 1:
+			writeRunPromptFunctionCallResponse(w, "fc-patch-target", "call-patch-target", toolspec.ToolPatch, patchArgs)
+		case 2:
+			defer r.Body.Close()
+			var payload map[string]any
+			if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+				t.Errorf("decode patch follow-up request: %v", decodeErr)
+			}
+			output, ok := findRunPromptFunctionCallOutput(payload)
+			if !ok {
+				t.Errorf("patch follow-up request has no function_call_output")
+			} else {
+				patchOutput <- output
+			}
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+		default:
+			t.Errorf("unexpected provider request %d", providerCalls.Load())
+		}
+	}))
+	defer provider.Close()
+
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:               "gpt-5",
+			ThinkingLevel:       "medium",
+			OpenAIBaseURL:       provider.URL,
+			EnabledTools:        map[toolspec.ID]bool{toolspec.ToolPatch: true},
+			AllowNonCwdEdits:    true,
+			MaxSubagentDepth:    2,
+			Worktrees:           config.WorktreeSettings{BaseDir: managedBase},
+			ShellOutputMaxChars: 16_000,
+			Shell:               config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:            cfg,
+			ContainerDir:      containerDir,
+			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions: meta,
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		RuntimeAuthority: authority,
+		PromptHistory:    meta,
+	})
+	parentID := parent.Meta().SessionID
+	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "inherited-target-without-reminder",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
+		CallerSessionID: &parentID,
+		Prompt:          "verify the inherited execution target",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if response.Result != "done" {
+		t.Fatalf("RunPrompt result = %q, want done", response.Result)
+	}
+	select {
+	case output := <-patchOutput:
+		var result map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("decode patch output %q: %v", output, err)
+		}
+		if warning, exists := result["warning"]; exists {
+			t.Fatalf("patch inside inherited current worktree emitted warning %s", warning)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for patch output")
+	}
+	if data, err := os.ReadFile(patchTarget); err != nil || string(data) != "inherited target\n" {
+		t.Fatalf("patch target data = %q, error = %v", data, err)
+	}
+
+	child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenByID child: %v", err)
+	}
+	if child.Meta().WorktreeReminder != nil {
+		t.Fatalf("child worktree reminder = %+v, want no reminder", child.Meta().WorktreeReminder)
+	}
+	target, err := meta.ResolveSessionExecutionTarget(ctx, response.SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget child: %v", err)
+	}
+	if target.Worktree == nil || target.Worktree.ID != "worktree-task" || target.EffectiveWorkdir != canonicalWorktreeSubdir {
+		t.Fatalf("child execution target = %+v, want worktree-task at %q", target, canonicalWorktreeSubdir)
+	}
+	records, err := sessiontest.CollectRecords(child)
+	if err != nil {
+		t.Fatalf("CollectRecords child: %v", err)
+	}
+	wantCWD := "\nCWD: " + canonicalWorktreeSubdir + "\n"
+	for _, record := range records {
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			t.Fatalf("read child event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok &&
+			message.MessageType != nil &&
+			*message.MessageType == session.MessageTypeEnvironment &&
+			message.Content != nil &&
+			strings.Contains(*message.Content, wantCWD) {
+			return
+		}
+	}
+	t.Fatalf("child environment did not use inherited CWD %q", canonicalWorktreeSubdir)
 }
 
 func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T) {
@@ -1161,19 +1364,23 @@ func mustRunPromptPostprocessor(t *testing.T, mode config.ShellPostprocessingMod
 }
 
 func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessage) {
+	writeRunPromptFunctionCallResponse(w, "fc-runprompt-1", "call-runprompt-1", toolspec.ToolExecCommand, args)
+}
+
+func writeRunPromptFunctionCallResponse(w http.ResponseWriter, itemID string, callID string, toolID toolspec.ID, args json.RawMessage) {
 	writeSSEJSON(w, map[string]any{
 		"type": "response.output_item.added",
 		"item": map[string]any{
-			"id":        "fc-runprompt-1",
+			"id":        itemID,
 			"type":      "function_call",
-			"name":      string(toolspec.ToolExecCommand),
-			"call_id":   "call-runprompt-1",
+			"name":      string(toolID),
+			"call_id":   callID,
 			"arguments": "",
 		},
 	})
 	writeSSEJSON(w, map[string]any{
 		"type":    "response.function_call_arguments.delta",
-		"item_id": "fc-runprompt-1",
+		"item_id": itemID,
 		"delta":   string(args),
 	})
 	writeSSEJSON(w, map[string]any{
@@ -1187,9 +1394,9 @@ func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessa
 			"output": []any{
 				map[string]any{
 					"type":      "function_call",
-					"id":        "fc-runprompt-1",
-					"name":      string(toolspec.ToolExecCommand),
-					"call_id":   "call-runprompt-1",
+					"id":        itemID,
+					"name":      string(toolID),
+					"call_id":   callID,
 					"arguments": string(args),
 				},
 			},
