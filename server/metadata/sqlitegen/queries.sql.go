@@ -3679,6 +3679,41 @@ board_node_tasks AS (
                 AND current_node.node_id = ?14
           )
       )
+),
+board_node_task_label_values AS (
+    SELECT
+        assignment.task_id,
+        group_concat(printf('%03d', label.ordinal), '') OVER (
+            PARTITION BY assignment.task_id
+            ORDER BY label.ordinal ASC, label.id ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS label_ordinals,
+        ROW_NUMBER() OVER (
+            PARTITION BY assignment.task_id
+            ORDER BY label.ordinal DESC, label.id DESC
+        ) AS label_score_row
+    FROM task_label_assignments assignment
+    JOIN project_labels label ON label.id = assignment.label_id
+    WHERE EXISTS (
+        SELECT 1
+        FROM board_node_tasks task
+        WHERE task.id = assignment.task_id
+    )
+),
+board_node_task_labels AS (
+    SELECT
+        task_id,
+        CAST(label_ordinals AS TEXT) AS label_ordinals
+    FROM board_node_task_label_values
+    WHERE label_score_row = 1
+),
+board_node_tasks_scored AS (
+    SELECT
+        t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.execution_target_mode, t.execution_target_requested_ref, t.execution_target_resolved_ref, t.execution_target_commit_oid, t.execution_target_provenance, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json,
+        labels.label_ordinals,
+        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled
+    FROM board_node_tasks t
+    LEFT JOIN board_node_task_labels labels ON labels.task_id = t.id
 )
 SELECT
     t.id,
@@ -3701,39 +3736,18 @@ SELECT
     t.created_at_unix_ms,
     t.updated_at_unix_ms,
     t.metadata_json,
-    CASE WHEN EXISTS (
-        SELECT 1
-        FROM task_label_assignments assignment
-        WHERE assignment.task_id = t.id
-    ) THEN CAST((
-        SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-            ORDER BY label.ordinal ASC, label.id ASC
-            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-        )
-        FROM task_label_assignments assignment
-        JOIN project_labels label ON label.id = assignment.label_id
-        WHERE assignment.task_id = t.id
-        LIMIT 1
-    ) AS TEXT) ELSE NULL END AS label_ordinals,
-    CAST(NOT EXISTS (
-        SELECT 1
-        FROM task_label_assignments assignment
-        WHERE assignment.task_id = t.id
-    ) AS INTEGER) AS labels_unlabeled
-FROM board_node_tasks t
+    t.label_ordinals,
+    t.labels_unlabeled
+FROM board_node_tasks_scored t
 CROSS JOIN board_sort_args args
 WHERE ?1 IS NULL
    OR CASE
         WHEN ?2 = 'labels' THEN
             CASE ?3
                 WHEN 'older' THEN
-                    CAST(NOT EXISTS (
-                        SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-                    ) AS INTEGER) > CAST(?4 AS INTEGER)
+                    t.labels_unlabeled > CAST(?4 AS INTEGER)
                     OR (
-                        CAST(NOT EXISTS (
-                            SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-                        ) AS INTEGER) = CAST(?4 AS INTEGER)
+                        t.labels_unlabeled = CAST(?4 AS INTEGER)
                         AND CASE
                             WHEN ?4 != 0 THEN
                                 CASE WHEN ?5 = 0 THEN
@@ -3742,37 +3756,15 @@ WHERE ?1 IS NULL
                                     t.task_seq < CAST(?1 AS INTEGER)
                                 END
                             WHEN ?5 = 0 THEN
-                                ((
-                                    SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                                        ORDER BY label.ordinal ASC, label.id ASC
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                                    )
-                                    FROM task_label_assignments assignment
-                                    JOIN project_labels label ON label.id = assignment.label_id
-                                    WHERE assignment.task_id = t.id
-                                    LIMIT 1
-                                ), t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+                                (t.label_ordinals, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
                             ELSE
-                                ((
-                                    SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                                        ORDER BY label.ordinal ASC, label.id ASC
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                                    )
-                                    FROM task_label_assignments assignment
-                                    JOIN project_labels label ON label.id = assignment.label_id
-                                    WHERE assignment.task_id = t.id
-                                    LIMIT 1
-                                ), t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+                                (t.label_ordinals, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
                         END
                     )
                 WHEN 'newer' THEN
-                    CAST(NOT EXISTS (
-                        SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-                    ) AS INTEGER) < CAST(?4 AS INTEGER)
+                    t.labels_unlabeled < CAST(?4 AS INTEGER)
                     OR (
-                        CAST(NOT EXISTS (
-                            SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-                        ) AS INTEGER) = CAST(?4 AS INTEGER)
+                        t.labels_unlabeled = CAST(?4 AS INTEGER)
                         AND CASE
                             WHEN ?4 != 0 THEN
                                 CASE WHEN ?5 = 0 THEN
@@ -3781,27 +3773,9 @@ WHERE ?1 IS NULL
                                     t.task_seq > CAST(?1 AS INTEGER)
                                 END
                             WHEN ?5 = 0 THEN
-                                ((
-                                    SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                                        ORDER BY label.ordinal ASC, label.id ASC
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                                    )
-                                    FROM task_label_assignments assignment
-                                    JOIN project_labels label ON label.id = assignment.label_id
-                                    WHERE assignment.task_id = t.id
-                                    LIMIT 1
-                                ), t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+                                (t.label_ordinals, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
                             ELSE
-                                ((
-                                    SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                                        ORDER BY label.ordinal ASC, label.id ASC
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                                    )
-                                    FROM task_label_assignments assignment
-                                    JOIN project_labels label ON label.id = assignment.label_id
-                                    WHERE assignment.task_id = t.id
-                                    LIMIT 1
-                                ), t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+                                (t.label_ordinals, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
                         END
                     )
                 ELSE 0
@@ -3813,7 +3787,7 @@ WHERE ?1 IS NULL
                 WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
                 WHEN 'title' THEN LOWER(t.title)
                 WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE ''
+                ELSE NULL
             END, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
         ELSE
             (CASE ?2
@@ -3821,16 +3795,12 @@ WHERE ?1 IS NULL
                 WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
                 WHEN 'title' THEN LOWER(t.title)
                 WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE ''
+                ELSE NULL
             END, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
       END
 ORDER BY
-    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'older' THEN CAST(NOT EXISTS (
-        SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-    ) AS INTEGER) END ASC,
-    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'newer' THEN CAST(NOT EXISTS (
-        SELECT 1 FROM task_label_assignments assignment WHERE assignment.task_id = t.id
-    ) AS INTEGER) END DESC,
+    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'older' THEN t.labels_unlabeled END ASC,
+    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'newer' THEN t.labels_unlabeled END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN
         CASE args.sort_field
@@ -3838,16 +3808,7 @@ ORDER BY
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
             WHEN 'title' THEN LOWER(t.title)
             WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE (
-                SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                    ORDER BY label.ordinal ASC, label.id ASC
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                )
-                FROM task_label_assignments assignment
-                JOIN project_labels label ON label.id = assignment.label_id
-                WHERE assignment.task_id = t.id
-                LIMIT 1
-            )
+            ELSE t.label_ordinals
         END
     END ASC,
     CASE WHEN (args.sort_descending != 0 AND args.cursor_direction = 'older')
@@ -3857,16 +3818,7 @@ ORDER BY
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
             WHEN 'title' THEN LOWER(t.title)
             WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE (
-                SELECT group_concat(printf('%03d', label.ordinal), '') OVER (
-                    ORDER BY label.ordinal ASC, label.id ASC
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                )
-                FROM task_label_assignments assignment
-                JOIN project_labels label ON label.id = assignment.label_id
-                WHERE assignment.task_id = t.id
-                LIMIT 1
-            )
+            ELSE t.label_ordinals
         END
     END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
@@ -3914,7 +3866,7 @@ type ListBoardNodeTasksGeneralizedRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	LabelOrdinals               interface{}
+	LabelOrdinals               sql.NullString
 	LabelsUnlabeled             int64
 }
 
@@ -4002,9 +3954,7 @@ SELECT
         task.execution_target_provenance,
         task.created_at_unix_ms,
         task.updated_at_unix_ms,
-        task.metadata_json,
-        CAST(NULL AS TEXT) AS label_ordinals,
-        CAST(1 AS INTEGER) AS labels_unlabeled
+        task.metadata_json
     FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
     WHERE task.project_workflow_link_id = ?3
       AND (
@@ -4118,8 +4068,6 @@ type ListBoardNodeTasksUpdatedAscRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	LabelOrdinals               sql.NullString
-	LabelsUnlabeled             int64
 }
 
 func (q *Queries) ListBoardNodeTasksUpdatedAsc(ctx context.Context, arg ListBoardNodeTasksUpdatedAscParams) ([]ListBoardNodeTasksUpdatedAscRow, error) {
@@ -4167,8 +4115,6 @@ func (q *Queries) ListBoardNodeTasksUpdatedAsc(ctx context.Context, arg ListBoar
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-			&i.LabelOrdinals,
-			&i.LabelsUnlabeled,
 		), listBoardNodeTasksUpdatedAsc, 12); err != nil {
 			return nil, err
 		}
@@ -4204,9 +4150,7 @@ SELECT
     task.execution_target_provenance,
     task.created_at_unix_ms,
     task.updated_at_unix_ms,
-    task.metadata_json,
-    CAST(NULL AS TEXT) AS label_ordinals,
-    CAST(1 AS INTEGER) AS labels_unlabeled
+    task.metadata_json
 FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
 WHERE task.project_workflow_link_id = ?3
   AND (
@@ -4314,8 +4258,6 @@ type ListBoardNodeTasksUpdatedAscPreviousRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	LabelOrdinals               sql.NullString
-	LabelsUnlabeled             int64
 }
 
 func (q *Queries) ListBoardNodeTasksUpdatedAscPrevious(ctx context.Context, arg ListBoardNodeTasksUpdatedAscPreviousParams) ([]ListBoardNodeTasksUpdatedAscPreviousRow, error) {
@@ -4362,8 +4304,6 @@ func (q *Queries) ListBoardNodeTasksUpdatedAscPrevious(ctx context.Context, arg 
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-			&i.LabelOrdinals,
-			&i.LabelsUnlabeled,
 		), listBoardNodeTasksUpdatedAscPrevious, 11); err != nil {
 			return nil, err
 		}
@@ -4399,9 +4339,7 @@ SELECT
         task.execution_target_provenance,
         task.created_at_unix_ms,
         task.updated_at_unix_ms,
-        task.metadata_json,
-        CAST(NULL AS TEXT) AS label_ordinals,
-        CAST(1 AS INTEGER) AS labels_unlabeled
+        task.metadata_json
     FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
     WHERE task.project_workflow_link_id = ?3
       AND (
@@ -4515,8 +4453,6 @@ type ListBoardNodeTasksUpdatedDescRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	LabelOrdinals               sql.NullString
-	LabelsUnlabeled             int64
 }
 
 func (q *Queries) ListBoardNodeTasksUpdatedDesc(ctx context.Context, arg ListBoardNodeTasksUpdatedDescParams) ([]ListBoardNodeTasksUpdatedDescRow, error) {
@@ -4564,8 +4500,6 @@ func (q *Queries) ListBoardNodeTasksUpdatedDesc(ctx context.Context, arg ListBoa
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-			&i.LabelOrdinals,
-			&i.LabelsUnlabeled,
 		), listBoardNodeTasksUpdatedDesc, 12); err != nil {
 			return nil, err
 		}
@@ -4601,9 +4535,7 @@ SELECT
     task.execution_target_provenance,
     task.created_at_unix_ms,
     task.updated_at_unix_ms,
-    task.metadata_json,
-    CAST(NULL AS TEXT) AS label_ordinals,
-    CAST(1 AS INTEGER) AS labels_unlabeled
+    task.metadata_json
 FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
 WHERE task.project_workflow_link_id = ?3
   AND (
@@ -4711,8 +4643,6 @@ type ListBoardNodeTasksUpdatedDescPreviousRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	LabelOrdinals               sql.NullString
-	LabelsUnlabeled             int64
 }
 
 func (q *Queries) ListBoardNodeTasksUpdatedDescPrevious(ctx context.Context, arg ListBoardNodeTasksUpdatedDescPreviousParams) ([]ListBoardNodeTasksUpdatedDescPreviousRow, error) {
@@ -4759,8 +4689,6 @@ func (q *Queries) ListBoardNodeTasksUpdatedDescPrevious(ctx context.Context, arg
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
-			&i.LabelOrdinals,
-			&i.LabelsUnlabeled,
 		), listBoardNodeTasksUpdatedDescPrevious, 11); err != nil {
 			return nil, err
 		}

@@ -366,6 +366,14 @@ function useBoundedVerticalEdgeScroll(): Readonly<{
           return null;
         }
         const rect = current.getBoundingClientRect();
+        if (
+          position.x < rect.left ||
+          position.x > rect.right ||
+          position.y < rect.top ||
+          position.y > rect.bottom
+        ) {
+          return null;
+        }
         const velocity = verticalEdgeScrollVelocity(position.y, rect.top, rect.bottom);
         if (velocity === 0 || !canScrollVertically(current, velocity)) {
           return null;
@@ -434,5 +442,5 @@ function nearestVerticalScrollContainer(anchor: HTMLElement | null): HTMLElement
     }
     element = element.parentElement;
   }
-  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
+  return null;
 }

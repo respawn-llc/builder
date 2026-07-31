@@ -414,21 +414,17 @@ type boardNodeCardsPageTask struct {
 	unlabeled     bool
 }
 
-func boardNodeTaskRecordsGeneralized(rows []sqlitegen.ListBoardNodeTasksGeneralizedRow) []boardNodeCardsPageTask {
+func boardNodeCardsPageTasks[T any](rows []T, mapRow func(T) boardNodeCardsPageTask) []boardNodeCardsPageTask {
 	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
 	for _, row := range rows {
-		var labelOrdinals *string
-		switch value := row.LabelOrdinals.(type) {
-		case string:
-			labelOrdinals = &value
-		case []byte:
-			decoded := string(value)
-			labelOrdinals = &decoded
-		case nil:
-		default:
-			panic(fmt.Sprintf("board label ordinal key has unexpected type %T", row.LabelOrdinals))
-		}
-		tasks = append(tasks, boardNodeCardsPageTask{task: sqlitegen.TaskRecord{
+		tasks = append(tasks, mapRow(row))
+	}
+	return tasks
+}
+
+func boardNodeTaskRecordsGeneralized(rows []sqlitegen.ListBoardNodeTasksGeneralizedRow) []boardNodeCardsPageTask {
+	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksGeneralizedRow) boardNodeCardsPageTask {
+		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord{
 			ID:                          row.ID,
 			ProjectID:                   row.ProjectID,
 			ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
@@ -449,148 +445,51 @@ func boardNodeTaskRecordsGeneralized(rows []sqlitegen.ListBoardNodeTasksGenerali
 			CreatedAtUnixMs:             row.CreatedAtUnixMs,
 			UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
 			MetadataJson:                row.MetadataJson,
-		}, labelOrdinals: labelOrdinals, unlabeled: row.LabelsUnlabeled != 0})
-	}
-	return tasks
+		}, labelOrdinals: labelOrdinalKey(row.LabelOrdinals), unlabeled: row.LabelsUnlabeled != 0}
+	})
 }
 
 func boardNodeTaskRecordsUpdatedAsc(rows []sqlitegen.ListBoardNodeTasksUpdatedAscRow) []boardNodeCardsPageTask {
-	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
-	for _, row := range rows {
-		tasks = append(tasks, boardNodeCardsPageTask{
-			task: sqlitegen.TaskRecord{
-				ID:                          row.ID,
-				ProjectID:                   row.ProjectID,
-				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
-				WorkflowID:                  row.WorkflowID,
-				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
-				TaskSeq:                     row.TaskSeq,
-				ShortID:                     row.ShortID,
-				Title:                       row.Title,
-				Body:                        row.Body,
-				SourceUrl:                   row.SourceUrl,
-				SourceWorkspaceID:           row.SourceWorkspaceID,
-				ManagedWorktreeID:           row.ManagedWorktreeID,
-				ExecutionTargetMode:         row.ExecutionTargetMode,
-				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
-				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
-				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-				CreatedAtUnixMs:             row.CreatedAtUnixMs,
-				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
-				MetadataJson:                row.MetadataJson,
-			},
-			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
-			unlabeled:     row.LabelsUnlabeled != 0,
-		})
-	}
-	return tasks
+	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedAscRow) boardNodeCardsPageTask {
+		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
+	})
 }
 
 func boardNodeTaskRecordsUpdatedAscPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow) []boardNodeCardsPageTask {
-	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
-	for _, row := range rows {
-		tasks = append(tasks, boardNodeCardsPageTask{
-			task: sqlitegen.TaskRecord{
-				ID:                          row.ID,
-				ProjectID:                   row.ProjectID,
-				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
-				WorkflowID:                  row.WorkflowID,
-				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
-				TaskSeq:                     row.TaskSeq,
-				ShortID:                     row.ShortID,
-				Title:                       row.Title,
-				Body:                        row.Body,
-				SourceUrl:                   row.SourceUrl,
-				SourceWorkspaceID:           row.SourceWorkspaceID,
-				ManagedWorktreeID:           row.ManagedWorktreeID,
-				ExecutionTargetMode:         row.ExecutionTargetMode,
-				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
-				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
-				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-				CreatedAtUnixMs:             row.CreatedAtUnixMs,
-				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
-				MetadataJson:                row.MetadataJson,
-			},
-			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
-			unlabeled:     row.LabelsUnlabeled != 0,
-		})
-	}
-	return tasks
+	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow) boardNodeCardsPageTask {
+		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
+	})
 }
 
 func boardNodeTaskRecordsUpdatedDesc(rows []sqlitegen.ListBoardNodeTasksUpdatedDescRow) []boardNodeCardsPageTask {
-	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
-	for _, row := range rows {
-		tasks = append(tasks, boardNodeCardsPageTask{
-			task: sqlitegen.TaskRecord{
-				ID:                          row.ID,
-				ProjectID:                   row.ProjectID,
-				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
-				WorkflowID:                  row.WorkflowID,
-				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
-				TaskSeq:                     row.TaskSeq,
-				ShortID:                     row.ShortID,
-				Title:                       row.Title,
-				Body:                        row.Body,
-				SourceUrl:                   row.SourceUrl,
-				SourceWorkspaceID:           row.SourceWorkspaceID,
-				ManagedWorktreeID:           row.ManagedWorktreeID,
-				ExecutionTargetMode:         row.ExecutionTargetMode,
-				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
-				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
-				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-				CreatedAtUnixMs:             row.CreatedAtUnixMs,
-				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
-				MetadataJson:                row.MetadataJson,
-			},
-			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
-			unlabeled:     row.LabelsUnlabeled != 0,
-		})
-	}
-	return tasks
+	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedDescRow) boardNodeCardsPageTask {
+		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
+	})
 }
 
 func boardNodeTaskRecordsUpdatedDescPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow) []boardNodeCardsPageTask {
-	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
-	for _, row := range rows {
-		tasks = append(tasks, boardNodeCardsPageTask{
-			task: sqlitegen.TaskRecord{
-				ID:                          row.ID,
-				ProjectID:                   row.ProjectID,
-				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
-				WorkflowID:                  row.WorkflowID,
-				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
-				TaskSeq:                     row.TaskSeq,
-				ShortID:                     row.ShortID,
-				Title:                       row.Title,
-				Body:                        row.Body,
-				SourceUrl:                   row.SourceUrl,
-				SourceWorkspaceID:           row.SourceWorkspaceID,
-				ManagedWorktreeID:           row.ManagedWorktreeID,
-				ExecutionTargetMode:         row.ExecutionTargetMode,
-				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
-				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
-				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-				CreatedAtUnixMs:             row.CreatedAtUnixMs,
-				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
-				MetadataJson:                row.MetadataJson,
-			},
-			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
-			unlabeled:     row.LabelsUnlabeled != 0,
-		})
-	}
-	return tasks
+	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow) boardNodeCardsPageTask {
+		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
+	})
 }
 
-func nullableLabelOrdinalKey(value sql.NullString) *string {
-	if !value.Valid {
+func labelOrdinalKey(value any) *string {
+	switch typed := value.(type) {
+	case string:
+		return &typed
+	case []byte:
+		decoded := string(typed)
+		return &decoded
+	case sql.NullString:
+		if !typed.Valid {
+			return nil
+		}
+		return &typed.String
+	case nil:
 		return nil
+	default:
+		panic(fmt.Sprintf("board label ordinal key has unexpected type %T", value))
 	}
-	return &value.String
 }
 
 func boardNodeCardTaskRecords(tasks []boardNodeCardsPageTask) []sqlitegen.TaskRecord {
@@ -917,20 +816,21 @@ func (b *Board) projectWorkflowLinkID(ctx context.Context, projectID string, wor
 	if err != nil {
 		return "", err
 	}
-	var linkID string
+	var linkID *string
 	for _, link := range links {
 		if link.WorkflowID != workflowID {
 			continue
 		}
-		if linkID != "" {
+		if linkID != nil {
 			return "", fmt.Errorf("workflow link invariant violated: project_id=%q workflow_id=%q has multiple links", projectID, workflowID)
 		}
-		linkID = link.ID
+		id := link.ID
+		linkID = &id
 	}
-	if linkID == "" {
+	if linkID == nil {
 		return "", fmt.Errorf("workflow link not found: project_id=%q workflow_id=%q", projectID, workflowID)
 	}
-	return linkID, nil
+	return *linkID, nil
 }
 
 type workflowBoardSelector interface {

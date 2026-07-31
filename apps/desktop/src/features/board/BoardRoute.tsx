@@ -62,6 +62,12 @@ export type BoardRouteProps = Readonly<{
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
 
+function boardFilterScopeKey(projectID: string, workflowID: string | undefined): string {
+  return workflowID === undefined
+    ? `project:${projectID}`
+    : `workflow:${projectID}:${workflowID}`;
+}
+
 export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const reportBoardLoadError = useBoardLoadErrorReporter();
   const membershipRefreshRef = useRef<BoardMembershipRefreshRef["current"]>(ignoreBoardMembershipRefresh);
@@ -97,7 +103,7 @@ function BoardRouteWithLabels({
   const filter = useProjectLabelFilter();
   return (
     <BoardFilterGenerationProvider
-      key={`${projectId}:${workflowId ?? ""}`}
+      key={boardFilterScopeKey(projectId, workflowId)}
       desiredFilter={filter.state.filter}
       initialFilter={filter.state.filter}
       onBackgroundError={onBackgroundError}

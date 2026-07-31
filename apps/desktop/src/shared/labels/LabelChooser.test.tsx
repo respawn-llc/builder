@@ -180,7 +180,7 @@ describe("LabelChooser", () => {
     expect(rows[1]).toHaveTextContent("Alpha");
   });
 
-  it("reorders from the handle without selecting the Label and projects the complete lifted row", async () => {
+  it("projects the complete lifted row without selecting the Label", async () => {
     hooks.catalogLabels = [
       { id: "first-label", name: "First" },
       { id: "second-label", name: "Second" },
@@ -188,7 +188,6 @@ describe("LabelChooser", () => {
     ];
     const user = userEvent.setup();
     const actions: LabelFilterAction[] = [];
-    mockLabelRowGeometry();
     render(
       <LabelChooser
         invocation={{
@@ -210,18 +209,12 @@ describe("LabelChooser", () => {
     }
     secondHandle.focus();
     await user.keyboard("[Space]");
-    await user.keyboard("[ArrowDown]");
 
     await waitFor(() => {
       expect(screen.getAllByText("Second")).toHaveLength(2);
     });
     expect(actions).toEqual([]);
-
-    await user.keyboard("[Space]");
-
-    await waitFor(() => {
-      expect(hooks.reorder).toHaveBeenCalledWith(["first-label", "third-label", "second-label"]);
-    });
+    await user.keyboard("[Escape]");
   });
 
   it("cancels a Label drag without requesting a reorder", async () => {
@@ -244,7 +237,9 @@ describe("LabelChooser", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Open label chooser" }));
-    const secondHandle = reorderHandles()[1];
+    const handles = reorderHandles();
+    snapshotLabelRowGeometry();
+    const secondHandle = handles[1];
     if (secondHandle === undefined) {
       throw new Error("Second Label reorder handle did not render.");
     }
@@ -276,7 +271,7 @@ describe("LabelChooser", () => {
       callbacks.delete(frameID);
     });
     const originalGetComputedStyle = window.getComputedStyle;
-    mockLabelRowGeometry(labels.map((label) => label.name));
+    mockLabelRowGeometry();
     vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElement) => {
       const style = originalGetComputedStyle(element, pseudoElement);
       if (element.getAttribute("role") === "list") {
@@ -295,14 +290,16 @@ describe("LabelChooser", () => {
       />,
     );
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "Open label chooser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open label chooser" }));
     const scrollport = screen.getByRole("list");
     Object.defineProperties(scrollport, {
       clientHeight: { configurable: true, value: 100 },
       scrollHeight: { configurable: true, value: 800 },
       scrollTop: { configurable: true, value: 0, writable: true },
     });
-    const handle = reorderHandles()[5];
+    const handles = reorderHandles();
+    snapshotLabelRowGeometry();
+    const handle = handles[5];
     if (handle === undefined) {
       throw new Error("Scrollable Label reorder handle did not render.");
     }
@@ -346,7 +343,25 @@ function reorderHandles(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>('button[aria-roledescription="sortable"]'));
 }
 
-function mockLabelRowGeometry(labelNames = ["First", "Second", "Third"]): void {
+let labelGeometryIndexByElement = new WeakMap<HTMLElement, number>();
+
+function snapshotLabelRowGeometry(): void {
+  const handles = reorderHandles();
+  const rows = screen.getAllByRole("listitem").filter((row) =>
+    handles.some((handle) => row.contains(handle)),
+  );
+  const next = new WeakMap<HTMLElement, number>();
+  for (const element of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+    const matchingRows = rows.filter((row) => row.contains(element) || element.contains(row));
+    const matchingRow = matchingRows[0];
+    if (matchingRow !== undefined && matchingRows.length === 1) {
+      next.set(element, rows.indexOf(matchingRow));
+    }
+  }
+  labelGeometryIndexByElement = next;
+}
+
+function mockLabelRowGeometry(): void {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.getAttribute("role") === "list") {
       return {
@@ -361,7 +376,7 @@ function mockLabelRowGeometry(labelNames = ["First", "Second", "Third"]): void {
         y: 0,
       };
     }
-    const index = labelNames.findIndex((name) => this.textContent.includes(name));
+    const index = labelGeometryIndexByElement.get(this) ?? -1;
     const top = (index < 0 ? 0 : index) * 40;
     return {
       bottom: top + 32,

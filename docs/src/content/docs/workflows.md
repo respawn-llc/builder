@@ -286,7 +286,7 @@ Task Activity is an infinite-scroll stream of durable comments and retained Sess
 
 A project owns a shared catalog of up to 100 reusable labels across its linked workflows. You can create and rename labels from the label chooser; deleting a label removes it from every task in the project.
 
-Desktop owns the manual Project Label order. Every assigned Label sequence, including board cards and task detail, follows that order, and `kent task label list` prints it. CLI catalog commands create, rename, delete, and list Labels but do not reorder the catalog.
+A Project owns the manual Label order. Desktop lets users reorder it; every assigned Label sequence, including board cards and task detail, follows that order, and `kent task label list` prints it. CLI catalog commands create, rename, delete, and list Labels but do not reorder the catalog.
 
 Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
 

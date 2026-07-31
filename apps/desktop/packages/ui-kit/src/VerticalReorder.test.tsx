@@ -163,6 +163,95 @@ describe("VerticalReorder", () => {
     view.unmount();
     expect(callbacks).toHaveLength(0);
   });
+
+  it("does not use the document as an edge-scroll fallback for a short catalog", () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextFrameID = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const frameID = ++nextFrameID;
+      callbacks.set(frameID, callback);
+      return frameID;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameID) => {
+      callbacks.delete(frameID);
+    });
+    mockRowGeometry();
+
+    const documentScroll = document.documentElement;
+    Object.defineProperties(documentScroll, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 800 },
+      scrollTop: { configurable: true, value: 17, writable: true },
+    });
+    Object.defineProperty(document, "scrollingElement", {
+      configurable: true,
+      value: documentScroll,
+    });
+
+    try {
+      const view = render(<ReorderHarness onCommit={vi.fn()} />);
+      const handle = screen.getByRole("button", { name: "Reorder Second" });
+      act(() => {
+        activatePointerDrag(handle);
+      });
+
+      expect(callbacks).toHaveLength(0);
+      expect(documentScroll.scrollTop).toBe(17);
+
+      act(() => {
+        cancelPointerDrag();
+      });
+      view.unmount();
+    } finally {
+      Reflect.deleteProperty(document, "scrollingElement");
+      Reflect.deleteProperty(documentScroll, "clientHeight");
+      Reflect.deleteProperty(documentScroll, "scrollHeight");
+      Reflect.deleteProperty(documentScroll, "scrollTop");
+    }
+  });
+
+  it("cancels pointer edge scrolling when the pointer exits horizontally", () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextFrameID = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const frameID = ++nextFrameID;
+      callbacks.set(frameID, callback);
+      return frameID;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameID) => {
+      callbacks.delete(frameID);
+    });
+    mockRowGeometry();
+
+    const view = render(<ReorderHarness onCommit={vi.fn()} scrollable />);
+    const scrollport = screen.getByTestId("reorder-scrollport");
+    Object.defineProperties(scrollport, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 800 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+    act(() => {
+      activatePointerDrag(handle);
+    });
+
+    expect(callbacks).toHaveLength(1);
+    const scrollTopBeforeExit = scrollport.scrollTop;
+    fireEvent.pointerMove(document, {
+      buttons: 1,
+      clientX: 300,
+      clientY: 95,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    expect(callbacks).toHaveLength(0);
+    expect(scrollport.scrollTop).toBe(scrollTopBeforeExit);
+    act(() => {
+      cancelPointerDrag();
+    });
+    view.unmount();
+  });
 });
 
 function activatePointerDrag(handle: HTMLElement): void {
@@ -232,7 +321,7 @@ function firstFrame(
 
 function mockRowGeometry(): void {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (this.dataset.testid === "reorder-scrollport") {
+    if (this.dataset.testid === "reorder-scrollport" || this === document.documentElement) {
       return {
         bottom: 100,
         height: 100,
