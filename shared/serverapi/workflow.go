@@ -2427,8 +2427,8 @@ func validateOptionalAttentionString(field string, value *string) error {
 }
 
 type workflowAttentionInterruptionDetailSchema struct {
-	Code   string            `json:"code"`
-	Fields map[string]string `json:"fields"`
+	Code   string             `json:"code"`
+	Fields map[string]*string `json:"fields"`
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2442,9 +2442,12 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 	if strings.TrimSpace(detail.Code) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" code must be non-blank")
 	}
-	for name := range detail.Fields {
+	for name, value := range detail.Fields {
 		if strings.TrimSpace(name) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" field names must be non-blank")
+		}
+		if value == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" values must be strings")
 		}
 	}
 	return nil

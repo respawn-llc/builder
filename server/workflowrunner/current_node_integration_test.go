@@ -64,16 +64,27 @@ func (s currentNodeStartContextStore) ResolveCurrentNodeStartContext(
 
 type currentNodeRestoreFailureStore struct {
 	RuntimeStore
-	sourceSessionID runtimeids.SessionID
+	mu              sync.RWMutex
+	sourceSessionID *runtimeids.SessionID
 }
 
-func (s currentNodeRestoreFailureStore) BindSessionToCurrentNode(
+func (s *currentNodeRestoreFailureStore) setSourceSessionID(sourceSessionID runtimeids.SessionID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sourceSessionID = &sourceSessionID
+}
+
+func (s *currentNodeRestoreFailureStore) BindSessionToCurrentNode(
 	ctx context.Context,
 	req workflowstore.CurrentNodeSessionBindingRequest,
 ) (workflowstore.TaskSessionAssociation, error) {
-	if req.Association.SessionID == s.sourceSessionID &&
+	s.mu.RLock()
+	sourceSessionID := s.sourceSessionID
+	s.mu.RUnlock()
+	if sourceSessionID != nil &&
+		req.Association.SessionID == *sourceSessionID &&
 		req.ExpectedCurrentSessionID != nil &&
-		*req.ExpectedCurrentSessionID != s.sourceSessionID {
+		*req.ExpectedCurrentSessionID != *sourceSessionID {
 		return workflowstore.TaskSessionAssociation{}, errors.New("restore source Session unavailable")
 	}
 	return s.RuntimeStore.BindSessionToCurrentNode(ctx, req)
@@ -441,24 +452,11 @@ func TestCurrentNodeFanoutPreparationFailureKeepsEachBranchResumable(t *testing.
 			)
 			workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
 			task := f.createTask(t, workflowID)
-			source := f.startTask(t, task)
-			select {
-			case <-sourceResponseStarted:
-			case <-time.After(currentNodeRunnerWait):
-				t.Fatal("source Current Node did not start")
-			}
-			sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-				return len(nodes) == 1 &&
-					nodes[0].Reference.Equal(source) &&
-					nodes[0].SessionID != nil
-			})
-			sourceSessionID := *sourceNodes[0].SessionID
+			var restoreFailureStore *currentNodeRestoreFailureStore
 			var runtimeStore RuntimeStore = f.store
 			if test.restoreFails {
-				runtimeStore = currentNodeRestoreFailureStore{
-					RuntimeStore:    runtimeStore,
-					sourceSessionID: sourceSessionID,
-				}
+				restoreFailureStore = &currentNodeRestoreFailureStore{RuntimeStore: runtimeStore}
+				runtimeStore = restoreFailureStore
 			}
 			f.starter.store = currentNodeStartContextStore{
 				RuntimeStore: runtimeStore,
@@ -471,6 +469,21 @@ func TestCurrentNodeFanoutPreparationFailureKeepsEachBranchResumable(t *testing.
 					input.ExecutionRoot = &root
 					return input
 				},
+			}
+			source := f.startTask(t, task)
+			select {
+			case <-sourceResponseStarted:
+			case <-time.After(currentNodeRunnerWait):
+				t.Fatal("source Current Node did not start")
+			}
+			sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+				return len(nodes) == 1 &&
+					nodes[0].Reference.Equal(source) &&
+					nodes[0].SessionID != nil
+			})
+			sourceSessionID := *sourceNodes[0].SessionID
+			if restoreFailureStore != nil {
+				restoreFailureStore.setSourceSessionID(sourceSessionID)
 			}
 
 			releaseSource.Do(func() { close(sourceResponseRelease) })

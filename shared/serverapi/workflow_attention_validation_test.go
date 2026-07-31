@@ -88,6 +88,7 @@ func TestWorkflowAttentionItemValidateRequiresStrictInterruptedDetailSchema(t *t
 		"blank code":       `{"code":"","fields":{}}`,
 		"unknown field":    `{"code":"restart","fields":{},"message":"restarted"}`,
 		"non-string field": `{"code":"restart","fields":{"attempt":1}}`,
+		"null field":       `{"code":"restart","fields":{"attempt":null}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			item := validWorkflowAttentionInterrupted()
