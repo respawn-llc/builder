@@ -156,7 +156,7 @@ type uiSessionTransitionFeatureState struct {
 	exitAction                              UIAction
 	nextSessionInitialPrompt                string
 	nextSessionInitialPromptHistoryRecorded bool
-	nextSessionInitialInput                 string
+	nextSessionInitialInput                 *string
 	nextSessionID                           string
 	nextForkRollbackTargetID                string
 	nextPreviousSessionID                   *runtimeids.SessionID

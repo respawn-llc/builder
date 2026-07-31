@@ -981,9 +981,11 @@ type WorkflowAttentionItem struct {
 	TaskID                 string                             `json:"task_id"`
 	TaskShortID            string                             `json:"task_short_id"`
 	TaskTitle              string                             `json:"task_title"`
+	Message                *string                            `json:"message,omitempty"`
 	ApprovalID             *string                            `json:"approval_id,omitempty"`
 	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
 	SessionID              *string                            `json:"session_id,omitempty"`
+	DetailJSON             *string                            `json:"detail_json,omitempty"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
@@ -2275,6 +2277,9 @@ func (r WorkflowAttentionItem) Validate() error {
 	}
 	switch r.Kind {
 	case "question":
+		if err := validateRequiredAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("question_id", r.QuestionID); err != nil {
 			return err
 		}
@@ -2298,8 +2303,12 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "approval":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if err := validateRequiredAttentionString("approval_id", r.ApprovalID); err != nil {
 			return err
 		}
@@ -2316,17 +2325,26 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
 			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
-	case "interrupted":
+	case "interrupted_current_node":
+		if err := validateOptionalAttentionString("message", r.Message); err != nil {
+			return err
+		}
 		if r.CurrentNode == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "current_node", "current_node is required")
 		}
 		if err := validateWorkflowTaskCurrentNode(*r.CurrentNode); err != nil {
 			return err
 		}
+		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
+			return err
+		}
+		if err := validateOptionalAttentionInterruptionDetailJSON("detail_json", r.DetailJSON); err != nil {
+			return err
+		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
-			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
@@ -2334,7 +2352,7 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted")
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_current_node")
 	}
 }
 
@@ -2404,6 +2422,33 @@ func validateOptionalAttentionString(field string, value *string) error {
 	}
 	if strings.TrimSpace(*value) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be non-blank when present")
+	}
+	return nil
+}
+
+type workflowAttentionInterruptionDetailSchema struct {
+	Code   string             `json:"code"`
+	Fields map[string]*string `json:"fields"`
+}
+
+func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
+	if err := validateOptionalAttentionString(field, value); err != nil || value == nil {
+		return err
+	}
+	var detail workflowAttentionInterruptionDetailSchema
+	if err := protocol.DecodeStrictJSON([]byte(*value), &detail); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must match the current Node interruption detail schema")
+	}
+	if strings.TrimSpace(detail.Code) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" code must be non-blank")
+	}
+	for name, value := range detail.Fields {
+		if strings.TrimSpace(name) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" field names must be non-blank")
+		}
+		if value == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" values must be strings")
+		}
 	}
 	return nil
 }

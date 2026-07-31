@@ -25,7 +25,7 @@ func (m *uiModel) canToggleHelpWithQuestionMark() bool {
 		return false
 	}
 	switch m.inputMode() {
-	case uiInputModeMain, uiInputModeRollbackEdit:
+	case uiInputModeMain:
 		return true
 	default:
 		return false
@@ -78,7 +78,6 @@ func helpSectionsForGOOS(goos string) []uiHelpSection {
 				{Bindings: []string{"Esc Esc"}, Description: "open rollback selection from an idle empty prompt", Active: uiHelpCanArmRollback},
 				{Bindings: []string{"↑ / ↓"}, Description: "move the rollback selection and load older/newer pages at the edges", Active: func(*uiModel) bool { return true }},
 				{Bindings: []string{"PgUp / PgDn"}, Description: "scroll the transcript while selecting a rollback point", Active: func(*uiModel) bool { return true }},
-				{Bindings: []string{"Esc"}, Description: "cancel or go back", Active: func(*uiModel) bool { return true }},
 			},
 		},
 	}
@@ -114,7 +113,7 @@ func (l uiShortcutLabels) helpToggleBinding() string {
 
 func uiHelpCanToggleTranscript(m *uiModel) bool {
 	switch m.inputMode() {
-	case uiInputModeMain, uiInputModeRollbackEdit:
+	case uiInputModeMain:
 		return true
 	default:
 		return false
@@ -139,7 +138,7 @@ func uiHelpInPromptInput(m *uiModel) bool {
 
 func uiHelpInTextEditing(m *uiModel) bool {
 	switch m.inputMode() {
-	case uiInputModeMain, uiInputModeRollbackEdit:
+	case uiInputModeMain:
 		return true
 	case uiInputModeAsk:
 		return m.ask.freeform

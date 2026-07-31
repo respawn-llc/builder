@@ -191,10 +191,12 @@ func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started sta
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  started.currentNode,
-		AssociatedAt: time.Now().UTC(),
+	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  started.currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
 	}); err != nil {
 		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}

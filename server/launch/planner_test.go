@@ -609,6 +609,19 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if target.EffectiveWorkdir != filepath.Join(canonicalWorktreeRoot, "pkg") {
 		t.Fatalf("child effective workdir = %q, want %q", target.EffectiveWorkdir, filepath.Join(canonicalWorktreeRoot, "pkg"))
 	}
+	if !clientui.SessionExecutionTargetsEqual(plan.ExecutionTarget, target) {
+		t.Fatalf("new child plan execution target = %+v, want %+v", plan.ExecutionTarget, target)
+	}
+	reopenedPlan, err := planner.PlanSession(ctx, SessionRequest{
+		Mode:   ModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, childMeta.SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession existing child: %v", err)
+	}
+	if !clientui.SessionExecutionTargetsEqual(reopenedPlan.ExecutionTarget, target) {
+		t.Fatalf("existing child plan execution target = %+v, want %+v", reopenedPlan.ExecutionTarget, target)
+	}
 }
 
 func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T) {

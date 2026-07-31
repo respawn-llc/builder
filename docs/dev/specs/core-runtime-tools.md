@@ -127,7 +127,13 @@
 - A resumed non-Workflow Session carries its active Goal verbatim into new model context with the ordinary Goal work and completion guidance, without referring to compaction.
 - If a later notification fails, compaction remains complete, Kent reports the failure, and does not repeat compaction.
 - Kent may compact before a queued user prompt when configured context usage indicates that prompt would likely require it. The trigger is `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`. Normal and pre-submit compaction thresholds must be at least 50% of `model_context_window`; invalid settings fail startup.
-- `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface. `/compact` works while idle or running; during a run it takes effect before the next model step.
+- `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
+- A manual compact request starts immediately when no Agent Step is active and server admission succeeds.
+- A manual compact request made during an Agent Step becomes typed Steer work. It executes after that Agent Step reaches its boundary and before any later Agent Step. It never waits for the turn to finish and never becomes model-visible user text.
+- Repeated manual compact requests remain distinct pending Steer items. Clients do not coalesce them. The server admits or rejects each request independently when it reaches the execution boundary.
+- Only one compaction may run at a time. Manual, automatic, pre-submit, and handoff compaction must never overlap. A manual compact request that reaches admission while compaction is active fails with a typed rejection.
+- Manual compaction requires at least one Agent Step boundary since Session creation or the latest successful compaction. The active Agent Step satisfies this requirement when its boundary is reached. A rejected request starts no provider call and commits no history replacement.
+- Disabled-policy, active-compaction, and too-soon manual-compaction failures are typed server-owned outcomes shared by every client.
 - Human-facing text calls this operation `compact`; model-facing context calls it `handoff`. Manual compaction carries the last visible user prompt. Agent handoff may carry a future-agent message visible only in detail.
 - Main-agent provider session identity remains the Kent Session ID across compactions. Prompt-cache lineage is `<session_id>`, then `<session_id>/compact-N`; reviewer lineage is `<session_id>/supervisor` with the same generation counter.
 - The compaction request uses the pre-compaction locked contract. After compaction completes, the next model request refreshes and locks effective model/provider settings, enabled tools, and system/reviewer prompts for the new cache generation. This preserves cache continuity even if a repeat compaction occurs before refresh.

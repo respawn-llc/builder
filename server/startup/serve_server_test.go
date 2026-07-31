@@ -277,7 +277,10 @@ func TestStartWithOptionsRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 		currentNodes[0].Scheduling == nil ||
 		currentNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted ||
 		currentNodes[0].Scheduling.Interruption == nil ||
-		currentNodes[0].Scheduling.Interruption.Reason != workflowexecution.ReasonCurrentNodeStartupRecovery {
+		currentNodes[0].Scheduling.Interruption.Reason != workflowexecution.ReasonCurrentNodeStartupRecovery ||
+		currentNodes[0].Scheduling.Interruption.Detail.Code != string(workflowexecution.ReasonCurrentNodeStartupRecovery) ||
+		currentNodes[0].Scheduling.Interruption.Detail.Fields == nil ||
+		len(currentNodes[0].Scheduling.Interruption.Detail.Fields) != 0 {
 		t.Fatalf("current nodes after startup recovery = %+v, want interrupted admitted current node %v", currentNodes, currentNode)
 	}
 }

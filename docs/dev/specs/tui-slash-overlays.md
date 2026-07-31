@@ -44,6 +44,8 @@
 - The picker uses Detail Mode rendering on an Alternate Screen. It does not enable Alternate Scroll and ignores mouse events.
 - The selected candidate is highlighted and centered in the transcript. `Up`/`Down` move between candidates; at the window edge they page across transcript windows through bounded requests, re-anchoring the selection.
 - Candidate-free pages encountered during edge navigation are traversed automatically through sequential bounded reads while remaining transient. Each navigation attempt has a 20-second deadline; timeout stops pagination, keeps the current candidate selected, and surfaces an error in the status line.
-- `Enter` begins editing. The composer receives the selected message text and the status line shows `editing`. `Esc` while editing returns to selection. `Esc` while selecting closes the picker and restores the prior Transcript Mode.
-- Submitting the edited message creates and opens a rollback fork at the selected message. The edited text becomes its first prompt. Rollback never changes the original Session transcript.
+- `Enter` creates and opens a rollback fork at the selected message. The fork retains history before the selected user message and excludes that message.
+- The fork opens in Ongoing Mode with the selected user message text restored as unsent composer input.
+- `Esc` while selecting closes the picker and restores the prior Transcript Mode.
+- Rollback never changes the original Session transcript.
 - If the transcript has no rollback candidates, arming does nothing visible.

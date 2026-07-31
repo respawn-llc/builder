@@ -499,13 +499,15 @@ func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
 	}
 }
 
-func TestWorkflowModePromptExistingCurrentNodeMessageSkipsCommentCountQuery(t *testing.T) {
+func TestWorkflowModePromptResumedCurrentNodeMessageSkipsCommentCountQuery(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	counter := &fakeTaskCommentCounter{count: 2}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = counter
-	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)), Content: textutil.Value("existing workflow instructions")}); err != nil {
+	workflowCfg.TaskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+	promptIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(promptIdentity), Content: textutil.Value("existing workflow instructions")}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
@@ -521,6 +523,34 @@ func TestWorkflowModePromptExistingCurrentNodeMessageSkipsCommentCountQuery(t *t
 	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
 	if len(workflowMessages) != 1 || messageContent(workflowMessages[0]) != "existing workflow instructions" {
 		t.Fatalf("workflow messages = %+v, want only the existing current-node prompt", workflowMessages)
+	}
+}
+
+func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	counter := &fakeTaskCommentCounter{count: 2}
+	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
+	workflowCfg.TaskCommentCounter = counter
+	promptIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(promptIdentity), Content: textutil.Value("previous assignment instructions")}); err != nil {
+		t.Fatalf("seed workflow message: %v", err)
+	}
+	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
+		completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+	)}}
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
+	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if got := counter.calls.Load(); got != 1 {
+		t.Fatalf("CountTaskComments calls = %d, want one refreshed assignment prompt", got)
+	}
+	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "same-assignment-follow-up"); err != nil {
+		t.Fatalf("prepare same-assignment follow-up: %v", err)
+	}
+	if got := counter.calls.Load(); got != 1 {
+		t.Fatalf("CountTaskComments calls after same-assignment follow-up = %d, want one", got)
 	}
 }
 

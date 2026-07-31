@@ -2,7 +2,9 @@ package workflowview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 
 	interruptedFixture := newCurrentNodeViewFixture(t, false)
 	interruptedStarted := interruptedFixture.startTask(t, "Interrupted task")
+	interruptedSessionID := interruptedFixture.bindCurrentNodeSession(t, interruptedStarted)
 	if err := interruptedFixture.store.InterruptCurrentNode(
 		interruptedFixture.ctx,
 		interruptedStarted.currentNode,
@@ -57,6 +60,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		approval.CurrentNode != nil {
 		t.Fatalf("approval attention item = %+v, want pending Approval identity", approval)
 	}
+	requireAttentionMessageOmitted(t, approval)
 
 	interruptedAttention := interruptedFixture.attention(t)
 	interruptions, err := interruptedAttention.List(interruptedFixture.ctx, serverapi.WorkflowAttentionListRequest{PageSize: 20})
@@ -67,20 +71,42 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		t.Fatalf("interrupted attention = %+v, want one interrupted Current Node", interruptions.Items)
 	}
 	interrupted := interruptions.Items[0]
-	if interrupted.Kind != "interrupted" ||
+	if interrupted.Kind != "interrupted_current_node" ||
 		interrupted.TaskID != string(interruptedStarted.task.ID) ||
 		interrupted.CurrentNode == nil ||
 		interrupted.CurrentNode.NodeID != string(interruptedFixture.agentNodeID) ||
+		interrupted.CurrentNode.SessionID == nil ||
+		*interrupted.CurrentNode.SessionID != interruptedSessionID.String() ||
+		interrupted.SessionID == nil ||
+		*interrupted.SessionID != interruptedSessionID.String() ||
+		interrupted.DetailJSON == nil ||
+		strings.TrimSpace(*interrupted.DetailJSON) == "" ||
 		interrupted.ApprovalID != nil ||
 		interrupted.QuestionID != nil {
 		t.Fatalf("interrupted attention item = %+v, want Current Node identity", interrupted)
 	}
+	requireAttentionMessageOmitted(t, interrupted)
 	taskInterruptions, err := interruptedAttention.ListTask(interruptedFixture.ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(interruptedStarted.task.ID)})
 	if err != nil {
 		t.Fatalf("Attention.ListTask interrupted: %v", err)
 	}
 	if len(taskInterruptions.Items) != 1 || taskInterruptions.Items[0].ID != interrupted.ID {
 		t.Fatalf("task interrupted attention = %+v, want exact Current Node attention", taskInterruptions.Items)
+	}
+}
+
+func requireAttentionMessageOmitted(t *testing.T, item serverapi.WorkflowAttentionItem) {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal attention item: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode attention item fields: %v", err)
+	}
+	if _, exists := fields["message"]; exists {
+		t.Fatalf("attention item serialized fallback message: %s", raw)
 	}
 }
 
@@ -248,6 +274,8 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		taskAttention.Items[0].Kind != "question" ||
 		taskAttention.Items[0].QuestionID == nil ||
 		*taskAttention.Items[0].QuestionID != askID ||
+		taskAttention.Items[0].Message == nil ||
+		*taskAttention.Items[0].Message != request.Question ||
 		taskAttention.Items[0].SessionID == nil ||
 		*taskAttention.Items[0].SessionID != sessionID.String() ||
 		taskAttention.Items[0].CurrentNode == nil ||

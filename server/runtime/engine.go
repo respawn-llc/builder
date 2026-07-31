@@ -198,6 +198,7 @@ type Engine struct {
 	transcriptState    *transcriptRuntimeState
 	lockedState        *lockedContractState
 	modelRequestsState *modelRequestRuntimeState
+	workflowDelivery   *workflowPromptDeliveryState
 	compactionPlanner  *compactionPlanner
 	collaboratorsOnce  sync.Once
 
@@ -294,6 +295,7 @@ func New(
 		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
 		lockedState:        newLockedContractState(),
 		modelRequestsState: newModelRequestRuntimeState(),
+		workflowDelivery:   newWorkflowPromptDeliveryState(cfg.CurrentNodeExecution),
 		compactionPlanner:  newCompactionPlanner(),
 	}
 	eng.ensureLifecycle()

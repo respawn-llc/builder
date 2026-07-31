@@ -439,8 +439,8 @@ func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
-func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
-	roots := activeMetaContextRootsForMeta(meta)
+func newActiveMetaContextBuilder(meta session.Meta, executionRoot, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
+	roots := activeMetaContextRootsForMeta(meta, executionRoot)
 	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
 		withEnvironmentCWD(roots.environmentCWD).
 		withGlobalConfigDir(globalConfigDir)
@@ -452,9 +452,12 @@ type activeMetaContextRoots struct {
 	environmentCWD string
 }
 
-func activeMetaContextRootsForMeta(meta session.Meta) activeMetaContextRoots {
-	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
-	roots := activeMetaContextRoots{discoveryRoot: workspaceRoot, environmentCWD: workspaceRoot}
+func activeMetaContextRootsForMeta(meta session.Meta, executionRoot string) activeMetaContextRoots {
+	activeRoot := strings.TrimSpace(executionRoot)
+	if activeRoot == "" {
+		activeRoot = strings.TrimSpace(meta.WorkspaceRoot)
+	}
+	roots := activeMetaContextRoots{discoveryRoot: activeRoot, environmentCWD: activeRoot}
 	state := session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if state == nil {
 		return roots

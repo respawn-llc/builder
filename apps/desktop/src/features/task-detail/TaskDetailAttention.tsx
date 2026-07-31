@@ -108,7 +108,7 @@ export function InterruptedCurrentNodeBox({
       unpadded
     >
       <strong>{t("task.interrupted")}</strong>
-      {attention.message.length > 0 ? (
+      {attention.message !== null ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
       {detailJSON !== null ? (

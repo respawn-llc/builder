@@ -61,6 +61,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 			}},
 		},
 		lease,
+		workflowruntime.TaskPromptDeliveryAssignment,
 		workflowruntime.CompletionModeTool,
 		3,
 		true,
@@ -72,6 +73,9 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	}
 	if runtimeConfig.ScopeID != lease.ScopeID() {
 		t.Fatalf("Current Node execution scope = %s, want authority scope %s", runtimeConfig.ScopeID, lease.ScopeID())
+	}
+	if runtimeConfig.TaskPromptDelivery != workflowruntime.TaskPromptDeliveryAssignment {
+		t.Fatalf("Current Node task prompt delivery = %v, want Assignment", runtimeConfig.TaskPromptDelivery)
 	}
 	if !runtimeConfig.Instructions.CurrentNode.Equal(reference) {
 		t.Fatalf("Current Node execution identity = %+v, want %+v", runtimeConfig.Instructions.CurrentNode, reference)

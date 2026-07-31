@@ -18,6 +18,7 @@ import (
 func BuildCurrentNodeRuntimeConfig(
 	input workflowstore.CurrentNodeStartContext,
 	lease sessionruntime.WorkflowExecutionLease,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	completionMode workflowruntime.CompletionMode,
 	maxInvalidCompletionAttempts int,
 	useRequiredToolCalls bool,
@@ -30,6 +31,7 @@ func BuildCurrentNodeRuntimeConfig(
 	}
 	return &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID:                      lease.ScopeID(),
+		TaskPromptDelivery:           taskPromptDelivery,
 		Contract:                     workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)},
 		CompletionMode:               completionMode,
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,

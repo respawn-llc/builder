@@ -22,6 +22,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -43,6 +44,50 @@ type currentNodeRunnerFixture struct {
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
 	clientErr      error
+}
+
+type currentNodeStartContextStore struct {
+	RuntimeStore
+	transform func(workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext
+}
+
+func (s currentNodeStartContextStore) ResolveCurrentNodeStartContext(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (workflowstore.CurrentNodeStartContext, error) {
+	input, err := s.RuntimeStore.ResolveCurrentNodeStartContext(ctx, reference)
+	if err != nil {
+		return workflowstore.CurrentNodeStartContext{}, err
+	}
+	return s.transform(input), nil
+}
+
+type currentNodeRestoreFailureStore struct {
+	RuntimeStore
+	mu              sync.RWMutex
+	sourceSessionID *runtimeids.SessionID
+}
+
+func (s *currentNodeRestoreFailureStore) setSourceSessionID(sourceSessionID runtimeids.SessionID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sourceSessionID = &sourceSessionID
+}
+
+func (s *currentNodeRestoreFailureStore) BindSessionToCurrentNode(
+	ctx context.Context,
+	req workflowstore.CurrentNodeSessionBindingRequest,
+) (workflowstore.TaskSessionAssociation, error) {
+	s.mu.RLock()
+	sourceSessionID := s.sourceSessionID
+	s.mu.RUnlock()
+	if sourceSessionID != nil &&
+		req.Association.SessionID == *sourceSessionID &&
+		req.ExpectedCurrentSessionID != nil &&
+		*req.ExpectedCurrentSessionID != *sourceSessionID {
+		return workflowstore.TaskSessionAssociation{}, errors.New("restore source Session unavailable")
+	}
+	return s.RuntimeStore.BindSessionToCurrentNode(ctx, req)
 }
 
 func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *currentNodeRunnerFixture {
@@ -333,6 +378,168 @@ func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch"}`),
+	)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.IsBranchScoped() && nodes[0].Scheduling == nil
+	})
+	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	if err != nil {
+		t.Fatalf("resolve source Session association: %v", err)
+	}
+	branchAssociations := make([]workflowstore.TaskSessionAssociation, 0, len(branchNodeIDs))
+	for branchKey, nodeID := range branchNodeIDs {
+		reference, err := workflow.NewCurrentNodeReference(task.ID, nodeID, &branchKey)
+		if err != nil {
+			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
+		}
+		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
+		if err != nil {
+			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
+		}
+		if association.SessionID == sourceAssociation.SessionID {
+			t.Fatalf("branch %q reused source Session %q, want fan-out clone", branchKey, association.SessionID)
+		}
+		branchAssociations = append(branchAssociations, association)
+	}
+	if len(branchAssociations) != 2 || branchAssociations[0].SessionID == branchAssociations[1].SessionID {
+		t.Fatalf("branch Session associations = %+v, want two distinct clones", branchAssociations)
+	}
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 3 {
+		t.Fatalf("retained Session count = %d, %v; want source plus two fan-out clones", count, err)
+	}
+}
+
+func TestCurrentNodeFanoutPreparationFailureKeepsEachBranchResumable(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		restoreFails     bool
+		wantTaskSessions int64
+	}{
+		{name: "source restoration succeeds", wantTaskSessions: 1},
+		{name: "source restoration fails", restoreFails: true, wantTaskSessions: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceResponseStarted := make(chan struct{})
+			sourceResponseRelease := make(chan struct{})
+			var releaseSource sync.Once
+			t.Cleanup(func() {
+				releaseSource.Do(func() { close(sourceResponseRelease) })
+			})
+			f := newCurrentNodeRunnerFixture(
+				t,
+				ScriptedRuntimeStep{
+					BeforeResponse: func(ctx context.Context) error {
+						close(sourceResponseStarted)
+						select {
+						case <-sourceResponseRelease:
+							return nil
+						case <-ctx.Done():
+							return context.Cause(ctx)
+						}
+					},
+					Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
+				},
+			)
+			workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+			task := f.createTask(t, workflowID)
+			var restoreFailureStore *currentNodeRestoreFailureStore
+			var runtimeStore RuntimeStore = f.store
+			if test.restoreFails {
+				restoreFailureStore = &currentNodeRestoreFailureStore{RuntimeStore: runtimeStore}
+				runtimeStore = restoreFailureStore
+			}
+			f.starter.store = currentNodeStartContextStore{
+				RuntimeStore: runtimeStore,
+				transform: func(input workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext {
+					if !input.IsFanoutBranch {
+						return input
+					}
+					root := *input.ExecutionRoot
+					root.SourceWorkspaceID = "workspace-missing"
+					input.ExecutionRoot = &root
+					return input
+				},
+			}
+			source := f.startTask(t, task)
+			select {
+			case <-sourceResponseStarted:
+			case <-time.After(currentNodeRunnerWait):
+				t.Fatal("source Current Node did not start")
+			}
+			sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+				return len(nodes) == 1 &&
+					nodes[0].Reference.Equal(source) &&
+					nodes[0].SessionID != nil
+			})
+			sourceSessionID := *sourceNodes[0].SessionID
+			if restoreFailureStore != nil {
+				restoreFailureStore.setSourceSessionID(sourceSessionID)
+			}
+
+			releaseSource.Do(func() { close(sourceResponseRelease) })
+			branches := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+				if len(nodes) != len(branchNodeIDs) {
+					return false
+				}
+				for _, node := range nodes {
+					if node.Scheduling == nil ||
+						node.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+						return false
+					}
+				}
+				return true
+			})
+			branchSessionIDs := map[runtimeids.SessionID]struct{}{}
+			for _, branch := range branches {
+				if branch.SessionID == nil {
+					t.Fatalf("branch %v has no resumable Session", branch.Reference)
+				}
+				if test.restoreFails {
+					if *branch.SessionID == sourceSessionID {
+						t.Fatalf("branch %v retained source Session after forced restoration failure", branch.Reference)
+					}
+					branchSessionIDs[*branch.SessionID] = struct{}{}
+				} else if *branch.SessionID != sourceSessionID {
+					t.Fatalf(
+						"branch %v Session = %v, want restored source Session %q",
+						branch.Reference,
+						branch.SessionID,
+						sourceSessionID,
+					)
+				}
+				if err := f.store.ValidateCurrentNodeSessionBinding(
+					context.Background(),
+					*branch.SessionID,
+					branch.Reference,
+				); err != nil {
+					t.Fatalf("validate resumable branch Session binding %v: %v", branch.Reference, err)
+				}
+			}
+			if test.restoreFails && len(branchSessionIDs) != len(branchNodeIDs) {
+				t.Fatalf("retained clone Sessions = %d, want one per branch", len(branchSessionIDs))
+			}
+			if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != test.wantTaskSessions {
+				t.Fatalf(
+					"retained Session count after branch preparation failures = %d, %v; want %d",
+					count,
+					err,
+					test.wantTaskSessions,
+				)
+			}
+		})
+	}
+}
+
 func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX shell scripts")
@@ -491,6 +698,112 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "First."},
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Second."},
 	)
+}
+
+func createCurrentNodeFanoutContinuationWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+) (workflow.WorkflowID, map[workflow.TransitionBranchKey]workflow.NodeID) {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node fan-out continuation"})
+	if err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get workflow: %v", err)
+	}
+	var startID, doneID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			doneID = workflow.NodeIDOf(node)
+		}
+	}
+	sourceID := workflow.NodeID("node-source-" + string(created.ID))
+	branchNodeIDs := map[workflow.TransitionBranchKey]workflow.NodeID{
+		"branch_a": workflow.NodeID("node-branch-a-" + string(created.ID)),
+		"branch_b": workflow.NodeID("node-branch-b-" + string(created.ID)),
+	}
+	joinID := workflow.NodeID("node-join-" + string(created.ID))
+	for _, node := range []workflowstore.NodeRecord{
+		{
+			ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent,
+			DisplayName: "Source", SubagentRole: "coder", PromptTemplate: "Source.",
+		},
+		{
+			ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent,
+			DisplayName: "Branch A", SubagentRole: "coder", PromptTemplate: "Branch A.",
+		},
+		{
+			ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent,
+			DisplayName: "Branch B", SubagentRole: "coder", PromptTemplate: "Branch B.",
+		},
+		{
+			ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin,
+			DisplayName: "Join",
+		},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("add node: %v", err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
+	splitGroup := workflow.TransitionGroupID("group-split-" + string(created.ID))
+	branchAGroup := workflow.TransitionGroupID("group-branch-a-" + string(created.ID))
+	branchBGroup := workflow.TransitionGroupID("group-branch-b-" + string(created.ID))
+	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
+		{ID: branchAGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_a"], TransitionID: "join", DisplayName: "Join"},
+		{ID: branchBGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_b"], TransitionID: "join", DisplayName: "Join"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("add transition group: %v", err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{
+			ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID,
+			ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source.",
+		},
+		{
+			ID: workflow.EdgeID("edge-branch-a-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"],
+			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch A.",
+		},
+		{
+			ID: workflow.EdgeID("edge-branch-b-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"],
+			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch B.",
+		},
+		{
+			ID: workflow.EdgeID("edge-join-a-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+		{
+			ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+		{
+			ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID,
+			TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("add edge: %v", err)
+		}
+	}
+	return created.ID, branchNodeIDs
 }
 
 func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) workflow.WorkflowID {
