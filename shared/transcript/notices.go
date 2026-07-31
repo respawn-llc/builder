@@ -4,6 +4,7 @@ import "strings"
 
 const (
 	NoticeReasonCacheWarning        = "cache_warning"
+	NoticeReasonCompaction          = "compaction"
 	NoticeReasonLegacyUntypedNotice = "legacy_untyped_notice"
 	NoticeReasonRuntimeDiagnostic   = "runtime_diagnostic"
 

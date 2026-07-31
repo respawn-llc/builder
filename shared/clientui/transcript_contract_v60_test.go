@@ -131,6 +131,8 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		{owner: TranscriptAssistantRow{}, field: "CondensedText"},
 		{owner: TranscriptToolRow{}, field: "ResultSummary"},
 		{owner: TranscriptToolRow{}, field: "CondensedText"},
+		{owner: TranscriptCompactionNotice{}, field: "Count"},
+		{owner: TranscriptCompactionNotice{}, field: "Detail"},
 		{owner: TranscriptPrompt{}, field: "RecommendedOptionIndex"},
 	}
 	for _, test := range tests {

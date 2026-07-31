@@ -182,7 +182,7 @@ func steerHistoryReplacementIntent(engine string, mode compactionMode, compactio
 		priority: steeringPriorityNormal,
 		items: []steeringItem{{historyReplace: &steeringHistoryReplacement{
 			payload:          payload,
-			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items),
+			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items, payload.CompactionNumber),
 		}}},
 	}
 }
@@ -556,7 +556,12 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	}
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
-	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, preparedItems, &projectedStart)
+	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+		stepID,
+		preparedItems,
+		&projectedStart,
+		replacement.projectedEntries,
+	)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,

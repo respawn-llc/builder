@@ -87,6 +87,26 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 	}
 }
 
+func TestTranscriptNoticeRowCarriesTypedCompactionFacts(t *testing.T) {
+	messageType := TranscriptMessageCompactionSummary
+	notice := TranscriptNoticeRow{
+		Reason:      TranscriptNoticeCompaction,
+		Severity:    TranscriptNoticeInfo,
+		MessageType: &messageType,
+		Compaction: &TranscriptCompactionNotice{
+			Count:  textutil.Value(2),
+			Detail: textutil.Value("provider summary"),
+		},
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("validate typed compaction notice: %v", err)
+	}
+	notice.Compaction.Count = textutil.Value(0)
+	if err := notice.Validate(); err == nil {
+		t.Fatal("accepted present zero compaction count")
+	}
+}
+
 func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
 	warning := TranscriptCacheWarning{
 		Scope:      "conversation",
@@ -112,6 +132,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
 			Severity: TranscriptNoticeError,
+		},
+		{
+			Reason:   TranscriptNoticeCompaction,
+			Severity: TranscriptNoticeInfo,
 		},
 		{
 			Reason:   TranscriptNoticeLegacyUntypedNotice,

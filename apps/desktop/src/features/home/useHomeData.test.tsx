@@ -267,7 +267,7 @@ function attentionItem(taskID: string): Readonly<Record<string, JsonValue>> {
     id: `approval:${taskID}`,
     kind: "approval",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    workflow_id: workflowID,
     task_id: taskID,
     task_short_id: taskID,
     task_title: taskID,
@@ -301,6 +301,7 @@ const taskDetailDestination = {
 } as const;
 
 const sidebarController = createSidebarController();
+const workflowID = "11111111-1111-4111-8111-111111111111";
 
 function createSidebarController(
   onOpen: (destination: SidebarDestination) => void = () => {
@@ -335,7 +336,7 @@ const attentionChangingProjectEvent = {
     project_id: "project-1",
     related_ids: [],
     resource: "task",
-    workflow_id: "workflow-1",
+    workflow_id: workflowID,
   },
 } as const;
 

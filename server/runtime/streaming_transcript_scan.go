@@ -133,7 +133,10 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			return fmt.Errorf("restore session history replacement record: %w", err)
 		}
 		s.scan.MarkCompactionBoundary()
-		for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(replacement.Items)) {
+		for _, entry := range transcriptEntriesFromHistoryReplacement(
+			llm.PrepareOpenAIInputItems(replacement.Items),
+			replacement.CompactionNumber,
+		) {
 			entry.StepID = stepID
 			s.scan.appendEntry(entry)
 		}

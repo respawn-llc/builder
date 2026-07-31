@@ -249,8 +249,18 @@ func (s *transcriptRuntimeState) RestoreToolCompletionRecord(record session.Tool
 	return s.chatProjection().restoreToolCompletionRecord(record)
 }
 
-func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(stepID string, items []llm.ResponseItem, committedEntryStart *int) {
-	s.chatProjection().replaceHistoryAtCommittedEntryStart(stepID, items, committedEntryStart)
+func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(
+	stepID string,
+	items []llm.ResponseItem,
+	committedEntryStart *int,
+	projectedEntries []ChatEntry,
+) {
+	s.chatProjection().replaceHistoryAtCommittedEntryStart(
+		stepID,
+		items,
+		committedEntryStart,
+		projectedEntries,
+	)
 }
 
 func (s *transcriptRuntimeState) ClearStreamingAssistantState() (*AssistantStreamMetadata, *uuid.UUID) {

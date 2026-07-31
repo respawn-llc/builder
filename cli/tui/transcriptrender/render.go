@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/charmbracelet/lipgloss"
@@ -663,7 +664,14 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	if text, ok := worktreeNoticeText(row); ok {
+	if row.Reason == clientui.TranscriptNoticeCompaction && row.Compaction != nil {
+		text := compactionNoticeText(row.Compaction.Count)
+		if mode == ModeDetailExpanded && row.Compaction.Detail != nil {
+			text = *row.Compaction.Detail
+		}
+		return noticeStyleRoleForMode(row, mode), text
+	}
+	if text, ok := worktreeNoticeText(row, mode); ok {
 		return noticeStyleRole(row), text
 	}
 	cacheWarningText := cacheWarningNoticeText(row.CacheWarning)
@@ -685,10 +693,20 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	return noticeStyleRoleForMode(row, mode), text
 }
 
-func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
+func compactionNoticeText(count *int) string {
+	if count == nil {
+		return "Context compacted"
+	}
+	return fmt.Sprintf("Context compacted for the %s time.", textutil.Ordinal(*count))
+}
+
+func worktreeNoticeText(row *clientui.TranscriptNoticeRow, mode Mode) (string, bool) {
 	context := row.Worktree
 	if context == nil {
 		return "", false
+	}
+	if mode == ModeDetailExpanded && row.Diagnostic != nil {
+		return row.Diagnostic.Detail, true
 	}
 	effectiveCWD := strings.TrimSpace(context.EffectiveCwd)
 	if effectiveCWD == "" {
@@ -748,7 +766,7 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	case clientui.TranscriptMessageCompactionSoonReminder:
 		return StyleRoleWarning
 	case clientui.TranscriptMessageCompactionSummary,
-		clientui.TranscriptMessageManualCompactionCarryover:
+		clientui.TranscriptMessageCompactionPreservedUserMessage:
 		return StyleRoleNoticeSecondary
 	case clientui.TranscriptMessageHandoffFutureMessage,
 		clientui.TranscriptMessageWorktreeMode,
@@ -777,8 +795,9 @@ func isExpandedCompactionNotice(row *clientui.TranscriptNoticeRow) bool {
 		return false
 	}
 	switch *row.MessageType {
-	case clientui.TranscriptMessageCompactionSummary,
-		clientui.TranscriptMessageCompactionSoonReminder:
+	case clientui.TranscriptMessageCompactionSummary:
+		return row.Compaction != nil && row.Compaction.Detail != nil
+	case clientui.TranscriptMessageCompactionSoonReminder:
 		return true
 	default:
 		return false

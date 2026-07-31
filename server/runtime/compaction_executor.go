@@ -240,7 +240,6 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 		trimmedItemsCount: nil,
 		overflowRepair:    repairStats,
 		provider:          providerID,
-		summary:           strings.TrimSpace(summary),
 	}, nil
 }
 
