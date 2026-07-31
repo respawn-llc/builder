@@ -109,6 +109,73 @@ func newReservedBackgroundNotice(notice queuedBackgroundNotice, reservation uint
 	return reservedBackgroundNotice{notice: notice, reservation: reservation}
 }
 
+// preparationRecoveryDiagnosticBackgroundNotice holds an initial automatic
+// request-preparation failure until its bounded diagnostic commits. It cannot
+// be delivered before that durable diagnostic establishes the recovery edge.
+type preparationRecoveryDiagnosticBackgroundNotice struct {
+	notice queuedBackgroundNotice
+}
+
+func (preparationRecoveryDiagnosticBackgroundNotice) backgroundNoticeState() {}
+func (s preparationRecoveryDiagnosticBackgroundNotice) queuedBackgroundNotice() (queuedBackgroundNotice, bool) {
+	return s.notice, true
+}
+
+func newPreparationRecoveryDiagnosticBackgroundNotice(
+	notice queuedBackgroundNotice,
+) preparationRecoveryDiagnosticBackgroundNotice {
+	if !notice.hasIdentity() ||
+		notice.diagnostic == nil ||
+		notice.diagnostic.stage != backgroundDeliveryStagePreparation {
+		panic("preparation recovery diagnostic notice requires a terminal preparation diagnostic")
+	}
+	return preparationRecoveryDiagnosticBackgroundNotice{notice: notice}
+}
+
+// preparationRecoveryBackgroundNotice is the single ready retry granted after
+// a pre-delivery diagnostic commits. Ordinary automatic delivery failures
+// never enter this state.
+type preparationRecoveryBackgroundNotice struct {
+	notice queuedBackgroundNotice
+}
+
+func (preparationRecoveryBackgroundNotice) backgroundNoticeState() {}
+func (s preparationRecoveryBackgroundNotice) queuedBackgroundNotice() (queuedBackgroundNotice, bool) {
+	return s.notice, true
+}
+
+func newPreparationRecoveryBackgroundNotice(
+	notice queuedBackgroundNotice,
+) preparationRecoveryBackgroundNotice {
+	if !notice.hasIdentity() || notice.diagnostic != nil {
+		panic("preparation recovery notice requires a diagnostic-free terminal notice")
+	}
+	return preparationRecoveryBackgroundNotice{notice: notice}
+}
+
+// reservedPreparationRecoveryBackgroundNotice records that the scheduler is
+// consuming the one permitted pre-delivery recovery attempt. Any failure from
+// this reservation returns to the externally permitted retry state.
+type reservedPreparationRecoveryBackgroundNotice struct {
+	notice      queuedBackgroundNotice
+	reservation uint64
+}
+
+func (reservedPreparationRecoveryBackgroundNotice) backgroundNoticeState() {}
+func (s reservedPreparationRecoveryBackgroundNotice) queuedBackgroundNotice() (queuedBackgroundNotice, bool) {
+	return s.notice, true
+}
+
+func newReservedPreparationRecoveryBackgroundNotice(
+	notice queuedBackgroundNotice,
+	reservation uint64,
+) reservedPreparationRecoveryBackgroundNotice {
+	if !notice.hasIdentity() || reservation == 0 {
+		panic("reserved preparation recovery notice requires terminal identity and reservation")
+	}
+	return reservedPreparationRecoveryBackgroundNotice{notice: notice, reservation: reservation}
+}
+
 type retryDeferredBackgroundNotice struct {
 	notice     queuedBackgroundNotice
 	generation uint64

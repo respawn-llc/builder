@@ -9,8 +9,11 @@ import (
 	"unicode/utf8"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -193,6 +196,153 @@ func TestDiagnosticOnlyBackgroundWorkPersistsWithoutModelContinuation(t *testing
 	}
 	if engine.BackgroundDeliveryRetirementSnapshot().Active {
 		t.Fatal("committed diagnostic-only work retained the runtime")
+	}
+}
+
+func TestBackgroundPreDeliveryFailurePersistsDiagnosticAndRecoversOnce(t *testing.T) {
+	observerErr := errors.New("pre-delivery persistence observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("background continuation complete"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200_000},
+	}}}
+	diagnosticPersisted := make(chan struct{}, 1)
+	continuationFinished := make(chan struct{}, 1)
+	var diagnosticCount, finalAnswerCount int
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			switch {
+			case event.Kind == EventLocalEntryAdded &&
+				event.LocalEntry != nil &&
+				event.LocalEntry.Role == string(transcript.EntryRoleDeveloperErrorFeedback):
+				diagnosticCount++
+				select {
+				case diagnosticPersisted <- struct{}{}:
+				default:
+				}
+			case event.Kind == EventAssistantMessage &&
+				event.Message.Phase != nil &&
+				*event.Message.Phase == llm.MessagePhaseFinal:
+				finalAnswerCount++
+				select {
+				case continuationFinished <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	engine.AdmitBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "pre-delivery-recovery",
+		ActivityID: uuid.New(),
+		State:      "completed",
+		NoticeText: "terminal notice",
+	})
+	gate.FailNext(observerErr)
+
+	engine.ScheduleBackgroundNoticesIfIdle()
+
+	select {
+	case <-diagnosticPersisted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pre-delivery failure did not persist a delivery diagnostic")
+	}
+	select {
+	case <-continuationFinished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pre-delivery recovery did not resume the owner")
+	}
+	waitEngineLifecycleTasks(t, engine)
+
+	if diagnosticCount != 1 {
+		t.Fatalf("persisted delivery diagnostics = %d, want 1", diagnosticCount)
+	}
+	if finalAnswerCount != 1 {
+		t.Fatalf("automatic final answers = %d, want 1", finalAnswerCount)
+	}
+	if calls := fakeClientCallCount(client); calls != 1 {
+		t.Fatalf("automatic model continuation calls = %d, want 1", calls)
+	}
+	if notices := countBackgroundNoticeMessages(engine); notices != 1 {
+		t.Fatalf("persisted terminal notices = %d, want 1", notices)
+	}
+	if engine.BackgroundDeliveryRetirementSnapshot().Active {
+		t.Fatal("recovered background delivery retained runtime work")
+	}
+}
+
+func TestBackgroundPreDeliveryRecoveryFailureRequiresExternalPermit(t *testing.T) {
+	scheduler := &defaultBackgroundNoticeScheduler{engine: &Engine{}}
+	activity := uuid.New()
+	notice := newTerminalBackgroundNotice(
+		"pre-delivery-retry-boundary",
+		activity,
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("terminal")}},
+		),
+	)
+	var scheduled backgroundLifecycleTask
+	scheduler.admitNotice(notice, false, &scheduled)
+	initialReservation := scheduler.DrainPendingNotices()
+	if len(initialReservation) != 1 {
+		t.Fatalf("initial reservations = %+v, want one", initialReservation)
+	}
+
+	scheduler.restorePreDeliveryReservations(initialReservation, errors.New("initial preparation failure"))
+	if len(scheduler.states) != 1 {
+		t.Fatalf("states after initial preparation failure = %+v", scheduler.states)
+	}
+	diagnosticState, ok := scheduler.states[0].(preparationRecoveryDiagnosticBackgroundNotice)
+	if !ok {
+		t.Fatalf("state after initial preparation failure = %T, want preparation recovery diagnostic", scheduler.states[0])
+	}
+	if diagnosticState.notice.diagnostic == nil ||
+		diagnosticState.notice.diagnostic.stage != backgroundDeliveryStagePreparation ||
+		diagnosticState.notice.diagnostic.activity != activity {
+		t.Fatalf("preparation diagnostic = %+v", diagnosticState.notice.diagnostic)
+	}
+
+	scheduler.clearCommittedDeliveryDiagnostic("pre-delivery-retry-boundary", activity)
+	if len(scheduler.states) != 1 {
+		t.Fatalf("states after preparation diagnostic commit = %+v", scheduler.states)
+	}
+	if _, ok := scheduler.states[0].(preparationRecoveryBackgroundNotice); !ok {
+		t.Fatalf("state after preparation diagnostic commit = %T, want ready preparation recovery", scheduler.states[0])
+	}
+
+	recoveryReservation := scheduler.DrainPendingNotices()
+	if len(recoveryReservation) != 1 {
+		t.Fatalf("recovery reservations = %+v, want one", recoveryReservation)
+	}
+	if _, ok := scheduler.states[0].(reservedPreparationRecoveryBackgroundNotice); !ok {
+		t.Fatalf("state for preparation recovery attempt = %T, want reserved preparation recovery", scheduler.states[0])
+	}
+
+	scheduler.restorePreDeliveryReservations(recoveryReservation, errors.New("recovery preparation failure"))
+	if scheduler.hasDeliverableNotice() {
+		t.Fatal("second preparation failure became self-retryable")
+	}
+	if len(scheduler.states) != 1 {
+		t.Fatalf("states after recovery preparation failure = %+v", scheduler.states)
+	}
+	if _, ok := scheduler.states[0].(retryDeferredBackgroundNotice); !ok {
+		t.Fatalf("state after recovery preparation failure = %T, want retry deferred", scheduler.states[0])
+	}
+	if !scheduler.PermitRetry() || !scheduler.hasDeliverableNotice() {
+		t.Fatal("external permit did not authorize the deferred recovery")
 	}
 }
 

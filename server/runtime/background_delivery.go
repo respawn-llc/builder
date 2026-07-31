@@ -18,6 +18,7 @@ type backgroundDeliveryStage string
 
 const backgroundDeliveryStageAutomaticSteering backgroundDeliveryStage = "automatic_steering"
 const backgroundDeliveryStageRouting backgroundDeliveryStage = "routing"
+const backgroundDeliveryStagePreparation backgroundDeliveryStage = "preparation"
 
 // PendingBackgroundDeliveryDiagnostic is the bounded recovery record for one
 // failed automatic completion delivery. It deliberately owns no error or
@@ -53,7 +54,9 @@ func newPendingBackgroundDeliveryDiagnostic(
 	if activity.Version() != 4 {
 		panic(fmt.Sprintf("background delivery diagnostic requires UUIDv4 activity id: %q", activity))
 	}
-	if stage != backgroundDeliveryStageAutomaticSteering && stage != backgroundDeliveryStageRouting {
+	if stage != backgroundDeliveryStageAutomaticSteering &&
+		stage != backgroundDeliveryStageRouting &&
+		stage != backgroundDeliveryStagePreparation {
 		panic(fmt.Sprintf("background delivery diagnostic has unsupported stage %q", stage))
 	}
 	if attempt == 0 {

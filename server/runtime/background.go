@@ -352,29 +352,21 @@ withdrawalLoop:
 			notice, hasNotice := state.queuedBackgroundNotice()
 			if hasNotice && notice.identity != nil && *notice.identity == identity {
 				switch current := state.(type) {
-				case pendingBackgroundNotice:
+				case pendingBackgroundNotice,
+					retryDeferredBackgroundNotice,
+					preparationRecoveryDiagnosticBackgroundNotice,
+					preparationRecoveryBackgroundNotice:
+					currentNotice, ok := state.queuedBackgroundNotice()
+					if !ok {
+						panic(fmt.Sprintf("withdraw background delivery has no notice state %T", state))
+					}
 					if b.task == nil {
 						b.states = append(b.states[:index], b.states[index+1:]...)
 						b.signalChangedLocked()
 						b.mu.Unlock()
-						return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
+						return backgroundDeliveryWithdrawalForNotice(currentNotice), true, nil
 					}
-					b.states[index] = newWithdrawingBackgroundNotice(current.notice, backgroundLifecycleTaskAttempt(b.task))
-					task := b.task
-					b.signalChangedLocked()
-					b.mu.Unlock()
-					if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
-						return BackgroundDeliveryWithdrawal{}, false, err
-					}
-					continue withdrawalLoop
-				case retryDeferredBackgroundNotice:
-					if b.task == nil {
-						b.states = append(b.states[:index], b.states[index+1:]...)
-						b.signalChangedLocked()
-						b.mu.Unlock()
-						return backgroundDeliveryWithdrawalForNotice(current.notice), true, nil
-					}
-					b.states[index] = newWithdrawingBackgroundNotice(current.notice, backgroundLifecycleTaskAttempt(b.task))
+					b.states[index] = newWithdrawingBackgroundNotice(currentNotice, backgroundLifecycleTaskAttempt(b.task))
 					task := b.task
 					b.signalChangedLocked()
 					b.mu.Unlock()
@@ -383,6 +375,17 @@ withdrawalLoop:
 					}
 					continue withdrawalLoop
 				case reservedBackgroundNotice:
+					b.states[index] = newWithdrawingBackgroundNotice(current.notice, current.reservation)
+					b.signalChangedLocked()
+					task := b.task
+					b.mu.Unlock()
+					if task != nil {
+						if err := cancelAndJoinBackgroundLifecycleTask(ctx, task); err != nil {
+							return BackgroundDeliveryWithdrawal{}, false, err
+						}
+					}
+					continue withdrawalLoop
+				case reservedPreparationRecoveryBackgroundNotice:
 					b.states[index] = newWithdrawingBackgroundNotice(current.notice, current.reservation)
 					b.signalChangedLocked()
 					task := b.task
@@ -525,6 +528,15 @@ func (b *defaultBackgroundNoticeScheduler) AttachDiagnostic(diagnostic PendingBa
 		case retryDeferredBackgroundNotice:
 			current.notice = notice
 			b.states[index] = current
+		case preparationRecoveryDiagnosticBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		case preparationRecoveryBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
+		case reservedPreparationRecoveryBackgroundNotice:
+			current.notice = notice
+			b.states[index] = current
 		case withdrawingBackgroundNotice:
 			current.notice = notice
 			b.states[index] = current
@@ -617,7 +629,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 			return nil
 		}
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-			b.restoreUncommittedReservations(reserved, nil)
+			b.restorePreDeliveryReservations(reserved, err)
 			return err
 		}
 		accepted := false
@@ -785,6 +797,16 @@ func (b *defaultBackgroundNoticeScheduler) pendingDiagnosticsSnapshot() []Pendin
 			if current.notice.diagnostic != nil {
 				diagnostics = append(diagnostics, *current.notice.diagnostic)
 			}
+		case preparationRecoveryDiagnosticBackgroundNotice:
+			diagnostics = append(diagnostics, *current.notice.diagnostic)
+		case preparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
+			}
+		case reservedPreparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				diagnostics = append(diagnostics, *current.notice.diagnostic)
+			}
 		case withdrawingBackgroundNotice:
 			// Workflow withdrawal owns this diagnostic until the lifecycle
 			// task is canceled and joined. It must not commit post-stop.
@@ -823,6 +845,21 @@ func (b *defaultBackgroundNoticeScheduler) clearCommittedDeliveryDiagnostic(proc
 				state = current
 			}
 		case retryDeferredBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		case preparationRecoveryDiagnosticBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = newPreparationRecoveryBackgroundNotice(current.notice)
+			}
+		case preparationRecoveryBackgroundNotice:
+			if current.notice.matches(processID, activity) {
+				current.notice.diagnostic = nil
+				state = current
+			}
+		case reservedPreparationRecoveryBackgroundNotice:
 			if current.notice.matches(processID, activity) {
 				current.notice.diagnostic = nil
 				state = current
@@ -946,6 +983,14 @@ func (b *defaultBackgroundNoticeScheduler) reserveDeliverableLocked() []backgrou
 			reservationState := newReservedBackgroundNotice(current.notice, reservation)
 			next = append(next, reservationState)
 			reserved = append(reserved, reservationState)
+		case preparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				next = append(next, state)
+				continue
+			}
+			reservationState := newReservedPreparationRecoveryBackgroundNotice(current.notice, reservation)
+			next = append(next, reservationState)
+			reserved = append(reserved, reservationState)
 		case retryDeferredBackgroundNotice:
 			if b.retryPermit != nil && b.retryPermit.generation == current.generation {
 				reservationState := newReservedBackgroundNotice(current.notice, reservation)
@@ -979,11 +1024,15 @@ func (b *defaultBackgroundNoticeScheduler) restoreUncommittedReservations(notice
 	for _, notice := range notices {
 		for index, state := range b.states {
 			reserved, ok := state.(reservedBackgroundNotice)
+			preparationRecoveryReserved, preparationRecoveryState := state.(reservedPreparationRecoveryBackgroundNotice)
 			withdrawing, withdrawingState := state.(withdrawingBackgroundNotice)
-			if !ok && !withdrawingState {
+			if !ok && !preparationRecoveryState && !withdrawingState {
 				continue
 			}
 			current := reserved.notice
+			if preparationRecoveryState {
+				current = preparationRecoveryReserved.notice
+			}
 			if withdrawingState {
 				current = withdrawing.notice
 			}
@@ -1006,6 +1055,87 @@ func (b *defaultBackgroundNoticeScheduler) restoreUncommittedReservations(notice
 		}
 	}
 	b.signalChangedLocked()
+}
+
+// restorePreDeliveryReservations preserves the first automatic request-
+// preparation failure as a durable diagnostic followed by one scheduler-owned
+// retry. A failed recovery reservation falls back to the ordinary externally
+// permitted retry path, so no lifecycle task can self-retry indefinitely.
+func (b *defaultBackgroundNoticeScheduler) restorePreDeliveryReservations(
+	notices []queuedBackgroundNotice,
+	cause error,
+) {
+	if len(notices) == 0 {
+		return
+	}
+	if cause == nil {
+		panic("restore pre-delivery reservations requires a cause")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ensureChangedLocked()
+	b.nextRetry = nextBackgroundLifecycleAttempt(b.nextRetry)
+	for _, notice := range notices {
+		for index, state := range b.states {
+			switch current := state.(type) {
+			case reservedBackgroundNotice:
+				if !sameBackgroundNotice(current.notice, notice) {
+					continue
+				}
+				recovery, recoverable := preparationRecoveryNotice(current.notice, cause)
+				if recoverable {
+					b.states[index] = newPreparationRecoveryDiagnosticBackgroundNotice(recovery)
+				} else {
+					b.states[index] = newRetryDeferredBackgroundNotice(current.notice, b.nextRetry)
+				}
+			case reservedPreparationRecoveryBackgroundNotice:
+				if !sameBackgroundNotice(current.notice, notice) {
+					continue
+				}
+				retry, recoverable := preparationRecoveryNotice(current.notice, cause)
+				if recoverable {
+					b.states[index] = newRetryDeferredBackgroundNotice(retry, b.nextRetry)
+				} else {
+					b.states[index] = newRetryDeferredBackgroundNotice(current.notice, b.nextRetry)
+				}
+			case withdrawingBackgroundNotice:
+				if !sameBackgroundNotice(current.notice, notice) {
+					continue
+				}
+				withdrawn := current.notice
+				if recovery, recoverable := preparationRecoveryNotice(withdrawn, cause); recoverable {
+					withdrawn = recovery
+				}
+				if b.withdrawn == nil {
+					b.withdrawn = make(map[backgroundNoticeIdentity]BackgroundDeliveryWithdrawal)
+				}
+				b.withdrawn[*withdrawn.identity] = backgroundDeliveryWithdrawalForNotice(withdrawn)
+				b.states = append(b.states[:index], b.states[index+1:]...)
+			default:
+				continue
+			}
+			break
+		}
+	}
+	b.signalChangedLocked()
+}
+
+func preparationRecoveryNotice(
+	notice queuedBackgroundNotice,
+	cause error,
+) (queuedBackgroundNotice, bool) {
+	if !notice.hasIdentity() || notice.identity.activity.Version() != 4 {
+		return notice, false
+	}
+	diagnostic := newPendingBackgroundDeliveryDiagnostic(
+		notice.processID(),
+		notice.activityID(),
+		backgroundDeliveryStagePreparation,
+		nextBackgroundDeliveryAttempt(notice.diagnostic),
+		cause,
+	)
+	notice.diagnostic = &diagnostic
+	return notice, true
 }
 
 func cloneBackgroundDeliveryDiagnostic(
@@ -1067,6 +1197,10 @@ func (b *defaultBackgroundNoticeScheduler) hasDeliverableNoticeLocked() bool {
 			if b.retryPermit != nil && b.retryPermit.generation == current.generation {
 				return true
 			}
+		case preparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic == nil {
+				return true
+			}
 		}
 	}
 	return false
@@ -1095,6 +1229,16 @@ func (b *defaultBackgroundNoticeScheduler) hasPendingDeliveryDiagnosticsLocked()
 			if current.notice.diagnostic != nil {
 				return true
 			}
+		case preparationRecoveryDiagnosticBackgroundNotice:
+			return true
+		case preparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
+		case reservedPreparationRecoveryBackgroundNotice:
+			if current.notice.diagnostic != nil {
+				return true
+			}
 		case withdrawingBackgroundNotice:
 			// A withdrawing Workflow obligation is intentionally not
 			// deliverable. Workflow retirement transfers it after task join.
@@ -1109,6 +1253,16 @@ func (b *defaultBackgroundNoticeScheduler) hasPendingDeliveryDiagnosticsLocked()
 
 func (b *defaultBackgroundNoticeScheduler) hasScheduledWorkLocked() bool {
 	return b.hasDeliverableNoticeLocked() || b.hasPendingDeliveryDiagnosticsLocked()
+}
+
+func (b *defaultBackgroundNoticeScheduler) hasReadyPreparationRecoveryLocked() bool {
+	for _, state := range b.states {
+		recovery, ok := state.(preparationRecoveryBackgroundNotice)
+		if ok && recovery.notice.diagnostic == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *defaultBackgroundNoticeScheduler) hasRetirementWorkLocked() bool {
@@ -1164,12 +1318,16 @@ func (b *defaultBackgroundNoticeScheduler) finishTask(task backgroundLifecycleTa
 		return
 	}
 	finished := false
+	var scheduled backgroundLifecycleTask
 	b.mu.Lock()
 	running, ok := b.task.(runningBackgroundLifecycleTask)
 	if ok && sameBackgroundLifecycleTask(running, task) {
 		b.task = nil
 		b.signalChangedLocked()
 		finished = true
+		if b.hasReadyPreparationRecoveryLocked() && (b.steps == nil || !b.steps.IsBusy()) {
+			scheduled = b.scheduleTaskLocked()
+		}
 	}
 	b.mu.Unlock()
 	if finished {
@@ -1177,4 +1335,5 @@ func (b *defaultBackgroundNoticeScheduler) finishTask(task backgroundLifecycleTa
 			close(backgroundLifecycleTaskControlFor(task).done)
 		})
 	}
+	b.launchIfScheduled(scheduled)
 }
