@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func completionHasCode(err error, code CompletionCode) bool {
@@ -77,7 +78,7 @@ func newWorkflowDeletionFixture(t *testing.T) workflowDeletionFixture {
 	return workflowDeletionFixture{ctx: ctx, store: store, projectID: binding.ProjectID}
 }
 
-func (f workflowDeletionFixture) linkedWorkflow(t *testing.T, isDefault bool) (workflow.WorkflowID, ProjectWorkflowLinkRecord) {
+func (f workflowDeletionFixture) linkedWorkflow(t *testing.T, isDefault bool) (runtimeids.WorkflowID, ProjectWorkflowLinkRecord) {
 	t.Helper()
 	workflowID := createValidWorkflow(t, f.ctx, f.store)
 	return workflowID, linkWorkflow(t, f.ctx, f.store, f.projectID, workflowID, isDefault)
@@ -92,7 +93,7 @@ func (f workflowDeletionFixture) unlink(t *testing.T, linkID, replacementDefault
 	return result
 }
 
-func (f workflowDeletionFixture) preview(t *testing.T, workflowID workflow.WorkflowID) WorkflowDeleteImpact {
+func (f workflowDeletionFixture) preview(t *testing.T, workflowID runtimeids.WorkflowID) WorkflowDeleteImpact {
 	t.Helper()
 	impact, err := f.store.PreviewWorkflowDelete(f.ctx, workflowID)
 	if err != nil {
@@ -145,7 +146,7 @@ func hasWorkflowDeleteBlocker(blockers []WorkflowDeleteBlocker, code string, cou
 	return false
 }
 
-func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revision int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
+func workflowGraphSaveRequestFromDefinition(workflowID runtimeids.WorkflowID, revision int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
 	req := WorkflowGraphSaveRequest{WorkflowID: workflowID, ExpectedVersion: revision, Confirmed: confirmed}
 	groupKeyByID := make(map[string]string, len(def.NodeGroups))
 	for index, group := range def.NodeGroups {
@@ -165,7 +166,7 @@ func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revi
 	return req
 }
 
-func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, edit func(workflow.Definition, *WorkflowGraphSaveRequest)) WorkflowGraphSaveResult {
+func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, workflowID runtimeids.WorkflowID, edit func(workflow.Definition, *WorkflowGraphSaveRequest)) WorkflowGraphSaveResult {
 	t.Helper()
 	def, record, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {

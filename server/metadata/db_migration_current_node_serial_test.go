@@ -311,7 +311,7 @@ SET metadata_json = json_object(
     json_object(
         'run_id', 'run-stale-agent-migration',
         'task_id', 'task-stale-agent-migration',
-        'workflow_id', 'workflow-stale-agent-migration'
+        'workflow_id', 'workflow-550e8400-e29b-41d4-a716-446655440012'
     )
 )
 WHERE id = '550e8400-e29b-41d4-a716-446655440000'`)

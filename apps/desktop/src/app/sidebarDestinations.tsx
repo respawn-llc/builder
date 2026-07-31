@@ -104,7 +104,7 @@ function LinkWorkflowDestinationView({
       }}
       creating={destination.creating === true}
       projectID={destination.projectID}
-      selectedWorkflowID={destination.selectedWorkflowID ?? ""}
+      selectedWorkflowID={destination.selectedWorkflowID}
     />
   );
 }

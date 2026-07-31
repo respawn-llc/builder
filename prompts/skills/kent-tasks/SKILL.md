@@ -44,7 +44,7 @@ kent task list --project . --workflow "<uuid>"
 kent task show <short-id-or-task-id>
 ```
 
-Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Names and `workflow-...` persistence IDs are not accepted. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
+Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
 
 ## Search
 

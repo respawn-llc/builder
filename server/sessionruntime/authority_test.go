@@ -990,7 +990,7 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1025,7 +1025,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 	})
 	grace := 50 * time.Millisecond
-	start := func(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
+	start := func(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
 		t.Helper()
 		ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID(uuid.NewString()), nil)
 		ref.ProjectID, ref.WorkflowID = projectID, workflowID
@@ -1038,16 +1038,16 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 		return handle
 	}
-	selected := start("project-a", "workflow-a", "task-a")
-	unrelatedWorkflow := start("project-a", "workflow-b", "task-b")
-	unrelatedProject := start("project-b", "workflow-a", "task-c")
+	selected := start("project-a", authorityWorkflowID(t, "a"), "task-a")
+	unrelatedWorkflow := start("project-a", authorityWorkflowID(t, "b"), "task-b")
+	unrelatedProject := start("project-b", authorityWorkflowID(t, "a"), "task-c")
 	t.Cleanup(func() {
 		for _, handle := range []ExecutionHandle{selected, unrelatedWorkflow, unrelatedProject} {
 			_ = handle.Stop(context.Background())
 		}
 	})
 
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("scoped snapshot: %v", err)
 	}
@@ -1055,7 +1055,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		t.Fatalf("scoped snapshot included unrelated execution: %+v", snapshot)
 	}
 	snapshot.Executions[0].Script.Path = "mutated"
-	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("repeat scoped snapshot: %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1239,7 +1239,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1522,7 +1522,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
+func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
@@ -1541,7 +1541,7 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
-	route := func(generation runtimeids.ResourceGeneration) {
+	route := func(event shelltool.Event, generation runtimeids.ResourceGeneration) {
 		correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), generation)
 		if err != nil {
 			t.Fatalf("new execution correlation: %v", err)
@@ -1549,21 +1549,33 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 		event.Snapshot.ExecutionCorrelation = &correlation
 		authority.routeBackgroundEvent(event)
 	}
-	route(predecessor.Resource().Generation())
+	route(event, predecessor.Resource().Generation())
 	select {
 	case update := <-updates:
-		t.Fatalf("stale predecessor generation routed background update: %+v", update)
+		if update.Type != runtime.BackgroundShellEventCompleted || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("predecessor terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("predecessor terminal event did not route to current runtime")
+	}
+
+	backgrounded := event
+	backgrounded.Type = shelltool.EventBackgrounded
+	route(backgrounded, predecessor.Resource().Generation())
+	select {
+	case update := <-updates:
+		t.Fatalf("stale predecessor registration routed background update: %+v", update)
 	default:
 	}
 
-	route(successor.Resource().Generation())
+	route(backgrounded, successor.Resource().Generation())
 	select {
 	case update := <-updates:
-		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("current generation background update = %+v", update)
+		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("current generation registration update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("current resource generation did not receive background update")
+		t.Fatal("current resource generation did not receive background registration")
 	}
 }
 
@@ -2250,6 +2262,23 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	}
 }
 
+func authorityWorkflowID(t *testing.T, name string) runtimeids.WorkflowID {
+	t.Helper()
+	raw, found := map[string]string{
+		"test": "550e8400-e29b-41d4-a716-446655440101",
+		"a":    "550e8400-e29b-41d4-a716-446655440102",
+		"b":    "550e8400-e29b-41d4-a716-446655440103",
+	}[name]
+	if !found {
+		t.Fatalf("unknown authority Workflow fixture %q", name)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse authority Workflow fixture %q: %v", raw, err)
+	}
+	return workflowID
+}
+
 func workflowExecutionRefForTest(
 	t *testing.T,
 	taskID workflow.TaskID,
@@ -2261,7 +2290,7 @@ func workflowExecutionRefForTest(
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: "workflow-test", CurrentNode: reference}
+	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"), CurrentNode: reference}
 }
 
 func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref WorkflowExecutionRef) *WorkflowExecutionLease {

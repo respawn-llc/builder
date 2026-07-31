@@ -53,16 +53,16 @@ INSERT INTO sessions (
 )`, sourceSessionID, "sessions/"+sourceSessionID, now, now)
 	execLegacyMigrationSeed(t, db, "workflow", `
 INSERT INTO workflows (id, name, description, version, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('workflow-migrated-approval-fanout', 'Workflow', '', 1, ?, ?)`, now, now)
+VALUES ('workflow-11111111-1111-4111-8111-111111111111', 'Workflow', '', 1, ?, ?)`, now, now)
 	execLegacyMigrationSeed(t, db, "workflow nodes", `
 INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, subagent_role, output_fields_json
 ) VALUES
-    ('node-start', 'workflow-migrated-approval-fanout', 'backlog', 'start', 'Backlog', '', '[]'),
-    ('node-source', 'workflow-migrated-approval-fanout', 'source', 'agent', 'Source', 'coder', '[]'),
-    ('node-target-a', 'workflow-migrated-approval-fanout', 'target_a', 'agent', 'Target A', 'coder', '[]'),
-    ('node-target-b', 'workflow-migrated-approval-fanout', 'target_b', 'agent', 'Target B', 'coder', '[]'),
-    ('node-done', 'workflow-migrated-approval-fanout', 'done', 'terminal', 'Done', '', '[]')`, now, now)
+    ('node-start', 'workflow-11111111-1111-4111-8111-111111111111', 'backlog', 'start', 'Backlog', '', '[]'),
+    ('node-source', 'workflow-11111111-1111-4111-8111-111111111111', 'source', 'agent', 'Source', 'coder', '[]'),
+    ('node-target-a', 'workflow-11111111-1111-4111-8111-111111111111', 'target_a', 'agent', 'Target A', 'coder', '[]'),
+    ('node-target-b', 'workflow-11111111-1111-4111-8111-111111111111', 'target_b', 'agent', 'Target B', 'coder', '[]'),
+    ('node-done', 'workflow-11111111-1111-4111-8111-111111111111', 'done', 'terminal', 'Done', '', '[]')`, now, now)
 	execLegacyMigrationSeed(t, db, "workflow transition groups", `
 INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
 VALUES
@@ -79,7 +79,7 @@ INSERT INTO workflow_edges (
 	execLegacyMigrationSeed(t, db, "workflow link", `
 INSERT INTO project_workflow_links (
     id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms
-) VALUES ('link-migrated-approval-fanout', 'project-migrated-approval-fanout', 'workflow-migrated-approval-fanout', ?, ?)`, now, now)
+) VALUES ('link-migrated-approval-fanout', 'project-migrated-approval-fanout', 'workflow-11111111-1111-4111-8111-111111111111', ?, ?)`, now, now)
 	execLegacyMigrationSeed(t, db, "default workflow link", `
 UPDATE projects
 SET default_project_workflow_link_id = 'link-migrated-approval-fanout'
@@ -303,12 +303,12 @@ func TestResolveCurrentSessionStartContextUsesMigratedDirectOwnership(t *testing
 	now := time.Now().UTC().UnixMilli()
 	const (
 		projectID  = "project-migrated-session-context"
-		workflowID = "workflow-migrated-session-context"
+		workflowID = "workflow-22222222-2222-4222-8222-222222222222"
 		taskID     = "task-migrated-session-context"
 		sessionID  = "550e8400-e29b-41d4-a716-446655440090"
 		runID      = "run-migrated-session-context"
 	)
-	snapshotJSON := `{"workflow_id":"workflow-migrated-session-context","workflow_revision_seen":1,"node":{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","subagent_role":"coder"}}`
+	snapshotJSON := `{"workflow_id":"workflow-22222222-2222-4222-8222-222222222222","workflow_revision_seen":1,"node":{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","subagent_role":"coder"}}`
 	execLegacyMigrationSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES (?, 'Project', ?, ?, '{}')`, projectID, now, now)

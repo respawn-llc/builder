@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+// The readiness-gated background/reviewer tests below intentionally run
+// serially. Their channels establish the product event under test; allowing
+// package-level contention to delay the engine goroutine makes the short
+// readiness deadline report a false timeout.
+
 func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -212,7 +217,6 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 }
 
 func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
-	t.Parallel()
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -482,7 +486,6 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 }
 
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 

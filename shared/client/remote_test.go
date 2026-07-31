@@ -639,7 +639,7 @@ func newRemoteWorkflowProjectSubscriptionServer(t *testing.T, event protocol.Wor
 func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
 	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
 		ProjectID:        remoteTestStringPointer("project-1"),
-		WorkflowID:       remoteTestStringPointer("workflow-1"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
 		Resource:         protocol.WorkflowProjectEventResourceTask,
 		Action:           protocol.WorkflowProjectEventActionQuestionWaiting,
 		PrimaryEntityID:  "task-1",
@@ -673,7 +673,7 @@ func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
 func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombination(t *testing.T) {
 	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
 		ProjectID:        remoteTestStringPointer("project-1"),
-		WorkflowID:       remoteTestStringPointer("workflow-1"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
 		Resource:         protocol.WorkflowProjectEventResourceTask,
 		Action:           protocol.WorkflowProjectEventActionLinked,
 		PrimaryEntityID:  "task-1",
@@ -1200,7 +1200,7 @@ func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 
 func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskListScopeError{
 		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
 		ProjectID:  &projectID,
@@ -1242,7 +1242,7 @@ func TestProtocolErrorDecodesTaskSearchError(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskCreateSelectionError{
 		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
 		ProjectID:  "project-1",
@@ -1488,6 +1488,14 @@ func remoteTestIntPointer(value int) *int {
 
 func remoteTestStringPointer(value string) *string {
 	return &value
+}
+
+func remoteTestWorkflowIDPointer(value string) *runtimeids.WorkflowID {
+	id, err := runtimeids.ParseWorkflowID(value)
+	if err != nil {
+		panic(err)
+	}
+	return &id
 }
 
 func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T) {

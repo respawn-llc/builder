@@ -13,7 +13,7 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	fs := newCommandFlagSet(config.Command+" workflow delete", stderr, workflowDeleteUsage)
 	confirm := fs.Bool("confirm", false, "delete using the current preview counts")
 	jsonOut := fs.Bool("json", false, "write the deletion preview or result as JSON")
-	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow delete requires <workflow>")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow delete requires <uuid>")
 	if !ok {
 		return exitCode
 	}
@@ -25,7 +25,7 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		workflowID := selector.PersistedID()
+		workflowID := selector
 		workflowDisplayID := selector.String()
 		preview, err := remote.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 		if err != nil {

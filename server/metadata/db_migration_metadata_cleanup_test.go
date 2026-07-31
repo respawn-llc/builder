@@ -138,23 +138,23 @@ func TestOpenRejectsInconsistentWorkflowGraphDenormalization(t *testing.T) {
 		{
 			name: "transition group workflow disagrees with source node",
 			seed: `INSERT INTO workflow_transition_groups (id, workflow_id, source_node_id, transition_id, display_name)
-VALUES ('group-bad', 'workflow-b', 'node-a', 'bad', 'Bad');`,
+VALUES ('group-bad', 'workflow-550e8400-e29b-41d4-a716-44665544000b', 'node-a', 'bad', 'Bad');`,
 		},
 		{
 			name: "edge workflow disagrees with transition group source node",
 			seed: `
 INSERT INTO workflow_transition_groups (id, workflow_id, source_node_id, transition_id, display_name)
-VALUES ('group-a', 'workflow-a', 'node-a', 'next', 'Next');
+VALUES ('group-a', 'workflow-550e8400-e29b-41d4-a716-44665544000a', 'node-a', 'next', 'Next');
 INSERT INTO workflow_edges (id, workflow_id, transition_group_id, edge_key, target_node_id, context_mode, input_bindings_json, output_requirements_json)
-VALUES ('edge-bad', 'workflow-b', 'group-a', 'next', 'node-a', 'new_session', '{}', '{}');`,
+VALUES ('edge-bad', 'workflow-550e8400-e29b-41d4-a716-44665544000b', 'group-a', 'next', 'node-a', 'new_session', '{}', '{}');`,
 		},
 		{
 			name: "edge target node belongs to different workflow",
 			seed: `
 INSERT INTO workflow_transition_groups (id, workflow_id, source_node_id, transition_id, display_name)
-VALUES ('group-a', 'workflow-a', 'node-a', 'next', 'Next');
+VALUES ('group-a', 'workflow-550e8400-e29b-41d4-a716-44665544000a', 'node-a', 'next', 'Next');
 INSERT INTO workflow_edges (id, workflow_id, transition_group_id, edge_key, target_node_id, context_mode, input_bindings_json, output_requirements_json)
-VALUES ('edge-bad', 'workflow-a', 'group-a', 'next', 'node-b', 'new_session', '{}', '{}');`,
+VALUES ('edge-bad', 'workflow-550e8400-e29b-41d4-a716-44665544000a', 'group-a', 'next', 'node-b', 'new_session', '{}', '{}');`,
 		},
 	}
 	for _, tt := range tests {
@@ -170,11 +170,11 @@ VALUES ('edge-bad', 'workflow-a', 'group-a', 'next', 'node-b', 'new_session', '{
 			}
 			if _, err := db.Exec(`
 INSERT INTO workflows (id, name, description, graph_revision, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('workflow-a', 'A', '', 1, 1, 1),
-       ('workflow-b', 'B', '', 1, 1, 1);
+VALUES ('workflow-550e8400-e29b-41d4-a716-44665544000a', 'A', '', 1, 1, 1),
+       ('workflow-550e8400-e29b-41d4-a716-44665544000b', 'B', '', 1, 1, 1);
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json)
-VALUES ('node-a', 'workflow-a', 'start', 'start', 'Start A', '[]'),
-       ('node-b', 'workflow-b', 'done', 'terminal', 'Done B', '[]');
+VALUES ('node-a', 'workflow-550e8400-e29b-41d4-a716-44665544000a', 'start', 'start', 'Start A', '[]'),
+       ('node-b', 'workflow-550e8400-e29b-41d4-a716-44665544000b', 'done', 'terminal', 'Done B', '[]');
 `); err != nil {
 				t.Fatalf("seed version 23 graph base: %v", err)
 			}
@@ -506,9 +506,9 @@ VALUES ('session-cross-worktree', 'project-a', 'workspace-a', 'worktree-b', 'pro
 INSERT INTO worktrees (id, workspace_id, canonical_root_path, display_name, availability, is_main, git_metadata_json, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('worktree-b', 'workspace-b', '/tmp/worktree-b', 'worktree-b', 'available', 0, '{}', 1, 1);
 INSERT INTO workflows (id, name, description, graph_revision, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('workflow-a', 'Workflow', '', 1, 1, 1, '{}');
+VALUES ('workflow-550e8400-e29b-41d4-a716-44665544000a', 'Workflow', '', 1, 1, 1, '{}');
 INSERT INTO project_workflow_links (id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('link-a', 'project-a', 'workflow-a', 1, 1);
+VALUES ('link-a', 'project-a', 'workflow-550e8400-e29b-41d4-a716-44665544000a', 1, 1);
 INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-cross-worktree', 'link-a', 1, 1, 'A-1', 'Task', '', 'workspace-a', 'worktree-b', 1, 1, '{}');
 `,

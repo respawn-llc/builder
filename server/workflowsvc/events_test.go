@@ -6,12 +6,18 @@ import (
 	"testing"
 
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
+func workflowEventID() *runtimeids.WorkflowID {
+	value := runtimeids.NewWorkflowID()
+	return &value
+}
+
 func TestWorkflowProjectEventBrokerRetainsBoundAndClosesOnGap(t *testing.T) {
 	broker := newWorkflowProjectEventBroker()
-	sub, err := broker.subscribe("project-1", "")
+	sub, err := broker.subscribe("project-1", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -20,7 +26,7 @@ func TestWorkflowProjectEventBrokerRetainsBoundAndClosesOnGap(t *testing.T) {
 	for index := 0; index <= workflowProjectEventBufferSize; index++ {
 		if err := broker.PublishWorkflowEvent(context.Background(), workflowstore.WorkflowEventRecord{
 			ProjectID:        stringPtr("project-1"),
-			WorkflowID:       stringPtr("workflow-1"),
+			WorkflowID:       workflowEventID(),
 			Resource:         serverapi.WorkflowProjectEventResourceTask,
 			Action:           serverapi.WorkflowProjectEventActionUpdated,
 			PrimaryEntityID:  "task-1",
@@ -42,7 +48,7 @@ func TestWorkflowProjectEventBrokerRetainsBoundAndClosesOnGap(t *testing.T) {
 
 func TestWorkflowProjectEventBrokerCopiesRelatedIDs(t *testing.T) {
 	broker := newWorkflowProjectEventBroker()
-	sub, err := broker.subscribe("project-1", "")
+	sub, err := broker.subscribe("project-1", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -51,7 +57,7 @@ func TestWorkflowProjectEventBrokerCopiesRelatedIDs(t *testing.T) {
 	relatedIDs := []string{"session-1"}
 	if err := broker.PublishWorkflowEvent(context.Background(), workflowstore.WorkflowEventRecord{
 		ProjectID:        stringPtr("project-1"),
-		WorkflowID:       stringPtr("workflow-1"),
+		WorkflowID:       workflowEventID(),
 		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           serverapi.WorkflowProjectEventActionStarted,
 		PrimaryEntityID:  "task-1",

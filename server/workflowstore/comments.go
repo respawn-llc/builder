@@ -8,6 +8,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func (s *Store) AddComment(ctx context.Context, taskID workflow.TaskID, body string, authorKind string, authorID string) (CommentRecord, error) {
@@ -59,10 +60,10 @@ func (s *Store) CountTaskComments(ctx context.Context, taskID workflow.TaskID) (
 	return s.queries.CountTaskComments(ctx, string(taskID))
 }
 
-func (s *Store) TaskIdentityForComment(ctx context.Context, commentID string) (taskID string, projectID string, workflowID string, err error) {
+func (s *Store) TaskIdentityForComment(ctx context.Context, commentID string) (taskID string, projectID string, workflowID runtimeids.WorkflowID, err error) {
 	row, err := s.queries.GetTaskIdentityForComment(ctx, strings.TrimSpace(commentID))
 	if err != nil {
-		return "", "", "", err
+		return "", "", runtimeids.WorkflowID{}, err
 	}
 	return row.TaskID, row.ProjectID, row.WorkflowID, nil
 }

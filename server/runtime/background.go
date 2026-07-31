@@ -105,21 +105,47 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) DrainPendingNotices() []steeringIntent {
+func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgroundNotice {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.pending) == 0 {
-		b.scheduled = false
-		return nil
-	}
 	pending := append([]queuedBackgroundNotice(nil), b.pending...)
 	b.pending = nil
 	b.scheduled = false
-	intents := make([]steeringIntent, 0, len(pending))
-	for _, notice := range pending {
-		intents = append(intents, notice.intent)
+	return pending
+}
+
+func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []queuedBackgroundNotice) {
+	if len(notices) == 0 {
+		return
 	}
-	return intents
+	b.mu.Lock()
+	b.pending = append(append([]queuedBackgroundNotice(nil), notices...), b.pending...)
+	b.scheduled = false
+	b.mu.Unlock()
+}
+
+func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID string) (int, error) {
+	pending := b.drainPendingNotices()
+	flushed := 0
+	for index, notice := range pending {
+		receipt, err := b.engine.steerWithCommitReceipt(stepID, notice.intent)
+		if receipt.Committed {
+			flushed++
+		}
+		if err != nil {
+			restore := pending[index:]
+			if receipt.Committed {
+				restore = pending[index+1:]
+			}
+			b.restorePendingNotices(restore)
+			return flushed, err
+		}
+		if !receipt.Committed {
+			b.restorePendingNotices(pending[index:])
+			return flushed, fmt.Errorf("background notice persistence did not commit")
+		}
+	}
+	return flushed, nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
@@ -205,20 +231,23 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
-		pending := b.DrainPendingNotices()
-		if len(pending) == 0 {
-			return nil
-		}
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
-		if err := b.engine.steer(stepID, pending...); err != nil {
-			return err
+		flushed, flushErr := b.flushPendingNotices(stepID)
+		if flushErr != nil {
+			return flushErr
+		}
+		if flushed == 0 {
+			return nil
 		}
 		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
 	})
+	if err != nil && b.HasPendingNotices() {
+		b.clearScheduled()
+	}
 	if errors.Is(err, ErrAgentBusy) {
 		b.clearScheduled()
 		return llm.Message{}, nil

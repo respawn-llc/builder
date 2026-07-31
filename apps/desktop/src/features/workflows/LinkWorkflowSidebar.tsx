@@ -30,7 +30,7 @@ export function LinkWorkflowSidebar({
   onCreated: (workflowID: string) => void;
   onLinked: (workflowID: string) => void;
   projectID: string;
-  selectedWorkflowID: string;
+  selectedWorkflowID?: string | undefined;
 }>) {
   const { t } = useTranslation();
   if (creating) {
@@ -61,7 +61,7 @@ function LinkWorkflowPicker({
 }: Readonly<{
   onLinked: (workflowID: string) => void;
   projectID: string;
-  selectedWorkflowID: string;
+  selectedWorkflowID?: string | undefined;
   title: string;
 }>) {
   const { t } = useTranslation();

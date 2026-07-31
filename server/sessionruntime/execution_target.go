@@ -263,7 +263,7 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
-	if resource == nil || resource.ref.Generation() != correlation.ResourceGeneration() {
+	if resource == nil || (event.Type == shelltool.EventBackgrounded && resource.ref.Generation() != correlation.ResourceGeneration()) {
 		return
 	}
 	routeErr := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {

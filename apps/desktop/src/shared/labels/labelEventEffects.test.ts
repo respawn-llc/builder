@@ -150,8 +150,8 @@ describe("Project label event effects", () => {
       queryClient,
     });
     const assignmentKey = queryKeys.taskLabels("task-1");
-    const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
-    const unrelatedBoardKey = queryKeys.board("project-2", "workflow-1", { kind: "none" });
+    const boardKey = queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" });
+    const unrelatedBoardKey = queryKeys.board("project-2", "11111111-1111-4111-8111-111111111111", { kind: "none" });
     const taskListKey = queryKeys.projectTaskListsRoot("project-1");
     const unrelatedTaskListKey = queryKeys.projectTaskListsRoot("project-2");
     queryClient.setQueryData(assignmentKey, { taskID: "task-1", labelIDs: [alphaID] });
@@ -182,7 +182,7 @@ describe("Project label event effects", () => {
         kind: "task.labels_changed",
         projectID: "project-1",
         taskID: "task-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
       },
     ]);
 
@@ -201,7 +201,7 @@ describe("Project label event effects", () => {
     });
     let admissionClosed = false;
     let admittedTransportCalls = 0;
-    const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
+    const boardKey = queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" });
     const observer = new QueryObserver(queryClient, {
       queryKey: boardKey,
       queryFn: async () => {
@@ -262,7 +262,7 @@ describe("Project label event effects", () => {
         kind: "task.deleted",
         projectID: "project-1",
         taskID: "task-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
       },
     ]);
   });
@@ -290,7 +290,7 @@ function taskEvent(action: "deleted" | "labels_changed" | "updated", taskID: str
     projectID: "project-1",
     relatedIDs: [],
     resource: "task",
-    workflowID: "workflow-1",
+    workflowID: "11111111-1111-4111-8111-111111111111",
   };
 }
 
