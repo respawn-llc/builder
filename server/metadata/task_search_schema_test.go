@@ -59,7 +59,7 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 }
 
 func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) {
-	for _, checkpoint := range []int64{59, 60, 61, 62} {
+	for _, checkpoint := range []int64{59, 60, 61, 62, 63} {
 		t.Run(fmt.Sprintf("version_%d", checkpoint), func(t *testing.T) {
 			legacy, root := openVersion59TaskSearchFixture(t)
 			if checkpoint > 59 {
@@ -132,7 +132,7 @@ func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestTaskSearchMigration61IsAtomic(t *testing.T) {
+func TestTaskSearchMigration62IsAtomic(t *testing.T) {
 	legacy, _ := openVersion59TaskSearchFixture(t)
 	t.Cleanup(func() { _ = legacy.Close() })
 	provider, err := goose.NewProvider(
@@ -145,15 +145,15 @@ func TestTaskSearchMigration61IsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failing task-search migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(context.Background(), 61); err == nil {
+	if _, err := provider.UpTo(context.Background(), 62); err == nil {
 		t.Fatal("task-search migration unexpectedly succeeded despite forced trailing failure")
 	}
 	version, err := provider.GetDBVersion(t.Context())
 	if err != nil {
 		t.Fatalf("read version after failed task-search migration: %v", err)
 	}
-	if version != 60 {
-		t.Fatalf("version after failed task-search migration = %d, want 60", version)
+	if version != 61 {
+		t.Fatalf("version after failed task-search migration = %d, want 61", version)
 	}
 	assertNoTaskSearchSchemaObjects(t, legacy)
 	assertTaskSearchLegacySourcesRemain(t, legacy)
@@ -221,7 +221,7 @@ func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
 		if err != nil {
 			t.Fatalf("read metadata migration %s: %v", entry.Name(), err)
 		}
-		if entry.Name() == "00061_task_search_index.up.sql" {
+		if entry.Name() == "00062_task_search_index.up.sql" {
 			data = append(data, []byte("\nSELECT * FROM task_search_forced_migration_failure;\n")...)
 		}
 		migrations[path] = &fstest.MapFile{Data: data}
