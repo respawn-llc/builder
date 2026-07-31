@@ -17,12 +17,16 @@ const (
 	GoalNoticeClear
 )
 
-func GoalNoticeRecord(kind GoalNoticeKind, goal *session.GoalState) (session.MessageRecord, error) {
+func SteerPersistedGoalNotice(
+	store *session.Store,
+	kind GoalNoticeKind,
+	goal *session.GoalState,
+) (session.CommitReceipt, error) {
 	message, err := goalNoticeMessage(kind, goal)
 	if err != nil {
-		return session.MessageRecord{}, err
+		return session.CommitReceipt{}, err
 	}
-	return sessionMessageRecordFromLLM(message)
+	return SteerPersistedMessage(store, "", message)
 }
 
 func goalNoticeMessage(kind GoalNoticeKind, goal *session.GoalState) (llm.Message, error) {

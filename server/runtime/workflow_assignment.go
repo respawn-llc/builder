@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 
 	"core/server/llm"
@@ -116,15 +115,7 @@ func SteerPersistedWorkflowAssignment(store *session.Store, assignment WorkflowA
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	record, err := sessionMessageRecordFromLLM(message)
-	if err != nil {
-		return WorkflowAssignmentSteer{}, fmt.Errorf("adapt workflow assignment message: %w", err)
-	}
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		return WorkflowAssignmentSteer{}, err
-	}
-	_, receipt, err := eventLog.AppendRecord(nil, record)
+	receipt, err := SteerPersistedMessage(store, "", message)
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
