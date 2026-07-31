@@ -127,6 +127,15 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 	if err != nil {
 		return tools.ErrorResultWith(c, formatToolCallError("exec_command", err), marshalNoHTMLEscape), nil
 	}
+	pendingTransition := result.PendingTransition
+	handoff := false
+	if pendingTransition != nil {
+		defer func() {
+			if !handoff {
+				_ = pendingTransition.Abort()
+			}
+		}()
+	}
 	if strings.TrimSpace(result.ToolError) != "" {
 		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil
 	}
@@ -145,6 +154,10 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 			result.ExitCode,
 		),
 	}
+	if pendingTransition != nil {
+		toolResult.TransientMetadata = pendingTransition
+	}
+	handoff = true
 	return toolResult, nil
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -321,37 +322,78 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 	if err != nil || !result.continueCombinedFlush {
 		return result, err
 	}
-	pendingNotices := []steeringIntent(nil)
+	var pendingNotices backgroundNoticeBatch
 	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
+		pendingNotices = m.background.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
 	}
-	for _, notice := range pendingNotices {
-		if err := m.engine.steer(stepID, notice); err != nil {
-			return result, err
-		}
-		result.flushed++
+	if pendingNotices.Empty() || !pendingNotices.BeginApply() {
+		return result, nil
+	}
+	applied, err := pendingNotices.Apply(func(intent steeringIntent) error {
+		return m.engine.steer(stepID, intent)
+	})
+	result.flushed += applied
+	if err != nil {
+		return result, err
 	}
 	return result, nil
 }
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	var pending []queuedUserSteeringIntent
-	switch selected := selection.(type) {
-	case allPendingUserInjectionSelection:
-		pending = m.queue.Drain()
-	case steerUserInjectionSelection:
-		if len(selected.queueItemIDs) > 0 {
-			pending = m.queue.DrainByID(selected.queueItemIDs)
-		}
-	default:
-		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
-	}
-	return m.commitPendingUserInjections(stepID, pending)
+	result := userInjectionCommitResult{continueCombinedFlush: true}
+	err := m.engine.steer(stepID, steerPendingUserInjectionClaimIntent(selection, &result))
+	return result, err
 }
 
-func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (userInjectionCommitResult, error) {
+func (m *defaultMessageLifecycle) commitPendingUserInjectionsInTurn(stepID string, selection userInjectionSelection, turn OrderedMutationTurn) (userInjectionCommitResult, error) {
+	claim := m.claimPendingUserInjections(selection)
+	result, err := m.commitPendingUserInjections(stepID, claim, func(stepID, text string, batch []string, items []QueuedUserMessage) (session.CommitReceipt, error) {
+		return m.engine.appendQueuedUserMessageFlush(stepID, text, batch, items)
+	})
+	if err != nil || !result.continueCombinedFlush || m.background == nil || turn == nil {
+		return result, err
+	}
+	result.continueCombinedFlush = false
+	pendingNotices := m.background.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
+	if pendingNotices.Empty() || !pendingNotices.BeginApply() {
+		return result, nil
+	}
+	applied, applyErr := pendingNotices.Apply(func(intent steeringIntent) error {
+		if turn == nil {
+			return m.engine.steer(stepID, intent)
+		}
+		return turn.Apply(func() error {
+			return m.engine.applySteeringIntentInline(stepID, intent)
+		})
+	})
+	result.flushed += applied
+	return result, applyErr
+}
+
+func (m *defaultMessageLifecycle) claimPendingUserInjections(selection userInjectionSelection) queuedUserMessageClaim {
+	var claim queuedUserMessageClaim
+	switch selected := selection.(type) {
+	case allPendingUserInjectionSelection:
+		claim = m.queue.ClaimAll()
+	case steerUserInjectionSelection:
+		if len(selected.queueItemIDs) > 0 {
+			claim = m.queue.ClaimByID(selected.queueItemIDs)
+		}
+	default:
+		panic(fmt.Sprintf("unsupported user injection selection %T", selection))
+	}
+	return claim
+}
+
+func (m *defaultMessageLifecycle) commitPendingUserInjections(
+	stepID string,
+	claim queuedUserMessageClaim,
+	appendFlush func(string, string, []string, []QueuedUserMessage) (session.CommitReceipt, error),
+) (userInjectionCommitResult, error) {
 	e := m.engine
 	result := userInjectionCommitResult{continueCombinedFlush: true}
+	claimed := claim.Items()
+	pending := claimed
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
 	pending = e.dropStoppedLiveRunQueueItems(pending)
@@ -361,20 +403,23 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 		result.queueItemIDs = queuedUserMessageIDSet(queueItems)
 		joined := strings.Join(queuedMessages, "\n\n")
 		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
-			receipt, persistErr := e.steerWithCommitReceipt(
-				stepID,
-				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queueItems),
-			)
+			if appendFlush == nil {
+				return errors.New("queued user flush applier is required")
+			}
+			receipt, persistErr := appendFlush(stepID, joined, queuedMessages, queueItems)
 			result.receipt = receipt
 			return persistErr
 		})
 		if err != nil {
 			if !result.receipt.Committed {
-				m.queue.RestoreFront(pending)
+				claim.Restore()
+			} else {
+				claim.Commit(idsFromQueuedUserIntents(claimed))
 			}
 			return result, err
 		}
 		if !publishAllowed {
+			claim.Commit(idsFromQueuedUserIntents(claimed))
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
@@ -387,6 +432,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	for _, item := range pending {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 	}
+	claim.Commit(idsFromQueuedUserIntents(claimed))
 	return result, nil
 }
 
@@ -404,35 +450,38 @@ func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage)
 	return m.queue.QueueItem(item)
 }
 
-func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	pending := m.queue.Drain()
-	out := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		out = append(out, item.message)
-	}
-	return out
-}
-
-func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage {
-	if m == nil || m.queue == nil || len(ids) == 0 {
-		return nil
-	}
-	pending := m.queue.DrainByID(ids)
-	out := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		out = append(out, item.message)
-	}
-	return out
-}
-
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, false
 	}
 	return m.queue.DiscardItem(queueItemID)
+}
+
+func (m *defaultMessageLifecycle) FailPendingUserInjections(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.failPendingUserInjections(m.queue.ClaimAll(), reason)
+}
+
+func (m *defaultMessageLifecycle) FailPendingUserInjectionsByID(ids map[string]struct{}, reason QueuedUserMessageFailureReason) []QueuedUserMessage {
+	if m == nil || m.queue == nil || len(ids) == 0 {
+		return nil
+	}
+	return m.failPendingUserInjections(m.queue.ClaimByID(ids), reason)
+}
+
+func (m *defaultMessageLifecycle) failPendingUserInjections(claim queuedUserMessageClaim, _ QueuedUserMessageFailureReason) []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	pending := claim.Items()
+	messages := make([]QueuedUserMessage, 0, len(pending))
+	for _, item := range pending {
+		messages = append(messages, item.message)
+	}
+	claim.Commit(idsFromQueuedUserIntents(pending))
+	return messages
 }
 
 func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {

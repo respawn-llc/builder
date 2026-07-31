@@ -19,9 +19,9 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	if err != nil {
 		t.Fatalf("new execution correlation: %v", err)
 	}
-	events := make(chan Event, 2)
+	events := make(chan Event, 1)
 	manager.SetEventHandler(func(event Event) {
-		if event.Type == EventBackgrounded || event.Type == EventCompleted || event.Type == EventKilled {
+		if event.Type == EventCompleted || event.Type == EventKilled {
 			events <- event
 		}
 	})
@@ -43,6 +43,7 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
 		t.Fatal("correlated process did not move to background")
 	}
+	transition := commitPendingTransition(t, result)
 
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
@@ -53,13 +54,10 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatal("snapshot reused caller execution correlation pointer")
 	}
 
-	backgrounded := <-events
-	if backgrounded.Type != EventBackgrounded {
-		t.Fatalf("first event type = %q, want %q", backgrounded.Type, EventBackgrounded)
-	}
-	assertExecutionCorrelation(t, backgrounded.Snapshot.ExecutionCorrelation, correlation, "background event")
-	if backgrounded.Snapshot.ExecutionCorrelation == snapshots[0].ExecutionCorrelation {
-		t.Fatal("background event reused snapshot execution correlation pointer")
+	backgrounded := transition.Snapshot()
+	assertExecutionCorrelation(t, backgrounded.ExecutionCorrelation, correlation, "background transition")
+	if backgrounded.ExecutionCorrelation == snapshots[0].ExecutionCorrelation {
+		t.Fatal("background transition reused snapshot execution correlation pointer")
 	}
 
 	processID, err := strconv.Atoi(snapshots[0].ID)
@@ -81,7 +79,7 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
 	}
 	assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
-	if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
+	if terminal.Snapshot.ExecutionCorrelation == backgrounded.ExecutionCorrelation {
 		t.Fatal("terminal event reused background event execution correlation pointer")
 	}
 	if manager.Count() != 0 {
@@ -208,6 +206,7 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	if autoA.IsError {
 		t.Fatalf("runtime A automatic completion start error: %s", string(autoA.Output))
 	}
+	commitPendingTransition(t, autoA)
 
 	select {
 	case event := <-events:
@@ -306,6 +305,7 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 		if result.IsError {
 			t.Fatalf("%s background start error: %s", name, string(result.Output))
 		}
+		commitPendingTransition(t, result)
 		if got := decodeStringToolOutput(t, result); !strings.Contains(got, name) {
 			t.Errorf("%s transition output = %q, want captured policy", name, got)
 		}

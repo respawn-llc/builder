@@ -470,11 +470,13 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 		if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
 			t.Fatalf("exec_command result did not move to background: %+v", result.PresentationDelta)
 		}
-		event := nextEvent()
-		if event.Type != shelltool.EventBackgrounded {
-			t.Fatalf("event type = %q, want %q", event.Type, shelltool.EventBackgrounded)
+		transition, ok := result.TransientMetadata.(*shelltool.PendingBackgroundTransition)
+		if !ok || transition == nil {
+			t.Fatalf("exec_command transition metadata = %T, want pending transition", result.TransientMetadata)
 		}
-		return event.Snapshot
+		snapshot := transition.Snapshot()
+		transition.Commit()
+		return snapshot
 	}
 	assertCorrelation := func(location string, got *runtimeids.ExecutionCorrelation, want *runtimeids.ExecutionCorrelation) {
 		t.Helper()

@@ -222,34 +222,61 @@ func (e *Engine) AppendCommittedEntry(role, text string) error {
 	return e.AppendCommittedEntryWithCondensedText(role, text, "")
 }
 
+func (e *Engine) AppendCommittedEntryWithOrderedTurn(turn OrderedMutationTurn, role, text string) error {
+	return e.AppendCommittedEntryWithCondensedTextAndOrderedTurn(turn, role, text, "")
+}
+
 func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+	return e.AppendCommittedEntryWithVisibilityAndOrderedTurn(nil, role, text, visibility)
+}
+
+func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
+	return e.AppendCommittedEntryWithNoticeIDAndOrderedTurn(nil, role, text, noticeID)
+}
+
+func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText string) error {
+	return e.AppendCommittedEntryWithCondensedTextAndOrderedTurn(nil, role, text, condensedText)
+}
+
+func (e *Engine) AppendCommittedEntryWithCondensedTextAndOrderedTurn(turn OrderedMutationTurn, role, text, condensedText string) error {
+	entry := storedLocalEntry{
+		Visibility:    transcript.EntryVisibilityAuto,
+		Role:          strings.TrimSpace(role),
+		Text:          strings.TrimSpace(text),
+		CondensedText: textutil.OptionalTrimmedString(condensedText),
+	}
+	_, err := e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(turn, entry)
+	return err
+}
+
+func (e *Engine) AppendCommittedEntryWithVisibilityAndOrderedTurn(turn OrderedMutationTurn, role, text string, visibility transcript.EntryVisibility) error {
+	_, err := e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(turn, storedLocalEntry{
 		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})
+	return err
 }
 
-func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
+func (e *Engine) AppendCommittedEntryWithNoticeIDAndOrderedTurn(turn OrderedMutationTurn, role, text, noticeID string) error {
+	_, err := e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(turn, storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 		NoticeID:   textutil.OptionalTrimmedString(noticeID),
 	})
+	return err
 }
 
-func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText string) error {
-	return e.appendCommittedEntry(storedLocalEntry{
-		Visibility:    transcript.EntryVisibilityAuto,
-		Role:          strings.TrimSpace(role),
-		Text:          strings.TrimSpace(text),
-		CondensedText: textutil.OptionalTrimmedString(condensedText),
-	})
+func (e *Engine) appendCommittedEntryWithCommitReceiptAndOrderedTurn(turn OrderedMutationTurn, entry storedLocalEntry) (session.CommitReceipt, error) {
+	if entry.Role == "" || entry.Text == "" {
+		return session.CommitReceipt{}, nil
+	}
+	return e.steerWithCommitReceiptAndTurn(turn, "", steerLocalEntryIntent(entry))
 }
 
 func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
-	_, err := e.appendCommittedEntryWithCommitReceipt(entry)
+	_, err := e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(nil, entry)
 	return err
 }
 

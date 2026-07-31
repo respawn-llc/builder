@@ -103,6 +103,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
+	runtimeCommandAuthority := runtimecommand.NewProcessAuthority()
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
@@ -115,12 +116,24 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
+		CommandLifecycle:  runtimeCommandAuthority,
+		OrderedMutation: func(ctx context.Context, ref runtimeids.SessionResourceRef, apply func(runtime.OrderedMutationTurn) error) error {
+			return runtimeCommandAuthority.Dispatch(ctx, ref, func(turn runtime.OrderedMutationTurn) error {
+				return apply(turn)
+			})
+		},
+		AgentOrderedMutation: func(ctx context.Context, scope sessionruntime.ExecutionScope, apply func(runtime.OrderedMutationTurn) error) error {
+			return runtimeCommandAuthority.DispatchAgent(ctx, scope, func(turn runtime.OrderedMutationTurn) error {
+				return apply(turn)
+			})
+		},
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			if workflowController != nil {
 				workflowController.ExecutionFinalized(scope)
 			}
 		}),
 	})
+	runtimeCommandAuthority.WithExecutionScopeAuthority(runtimeAuthority)
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
@@ -170,6 +183,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
+		WithRuntimeCommandAuthority(runtimeCommandAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
@@ -265,6 +279,21 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowexecution.CurrentNodeControllerConfig{
 			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
 			Attention:            workflowAttentionFinalizer,
+			CompletionFence: workflowexecution.CompletionFenceBeginFunc(func(ctx context.Context, scope sessionruntime.ExecutionScope) (workflowexecution.CompletionFenceLease, error) {
+				resource, ok := scope.Resource()
+				if !ok {
+					return nil, sessionruntime.ErrExecutionNoLongerLive
+				}
+				attempt, err := runtimeCommandAuthority.BeginCompletionAttempt(ctx, resource)
+				if err != nil {
+					return nil, err
+				}
+				lease, err := attempt.Acquire()
+				if err != nil {
+					return nil, err
+				}
+				return &lease, nil
+			}),
 		},
 	)
 	if err != nil {

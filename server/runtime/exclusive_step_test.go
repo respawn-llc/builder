@@ -66,10 +66,18 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)                       {}
-func (s *stubBackgroundNoticeScheduler) DrainPendingNotices() []steeringIntent                  { return nil }
-func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                                { return false }
-func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool             { return false }
+func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdateWithOrderedTurn(BackgroundShellEvent, bool, OrderedMutationTurn) error {
+	return nil
+}
+func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message) {}
+func (s *stubBackgroundNoticeScheduler) ClaimPendingNotices(backgroundNoticeClaim) backgroundNoticeBatch {
+	return backgroundNoticeBatch{}
+}
+func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool { return false }
+func (s *stubBackgroundNoticeScheduler) SuppressPendingBackgroundNotice(string) backgroundNoticeSuppressionResult {
+	return backgroundNoticeSuppressionResult{}
+}
+func (s *stubBackgroundNoticeScheduler) CancelPendingBackgroundNotices() {}
 func (s *stubBackgroundNoticeScheduler) ScheduleIfIdle() {
 	if s != nil && s.scheduleIfIdle != nil {
 		s.scheduleIfIdle()
@@ -822,8 +830,8 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	if !foundNotice {
 		t.Fatalf("expected scheduled request to include queued background notice, messages=%+v", requestMessages(request))
 	}
-	if pending := scheduler.pendingSnapshot(); len(pending) != 0 {
-		t.Fatalf("expected queued notices to be drained, got %+v", pending)
+	if scheduler.HasPendingNotices() {
+		t.Fatal("expected queued notices to be drained")
 	}
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)

@@ -78,6 +78,7 @@ type execution struct {
 	phase executionPhase
 
 	closeResource bool
+	commandLease  ResourceExecutionLease
 }
 
 type executionHandle struct {
@@ -165,6 +166,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
 	e.retire()
+	var commandErr error
+	if e.commandLease != nil {
+		commandErr = e.commandLease.Release()
+	}
 
 	authority := e.authority
 	executionErr := errors.Join(runErr, drainErr)
@@ -190,8 +195,8 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	}
 	e.resultMu.Lock()
 	e.result = result
-	e.runErr = errors.Join(executionErr, cleanupErr, closeErr)
-	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
+	e.runErr = errors.Join(executionErr, cleanupErr, commandErr, closeErr)
+	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, commandErr, closeErr)
 	e.resultMu.Unlock()
 	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
 		authority.executionFinalized.ExecutionFinalized(e.scope)

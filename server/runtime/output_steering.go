@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
@@ -18,6 +19,19 @@ import (
 )
 
 type steeringPriority int
+
+type directOrderedMutationTurn struct{}
+
+func (directOrderedMutationTurn) Apply(apply func() error) error {
+	if apply == nil {
+		return errors.New("ordered mutation is required")
+	}
+	return apply()
+}
+
+func (directOrderedMutationTurn) RetainLease() (OrderedMutationLease, error) {
+	return nil, errors.New("direct ordered mutation turn cannot retain queue capacity")
+}
 
 const (
 	steeringPriorityRuntimeContext steeringPriority = iota
@@ -39,6 +53,7 @@ type steeringItem struct {
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
 	queuedFlush                 *steeringQueuedUserMessageFlush
+	pendingUserClaim            *steeringPendingUserInjectionClaim
 	event                       *Event
 	streaming                   *steeringStreamingOutput
 	cacheWarning                *steeringCacheWarning
@@ -138,6 +153,11 @@ type steeringQueuedUserMessageFlush struct {
 	queueItems []QueuedUserMessage
 }
 
+type steeringPendingUserInjectionClaim struct {
+	selection userInjectionSelection
+	result    *userInjectionCommitResult
+}
+
 type steeringMessageEventPolicy uint8
 
 const (
@@ -202,6 +222,16 @@ func steerQueuedUserMessageFlushIntent(text string, batch []string, queueItems [
 			text:       text,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
+		}}},
+	}
+}
+
+func steerPendingUserInjectionClaimIntent(selection userInjectionSelection, result *userInjectionCommitResult) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityUser,
+		items: []steeringItem{{pendingUserClaim: &steeringPendingUserInjectionClaim{
+			selection: selection,
+			result:    result,
 		}}},
 	}
 }
@@ -337,6 +367,10 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
+	return e.steerWithCommitReceiptAndTurn(nil, stepID, intent)
+}
+
+func (e *Engine) steerWithCommitReceiptAndTurn(turn OrderedMutationTurn, stepID string, intent steeringIntent) (session.CommitReceipt, error) {
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(
 			"commit receipt requires exactly one steering item (items=%d)",
@@ -345,11 +379,15 @@ func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (s
 	}
 	receipt := session.CommitReceipt{}
 	intent.items[0].commitReceipt = &receipt
-	err := e.steer(stepID, intent)
+	err := e.steerAndTurn(turn, stepID, intent)
 	return receipt, err
 }
 
 func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
+	return e.steerAndTurn(nil, stepID, intents...)
+}
+
+func (e *Engine) steerAndTurn(turn OrderedMutationTurn, stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -360,6 +398,32 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	if len(ordered) == 0 {
 		return nil
 	}
+	if turn != nil {
+		return turn.Apply(func() error {
+			return e.applySteeringIntents(stepID, ordered, turn)
+		})
+	}
+	if mutation := e.executionMutationSnapshot(); mutation != nil {
+		return mutation(context.Background(), func(turn OrderedMutationTurn) error {
+			return turn.Apply(func() error {
+				return e.applySteeringIntents(stepID, ordered, turn)
+			})
+		})
+	}
+	if e.cfg.OrderedMutation != nil {
+		return e.cfg.OrderedMutation(func(turn OrderedMutationTurn) error {
+			if turn == nil {
+				return errors.New("ordered mutation turn is required")
+			}
+			return turn.Apply(func() error {
+				return e.applySteeringIntents(stepID, ordered, turn)
+			})
+		})
+	}
+	return e.applySteeringIntents(stepID, ordered, nil)
+}
+
+func (e *Engine) applySteeringIntents(stepID string, ordered []steeringIntent, turn OrderedMutationTurn) error {
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -367,9 +431,18 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	})
 	for _, intent := range ordered {
 		for _, item := range intent.items {
-			if err := e.applySteeringItem(stepID, item); err != nil {
+			if err := e.applySteeringItem(stepID, item, turn); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) applySteeringIntentInline(stepID string, intent steeringIntent) error {
+	for _, item := range intent.items {
+		if err := e.applySteeringItem(stepID, item, nil); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -386,7 +459,7 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 	return outcome, nil
 }
 
-func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+func (e *Engine) applySteeringItem(stepID string, item steeringItem, turn OrderedMutationTurn) error {
 	if item.message != nil {
 		receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 		item.recordCommitReceipt(receipt)
@@ -419,8 +492,30 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.toolCompletion != nil {
 		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
+		transition, _ := completion.Result.TransientMetadata.(interface {
+			Commit() error
+			Abort() error
+			Snapshot() shelltool.Snapshot
+		})
+		completion.Result.TransientMetadata = nil
 		receipt, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
+		if !receipt.Committed {
+			if transition != nil {
+				err = errors.Join(err, transition.Abort())
+			}
+			return err
+		}
+		if transition != nil {
+			if commitErr := transition.Commit(); commitErr != nil {
+				err = errors.Join(err, commitErr)
+			}
+			err = errors.Join(err, e.emitRaw(Event{
+				Kind:       EventBackgroundUpdated,
+				StepID:     stepID,
+				Background: backgroundShellEventFromSnapshot(transition.Snapshot()),
+			}))
+		}
 		if receipt.Committed {
 			result := cloneToolResult(completion.Result)
 			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
@@ -440,6 +535,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.queuedFlush != nil {
 		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
+		return err
+	}
+	if item.pendingUserClaim != nil {
+		if item.pendingUserClaim.result == nil {
+			return errors.New("pending user injection claim requires a result destination")
+		}
+		result, err := e.commitPendingUserInjectionsInTurn(stepID, item.pendingUserClaim.selection, turn)
+		*item.pendingUserClaim.result = result
 		return err
 	}
 	if item.event != nil {
@@ -521,6 +624,22 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return nil
 	}
 	return nil
+}
+
+func backgroundShellEventFromSnapshot(snapshot shelltool.Snapshot) *BackgroundShellEvent {
+	return &BackgroundShellEvent{
+		Type:              BackgroundShellEventBackgrounded,
+		ID:                snapshot.ID,
+		ActivityID:        snapshot.ActivityID,
+		OwnerRunID:        snapshot.OwnerRunID,
+		OwnerStepID:       snapshot.OwnerStepID,
+		State:             snapshot.State,
+		Command:           snapshot.Command,
+		Workdir:           snapshot.Workdir,
+		LogPath:           snapshot.LogPath,
+		ExitCode:          snapshot.ExitCode,
+		UserRequestedKill: snapshot.KillRequested,
+	}
 }
 
 func (item steeringItem) recordCommitReceipt(receipt session.CommitReceipt) {

@@ -29,6 +29,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
+	commitPendingTransition(t, result)
 
 	pollResult := callWriteStdin(t, NewWriteStdinTool(16_000, manager), pollID, map[string]any{
 		"session_id":    1000,
@@ -102,6 +103,7 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
+	commitPendingTransition(t, result)
 
 	select {
 	case <-terminalHandlerStarted:
@@ -205,6 +207,7 @@ func TestManagerCloseKillsRunningProcesses(t *testing.T) {
 	if !result.MovedToBackground || !result.Running {
 		t.Fatalf("expected background process, got %+v", result)
 	}
+	result.PendingTransition.Commit()
 	if manager.Count() != 1 {
 		t.Fatalf("manager count = %d, want 1", manager.Count())
 	}

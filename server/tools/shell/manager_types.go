@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -44,6 +45,154 @@ type Event struct {
 	Snapshot         Snapshot
 	NoticeSuppressed bool
 	completion       *completionOutput
+}
+
+// PendingBackgroundTransition is a manager-owned handoff capability for a
+// process that has crossed the shell tool's return boundary. Its fields stay
+// private so only the manager can finalize its ownership transition.
+type PendingBackgroundTransition struct {
+	manager  *Manager
+	entry    *processEntry
+	snapshot Snapshot
+	state    *backgroundTransitionState
+}
+
+// TransientToolResultMetadata marks this capability as runtime-only tool
+// result metadata.
+func (*PendingBackgroundTransition) TransientToolResultMetadata() {}
+
+// Snapshot returns the immutable transition payload to be applied with the
+// corresponding tool result.
+func (t *PendingBackgroundTransition) Snapshot() Snapshot {
+	if t == nil {
+		return Snapshot{}
+	}
+	return snapshotWithExecutionCorrelationCopy(t.snapshot)
+}
+
+// Commit transfers the retained process to the manager's normal background
+// lifecycle. Calling Commit after any terminal resolution is a programming
+// error: the runtime must commit only after its transition/result stage did.
+func (t *PendingBackgroundTransition) Commit() error {
+	if t == nil || t.state == nil {
+		return errors.New("commit pending background transition: transition is required")
+	}
+	return t.state.commit()
+}
+
+// Abort suppresses terminal publication, terminates the retained process, and
+// removes it once its process owner has joined.
+func (t *PendingBackgroundTransition) Abort() error {
+	if t == nil || t.manager == nil || t.entry == nil || t.state == nil {
+		return fmt.Errorf("abort pending background transition: transition is required")
+	}
+	if !t.state.abort() {
+		return nil
+	}
+
+	t.entry.mu.Lock()
+	process := t.entry.cmd.Process
+	t.entry.mu.Unlock()
+
+	var abortErr error
+	if err := killManagedProcess(process); err != nil {
+		abortErr = errors.Join(abortErr, err)
+	}
+	gracePeriod := t.manager.closeGracePeriod
+	if gracePeriod <= 0 {
+		gracePeriod = closeGracePeriod
+	}
+	if !waitForEntryDone(t.entry, gracePeriod) {
+		if err := forceKillManagedProcess(process); err != nil {
+			abortErr = errors.Join(abortErr, err)
+		}
+		waitTimeout := t.manager.closeWaitTimeout
+		if waitTimeout <= 0 {
+			waitTimeout = closeWaitTimeout
+		}
+		if !waitForEntryDone(t.entry, waitTimeout) {
+			abortErr = errors.Join(abortErr, fmt.Errorf("timed out waiting for aborted background process %s to exit", t.entry.id))
+		}
+	}
+	if abortErr != nil {
+		return abortErr
+	}
+	t.manager.releaseEntry(t.entry.id)
+	return nil
+}
+
+type backgroundTransitionState struct {
+	mu     sync.Mutex
+	status backgroundTransitionStatus
+	done   chan struct{}
+}
+
+type backgroundTransitionStatus string
+
+const (
+	backgroundTransitionPending   backgroundTransitionStatus = "pending"
+	backgroundTransitionCommitted backgroundTransitionStatus = "committed"
+	backgroundTransitionAborted   backgroundTransitionStatus = "aborted"
+)
+
+func newBackgroundTransitionState() *backgroundTransitionState {
+	return &backgroundTransitionState{
+		status: backgroundTransitionPending,
+		done:   make(chan struct{}),
+	}
+}
+
+func (s *backgroundTransitionState) commit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != backgroundTransitionPending {
+		return fmt.Errorf("commit pending background transition: status is %q", s.status)
+	}
+	s.status = backgroundTransitionCommitted
+	close(s.done)
+	return nil
+}
+
+func (s *backgroundTransitionState) abort() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.status {
+	case backgroundTransitionPending:
+		s.status = backgroundTransitionAborted
+		close(s.done)
+		return true
+	case backgroundTransitionAborted:
+		return false
+	case backgroundTransitionCommitted:
+		return false
+	default:
+		return false
+	}
+}
+
+func (s *backgroundTransitionState) abortIfPending() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != backgroundTransitionPending {
+		return
+	}
+	s.status = backgroundTransitionAborted
+	close(s.done)
+}
+
+func (s *backgroundTransitionState) terminalPublicationAllowed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.status {
+	case backgroundTransitionCommitted:
+		return true
+	case backgroundTransitionAborted:
+		return false
+	case backgroundTransitionPending:
+		return false
+	default:
+		return false
+	}
 }
 
 type completionOutputSource uint8
@@ -155,6 +304,7 @@ type ExecResult struct {
 	MovedToBackground  bool
 	RawOutputRequested bool
 	Truncated          bool
+	PendingTransition  *PendingBackgroundTransition `json:"-"`
 }
 
 type BackgroundNoticeSummary struct {
@@ -250,6 +400,7 @@ type processEntry struct {
 	done                 chan struct{}
 	killRequested        bool
 	noticeConsumed       bool
+	backgroundTransition *backgroundTransitionState
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }

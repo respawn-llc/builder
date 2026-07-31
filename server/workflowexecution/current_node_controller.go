@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/runtime"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -28,11 +29,27 @@ type CurrentNodeRunner interface {
 type CurrentNodeControllerConfig struct {
 	AutomaticConcurrency int
 	Attention            CurrentNodeAttentionLifecycle
+	CompletionFence      CompletionFenceOwner
 }
 
 type CurrentNodeAttentionLifecycle interface {
 	PublishPendingInterruptedCurrentNode(context.Context, workflow.CurrentNodeReference)
 	FinalizeTaskResolution(workflowstore.TaskAttentionResolution)
+}
+
+type CompletionFenceLease interface {
+	Commit() error
+	Abort() error
+}
+
+type CompletionFenceOwner interface {
+	BeginCompletion(context.Context, sessionruntime.ExecutionScope) (CompletionFenceLease, error)
+}
+
+type CompletionFenceBeginFunc func(context.Context, sessionruntime.ExecutionScope) (CompletionFenceLease, error)
+
+func (f CompletionFenceBeginFunc) BeginCompletion(ctx context.Context, scope sessionruntime.ExecutionScope) (CompletionFenceLease, error) {
+	return f(ctx, scope)
 }
 
 // CurrentNodeAutomaticIntent is volatile automatic work. It has a Current Node
@@ -94,10 +111,12 @@ type CurrentNodeController struct {
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
-	runner    CurrentNodeRunner
-	authority *sessionruntime.Authority
-	permit    *MutationPermit
-	attention CurrentNodeAttentionLifecycle
+	runner             CurrentNodeRunner
+	authority          *sessionruntime.Authority
+	permit             *MutationPermit
+	attention          CurrentNodeAttentionLifecycle
+	completionFence    CompletionFenceOwner
+	completionAttempts map[runtimeids.ExecutionScopeID]CompletionFenceLease
 
 	automaticConcurrency int
 	workerContext        context.Context
@@ -171,6 +190,8 @@ func NewCurrentNodeController(
 		authority:             authority,
 		permit:                permit,
 		attention:             cfg.Attention,
+		completionFence:       cfg.CompletionFence,
+		completionAttempts:    make(map[runtimeids.ExecutionScopeID]CompletionFenceLease),
 		automaticConcurrency:  cfg.AutomaticConcurrency,
 		workerContext:         workerContext,
 		workerCancel:          workerCancel,
@@ -194,8 +215,98 @@ func NewCurrentNodeController(
 	return controller, nil
 }
 
+func (c *CurrentNodeController) beginCompletion(ctx context.Context, scopeID runtimeids.ExecutionScopeID) (CompletionFenceLease, error) {
+	if c == nil || c.completionFence == nil {
+		return nil, nil
+	}
+	c.mu.Lock()
+	if lease := c.completionAttempts[scopeID]; lease != nil {
+		delete(c.completionAttempts, scopeID)
+		c.mu.Unlock()
+		return lease, nil
+	}
+	c.mu.Unlock()
+	handle, ok := c.authority.ExecutionByScope(scopeID)
+	if !ok {
+		return nil, sessionruntime.ErrExecutionNoLongerLive
+	}
+	return c.completionFence.BeginCompletion(ctx, handle.Scope())
+}
+
+// BeginCompletionAttempt captures the live Agent input baseline before the
+// provider request that may produce a completion result.
+func (c *CurrentNodeController) BeginCompletionAttempt(ctx context.Context, scopeID runtimeids.ExecutionScopeID) error {
+	if c == nil || c.completionFence == nil {
+		return nil
+	}
+	handle, ok := c.authority.ExecutionByScope(scopeID)
+	if !ok || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	lease, err := c.completionFence.BeginCompletion(ctx, handle.Scope())
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	previous := c.completionAttempts[scopeID]
+	c.completionAttempts[scopeID] = lease
+	c.mu.Unlock()
+	if previous != nil {
+		_ = previous.Abort()
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) AbortCompletionAttempt(scopeID runtimeids.ExecutionScopeID) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	lease := c.completionAttempts[scopeID]
+	delete(c.completionAttempts, scopeID)
+	c.mu.Unlock()
+	if lease == nil {
+		return nil
+	}
+	return lease.Abort()
+}
+
 func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
-	_, err := c.completeLiveCurrentNode(ctx, req)
+	if c == nil {
+		return workflowruntime.CompletionResult{}, errors.New("current node workflow controller is required")
+	}
+	applicationCtx := ctx
+	handle, liveAgent := c.authority.ExecutionByScope(req.ScopeID)
+	liveAgent = liveAgent && handle.Scope().Kind() == sessionruntime.ExecutionScopeAgent
+	if liveAgent {
+		applicationCtx = context.WithoutCancel(ctx)
+	}
+	if !liveAgent {
+		_, err := c.completeLiveCurrentNode(applicationCtx, req)
+		if err != nil {
+			return workflowruntime.CompletionResult{}, err
+		}
+		return workflowruntime.CompletionResult{TransitionID: workflow.TransitionID(req.TransitionID), State: "applied"}, nil
+	}
+	fence, err := c.beginCompletion(ctx, req.ScopeID)
+	if err != nil {
+		return workflowruntime.CompletionResult{}, err
+	}
+	apply := func() error {
+		if _, err := c.completeLiveCurrentNode(applicationCtx, req); err != nil {
+			return err
+		}
+		if fence != nil {
+			return fence.Commit()
+		}
+		return nil
+	}
+	err = c.authority.WithExecutionMutation(ctx, req.ScopeID, func(turn runtime.OrderedMutationTurn) error {
+		return turn.Apply(apply)
+	})
+	if err != nil && fence != nil {
+		err = errors.Join(err, fence.Abort())
+	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}
@@ -233,12 +344,34 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	if !ownedLive || !owned.reference.Equal(scopeRef.CurrentNode) {
 		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
 	}
-	return c.completeLiveCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      handle.Scope().ID(),
-		TransitionID: transitionID,
-		OutputValues: outputValues,
-		Commentary:   commentary,
+	applicationCtx := context.WithoutCancel(ctx)
+	fence, err := c.beginCompletion(ctx, handle.Scope().ID())
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	var completed workflowstore.CurrentNodeCompletionResult
+	err = c.authority.WithExecutionMutation(ctx, handle.Scope().ID(), func(turn runtime.OrderedMutationTurn) error {
+		return turn.Apply(func() error {
+			var err error
+			completed, err = c.completeLiveCurrentNode(applicationCtx, workflowruntime.CompletionRequest{
+				ScopeID:      handle.Scope().ID(),
+				TransitionID: transitionID,
+				OutputValues: outputValues,
+				Commentary:   commentary,
+			})
+			if err != nil {
+				return err
+			}
+			if fence != nil {
+				return fence.Commit()
+			}
+			return nil
+		})
 	})
+	if err != nil && fence != nil {
+		err = errors.Join(err, fence.Abort())
+	}
+	return completed, err
 }
 
 // AnswerWorkflowQuestion delivers an answer only after resolving one exact
@@ -504,6 +637,8 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	delete(c.violations, scope.ID())
 	delete(c.stopping, scope.ID())
+	completionLease := c.completionAttempts[scope.ID()]
+	delete(c.completionAttempts, scope.ID())
 	_, completed := c.completed[scope.ID()]
 	delete(c.completed, scope.ID())
 	starts := append([]currentNodeQueuedStart(nil), c.heldStarts[scope.ID()]...)
@@ -515,6 +650,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	c.interrupts.finishScope(scope.ID())
 	closed := c.closed
 	c.mu.Unlock()
+	if completionLease != nil {
+		_ = completionLease.Abort()
+	}
 	if !closed {
 		c.wakeAdmissionWorker()
 	}

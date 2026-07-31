@@ -110,6 +110,7 @@ func TestRawBackgroundOutputPathsPreserveAnsi(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
+	commitPendingTransition(t, result)
 
 	snapshot, err := manager.Snapshot("1000")
 	if err != nil {

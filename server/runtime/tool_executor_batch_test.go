@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -40,6 +41,71 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	}
 	if probe.calls.Load() != 0 {
 		t.Fatal("missing provider call ID reached a local tool handler")
+	}
+}
+
+func TestExecuteToolCallsDoesNotRunHandlerBeforeToolStartCommits(t *testing.T) {
+	t.Parallel()
+	startMutationEntered := make(chan struct{})
+	releaseStartMutation := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	var startOnce sync.Once
+	var handlerOnce sync.Once
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID: toolspec.ToolExecCommand,
+			Handler: toolExecutionFunc(func(context.Context, tools.Call) (tools.Result, error) {
+				handlerOnce.Do(func() { close(handlerStarted) })
+				return tools.Result{Output: json.RawMessage(`{"ok":true}`)}, nil
+			}),
+		}),
+		Config{
+			Model: "gpt-5",
+			OrderedMutation: func(apply func(OrderedMutationTurn) error) error {
+				startOnce.Do(func() { close(startMutationEntered) })
+				<-releaseStartMutation
+				return apply(directOrderedMutationTurn{})
+			},
+		},
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "gated-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}})
+		done <- err
+	}()
+
+	select {
+	case <-startMutationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool-start mutation did not enter ordered stage")
+	}
+	select {
+	case <-handlerStarted:
+		t.Fatal("tool handler ran before tool-start mutation committed")
+	default:
+	}
+
+	close(releaseStartMutation)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("execute gated tool call: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gated tool call did not finish")
+	}
+	select {
+	case <-handlerStarted:
+	default:
+		t.Fatal("tool handler did not run after tool-start mutation committed")
 	}
 }
 
@@ -313,6 +379,12 @@ func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
 type toolExecutionProbe struct {
 	called bool
 	calls  atomic.Int32
+}
+
+type toolExecutionFunc func(context.Context, tools.Call) (tools.Result, error)
+
+func (f toolExecutionFunc) Call(ctx context.Context, call tools.Call) (tools.Result, error) {
+	return f(ctx, call)
 }
 
 func (p *toolExecutionProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {

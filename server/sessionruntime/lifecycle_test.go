@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,6 +101,93 @@ func (c lifecycleRequestCaptureClient) await(t *testing.T) llm.Request {
 	}
 }
 
+type lifecycleContinuationClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *lifecycleContinuationClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return llm.Response{}, ctx.Err()
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("follow-up"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func TestAuthoritySubmittedTurnReturnsBeforeSameScopeQueuedFollowUp(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := &lifecycleContinuationClient{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		close(client.release)
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(t, authority, sessionID, "command-owner", &plan)
+	t.Cleanup(func() {
+		if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+			t.Errorf("release runtime: %v", err)
+		}
+	})
+
+	callbackStarted := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- authority.RunCurrentAgentExecution(
+			context.Background(),
+			mustOpenSessionDescriptor(t, sessionID),
+			func(_ context.Context, engine *runtime.Engine) error {
+				close(callbackStarted)
+				engine.QueueUserMessageForAutoDrain("same-scope follow-up", "follow-up-request")
+				return nil
+			},
+		)
+	}()
+
+	select {
+	case <-callbackStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("initial submitted turn did not start")
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("submitted turn result: %v", err)
+		}
+	case <-client.started:
+		t.Fatal("same-scope follow-up provider started before submitted-turn result")
+	case <-time.After(3 * time.Second):
+		t.Fatal("submitted-turn result did not complete before follow-up")
+	}
+
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("same-scope follow-up did not start")
+	}
+}
+
 func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -162,6 +250,305 @@ func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ Ag
 
 func (l *authorityStartBarrierLifecycle) ResourceDraining(context.Context, AgentResourceDescriptor) error {
 	return nil
+}
+
+type commandLifecycleProbe struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (p *commandLifecycleProbe) record(event string) {
+	p.mu.Lock()
+	p.events = append(p.events, event)
+	p.mu.Unlock()
+}
+
+func (p *commandLifecycleProbe) AdmitResource(context.Context, runtimeids.SessionResourceRef) error {
+	p.record("command-admit")
+	return nil
+}
+
+func (p *commandLifecycleProbe) CloseResource(context.Context, runtimeids.SessionResourceRef) error {
+	p.record("command-close")
+	return nil
+}
+
+func (p *commandLifecycleProbe) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+
+type commandLifecycleResourceProbe struct {
+	commands *commandLifecycleProbe
+}
+
+func (p *commandLifecycleResourceProbe) ResourceReady(context.Context, AgentResourceDescriptor, *runtime.Engine, AgentResourceRetainer) error {
+	p.commands.record("resource-ready")
+	return nil
+}
+
+func (p *commandLifecycleResourceProbe) ResourceDraining(context.Context, AgentResourceDescriptor) error {
+	p.commands.record("resource-draining")
+	return nil
+}
+
+type lifecycleExecutionLeaseProbe struct {
+	commitOnce  sync.Once
+	abortOnce   sync.Once
+	releaseOnce sync.Once
+	committed   chan struct{}
+	released    chan struct{}
+	ordered     atomic.Int32
+}
+
+func newLifecycleExecutionLeaseProbe() *lifecycleExecutionLeaseProbe {
+	return &lifecycleExecutionLeaseProbe{
+		committed: make(chan struct{}),
+		released:  make(chan struct{}),
+	}
+}
+
+func (p *lifecycleExecutionLeaseProbe) Wait(ctx context.Context) error {
+	select {
+	case <-p.committed:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (p *lifecycleExecutionLeaseProbe) Commit() error {
+	p.commitOnce.Do(func() { close(p.committed) })
+	return nil
+}
+
+func (p *lifecycleExecutionLeaseProbe) Abort(error) error {
+	p.abortOnce.Do(func() {})
+	return nil
+}
+
+func (p *lifecycleExecutionLeaseProbe) Release() error {
+	p.releaseOnce.Do(func() { close(p.released) })
+	return nil
+}
+
+func (p *lifecycleExecutionLeaseProbe) OrderedMutation(_ context.Context, apply func(runtime.OrderedMutationTurn) error) error {
+	p.ordered.Add(1)
+	return apply(directOrderedMutationTurn{})
+}
+
+type lifecycleExecutionCommandProbe struct {
+	commands *commandLifecycleProbe
+	lease    *lifecycleExecutionLeaseProbe
+}
+
+func (p *lifecycleExecutionCommandProbe) AdmitResource(ctx context.Context, ref runtimeids.SessionResourceRef) error {
+	return p.commands.AdmitResource(ctx, ref)
+}
+
+func (p *lifecycleExecutionCommandProbe) CloseResource(ctx context.Context, ref runtimeids.SessionResourceRef) error {
+	return p.commands.CloseResource(ctx, ref)
+}
+
+func (p *lifecycleExecutionCommandProbe) AcquireExecution(context.Context, runtimeids.SessionResourceRef) (ResourceExecutionLease, error) {
+	p.commands.record("execution-acquire")
+	return p.lease, nil
+}
+
+func TestAuthorityBindsCommandQueueAroundResourceReadinessAndClosure(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	commands := &commandLifecycleProbe{}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		CommandLifecycle:  commands,
+		ResourceLifecycle: &commandLifecycleResourceProbe{commands: commands},
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "command-owner", &plan)
+	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release runtime: %v", err)
+	}
+
+	events := commands.snapshot()
+	admitIndex := slices.Index(events, "command-admit")
+	readyIndex := slices.Index(events, "resource-ready")
+	drainingIndex := slices.Index(events, "resource-draining")
+	closeIndex := slices.Index(events, "command-close")
+	if admitIndex < 0 || readyIndex < 0 || drainingIndex < 0 || closeIndex < 0 {
+		t.Fatalf("command lifecycle events = %v, want all lifecycle boundaries", events)
+	}
+	if admitIndex > readyIndex {
+		t.Fatalf("command admission happened after resource ready: %v", events)
+	}
+	if drainingIndex > closeIndex {
+		t.Fatalf("command queue closed before resource draining callback: %v", events)
+	}
+}
+
+func TestAuthorityExecutionWaitsOnCommandLeaseAndReleasesAtTerminalCleanup(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	commands := &commandLifecycleProbe{}
+	lease := newLifecycleExecutionLeaseProbe()
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		CommandLifecycle: &lifecycleExecutionCommandProbe{
+			commands: commands,
+			lease:    lease,
+		},
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "command-owner", &plan)
+	runnerStarted := make(chan struct{})
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(runnerStarted)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	select {
+	case <-runnerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("command lease did not commit the execution start gate")
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait execution: %v", err)
+	}
+	select {
+	case <-lease.released:
+	case <-time.After(3 * time.Second):
+		t.Fatal("execution lease was not released at terminal cleanup")
+	}
+	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release runtime: %v", err)
+	}
+}
+
+func TestAuthorityExecutionReusesCommandPermitForOrderedEngineMutation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	commands := &commandLifecycleProbe{}
+	lease := newLifecycleExecutionLeaseProbe()
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		CommandLifecycle: &lifecycleExecutionCommandProbe{
+			commands: commands,
+			lease:    lease,
+		},
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "command-owner", &plan)
+	t.Cleanup(func() {
+		if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+			t.Errorf("release runtime: %v", err)
+		}
+	})
+
+	started := make(chan struct{})
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(_ context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			close(started)
+			return bridge.WithEngine(context.Background(), func(_ context.Context, engine *runtime.Engine) error {
+				return engine.AppendCommittedEntry("system", "ordered from execution")
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("execution runner did not start")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("execution ordered mutation deadlocked or failed: %v", err)
+	}
+	if lease.ordered.Load() == 0 {
+		t.Fatal("execution mutation did not reuse its command-owned ordering continuation")
+	}
+}
+
+func TestAuthorityOrderedExecutionCapturesExactAgentScope(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	var captured ExecutionScope
+	var calls atomic.Int32
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		AgentOrderedMutation: func(_ context.Context, scope ExecutionScope, apply func(runtime.OrderedMutationTurn) error) error {
+			captured = scope
+			calls.Add(1)
+			return apply(directOrderedMutationTurn{})
+		},
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "command-owner", &plan)
+	runnerRelease := make(chan struct{})
+	var releaseRunner sync.Once
+	release := func() { releaseRunner.Do(func() { close(runnerRelease) }) }
+	t.Cleanup(release)
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			<-runnerRelease
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	if err := authority.WithOrderedExecution(context.Background(), handle.Scope().ID(), func() error {
+		return nil
+	}); err != nil {
+		t.Fatalf("ordered execution: %v", err)
+	}
+	if calls.Load() != 1 || captured.ID() != handle.Scope().ID() || captured.Kind() != ExecutionScopeAgent {
+		t.Fatalf("captured ordered scope = %#v calls=%d, want exact agent scope %s", captured, calls.Load(), handle.Scope().ID())
+	}
+	release()
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait execution: %v", err)
+	}
+	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release runtime: %v", err)
+	}
 }
 
 func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer session.PersistenceObserver, lifecycle AgentResourceLifecycle) *Authority {

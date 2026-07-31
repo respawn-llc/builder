@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"core/server/llm"
@@ -179,6 +180,26 @@ func (e *Engine) HasQueuedUserWork() bool {
 	return false
 }
 
+// HasPendingUserMessages reports only user Pending Work. Background notices
+// have a resource-lifecycle owner and must not be pulled into an Agent
+// execution's same-scope continuation.
+func (e *Engine) HasPendingUserMessages() bool {
+	e.ensureOrchestrationCollaborators()
+	return e.messageFlow.HasPendingUserInjections()
+}
+
+// RetainQueuedUserAutoDrain keeps automatic queued-user delivery inside the
+// current Agent execution owner. The returned release function is idempotent
+// and must be called by that owner after its continuation reaches terminal
+// state.
+func (e *Engine) RetainQueuedUserAutoDrain() func() {
+	e.pauseQueuedUserAutoDrain()
+	var once sync.Once
+	return func() {
+		once.Do(e.resumeQueuedUserAutoDrain)
+	}
+}
+
 func (e *Engine) markQueuedUserInjectionForAutoDrain(queueItemID string) {
 	queueItemID = strings.TrimSpace(queueItemID)
 	if queueItemID == "" {
@@ -218,6 +239,10 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		return false
 	}
 	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkPauseCount > 0 {
+		e.queuedUserWorkMu.Unlock()
+		return false
+	}
 	if e.queuedUserWorkScheduled {
 		e.queuedUserWorkMu.Unlock()
 		return true

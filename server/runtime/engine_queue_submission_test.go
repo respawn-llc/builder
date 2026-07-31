@@ -3,7 +3,9 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -37,6 +39,47 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 	}
 	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
 		t.Fatalf("persisted queued user messages = %d, want one committed input", userMessages)
+	}
+}
+
+func TestPendingUserInjectionClaimWaitsUntilOrderedStageApplies(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	queued := engine.QueueUserMessage("claim at boundary")
+
+	stageStarted := make(chan struct{})
+	releaseStage := make(chan struct{})
+	var stageStartOnce sync.Once
+	engine.cfg.OrderedMutation = func(apply func(OrderedMutationTurn) error) error {
+		stageStartOnce.Do(func() { close(stageStarted) })
+		<-releaseStage
+		return apply(directOrderedMutationTurn{})
+	}
+	resultCh := make(chan userInjectionCommitResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := engine.flushPendingUserInjections("boundary", allPendingUserInjectionSelection{})
+		resultCh <- result
+		errCh <- err
+	}()
+
+	select {
+	case <-stageStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending-work boundary stage was not admitted")
+	}
+	if !engine.DiscardQueuedUserMessage(queued.ID) {
+		t.Fatal("discard lost the FIFO race because the boundary stage claimed before application")
+	}
+	close(releaseStage)
+
+	select {
+	case <-resultCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending-work boundary stage did not finish")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("pending-work boundary stage: %v", err)
 	}
 }
 

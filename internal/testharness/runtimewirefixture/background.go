@@ -48,6 +48,10 @@ func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root 
 	if !result.MovedToBackground {
 		panic("background shell fixture completed before background transition")
 	}
+	if result.PendingTransition == nil {
+		panic("background shell fixture returned no pending transition")
+	}
+	result.PendingTransition.Commit()
 	select {
 	case event := <-events:
 		event.Snapshot.ID = id

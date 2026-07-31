@@ -301,7 +301,7 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
 	failed := map[runtimeids.QueueItemID]struct{}{}
-	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
+	for _, item := range e.messageFlow.FailPendingUserInjectionsByID(stringIDs, QueuedUserMessageFailureStopped) {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 	}

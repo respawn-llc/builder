@@ -123,7 +123,7 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
-		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
+		e.backgroundFlow.SuppressPendingBackgroundNotice(backgroundSessionID)
 	}
 }
 
@@ -498,10 +498,8 @@ func (e *Engine) emitQueuedUserMessageStatus(
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	pending := e.messageFlow.DrainPendingUserInjections()
-	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item)
+	messages := e.messageFlow.FailPendingUserInjections(reason)
+	for _, item := range messages {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
@@ -648,6 +646,15 @@ func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {
 func (e *Engine) flushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.messageFlow.FlushPendingUserInjections(stepID, selection)
+}
+
+func (e *Engine) commitPendingUserInjectionsInTurn(stepID string, selection userInjectionSelection, turn OrderedMutationTurn) (userInjectionCommitResult, error) {
+	e.ensureOrchestrationCollaborators()
+	lifecycle, ok := e.messageFlow.(*defaultMessageLifecycle)
+	if !ok {
+		return userInjectionCommitResult{}, errors.New("pending user injection claim requires the default message lifecycle")
+	}
+	return lifecycle.commitPendingUserInjectionsInTurn(stepID, selection, turn)
 }
 
 // resolveGlobalConfigDir returns the directory that owns model-visible global

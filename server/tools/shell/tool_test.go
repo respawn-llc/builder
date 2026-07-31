@@ -54,6 +54,27 @@ func callExecCommand(t *testing.T, tool *ExecCommandTool, id string, input map[s
 	return callShellTestTool(t, tool, id, toolspec.ToolExecCommand, input)
 }
 
+func commitPendingTransition(t *testing.T, result tools.Result) *PendingBackgroundTransition {
+	t.Helper()
+	transition, ok := result.TransientMetadata.(*PendingBackgroundTransition)
+	if !ok || transition == nil {
+		t.Fatalf("exec_command transient metadata = %T, want pending background transition", result.TransientMetadata)
+	}
+	if err := transition.Commit(); err != nil {
+		t.Fatalf("commit transition: %v", err)
+	}
+	return transition
+}
+
+func commitManagerTransition(t *testing.T, result ExecResult) *PendingBackgroundTransition {
+	t.Helper()
+	if result.PendingTransition == nil {
+		return nil
+	}
+	result.PendingTransition.Commit()
+	return result.PendingTransition
+}
+
 func callWriteStdin(t *testing.T, tool *WriteStdinTool, id string, input map[string]any) tools.Result {
 	t.Helper()
 	return callShellTestTool(t, tool, id, toolspec.ToolWriteStdin, input)
@@ -220,6 +241,7 @@ func TestManagerSubscribeOutputStreamsTailAndEndsAtEOF(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 
 	sub, err := manager.SubscribeOutput(context.Background(), result.SessionID, 0)
 	if err != nil {
@@ -273,6 +295,7 @@ func TestManagerSubscribeOutputReceivesSingleLineWhileProcessKeepsRunning(t *tes
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 	defer func() { _ = manager.Kill(result.SessionID) }()
 
 	sub, err := manager.SubscribeOutput(context.Background(), result.SessionID, 0)
@@ -315,6 +338,7 @@ func TestManagerInlineOutputUsesRecentOutputBeforeLogFlush(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 	defer func() { _ = manager.Kill(result.SessionID) }()
 
 	preview, _, err := manager.InlineOutput(result.SessionID, 1024)
@@ -342,6 +366,7 @@ func TestManagerInlineOutputTruncatesRecentOutputFallback(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 	defer func() { _ = manager.Kill(result.SessionID) }()
 
 	preview, _, err := manager.InlineOutput(result.SessionID, 80)
@@ -383,6 +408,7 @@ func TestManagerSubscribeOutputCloseUnblocksNext(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 
 	sub, err := manager.SubscribeOutput(context.Background(), result.SessionID, 0)
 	if err != nil {
@@ -585,6 +611,7 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -639,6 +666,7 @@ func TestManagerWriteStdinCancellationPreservesContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start background process: %v", err)
 	}
+	commitManagerTransition(t, result)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -703,6 +731,7 @@ func TestWriteStdinWarnsAndRetriesWhenFullLogReadFails(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded result, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 	logPath := result.OutputPath
 	backupPath := logPath + ".bak"
 	sessionID, err := strconv.Atoi(result.SessionID)

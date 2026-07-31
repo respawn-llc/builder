@@ -76,6 +76,15 @@ func (m *Manager) Close() error {
 
 	for _, entry := range entries {
 		entry.mu.Lock()
+		transition := entry.backgroundTransition
+		entry.mu.Unlock()
+		if transition != nil {
+			transition.abortIfPending()
+		}
+	}
+
+	for _, entry := range entries {
+		entry.mu.Lock()
 		if entry.stdin != nil {
 			_ = entry.stdin.Close()
 			entry.stdin = nil

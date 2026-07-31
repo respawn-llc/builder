@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"core/server/auth"
+	runtimepkg "core/server/runtime"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -28,16 +29,50 @@ func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
 	}
 }
 
+type ResourceCommandLifecycle interface {
+	AdmitResource(context.Context, runtimeids.SessionResourceRef) error
+	CloseResource(context.Context, runtimeids.SessionResourceRef) error
+}
+
+type ResourceOrderedMutation func(context.Context, runtimeids.SessionResourceRef, func(runtimepkg.OrderedMutationTurn) error) error
+
+type ResourceAgentOrderedMutation func(context.Context, ExecutionScope, func(runtimepkg.OrderedMutationTurn) error) error
+
+type ResourceExecutionLease interface {
+	Wait(context.Context) error
+	Commit() error
+	Abort(error) error
+	Release() error
+}
+
+// ResourceExecutionMutation is the optional retained continuation owned by a
+// live Agent execution. It is deliberately separate from the lifecycle gate:
+// the Runner uses it for every ordered durable effect after the gate commits.
+type ResourceExecutionMutation interface {
+	OrderedMutation(context.Context, func(runtimepkg.OrderedMutationTurn) error) error
+}
+
+type executionScopeBinder interface {
+	BindAgentScope(ExecutionScope) error
+}
+
+type ResourceCommandExecutionLifecycle interface {
+	AcquireExecution(context.Context, runtimeids.SessionResourceRef) (ResourceExecutionLease, error)
+}
+
 type AuthorityOptions struct {
-	ExecutionFinalized ExecutionFinalized
-	PersistenceRoot    string
-	AuthManager        *auth.Manager
-	Background         *shelltool.Manager
-	StoreOptions       []session.StoreOption
-	EventFeed          AgentResourceEventFeed
-	ResourceLifecycle  AgentResourceLifecycle
-	StepLifecycle      AgentResourceStepLifecycle
-	PromptFeed         ExecutionPromptFeed
+	ExecutionFinalized   ExecutionFinalized
+	PersistenceRoot      string
+	AuthManager          *auth.Manager
+	Background           *shelltool.Manager
+	StoreOptions         []session.StoreOption
+	EventFeed            AgentResourceEventFeed
+	ResourceLifecycle    AgentResourceLifecycle
+	StepLifecycle        AgentResourceStepLifecycle
+	CommandLifecycle     ResourceCommandLifecycle
+	OrderedMutation      ResourceOrderedMutation
+	AgentOrderedMutation ResourceAgentOrderedMutation
+	PromptFeed           ExecutionPromptFeed
 }
 
 type Authority struct {
@@ -281,6 +316,22 @@ func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionH
 		return nil, false
 	}
 	return resource.currentExecution()
+}
+
+// CurrentExecutionScope resolves the exact live scope at the moment a
+// queued command is applied. Captured scopes are never authoritative across
+// a queue wait because a successor execution may have replaced them.
+func (a *Authority) CurrentExecutionScope(id runtimeids.ExecutionScopeID) (ExecutionScope, bool) {
+	if a == nil || id.IsZero() {
+		return ExecutionScope{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	execution := a.byScope[id]
+	if execution == nil || execution.scope.Kind() != ExecutionScopeAgent {
+		return ExecutionScope{}, false
+	}
+	return execution.scope, true
 }
 
 func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {

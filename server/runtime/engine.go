@@ -47,6 +47,9 @@ var (
 	errUnknownTool = errors.New("unknown tool")
 	// errPersistToolCompletion wraps failures to persist a tool completion result.
 	errPersistToolCompletion = errors.New("persist tool completion")
+	// ErrExecutionMutationUnavailable means an Agent-owned mutation arrived
+	// after its retained execution continuation was cleared.
+	ErrExecutionMutationUnavailable = errors.New("retained execution mutation is unavailable")
 )
 
 func NormalizeThinkingLevel(level string) (string, bool) {
@@ -133,6 +136,49 @@ type Config struct {
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
+	LifecycleTaskOwner    LifecycleTaskOwner
+	OrderedMutation       OrderedMutation
+}
+
+// OrderedMutation is the narrow runtime-owned mutation dispatcher. Producers
+// provide one synchronous mutation batch; the admitted Session resource owns
+// its FIFO placement and completion.
+type OrderedMutationTurn interface {
+	Apply(func() error) error
+	RetainLease() (OrderedMutationLease, error)
+}
+
+type OrderedMutation func(func(OrderedMutationTurn) error) error
+
+// OrderedMutationLease retains the queue capacity held by the current
+// lexical turn while deferred resource-owned work re-enters at the current
+// queue tail. The owner must release it exactly once after its terminal work.
+type OrderedMutationLease interface {
+	OrderedMutation(context.Context, func(OrderedMutationTurn) error) error
+	Release() error
+}
+
+// ExecutionMutation is the retained ordering continuation for one live Agent
+// execution. It lets synchronous and child-owned runtime effects reuse the
+// execution's command-stage permit instead of acquiring a nested permit.
+type ExecutionMutation func(context.Context, func(OrderedMutationTurn) error) error
+
+type LifecycleTaskMutation interface {
+	OrderedMutation(context.Context, func(OrderedMutationTurn) error) error
+}
+
+// LifecycleTaskLease gates a resource-owned lifecycle task. The task owner
+// remains responsible for retaining any Session resource capacity until the
+// task returns.
+type LifecycleTaskLease interface {
+	Wait(context.Context) error
+	Commit() error
+	Abort(error) error
+	Release() error
+}
+
+type LifecycleTaskOwner interface {
+	AcquireLifecycleTask(context.Context) (LifecycleTaskLease, error)
 }
 
 type ReviewerConfig struct {
@@ -174,8 +220,12 @@ type Engine struct {
 	// persist transcript feedback before applying in-memory runtime state.
 	controlMutationMu sync.Mutex
 	// outputMutationMu keeps durable transcript writes, runtime projections, and
-	// event emission in one order for concurrent steering producers.
-	outputMutationMu sync.Mutex
+	// event emission atomic within one applied queue turn. Session-level
+	// ordering is supplied by OrderedMutation; this mutex remains the leaf
+	// integrity guard for direct/test engines and nested appliers.
+	outputMutationMu    sync.Mutex
+	executionMutationMu sync.RWMutex
+	executionMutation   ExecutionMutation
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -186,6 +236,7 @@ type Engine struct {
 	activeStepGoalMutationsMu  sync.Mutex
 	activeStepGoalMutations    map[string][]activeStepGoalMutation
 	pendingGoalLoopStart       bool
+	goalContinuationHeld       atomic.Bool
 	diagnostics                *diagnosticDedupeStore
 	toolCallStarts             *pendingToolCallStartStore
 
@@ -216,6 +267,63 @@ type Engine struct {
 	// boot injection. It is process-local: the persisted transcript itself is the
 	// source of truth across restarts.
 	baseMetaInjected bool
+}
+
+// BindExecutionMutation installs the retained continuation for the currently
+// running Agent execution. The Session runtime owns the binding lifecycle.
+func (e *Engine) BindExecutionMutation(mutation ExecutionMutation) {
+	if e == nil {
+		return
+	}
+	e.executionMutationMu.Lock()
+	e.executionMutation = mutation
+	e.executionMutationMu.Unlock()
+}
+
+// ClearExecutionMutation removes the continuation after the owning Agent
+// execution reaches its terminal cleanup.
+func (e *Engine) ClearExecutionMutation() {
+	if e == nil {
+		return
+	}
+	e.executionMutationMu.Lock()
+	e.executionMutation = nil
+	e.executionMutationMu.Unlock()
+}
+
+func (e *Engine) executionMutationSnapshot() ExecutionMutation {
+	if e == nil {
+		return nil
+	}
+	e.executionMutationMu.RLock()
+	defer e.executionMutationMu.RUnlock()
+	return e.executionMutation
+}
+
+// ApplyExecutionMutation applies one synchronous Agent-owned mutation through
+// the retained execution continuation when one exists. The callback receives
+// the continuation's lexical turn and must not retain it beyond the call.
+func (e *Engine) ApplyExecutionMutation(ctx context.Context, apply func(OrderedMutationTurn) error) error {
+	if apply == nil {
+		return errors.New("execution mutation is required")
+	}
+	if mutation := e.executionMutationSnapshot(); mutation != nil {
+		return mutation(ctx, apply)
+	}
+	return apply(directOrderedMutationTurn{})
+}
+
+// ApplyRetainedExecutionMutation is the strict Agent-scope variant. It never
+// falls back to an unscoped direct mutation after execution retirement.
+func (e *Engine) ApplyRetainedExecutionMutation(ctx context.Context, apply func(OrderedMutationTurn) error) error {
+	if apply == nil {
+		return errors.New("execution mutation is required")
+	}
+	mutation := e.executionMutationSnapshot()
+	if mutation == nil {
+		return ErrExecutionMutationUnavailable
+	}
+	return mutation(ctx, apply)
 }
 
 type handoffRequest struct {
@@ -472,6 +580,10 @@ func (e *Engine) Close() error {
 	if cancel != nil {
 		cancel()
 	}
+	e.ensureOrchestrationCollaborators()
+	if e.backgroundFlow != nil {
+		e.backgroundFlow.CancelPendingBackgroundNotices()
+	}
 	e.lifecycleWG.Wait()
 	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
 	return interruptErr
@@ -491,6 +603,64 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 		return false
 	}
 	e.ensureLifecycle()
+	var lease LifecycleTaskLease
+	if e.cfg.LifecycleTaskOwner != nil {
+		var err error
+		lease, err = e.cfg.LifecycleTaskOwner.AcquireLifecycleTask(e.lifecycleCtx)
+		if err != nil {
+			return false
+		}
+	}
+	e.lifecycleMu.Lock()
+	if e.lifecycleClosed {
+		e.lifecycleMu.Unlock()
+		if lease != nil {
+			_ = lease.Abort(ErrEngineClosed)
+			_ = lease.Release()
+		}
+		return false
+	}
+	e.lifecycleWG.Add(1)
+	ctx := e.lifecycleCtx
+	e.lifecycleMu.Unlock()
+	go func(ctx context.Context, lease LifecycleTaskLease) {
+		defer func() {
+			if lease != nil {
+				_ = lease.Release()
+			}
+			e.lifecycleWG.Done()
+			if e.cfg.LifecycleTaskFinished != nil {
+				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
+			}
+		}()
+		if lease != nil {
+			if err := lease.Wait(ctx); err != nil {
+				_ = lease.Abort(err)
+				return
+			}
+		}
+		if mutationLease, ok := lease.(LifecycleTaskMutation); ok {
+			e.BindExecutionMutation(ExecutionMutation(mutationLease.OrderedMutation))
+			defer e.ClearExecutionMutation()
+		}
+		task(ctx)
+	}(ctx, lease)
+	if lease != nil {
+		if err := lease.Commit(); err != nil {
+			_ = lease.Abort(err)
+		}
+	}
+	return true
+}
+
+func (e *Engine) launchLifecycleTaskWithLease(task func(context.Context), lease OrderedMutationLease) bool {
+	if lease == nil {
+		return e.launchLifecycleTask(task)
+	}
+	if e == nil || task == nil {
+		return false
+	}
+	e.ensureLifecycle()
 	e.lifecycleMu.Lock()
 	if e.lifecycleClosed {
 		e.lifecycleMu.Unlock()
@@ -499,15 +669,18 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	e.lifecycleWG.Add(1)
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
-	go func(ctx context.Context) {
+	go func() {
 		defer func() {
+			_ = lease.Release()
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
 			}
 		}()
+		e.BindExecutionMutation(ExecutionMutation(lease.OrderedMutation))
+		defer e.ClearExecutionMutation()
 		task(ctx)
-	}(ctx)
+	}()
 	return true
 }
 

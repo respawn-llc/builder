@@ -47,6 +47,7 @@ var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction ca
 
 type Service struct {
 	authority      *sessionruntime.Authority
+	commands       *runtimecommand.Authority
 	execution      *runtimecommand.ExecutionAdapter
 	goalAuthority  *runtimecommand.GoalAuthority
 	activity       RuntimeActivityResolver
@@ -205,6 +206,9 @@ func (s *Service) runAgentExecution(
 	if s == nil || s.execution == nil {
 		return errors.New("session runtime authority is required")
 	}
+	if s.commands != nil {
+		return s.execution.RunAgentExecutionOrdered(ctx, s.commands, sessionID, run)
+	}
 	return s.execution.RunAgentExecution(ctx, sessionID, run)
 }
 
@@ -213,6 +217,14 @@ func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) 
 		return nil
 	}
 	s.activity = resolver
+	return s
+}
+
+func (s *Service) WithRuntimeCommandAuthority(authority *runtimecommand.Authority) *Service {
+	if s == nil {
+		return nil
+	}
+	s.commands = authority
 	return s
 }
 
@@ -260,6 +272,67 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 		return err
 	}
 	return s.authority.WithCurrentRuntime(ctx, id, fn)
+}
+
+func (s *Service) withOrderedRuntime(ctx context.Context, sessionID string, fn func(context.Context, *runtime.Engine) error) error {
+	return s.withOrderedRuntimeTurn(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine, _ runtime.OrderedMutationTurn) error {
+		return fn(callbackCtx, engine)
+	})
+}
+
+func (s *Service) withOrderedRuntimeTurn(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, *runtime.Engine, runtime.OrderedMutationTurn) error,
+) error {
+	if s == nil || s.authority == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if s.commands == nil {
+		return s.withRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+			return fn(callbackCtx, engine, nil)
+		})
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	ref, err := s.authority.CurrentResourceRef(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.commands.Dispatch(ctx, ref, func(turn runtime.OrderedMutationTurn) error {
+		return s.authority.WithRuntime(context.Background(), ref, func(_ context.Context, engine *runtime.Engine) error {
+			return turn.Apply(func() error {
+				return fn(context.Background(), engine, turn)
+			})
+		})
+	})
+}
+
+func (s *Service) acceptRuntimeInput(ctx context.Context, sessionID string, apply func() error) error {
+	if apply == nil {
+		return errors.New("runtime input application is required")
+	}
+	if s == nil || s.commands == nil {
+		return apply()
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	ref, err := s.authority.CurrentResourceRef(ctx, id)
+	if err != nil {
+		return err
+	}
+	acceptance, err := s.commands.BeginInput(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if err := apply(); err != nil {
+		return errors.Join(err, acceptance.Abort())
+	}
+	return acceptance.Commit()
 }
 
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
@@ -311,7 +384,7 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Level}
 	_, err := s.thinkingLevels.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		return struct{}{}, s.withOrderedRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if err := engine.SetThinkingLevel(req.Level); err != nil {
 				return err
 			}
@@ -327,8 +400,8 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
-		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(changed bool) string {
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
+		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedbackAndOrderedTurn(turn, req.Enabled, func(changed bool) string {
 			return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
 		})
 		return serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}, receipt, err
@@ -340,8 +413,8 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
-		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, mode string, changed bool) string {
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
+		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedbackAndOrderedTurn(turn, req.Enabled, func(enabled bool, mode string, changed bool) string {
 			return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
 		})
 		return serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}, receipt, err
@@ -355,7 +428,7 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return s.autoCompacts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
 		var resp serverapi.RuntimeSetAutoCompactionEnabledResponse
-		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		err := s.withOrderedRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if !req.Enabled {
 				if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
 					return err
@@ -375,8 +448,8 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
-		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, changed bool) string {
+	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
+		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedbackAndOrderedTurn(turn, req.Enabled, func(enabled bool, changed bool) string {
 			return serverapi.QuestionsToggleStatusMessage(enabled, changed)
 		})
 		return serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}, receipt, err
@@ -391,13 +464,13 @@ func memoizedCommittedRuntimeMutation[Req any, Resp any](
 	req Req,
 	memo *requestmemo.Memo[Req, committedRuntimeMutationResult[Resp]],
 	same func(Req, Req) bool,
-	run func(*runtime.Engine) (Resp, session.CommitReceipt, error),
+	run func(*runtime.Engine, runtime.OrderedMutationTurn) (Resp, session.CommitReceipt, error),
 ) (Resp, error) {
 	var zero Resp
 	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedRuntimeMutationResult[Resp], error) {
 		var result committedRuntimeMutationResult[Resp]
-		err := service.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-			response, receipt, mutationErr := run(engine)
+		err := service.withOrderedRuntimeTurn(ctx, sessionID, func(_ context.Context, engine *runtime.Engine, turn runtime.OrderedMutationTurn) error {
+			response, receipt, mutationErr := run(engine, turn)
 			result.Response = response
 			if !receipt.Committed {
 				return mutationErr
@@ -427,14 +500,14 @@ func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.Runtim
 	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(req.Visibility))
 	memoReq := localEntryMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Role: strings.TrimSpace(req.Role), Text: req.Text, Visibility: visibility, NoticeID: strings.TrimSpace(req.NoticeID)}
 	_, err := s.localEntries.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLocalEntryMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		return struct{}{}, s.withOrderedRuntimeTurn(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine, turn runtime.OrderedMutationTurn) error {
 			if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
-				return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
+				return engine.AppendCommittedEntryWithNoticeIDAndOrderedTurn(turn, req.Role, req.Text, req.NoticeID)
 			}
 			if visibility == transcript.EntryVisibilityAuto {
-				return engine.AppendCommittedEntry(req.Role, req.Text)
+				return engine.AppendCommittedEntryWithOrderedTurn(turn, req.Role, req.Text)
 			}
-			return engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
+			return engine.AppendCommittedEntryWithVisibilityAndOrderedTurn(turn, req.Role, req.Text, visibility)
 		})
 	})
 	return err
@@ -453,8 +526,8 @@ func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role
 	if trimmedText == "" {
 		return fmt.Errorf("text is required")
 	}
-	return s.withRuntime(ctx, trimmedSessionID, func(_ context.Context, engine *runtime.Engine) error {
-		return engine.AppendCommittedEntry(trimmedRole, trimmedText)
+	return s.withOrderedRuntimeTurn(ctx, trimmedSessionID, func(_ context.Context, engine *runtime.Engine, turn runtime.OrderedMutationTurn) error {
+		return engine.AppendCommittedEntryWithOrderedTurn(turn, trimmedRole, trimmedText)
 	})
 }
 
@@ -608,29 +681,46 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 		}
 	}
-	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		for _, ref := range pendingRefs {
-			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
-				continue
-			}
-			if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
-				continue
-			}
-			if err := s.operations.RecordQueuedMessageStatus(
-				sessionID,
-				ref,
-				clientui.RuntimeInputReconciliationCanceledNotCommitted,
-			); err != nil {
-				return err
-			}
+	hasQueuedReferences := false
+	for _, ref := range pendingRefs {
+		if ref.Kind == clientui.RuntimeOperationKindQueuedMessage && ref.QueueItemID != nil {
+			hasQueuedReferences = true
+			break
 		}
-		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
-				return err
+	}
+	var err error
+	if hasQueuedReferences {
+		err = s.withOrderedRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+			for _, ref := range pendingRefs {
+				if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
+					continue
+				}
+				if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
+					continue
+				}
+				if err := s.operations.RecordQueuedMessageStatus(
+					sessionID,
+					ref,
+					clientui.RuntimeInputReconciliationCanceledNotCommitted,
+				); err != nil {
+					return err
+				}
 			}
+			return nil
+		})
+	}
+	if err == nil && interruptActive {
+		id, parseErr := runtimeids.ParseSessionID(sessionID)
+		if parseErr != nil {
+			return serverapi.RuntimeInterruptResponse{}, parseErr
 		}
-		return nil
-	})
+		err = s.withLiveExecutionRuntime(ctx, id, func(_ context.Context, engine *runtime.Engine) error {
+			return engine.Interrupt()
+		})
+		if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+			err = nil
+		}
+	}
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
@@ -693,7 +783,7 @@ func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.Ru
 	memoReq := queuedUserMessageMemoRequest{SessionID: strings.TrimSpace(req.SessionID), QueueItemID: strings.TrimSpace(req.QueueItemID)}
 	return s.queuedDiscards.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameQueuedUserMessageMemoRequest, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 		var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
-		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		err := s.withOrderedRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			resp.Discarded = engine.DiscardQueuedUserMessage(memoReq.QueueItemID)
 			return nil
 		})

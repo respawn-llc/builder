@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -75,6 +76,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		if e.currentNodeExecutionActive() {
+			if starter, ok := e.cfg.CurrentNodeExecution.Controller.(interface {
+				BeginCompletionAttempt(context.Context, runtimeids.ExecutionScopeID) error
+			}); ok {
+				if err := starter.BeginCompletionAttempt(ctx, e.cfg.CurrentNodeExecution.ScopeID); err != nil {
+					return stepLoopResult{}, err
+				}
+			}
+		}
 
 		resp, err := e.generateWithMissingToolOutputRepair(
 			ctx,
@@ -100,6 +110,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			},
 		)
 		if err != nil {
+			if e.currentNodeExecutionActive() {
+				if aborter, ok := e.cfg.CurrentNodeExecution.Controller.(interface {
+					AbortCompletionAttempt(runtimeids.ExecutionScopeID) error
+				}); ok {
+					_ = aborter.AbortCompletionAttempt(e.cfg.CurrentNodeExecution.ScopeID)
+				}
+			}
 			return stepLoopResult{}, err
 		}
 		if _, err := e.recordLastUsage(resp.Usage); err != nil {

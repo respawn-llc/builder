@@ -16,6 +16,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/registry"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -92,10 +93,12 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		),
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
+	commands := runtimecommand.NewProcessAuthority()
 	var controller *workflowexecution.CurrentNodeController
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistenceRoot:  cfg.PersistenceRoot,
+		StoreOptions:     metadataStore.AuthoritativeSessionStoreOptions(),
+		CommandLifecycle: commands,
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			controller.ExecutionFinalized(scope)
 		}),

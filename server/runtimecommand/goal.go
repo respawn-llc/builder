@@ -84,7 +84,7 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 		return GoalCommandResult{}, errors.New("goal objective is required")
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine, _ runtime.OrderedMutationTurn) (GoalCommandResult, error) {
 			goal, queued, err := queueSet(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -97,8 +97,8 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 	}
 	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantSet(store, command)
-	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
-		return liveSet(engine, command)
+	}, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
+		return liveSetWithOrderedTurn(engine, command, turn)
 	})
 }
 
@@ -107,7 +107,7 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 		return GoalCommandResult{}, err
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine, _ runtime.OrderedMutationTurn) (GoalCommandResult, error) {
 			goal, queued, err := queueStatus(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -120,8 +120,8 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 	}
 	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantStatus(store, command)
-	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
-		return liveStatus(engine, command)
+	}, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
+		return liveStatusWithOrderedTurn(engine, command, turn)
 	})
 }
 
@@ -131,8 +131,8 @@ func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (Go
 	}
 	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantClear(store, command)
-	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
-		return liveClear(engine, command)
+	}, func(engine *runtime.Engine, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
+		return liveClearWithOrderedTurn(engine, command, turn)
 	})
 }
 
@@ -162,7 +162,7 @@ func (a *GoalAuthority) withDormantAdmission(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	dormant func(*session.Store) (GoalCommandResult, error),
-	live func(*runtime.Engine) (GoalCommandResult, error),
+	live func(*runtime.Engine, runtime.OrderedMutationTurn) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.authority == nil {
 		return GoalCommandResult{}, errors.New("session runtime authority is required")
@@ -196,14 +196,31 @@ func (a *GoalAuthority) withDormantAdmission(
 func (a *GoalAuthority) withLive(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	mutate func(*runtime.Engine) (GoalCommandResult, error),
+	mutate func(*runtime.Engine, runtime.OrderedMutationTurn) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.execution == nil {
 		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
 	}
+	if _, live := a.authority.SessionExecution(sessionID); live {
+		var result GoalCommandResult
+		err := a.execution.WithLiveExecutionMutation(ctx, sessionID, func(turn runtime.OrderedMutationTurn) error {
+			return turn.Apply(func() error {
+				return a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+					applied, applyErr := mutate(engine, turn)
+					result = applied
+					return applyErr
+				})
+			})
+		})
+		if result.Accepted() {
+			result.Err = err
+			return result, nil
+		}
+		return GoalCommandResult{}, err
+	}
 	var result GoalCommandResult
 	err := a.execution.RunAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
+		applied, applyErr := mutate(engine, nil)
 		result = applied
 		return applyErr
 	})
@@ -215,7 +232,7 @@ func (a *GoalAuthority) withLive(
 		return GoalCommandResult{}, err
 	}
 	err = a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
+		applied, applyErr := mutate(engine, nil)
 		result = applied
 		return applyErr
 	})
@@ -230,21 +247,29 @@ func (a *GoalAuthority) withExactLive(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	execution GoalExecutionIdentity,
-	mutate func(*runtime.Engine) (GoalCommandResult, error),
+	mutate func(*runtime.Engine, runtime.OrderedMutationTurn) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.execution == nil {
 		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
 	}
 	var result GoalCommandResult
-	err := a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		if active := runtimeactivity.ActiveStepFromProvider(engine); active == nil ||
-			active.StepID != *execution.StepID ||
-			(execution.RunID != nil && active.RunID != *execution.RunID) {
-			return runtime.ErrAgentGoalStepInactive
-		}
-		applied, applyErr := mutate(engine)
-		result = applied
-		return applyErr
+	_, live := a.authority.SessionExecution(sessionID)
+	if !live {
+		return GoalCommandResult{}, runtime.ErrAgentGoalStepInactive
+	}
+	err := a.execution.WithLiveExecutionMutation(ctx, sessionID, func(turn runtime.OrderedMutationTurn) error {
+		return turn.Apply(func() error {
+			return a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+				if active := runtimeactivity.ActiveStepFromProvider(engine); active == nil ||
+					active.StepID != *execution.StepID ||
+					(execution.RunID != nil && active.RunID != *execution.RunID) {
+					return runtime.ErrAgentGoalStepInactive
+				}
+				applied, applyErr := mutate(engine, turn)
+				result = applied
+				return applyErr
+			})
+		})
 	})
 	if result.Accepted() {
 		result.Err = err
@@ -257,11 +282,15 @@ func (a *GoalAuthority) withExactLive(
 }
 
 func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult, error) {
+	return liveSetWithOrderedTurn(engine, command, nil)
+}
+
+func liveSetWithOrderedTurn(engine *runtime.Engine, command GoalSetCommand, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
 	if engine.CurrentNodeExecutionConfigured() {
-		result, err := engine.SetGoal(command.Objective, command.Actor)
+		result, err := engine.SetGoalWithOrderedTurn(turn, command.Objective, command.Actor)
 		return fromRuntimeResult(result, err), err
 	}
 	goal, queued, err := queueSet(engine, command)
@@ -280,7 +309,7 @@ func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult,
 	if err := engine.RequireGoalLoopStartAllowed(); err != nil {
 		return GoalCommandResult{Err: err}, err
 	}
-	result, err := engine.SetGoal(command.Objective, command.Actor)
+	result, err := engine.SetGoalWithOrderedTurn(turn, command.Objective, command.Actor)
 	out := fromRuntimeResult(result, err)
 	if !out.Accepted() || err != nil {
 		return out, err
@@ -293,6 +322,10 @@ func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult,
 }
 
 func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandResult, error) {
+	return liveStatusWithOrderedTurn(engine, command, nil)
+}
+
+func liveStatusWithOrderedTurn(engine *runtime.Engine, command GoalStatusCommand, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
@@ -302,7 +335,7 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 		}
 	}
 	if engine.CurrentNodeExecutionConfigured() {
-		result, err := engine.SetGoalStatusWithoutGoalLoopStart(command.Status, command.Actor)
+		result, err := engine.SetGoalStatusWithoutGoalLoopStartWithOrderedTurn(turn, command.Status, command.Actor)
 		return fromRuntimeResult(result, err), err
 	}
 	goal, queued, err := queueStatus(engine, command)
@@ -320,7 +353,7 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 			return GoalCommandResult{Err: err}, err
 		}
 	}
-	result, err := engine.SetGoalStatus(command.Status, command.Actor)
+	result, err := engine.SetGoalStatusWithOrderedTurn(turn, command.Status, command.Actor)
 	out := fromRuntimeResult(result, err)
 	if !out.Accepted() || err != nil {
 		return out, err
@@ -335,6 +368,10 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 }
 
 func liveClear(engine *runtime.Engine, command GoalClearCommand) (GoalCommandResult, error) {
+	return liveClearWithOrderedTurn(engine, command, nil)
+}
+
+func liveClearWithOrderedTurn(engine *runtime.Engine, command GoalClearCommand, turn runtime.OrderedMutationTurn) (GoalCommandResult, error) {
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
@@ -345,7 +382,7 @@ func liveClear(engine *runtime.Engine, command GoalClearCommand) (GoalCommandRes
 	if queued {
 		return queuedClearResult(goal), nil
 	}
-	result, err := engine.ClearGoal(command.Actor)
+	result, err := engine.ClearGoalWithOrderedTurn(turn, command.Actor)
 	return fromRuntimeResult(result, err), err
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,9 +159,12 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 		},
 	}}
 
+	var eventsMu sync.Mutex
 	events := make([]Event, 0, 12)
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		OnEvent: func(evt Event) {
+			eventsMu.Lock()
+			defer eventsMu.Unlock()
 			events = append(events, evt)
 		},
 	})
@@ -170,7 +174,9 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 		t.Fatalf("submit: %v", err)
 	}
 
+	eventsMu.Lock()
 	committedEvents := committedTranscriptEventsWithEntries(events)
+	eventsMu.Unlock()
 	if len(committedEvents) < 3 {
 		t.Fatalf("expected assistant, reasoning, and queued user committed events, got %+v", committedEvents)
 	}

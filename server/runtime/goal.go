@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"core/prompts"
@@ -109,10 +110,18 @@ func (e *Engine) goalLoopRestartNeeded() bool {
 }
 
 func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalForStep("", objective, actor)
+	return e.SetGoalWithOrderedTurn(nil, objective, actor)
+}
+
+func (e *Engine) SetGoalWithOrderedTurn(turn OrderedMutationTurn, objective string, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalForStepWithOrderedTurn(turn, "", objective, actor)
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalForStepWithOrderedTurn(nil, stepID, objective, actor)
+}
+
+func (e *Engine) setGoalForStepWithOrderedTurn(turn OrderedMutationTurn, stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -129,24 +138,36 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusUpdateFromState(goal))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
 
 func (e *Engine) SetGoalStatus(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusForStep("", status, actor)
+	return e.SetGoalStatusWithOrderedTurn(nil, status, actor)
+}
+
+func (e *Engine) SetGoalStatusWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalStatusForStepWithGoalLoopAdmissionAndTurn(turn, "", status, actor, true)
 }
 
 func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusForStepWithGoalLoopAdmission(stepID, status, actor, true)
+	return e.setGoalStatusForStepWithGoalLoopAdmissionAndTurn(nil, stepID, status, actor, true)
 }
 
 func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.setGoalStatusForStepWithGoalLoopAdmission("", status, actor, false)
+	return e.SetGoalStatusWithoutGoalLoopStartWithOrderedTurn(nil, status, actor)
+}
+
+func (e *Engine) SetGoalStatusWithoutGoalLoopStartWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalStatusForStepWithGoalLoopAdmissionAndTurn(turn, "", status, actor, false)
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+	return e.setGoalStatusForStepWithGoalLoopAdmissionAndTurn(nil, stepID, status, actor, requireGoalLoopStart)
+}
+
+func (e *Engine) setGoalStatusForStepWithGoalLoopAdmissionAndTurn(turn OrderedMutationTurn, stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -176,7 +197,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusUpdateFromState(goal))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -427,10 +448,18 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 }
 
 func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
-	return e.clearGoalForStep("", actor)
+	return e.ClearGoalWithOrderedTurn(nil, actor)
+}
+
+func (e *Engine) ClearGoalWithOrderedTurn(turn OrderedMutationTurn, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.clearGoalForStepWithOrderedTurn(turn, "", actor)
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.clearGoalForStepWithOrderedTurn(nil, stepID, actor)
+}
+
+func (e *Engine) clearGoalForStepWithOrderedTurn(turn OrderedMutationTurn, stepID string, actor session.GoalActor) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -446,7 +475,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate())
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusClearUpdate())
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -507,9 +536,35 @@ func (e *Engine) steerGoalNoticeAndStatus(
 	message llm.Message,
 	update GoalStatusUpdate,
 ) (session.CommitReceipt, error) {
+	return e.steerGoalNoticeAndStatusWithTurn(nil, stepID, message, update)
+}
+
+func (e *Engine) steerGoalNoticeAndStatusWithTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
+	if turn != nil {
+		var receipt session.CommitReceipt
+		err := turn.Apply(func() error {
+			var applyErr error
+			receipt, applyErr = e.applyGoalNoticeAndStatus(stepID, message, update)
+			return applyErr
+		})
+		return receipt, err
+	}
+	return e.applyGoalNoticeAndStatus(stepID, message, update)
+}
+
+func (e *Engine) applyGoalNoticeAndStatus(
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
 	receipt := session.CommitReceipt{}
 	notice := steeringItem{
 		message: &steeringMessage{
@@ -521,18 +576,48 @@ func (e *Engine) steerGoalNoticeAndStatus(
 	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
-	noticeErr := e.applySteeringItem(stepID, notice)
+	noticeErr := e.applySteeringItem(stepID, notice, nil)
 	if !receipt.Committed {
 		return receipt, noticeErr
 	}
 	statusErr := e.applySteeringItem(stepID, steeringItem{
 		event: &Event{Kind: EventGoalStatusUpdated, GoalStatus: &update},
-	})
+	}, nil)
 	return receipt, errors.Join(noticeErr, statusErr)
 }
 
 func (e *Engine) StartGoalLoop() error {
 	return e.startGoalLoop(true)
+}
+
+func (e *Engine) RetainGoalLoopContinuation() func() {
+	if e == nil {
+		return func() {}
+	}
+	e.goalContinuationHeld.Store(true)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.goalContinuationHeld.Store(false)
+			_ = e.startPendingGoalLoop()
+		})
+	}
+}
+
+func (e *Engine) goalLoopContinuationIsHeld() bool {
+	if e == nil {
+		return false
+	}
+	return e.goalContinuationHeld.Load()
+}
+
+func (e *Engine) GoalLoopContinuationPending() bool {
+	if e == nil {
+		return false
+	}
+	e.activeStepGoalMutationsMu.Lock()
+	defer e.activeStepGoalMutationsMu.Unlock()
+	return e.pendingGoalLoopStart
 }
 
 func (e *Engine) deferGoalLoopStart() {
@@ -561,6 +646,10 @@ func (e *Engine) startPendingGoalLoop() error {
 		return nil
 	}
 	e.activeStepGoalMutationsMu.Lock()
+	if e.goalLoopContinuationIsHeld() {
+		e.activeStepGoalMutationsMu.Unlock()
+		return nil
+	}
 	pending := e.pendingGoalLoopStart
 	e.pendingGoalLoopStart = false
 	e.activeStepGoalMutationsMu.Unlock()
@@ -578,6 +667,10 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 	if !e.goalActive() {
 		return nil
 	}
+	if e.goalLoopContinuationIsHeld() {
+		e.deferGoalLoopStart()
+		return nil
+	}
 	if e.currentNodeExecutionActive() {
 		return nil
 	}
@@ -593,6 +686,10 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 }
 
 func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
+	if e.goalLoopContinuationIsHeld() {
+		e.deferGoalLoopStart()
+		return
+	}
 	launched := e.launchLifecycleTask(func(ctx context.Context) {
 		defer e.finishGoalLoop()
 		e.runGoalLoop(ctx, firstTurnAlreadyPrompted)
@@ -600,6 +697,37 @@ func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
 	if !launched {
 		e.finishGoalLoop()
 	}
+}
+
+func (e *Engine) RunGoalLoopContinuation(ctx context.Context) error {
+	if e == nil || !e.GoalLoopContinuationPending() {
+		return nil
+	}
+	for e.takePendingGoalLoopStart() {
+		if !e.goalActive() {
+			return nil
+		}
+		if !e.goalLoopState().Start() {
+			if !e.goalLoopState().Running() {
+				return nil
+			}
+		}
+		e.runGoalLoop(ctx, true)
+		if !e.goalLoopState().Finish(e.goalActive()) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (e *Engine) takePendingGoalLoopStart() bool {
+	e.activeStepGoalMutationsMu.Lock()
+	defer e.activeStepGoalMutationsMu.Unlock()
+	if !e.pendingGoalLoopStart {
+		return false
+	}
+	e.pendingGoalLoopStart = false
+	return true
 }
 
 func (e *Engine) finishGoalLoop() {

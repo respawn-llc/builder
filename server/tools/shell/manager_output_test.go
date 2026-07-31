@@ -23,6 +23,7 @@ func TestManagerSubscribeOutputWaitsForLogFlushNotification(t *testing.T) {
 	if !result.Backgrounded {
 		t.Fatalf("expected backgrounded process, got %+v", result)
 	}
+	commitManagerTransition(t, result)
 	defer func() { _ = manager.Kill(result.SessionID) }()
 
 	sub, err := manager.SubscribeOutput(context.Background(), result.SessionID, 0)

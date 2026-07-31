@@ -36,29 +36,31 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	memoReq := liveSteerMemoRequest{SessionID: sessionID, Text: strings.TrimSpace(req.Text)}
 	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
 		var resp serverapi.RuntimeLiveSteerResponse
-		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(callbackCtx, memoReq.Text, clientRequestID, func() error {
-				if s == nil || s.promptStore == nil {
+		err := s.withOrderedRuntime(ctx, memoReq.SessionID.String(), func(callbackCtx context.Context, engine *runtime.Engine) error {
+			return s.acceptRuntimeInput(callbackCtx, memoReq.SessionID.String(), func() error {
+				item, accepted, err := engine.QueueUserMessageForActiveRun(callbackCtx, memoReq.Text, clientRequestID, func() error {
+					if s == nil || s.promptStore == nil {
+						return nil
+					}
+					record, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), memoReq.Text)
+					if err != nil {
+						return err
+					}
+					memoReq.Text = record.Text
 					return nil
+				})
+				if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+					return serverapi.ErrRuntimeNoActiveRun
 				}
-				record, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), memoReq.Text)
 				if err != nil {
 					return err
 				}
-				memoReq.Text = record.Text
+				if !accepted {
+					return serverapi.ErrRuntimeNoActiveRun
+				}
+				resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 				return nil
 			})
-			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				return serverapi.ErrRuntimeNoActiveRun
-			}
-			if err != nil {
-				return err
-			}
-			if !accepted {
-				return serverapi.ErrRuntimeNoActiveRun
-			}
-			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
-			return nil
 		})
 		return resp, err
 	})

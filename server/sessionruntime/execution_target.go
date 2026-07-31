@@ -266,49 +266,64 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	if resource == nil || resource.ref.Generation() != correlation.ResourceGeneration() {
 		return
 	}
-	routeErr := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-		summary := shelltool.BackgroundNoticeSummary{}
-		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
-			var summaryErr error
-			summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
-				MaxChars:          resource.backgroundLimit,
-				SuccessOutputMode: resource.backgroundMode,
-			})
-			if summaryErr != nil {
-				if resource.logger != nil {
-					resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
+	apply := func(turn runtime.OrderedMutationTurn) error {
+		return resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+			summary := shelltool.BackgroundNoticeSummary{}
+			if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
+				var summaryErr error
+				summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
+					MaxChars:          resource.backgroundLimit,
+					SuccessOutputMode: resource.backgroundMode,
+				})
+				if summaryErr != nil {
+					if resource.logger != nil {
+						resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
+					}
+					summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
 				}
-				summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
 			}
-		}
-		eventType := runtime.BackgroundShellEventBackgrounded
-		switch event.Type {
-		case shelltool.EventCompleted:
-			eventType = runtime.BackgroundShellEventCompleted
-		case shelltool.EventKilled:
-			eventType = runtime.BackgroundShellEventKilled
-		}
-		preview, previewRemoved := summary.RuntimePreview()
-		engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
-			Type:              eventType,
-			ID:                event.Snapshot.ID,
-			ActivityID:        event.Snapshot.ActivityID,
-			OwnerRunID:        event.Snapshot.OwnerRunID,
-			OwnerStepID:       event.Snapshot.OwnerStepID,
-			State:             event.Snapshot.State,
-			Command:           event.Snapshot.Command,
-			Workdir:           event.Snapshot.Workdir,
-			LogPath:           event.Snapshot.LogPath,
-			NoticeText:        summary.DetailText,
-			CompactText:       summary.CondensedText,
-			Preview:           preview,
-			PreviewRemoved:    previewRemoved,
-			ExitCode:          event.Snapshot.ExitCode,
-			UserRequestedKill: event.Snapshot.KillRequested,
-			NoticeSuppressed:  event.NoticeSuppressed,
-		}, !event.NoticeSuppressed)
-		return nil
-	})
+			eventType := runtime.BackgroundShellEventBackgrounded
+			switch event.Type {
+			case shelltool.EventCompleted:
+				eventType = runtime.BackgroundShellEventCompleted
+			case shelltool.EventKilled:
+				eventType = runtime.BackgroundShellEventKilled
+			}
+			preview, previewRemoved := summary.RuntimePreview()
+			if err := engine.HandleBackgroundShellUpdateWithOrderedTurn(turn, runtime.BackgroundShellEvent{
+				Type:              eventType,
+				ID:                event.Snapshot.ID,
+				ActivityID:        event.Snapshot.ActivityID,
+				OwnerRunID:        event.Snapshot.OwnerRunID,
+				OwnerStepID:       event.Snapshot.OwnerStepID,
+				State:             event.Snapshot.State,
+				Command:           event.Snapshot.Command,
+				Workdir:           event.Snapshot.Workdir,
+				LogPath:           event.Snapshot.LogPath,
+				NoticeText:        summary.DetailText,
+				CompactText:       summary.CondensedText,
+				Preview:           preview,
+				PreviewRemoved:    previewRemoved,
+				ExitCode:          event.Snapshot.ExitCode,
+				UserRequestedKill: event.Snapshot.KillRequested,
+				NoticeSuppressed:  event.NoticeSuppressed,
+			}, !event.NoticeSuppressed); err != nil {
+				return err
+			}
+			return nil
+		})
+	}
+	var routeErr error
+	if a.options.orderedMutation != nil {
+		routeErr = a.options.orderedMutation(context.Background(), resource.ref, func(turn runtime.OrderedMutationTurn) error {
+			return turn.Apply(func() error { return apply(turn) })
+		})
+	} else {
+		routeErr = apply(nil)
+	}
+	if routeErr == nil {
+		resource.engine.ScheduleBackgroundNoticesIfIdle()
+	}
 	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
 		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
 	}

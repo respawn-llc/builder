@@ -14,18 +14,19 @@ var (
 )
 
 func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (session.CommitReceipt, error) {
-	if entry.Role == "" || entry.Text == "" {
-		return session.CommitReceipt{}, nil
-	}
-	return e.steerWithCommitReceipt("", steerLocalEntryIntent(entry))
+	return e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(nil, entry)
 }
 
 func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitReceipt, error) {
+	return e.appendCommittedControlFeedbackWithOrderedTurn(nil, text)
+}
+
+func (e *Engine) appendCommittedControlFeedbackWithOrderedTurn(turn OrderedMutationTurn, text string) (session.CommitReceipt, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return session.CommitReceipt{}, errCommittedFeedbackTextRequired
 	}
-	return e.appendCommittedEntryWithCommitReceipt(storedLocalEntry{
+	return e.appendCommittedEntryWithCommitReceiptAndOrderedTurn(turn, storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       "system",
 		Text:       text,
@@ -33,6 +34,10 @@ func (e *Engine) appendCommittedControlFeedback(text string) (session.CommitRece
 }
 
 func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
+	return e.SetFastModeEnabledWithCommittedFeedbackAndOrderedTurn(nil, enabled, feedback)
+}
+
+func (e *Engine) SetFastModeEnabledWithCommittedFeedbackAndOrderedTurn(turn OrderedMutationTurn, enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
@@ -43,7 +48,7 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 		var receipt session.CommitReceipt
 		var feedbackErr error
 		changed, err := state.SetEnabledWithTransaction(enabled, func(changed bool) error {
-			receipt, feedbackErr = e.appendCommittedControlFeedback(feedback(changed))
+			receipt, feedbackErr = e.appendCommittedControlFeedbackWithOrderedTurn(turn, feedback(changed))
 			if !receipt.Committed {
 				return feedbackErr
 			}
@@ -60,7 +65,7 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	changed := e.localFastModeEnabledChange(enabled)
-	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
+	receipt, feedbackErr := e.appendCommittedControlFeedbackWithOrderedTurn(turn, feedback(changed))
 	if !receipt.Committed {
 		return false, receipt, feedbackErr
 	}
@@ -69,6 +74,10 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 }
 
 func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
+	return e.SetQuestionsEnabledWithCommittedFeedbackAndOrderedTurn(nil, enabled, feedback)
+}
+
+func (e *Engine) SetQuestionsEnabledWithCommittedFeedbackAndOrderedTurn(turn OrderedMutationTurn, enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.QuestionsEnabled(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
@@ -79,7 +88,7 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 	if changed {
 		resultEnabled = enabled
 	}
-	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(resultEnabled, changed))
+	receipt, feedbackErr := e.appendCommittedControlFeedbackWithOrderedTurn(turn, feedback(resultEnabled, changed))
 	if !receipt.Committed {
 		return false, current, receipt, feedbackErr
 	}
@@ -90,6 +99,10 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 }
 
 func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
+	return e.SetReviewerEnabledWithCommittedFeedbackAndOrderedTurn(nil, enabled, feedback)
+}
+
+func (e *Engine) SetReviewerEnabledWithCommittedFeedbackAndOrderedTurn(turn OrderedMutationTurn, enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
 	if feedback == nil {
 		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
 	}
@@ -99,7 +112,7 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 	if err != nil {
 		return false, mode, session.CommitReceipt{}, err
 	}
-	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(mode != "off", mode, changed))
+	receipt, feedbackErr := e.appendCommittedControlFeedbackWithOrderedTurn(turn, feedback(mode != "off", mode, changed))
 	if !receipt.Committed {
 		return false, mode, receipt, feedbackErr
 	}

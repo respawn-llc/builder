@@ -101,7 +101,15 @@ func (m *Manager) TempDir() string {
 func (m *Manager) SetEventHandler(handler func(Event)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.onEvent = handler
+	if handler == nil {
+		m.onEvent = nil
+		return
+	}
+	m.onEvent = func(event Event) {
+		if m.awaitTerminalPublication(event) {
+			handler(event)
+		}
+	}
 }
 
 func (m *Manager) SetMinimumExecToBgTime(value time.Duration) {
@@ -292,8 +300,60 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
-	m.emitEvent(newBackgroundedEvent(snapshot))
+	transition := &PendingBackgroundTransition{
+		manager:  m,
+		entry:    entry,
+		snapshot: snapshotWithExecutionCorrelationCopy(snapshot),
+		state:    newBackgroundTransitionState(),
+	}
+	entry.mu.Lock()
+	entry.backgroundTransition = transition.state
+	entry.mu.Unlock()
+	result.PendingTransition = transition
 	return result, nil
+}
+
+func (m *Manager) awaitTerminalPublication(event Event) bool {
+	switch event.Type {
+	case EventCompleted, EventKilled:
+	default:
+		return true
+	}
+
+	m.mu.Lock()
+	entry := m.entries[event.Snapshot.ID]
+	closed := m.closed
+	m.mu.Unlock()
+	if entry == nil {
+		panic(fmt.Sprintf("publish terminal background event: process %q is not retained", event.Snapshot.ID))
+	}
+	entry.mu.Lock()
+	transition := entry.backgroundTransition
+	entry.mu.Unlock()
+	if transition == nil {
+		panic(fmt.Sprintf("publish terminal background event: process %q has no transition", event.Snapshot.ID))
+	}
+	if closed {
+		select {
+		case <-transition.done:
+			return transition.terminalPublicationAllowed()
+		default:
+			return false
+		}
+	}
+	for {
+		select {
+		case <-transition.done:
+			return transition.terminalPublicationAllowed()
+		case <-time.After(10 * time.Millisecond):
+			m.mu.Lock()
+			closed = m.closed
+			m.mu.Unlock()
+			if closed {
+				return false
+			}
+		}
+	}
 }
 
 func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult, error) {

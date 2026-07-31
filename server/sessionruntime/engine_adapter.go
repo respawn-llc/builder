@@ -44,6 +44,19 @@ type AgentRuntimePlanOptions struct {
 	RecoveredWarningProvider            func() (string, bool, error)
 }
 
+type directOrderedMutationTurn struct{}
+
+func (directOrderedMutationTurn) Apply(apply func() error) error {
+	if apply == nil {
+		return errors.New("ordered mutation is required")
+	}
+	return apply()
+}
+
+func (directOrderedMutationTurn) RetainLease() (runtime.OrderedMutationLease, error) {
+	return nil, errors.New("direct ordered mutation turn cannot retain queue capacity")
+}
+
 type AgentRuntimePlan struct {
 	options AgentRuntimePlanOptions
 }
@@ -91,25 +104,36 @@ func cloneStringPointer(value *string) *string {
 }
 
 type authorityRuntimeOptions struct {
-	persistenceRoot   string
-	authManager       *auth.Manager
-	background        *shelltool.Manager
-	storeOptions      []session.StoreOption
-	eventFeed         AgentResourceEventFeed
-	resourceLifecycle AgentResourceLifecycle
-	stepLifecycle     AgentResourceStepLifecycle
+	persistenceRoot      string
+	authManager          *auth.Manager
+	background           *shelltool.Manager
+	storeOptions         []session.StoreOption
+	eventFeed            AgentResourceEventFeed
+	resourceLifecycle    AgentResourceLifecycle
+	stepLifecycle        AgentResourceStepLifecycle
+	commandLifecycle     ResourceCommandLifecycle
+	commandExecution     ResourceCommandExecutionLifecycle
+	orderedMutation      ResourceOrderedMutation
+	agentOrderedMutation ResourceAgentOrderedMutation
 }
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
-	return authorityRuntimeOptions{
-		persistenceRoot:   options.PersistenceRoot,
-		authManager:       options.AuthManager,
-		background:        options.Background,
-		storeOptions:      append([]session.StoreOption(nil), options.StoreOptions...),
-		eventFeed:         options.EventFeed,
-		resourceLifecycle: options.ResourceLifecycle,
-		stepLifecycle:     options.StepLifecycle,
+	runtimeOptions := authorityRuntimeOptions{
+		persistenceRoot:      options.PersistenceRoot,
+		authManager:          options.AuthManager,
+		background:           options.Background,
+		storeOptions:         append([]session.StoreOption(nil), options.StoreOptions...),
+		eventFeed:            options.EventFeed,
+		resourceLifecycle:    options.ResourceLifecycle,
+		stepLifecycle:        options.StepLifecycle,
+		commandLifecycle:     options.CommandLifecycle,
+		orderedMutation:      options.OrderedMutation,
+		agentOrderedMutation: options.AgentOrderedMutation,
 	}
+	if execution, ok := options.CommandLifecycle.(ResourceCommandExecutionLifecycle); ok {
+		runtimeOptions.commandExecution = execution
+	}
+	return runtimeOptions
 }
 
 func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
@@ -218,6 +242,13 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		StepLifecycle:                       resource,
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
+		},
+		LifecycleTaskOwner: resource,
+		OrderedMutation: func(apply func(runtime.OrderedMutationTurn) error) error {
+			if a.options.orderedMutation == nil {
+				return apply(directOrderedMutationTurn{})
+			}
+			return a.options.orderedMutation(context.Background(), resource.ref, apply)
 		},
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))

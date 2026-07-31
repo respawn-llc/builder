@@ -58,29 +58,33 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 			}
 			if compactionBusy {
-				queued := engine.QueueUserMessageForAutoDrain(
-					memoReq.Text,
-					strings.TrimSpace(req.ClientRequestID),
-				)
-				recordAccepted(true)
-				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				return s.acceptRuntimeInput(runCtx, memoReq.SessionID, func() error {
+					queued := engine.QueueUserMessageForAutoDrain(
+						memoReq.Text,
+						strings.TrimSpace(req.ClientRequestID),
+					)
+					recordAccepted(true)
+					resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+					return nil
+				})
+			}
+			return s.acceptRuntimeInput(runCtx, memoReq.SessionID, func() error {
+				msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID), func() {
+					s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+				}, recordAccepted)
+				if err != nil {
+					return err
+				}
+				if queued != nil {
+					resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+					return nil
+				}
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
+				if msg.Content != nil {
+					resp.Message = *msg.Content
+				}
 				return nil
-			}
-			msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID), func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			}, recordAccepted)
-			if err != nil {
-				return err
-			}
-			if queued != nil {
-				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
-				return nil
-			}
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
-			if msg.Content != nil {
-				resp.Message = *msg.Content
-			}
-			return nil
+			})
 		})
 		if err != nil {
 			if errors.Is(err, serverapi.ErrSessionRunStarting) {
@@ -119,29 +123,31 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 	if s == nil || s.authority == nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, false, errors.New("session runtime authority is required")
 	}
-	err = s.withLiveExecutionRuntime(runCtx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, req.OperationRef.ClientRequestID, nil)
+	err = s.withOrderedRuntime(runCtx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
+		return s.acceptRuntimeInput(runCtx, sessionID.String(), func() error {
+			committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
+				item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, req.OperationRef.ClientRequestID, nil)
+				if err != nil {
+					return err
+				}
+				if !accepted {
+					return runtime.ErrNoActiveLiveRun
+				}
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
+				steered = true
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			if !accepted {
-				return runtime.ErrNoActiveLiveRun
+			if !committed {
+				return runtimeops.ErrOperationCanceled
 			}
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
-			steered = true
+			if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
+				engine.ReportPromptHistoryPersistError(err.Error())
+			}
 			return nil
 		})
-		if err != nil {
-			return err
-		}
-		if !committed {
-			return runtimeops.ErrOperationCanceled
-		}
-		if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
-			engine.ReportPromptHistoryPersistError(err.Error())
-		}
-		return nil
 	})
 	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, steered, err

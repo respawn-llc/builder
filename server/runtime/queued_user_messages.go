@@ -17,6 +17,14 @@ type queuedUserMessageStore struct {
 type queuedUserSteeringIntent struct {
 	message QueuedUserMessage
 	intent  steeringIntent
+	claimed bool
+}
+
+type queuedUserMessageClaim struct {
+	store *queuedUserMessageStore
+	items []queuedUserSteeringIntent
+	ids   map[string]struct{}
+	done  bool
 }
 
 func newQueuedUserMessageStore() *queuedUserMessageStore {
@@ -60,6 +68,10 @@ func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (QueuedUserMess
 	removed := false
 	var item QueuedUserMessage
 	for _, pending := range s.pending {
+		if pending.claimed {
+			filtered = append(filtered, pending)
+			continue
+		}
 		if pending.message.ID == id {
 			removed = true
 			item = pending.message
@@ -71,44 +83,92 @@ func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (QueuedUserMess
 	return item, removed
 }
 
-func (s *queuedUserMessageStore) Drain() []queuedUserSteeringIntent {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	pending := append([]queuedUserSteeringIntent(nil), s.pending...)
-	s.pending = nil
-	s.mu.Unlock()
-	return pending
+func (s *queuedUserMessageStore) ClaimAll() queuedUserMessageClaim {
+	return s.claim(func(queuedUserSteeringIntent) bool { return true })
 }
 
-func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUserSteeringIntent {
-	if s == nil || len(ids) == 0 {
-		return nil
+func (s *queuedUserMessageStore) ClaimByID(ids map[string]struct{}) queuedUserMessageClaim {
+	return s.claim(func(item queuedUserSteeringIntent) bool {
+		_, ok := ids[strings.TrimSpace(item.message.ID)]
+		return ok
+	})
+}
+
+func (s *queuedUserMessageStore) claim(selectItem func(queuedUserSteeringIntent) bool) queuedUserMessageClaim {
+	claim := queuedUserMessageClaim{store: s}
+	if s == nil || selectItem == nil {
+		return claim
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	matched := make([]queuedUserSteeringIntent, 0, len(ids))
-	remaining := s.pending[:0]
-	for _, pending := range s.pending {
-		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok {
-			matched = append(matched, pending)
+	for index := range s.pending {
+		if s.pending[index].claimed || !selectItem(s.pending[index]) {
 			continue
 		}
-		remaining = append(remaining, pending)
+		s.pending[index].claimed = true
+		claim.items = append(claim.items, s.pending[index])
+		if claim.ids == nil {
+			claim.ids = make(map[string]struct{})
+		}
+		claim.ids[s.pending[index].message.ID] = struct{}{}
 	}
-	s.pending = remaining
-	return matched
+	return claim
 }
 
-func (s *queuedUserMessageStore) RestoreFront(items []queuedUserSteeringIntent) {
-	if s == nil || len(items) == 0 {
+func (c *queuedUserMessageClaim) Items() []queuedUserSteeringIntent {
+	if c == nil {
+		return nil
+	}
+	return append([]queuedUserSteeringIntent(nil), c.items...)
+}
+
+func (c *queuedUserMessageClaim) Restore() {
+	c.finish(nil)
+}
+
+func (c *queuedUserMessageClaim) Commit(ids []string) {
+	selected := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		selected[strings.TrimSpace(id)] = struct{}{}
+	}
+	c.finish(selected)
+}
+
+func (c *queuedUserMessageClaim) finish(selected map[string]struct{}) {
+	if c == nil || c.done || c.store == nil {
 		return
 	}
-	restored := append([]queuedUserSteeringIntent(nil), items...)
-	s.mu.Lock()
-	s.pending = append(restored, s.pending...)
-	s.mu.Unlock()
+	c.store.mu.Lock()
+	defer c.store.mu.Unlock()
+	if c.done {
+		return
+	}
+	remaining := c.store.pending[:0]
+	for _, item := range c.store.pending {
+		if !item.claimed {
+			remaining = append(remaining, item)
+			continue
+		}
+		_, claimedByThis := c.ids[item.message.ID]
+		if !claimedByThis {
+			remaining = append(remaining, item)
+			continue
+		}
+		if _, remove := selected[item.message.ID]; !remove {
+			item.claimed = false
+			remaining = append(remaining, item)
+		}
+	}
+	c.store.pending = remaining
+	c.done = true
+}
+
+func idsFromQueuedUserIntents(items []queuedUserSteeringIntent) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.message.ID)
+	}
+	return ids
 }
 
 func (s *queuedUserMessageStore) HasPending() bool {

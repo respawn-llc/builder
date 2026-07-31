@@ -49,6 +49,16 @@ type Result struct {
 	// PresentationDelta is transient handler output. Runtime consumes it before
 	// persistence and materializes Presentation from authoritative call input.
 	PresentationDelta *transcript.ToolResultPresentationDelta `json:"-"`
+	// TransientMetadata transfers handler-owned, runtime-only capabilities. It
+	// must be consumed before persistence or provider serialization.
+	TransientMetadata TransientMetadata `json:"-"`
+}
+
+// TransientMetadata is opaque handler output that belongs only to the runtime
+// handoff boundary. Implementations must not expose it through persisted or
+// provider-facing tool-result data.
+type TransientMetadata interface {
+	TransientToolResultMetadata()
 }
 
 type Definition struct {

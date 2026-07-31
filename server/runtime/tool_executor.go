@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/server/runtimegate"
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/textutil"
@@ -50,22 +51,25 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			started.CommittedEntryStart = start
 			started.CommittedEntryStartSet = true
 		}
-		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
-			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
-			continue
-		}
 		idx := i
 		serialOrdinal := -1
 		if serialToolExecutionRequired(toolID, workflowActive) {
 			serialOrdinal = nextSerialOrdinal
 			nextSerialOrdinal++
 		}
+		startGate := runtimegate.New()
 		wg.Add(1)
-		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
+		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata, gate *runtimegate.Gate) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
 
+			if err := gate.Wait(ctx); err != nil {
+				if serialOrdinal >= 0 {
+					serialGate.done(serialOrdinal)
+				}
+				return
+			}
 			if serialOrdinal >= 0 {
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
@@ -119,7 +123,16 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				return
 			}
 			callErrs[idx] = callErr
-		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
+		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch, startGate)
+		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
+			_ = startGate.Abort(err)
+			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
+			continue
+		}
+		if err := startGate.Commit(); err != nil {
+			_ = startGate.Abort(err)
+			callErrs[i] = fmt.Errorf("release tool start (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
+		}
 	}
 
 	wg.Wait()
@@ -203,14 +216,16 @@ func askQuestionMaterializable(engine *Engine) bool {
 }
 
 type serialToolGate struct {
-	mu   sync.Mutex
-	cond *sync.Cond
-	next int
+	mu        sync.Mutex
+	cond      *sync.Cond
+	next      int
+	completed map[int]struct{}
 }
 
 func newSerialToolGate() *serialToolGate {
 	gate := &serialToolGate{}
 	gate.cond = sync.NewCond(&gate.mu)
+	gate.completed = make(map[int]struct{})
 	return gate
 }
 
@@ -225,10 +240,18 @@ func (g *serialToolGate) wait(ordinal int) {
 func (g *serialToolGate) done(ordinal int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.next == ordinal {
-		g.next++
-		g.cond.Broadcast()
+	if ordinal < g.next {
+		return
 	}
+	g.completed[ordinal] = struct{}{}
+	for {
+		if _, ok := g.completed[g.next]; !ok {
+			break
+		}
+		delete(g.completed, g.next)
+		g.next++
+	}
+	g.cond.Broadcast()
 }
 
 func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
