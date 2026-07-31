@@ -40,6 +40,46 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 	}
 }
 
+func TestProjectHomeSummaryValidateRejectsMalformedOptionalWorkflowValues(t *testing.T) {
+	t.Run("blank workflow ID", func(t *testing.T) {
+		summary := validProjectHomeSummaryForResponseTest()
+		blank := ""
+		name := "Workflow"
+		summary.DefaultWorkflowID = &blank
+		summary.DefaultWorkflowName = &name
+		summary.DefaultWorkflowValid = true
+		if err := summary.Validate(); err == nil {
+			t.Fatal("blank workflow ID accepted")
+		}
+	})
+	t.Run("blank workflow name", func(t *testing.T) {
+		summary := validProjectHomeSummaryForResponseTest()
+		id := "workflow-1"
+		blank := ""
+		summary.DefaultWorkflowID = &id
+		summary.DefaultWorkflowName = &blank
+		summary.DefaultWorkflowValid = true
+		if err := summary.Validate(); err == nil {
+			t.Fatal("blank workflow name accepted")
+		}
+	})
+	t.Run("workflow fields must be paired", func(t *testing.T) {
+		summary := validProjectHomeSummaryForResponseTest()
+		id := "workflow-1"
+		summary.DefaultWorkflowID = &id
+		if err := summary.Validate(); err == nil {
+			t.Fatal("asymmetric workflow fields accepted")
+		}
+	})
+	t.Run("workflow validity follows presence", func(t *testing.T) {
+		summary := validProjectHomeSummaryForResponseTest()
+		summary.DefaultWorkflowValid = true
+		if err := summary.Validate(); err == nil {
+			t.Fatal("valid workflow flag without a workflow accepted")
+		}
+	})
+}
+
 func TestProjectWorkspaceMutationResponseValidateRejectsMalformedResponses(t *testing.T) {
 	summary := validProjectHomeSummaryForResponseTest()
 	if err := (ProjectDefaultWorkspaceSetResponse{Project: summary}).Validate(); err != nil {

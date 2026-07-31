@@ -10,7 +10,18 @@ type SentinelError struct {
 	Message  string
 }
 
+type SentinelErrorRendering uint8
+
+const (
+	SentinelErrorMessageOnly SentinelErrorRendering = iota
+	SentinelErrorJoined
+)
+
 func NewSentinelError(sentinel error, message string) error {
+	return NewSentinelErrorWithRendering(sentinel, message, SentinelErrorMessageOnly)
+}
+
+func NewSentinelErrorWithRendering(sentinel error, message string, rendering SentinelErrorRendering) error {
 	trimmed := strings.TrimSpace(message)
 	if sentinel == nil {
 		return errors.New(trimmed)
@@ -18,7 +29,14 @@ func NewSentinelError(sentinel error, message string) error {
 	if trimmed == "" || trimmed == sentinel.Error() {
 		return sentinel
 	}
-	return SentinelError{Sentinel: sentinel, Message: trimmed}
+	switch rendering {
+	case SentinelErrorMessageOnly:
+		return SentinelError{Sentinel: sentinel, Message: trimmed}
+	case SentinelErrorJoined:
+		return errors.Join(sentinel, errors.New(trimmed))
+	default:
+		panic("unsupported sentinel error rendering")
+	}
 }
 
 func (e SentinelError) Error() string {

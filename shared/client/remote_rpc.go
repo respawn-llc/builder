@@ -603,11 +603,11 @@ func protocolError(resp *protocol.ResponseError) error {
 	case protocol.ErrCodeProjectUnavailable:
 		return errors.Join(serverapi.ErrProjectUnavailable, errors.New(message))
 	case protocol.ErrCodeRuntimeUnavailable:
-		return protocolSentinelError(serverapi.ErrRuntimeUnavailable, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeUnavailable, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeRuntimeNoActiveRun:
-		return protocolSentinelError(serverapi.ErrRuntimeNoActiveRun, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoActiveRun, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
-		return protocolSentinelError(serverapi.ErrRuntimeNoFinalAnswer, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoFinalAnswer, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -627,14 +627,4 @@ func protocolError(resp *protocol.ResponseError) error {
 	default:
 		return errors.New(message)
 	}
-}
-
-func protocolSentinelError(sentinel error, message string) error {
-	if sentinel == nil {
-		return errors.New(message)
-	}
-	if strings.TrimSpace(message) == "" || message == sentinel.Error() {
-		return sentinel
-	}
-	return errors.Join(sentinel, errors.New(message))
 }

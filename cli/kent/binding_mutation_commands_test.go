@@ -185,6 +185,31 @@ func TestProjectDefaultMalformedResponseEmitsJSONFailure(t *testing.T) {
 	}, true)
 }
 
+func TestProjectDefaultBlankWorkflowFieldsEmitJSONFailure(t *testing.T) {
+	t.Run("blank workflow ID", func(t *testing.T) {
+		project := validProjectHomeSummaryForBindingMutationTest()
+		blank := ""
+		name := "Workflow"
+		project.DefaultWorkflowID = &blank
+		project.DefaultWorkflowName = &name
+		project.DefaultWorkflowValid = true
+		assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+			return bindingMutationResult{Project: &project}, nil
+		}, true)
+	})
+	t.Run("blank workflow name", func(t *testing.T) {
+		project := validProjectHomeSummaryForBindingMutationTest()
+		id := "workflow-1"
+		blank := ""
+		project.DefaultWorkflowID = &id
+		project.DefaultWorkflowName = &blank
+		project.DefaultWorkflowValid = true
+		assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+			return bindingMutationResult{Project: &project}, nil
+		}, true)
+	})
+}
+
 func TestDetachMalformedBlockerResponseEmitsJSONFailure(t *testing.T) {
 	assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
 		return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{

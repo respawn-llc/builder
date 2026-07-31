@@ -160,6 +160,33 @@ func TestRemoteProjectWorkspaceMutationsRejectMalformedSuccessResponses(t *testi
 			},
 		},
 		{
+			name:   "default blank workflow ID",
+			method: protocol.MethodProjectSetDefaultWorkspace,
+			result: map[string]any{
+				"project": map[string]any{
+					"project_id":   "project-1",
+					"project_key":  "project",
+					"display_name": "Project",
+					"primary_workspace": map[string]any{
+						"workspace_id": "workspace-1",
+						"display_name": "Workspace",
+						"root_path":    "/workspace",
+						"availability": "available",
+					},
+					"default_workflow_id":    "",
+					"default_workflow_name":  "Workflow",
+					"default_workflow_valid": true,
+				},
+			},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
 			name:   "unlink blocker",
 			method: protocol.MethodProjectUnlinkWorkspace,
 			result: map[string]any{

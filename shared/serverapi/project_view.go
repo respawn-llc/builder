@@ -198,6 +198,24 @@ func (s ProjectHomeSummary) Validate() error {
 			return errors.New(field + " must not be blank")
 		}
 	}
+	if (s.DefaultWorkflowID == nil) != (s.DefaultWorkflowName == nil) {
+		return errors.New("default workflow ID and name must be present together")
+	}
+	if s.DefaultWorkflowID == nil {
+		if s.DefaultWorkflowValid {
+			return errors.New("default workflow validity must be false when no workflow is present")
+		}
+		return nil
+	}
+	if strings.TrimSpace(*s.DefaultWorkflowID) == "" {
+		return errors.New("default_workflow_id must not be blank when present")
+	}
+	if strings.TrimSpace(*s.DefaultWorkflowName) == "" {
+		return errors.New("default_workflow_name must not be blank when present")
+	}
+	if !s.DefaultWorkflowValid {
+		return errors.New("default workflow validity must be true when a workflow is present")
+	}
 	return nil
 }
 
