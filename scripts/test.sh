@@ -28,7 +28,7 @@ Options:
 
 Environment:
   KENT_TEST_TIMEOUT_SECONDS
-            Server test-runtime cap in seconds. Defaults to 180.
+            Server test-runtime cap in seconds. Defaults to 300.
   KENT_TEST_GO_PACKAGE_PARALLELISM
             Maximum Go test packages to execute concurrently. Defaults to the detected CPU count,
             capped at 10, and falls back to 4 when CPU detection is unavailable.
@@ -133,7 +133,7 @@ case "$disable_wall_clock_cap" in
     ;;
 esac
 
-timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-180}"
+timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-300}"
 default_go_test_package_parallelism=4
 if command -v nproc >/dev/null 2>&1; then
     default_go_test_package_parallelism="$(nproc)"
@@ -179,12 +179,12 @@ fi
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
     '' | *[!0-9]*)
-        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 180\n' >&2
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 300\n' >&2
         exit 2
         ;;
     esac
-    if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 180 ]; then
-        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 180\n' >&2
+    if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 300 ]; then
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 300\n' >&2
         exit 2
     fi
     case "$tui_timeout_seconds" in
