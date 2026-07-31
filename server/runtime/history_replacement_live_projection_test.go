@@ -7,15 +7,16 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/textutil"
-	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
-func TestHistoryReplacementLiveProjectionMatchesPersistedActiveSegment(t *testing.T) {
+func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns(t *testing.T) {
 	t.Parallel()
 	var events []Event
+	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		&fakeClient{},
 		tools.NewRegistry(),
 		Config{
@@ -24,21 +25,12 @@ func TestHistoryReplacementLiveProjectionMatchesPersistedActiveSegment(t *testin
 		},
 	)
 	items := llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, Content: textutil.Value("input")},
+		{Role: llm.RoleUser, Content: textutil.Value("first preserved prompt")},
+		{Role: llm.RoleUser, Content: textutil.Value("second preserved prompt")},
 		{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value("response"),
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			ToolCalls: []llm.ToolCall{{
-				ID:   "call-1",
-				Name: string(toolspec.ToolExecCommand),
-			}},
-		},
-		{
-			Role:       llm.RoleTool,
-			ToolCallID: textutil.Value("call-1"),
-			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
-			Content:    textutil.Value(`{"output":"done"}`),
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeEnvironment),
+			Content:     textutil.Value("current environment"),
 		},
 	})
 
@@ -67,10 +59,73 @@ func TestHistoryReplacementLiveProjectionMatchesPersistedActiveSegment(t *testin
 	if projectedRows == 0 || len(live) == 0 {
 		t.Fatalf("history replacement emitted no projected transcript facts: %+v", events)
 	}
+	if len(live) != 4 {
+		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
+	}
+	wantMessageTypes := []llm.MessageType{
+		llm.MessageTypeCompactionSummary,
+		llm.MessageTypeCompactionPreservedUserMessage,
+		llm.MessageTypeCompactionPreservedUserMessage,
+		llm.MessageTypeEnvironment,
+	}
+	wantVisibility := []transcript.EntryVisibility{
+		transcript.EntryVisibilityOngoing,
+		transcript.EntryVisibilityDetail,
+		transcript.EntryVisibilityDetail,
+		transcript.EntryVisibilityDetail,
+	}
+	wantDetails := []string{
+		"",
+		"first preserved prompt",
+		"second preserved prompt",
+		"current environment",
+	}
+	for index, fact := range live {
+		if fact.Kind != TranscriptCommittedRowFactNotice || fact.Notice == nil {
+			t.Fatalf("projected fact %d = %+v, want typed notice", index, fact)
+		}
+		if fact.Notice.MessageType != wantMessageTypes[index] {
+			t.Fatalf("projected fact %d message type = %q, want %q", index, fact.Notice.MessageType, wantMessageTypes[index])
+		}
+		if fact.Visibility != wantVisibility[index] {
+			t.Fatalf("projected fact %d visibility = %q, want %q", index, fact.Visibility, wantVisibility[index])
+		}
+		if index > 0 && fact.Notice.DiagnosticDetail != wantDetails[index] {
+			t.Fatalf("projected fact %d detail = %q, want %q", index, fact.Notice.DiagnosticDetail, wantDetails[index])
+		}
+	}
 
 	page := mustEngineNewestSegmentPage(t, engine)
 	hydrated := TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)
 	if !reflect.DeepEqual(hydrated, live) {
 		t.Fatalf("persisted active segment facts = %+v, live facts = %+v", hydrated, live)
+	}
+	workingSet := engine.transcriptRuntimeState().SnapshotItems()
+	if len(workingSet) < 2 {
+		t.Fatalf("provider working set = %+v, want preserved user items", workingSet)
+	}
+	wantProviderContent := []string{"first preserved prompt", "second preserved prompt"}
+	for index, wantContent := range wantProviderContent {
+		item := workingSet[index]
+		if item.Role == nil || *item.Role != llm.RoleUser ||
+			item.MessageType != nil ||
+			item.Content == nil || *item.Content != wantContent {
+			t.Fatalf("provider item %d changed while projecting transcript provenance: %+v", index, item)
+		}
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close live engine: %v", err)
+	}
+	reopened := mustNewTestEngine(
+		t,
+		mustOpenTestSession(t, store.Dir()),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
+	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot)
+	if !reflect.DeepEqual(reopenedFacts, live) {
+		t.Fatalf("reopened active segment facts = %+v, live facts = %+v", reopenedFacts, live)
 	}
 }

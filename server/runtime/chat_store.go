@@ -161,10 +161,20 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) error {
 	return nil
 }
 func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
-	s.replaceHistoryAtCommittedEntryStart(stepID, items, nil)
+	s.replaceHistoryAtCommittedEntryStart(
+		stepID,
+		items,
+		nil,
+		transcriptEntriesFromHistoryReplacement(items, nil),
+	)
 }
 
-func (s *chatStore) replaceHistoryAtCommittedEntryStart(stepID string, items []llm.ResponseItem, committedEntryStart *int) {
+func (s *chatStore) replaceHistoryAtCommittedEntryStart(
+	stepID string,
+	items []llm.ResponseItem,
+	committedEntryStart *int,
+	projectedEntries []ChatEntry,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	activeSegmentEntryStart := s.transcriptEntryCount
@@ -176,11 +186,9 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(stepID string, items []l
 	}
 	preparedItems := llm.PrepareOpenAIInputItems(items)
 	s.recordReplacementToolCallStepIDsLocked(stepID, preparedItems)
-	// Non-reviewer compaction keeps user-visible transcript history append-only by
-	// materializing replacement items as synthetic local entries at the compaction
-	// boundary while provider/model history switches to the compacted checkpoint.
+	// Provider/model history switches to the compacted checkpoint while the
+	// transcript receives its typed projection at the same committed boundary.
 	projectedStart := len(s.local)
-	projectedEntries := transcriptEntriesFromHistoryReplacement(preparedItems)
 	for index := range projectedEntries {
 		projectedEntries[index].StepID = strings.TrimSpace(stepID)
 	}

@@ -99,7 +99,15 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
-			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, replacement.Items, replacement.CommittedEntryStart)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+				stepID,
+				replacement.Items,
+				replacement.CommittedEntryStart,
+				transcriptEntriesFromHistoryReplacement(
+					replacement.Items,
+					replacement.CompactionNumber,
+				),
+			)
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,

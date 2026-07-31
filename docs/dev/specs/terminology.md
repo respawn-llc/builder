@@ -250,6 +250,10 @@ The primary long-running TUI transcript mode. Ongoing Mode writes committed hist
 
 The TUI mode for inspecting a bounded transcript page with selection, expansion, and line scrolling. The page changes when Detail Mode opens, when the selected Session changes, or when the user loads an adjacent page. Live events do not change the open page.
 
+### Compaction-Preserved User Message
+
+A user message retained in the model working set across a compaction boundary. Kent projects each preserved message into the transcript in provider order with detail-only visibility. The persisted message-type value `manual_compaction_carryover` is its legacy identifier.
+
 ### Transcript Mode
 
 The rendering posture for transcript entries. Current modes are ongoing and detail.

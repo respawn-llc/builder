@@ -60,7 +60,7 @@ func TestForkedSessionAfterTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
 	}
 }
 
-func TestManualCompactionAppendsLastVisibleUserMessageCarryover(t *testing.T) {
+func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -101,19 +101,19 @@ func TestManualCompactionAppendsLastVisibleUserMessageCarryover(t *testing.T) {
 			continue
 		}
 		switch *message.MessageType {
-		case llm.MessageTypeManualCompactionCarryover:
+		case llm.MessageTypeCompactionPreservedUserMessage:
 			carryoverIndex = i
 			carryover = message
 		}
 	}
 	if carryoverIndex < 0 {
-		t.Fatalf("expected manual compaction carryover in message history, got %+v", messages)
+		t.Fatalf("expected compaction-preserved user message in history, got %+v", messages)
 	}
 	if carryover.Role != llm.RoleDeveloper {
 		t.Fatalf("expected developer carryover message, got role=%q", carryover.Role)
 	}
-	if carryover.MessageType == nil || *carryover.MessageType != llm.MessageTypeManualCompactionCarryover {
-		t.Fatalf("expected manual compaction carryover message type, got %v", carryover.MessageType)
+	if carryover.MessageType == nil || *carryover.MessageType != llm.MessageTypeCompactionPreservedUserMessage {
+		t.Fatalf("expected compaction-preserved user message type, got %v", carryover.MessageType)
 	}
 	if !strings.Contains(messageContent(carryover), "please keep tests green") {
 		t.Fatalf("expected carryover to include last visible user message, got %q", messageContent(carryover))
@@ -175,8 +175,8 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(messages[4]), "source: "+workspacePath) {
 		t.Fatalf("expected workspace AGENTS after global AGENTS, got %+v", messages[4])
 	}
-	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeManualCompactionCarryover || !strings.Contains(messageContent(messages[5]), "please keep tests green") {
-		t.Fatalf("expected manual carryover after reinjected base context, got %+v", messages[5])
+	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[5]), "please keep tests green") {
+		t.Fatalf("expected compaction-preserved user message after reinjected base context, got %+v", messages[5])
 	}
 }
 
@@ -265,8 +265,8 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 	}
 
 	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeManualCompactionCarryover {
-			t.Fatalf("did not expect manual carryover message when no user message followed prior compaction, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeCompactionPreservedUserMessage {
+			t.Fatalf("did not expect compaction-preserved user message message when no user message followed prior compaction, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
 }
@@ -302,7 +302,7 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	messages := restored.transcriptRuntimeState().SnapshotMessages()
 	carryoverMessages := 0
 	for _, message := range messages {
-		if message.MessageType == nil || *message.MessageType != llm.MessageTypeManualCompactionCarryover {
+		if message.MessageType == nil || *message.MessageType != llm.MessageTypeCompactionPreservedUserMessage {
 			continue
 		}
 		carryoverMessages++
@@ -311,7 +311,7 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 		}
 	}
 	if carryoverMessages != 1 {
-		t.Fatalf("manual compaction carryover message count = %d, want 1; messages=%+v", carryoverMessages, messages)
+		t.Fatalf("compaction-preserved user message count = %d, want 1; messages=%+v", carryoverMessages, messages)
 	}
 	assertSingleActiveGoalContinuation(t, llm.ItemsFromMessages(messages), "survive process reopen")
 

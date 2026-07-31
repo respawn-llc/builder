@@ -16,6 +16,8 @@
 - **Once a transcript line is emitted into scrollback, it is immutable: no retroactive restyling, no in-place rewrites, no clear-and-replay, and no emitted-history reconciliation.**
 - Compaction is same-session committed transcript progression, not a same-session transcript rewrite.
 - Compaction and handoff never truncate user-visible transcript history.
+- A successful compaction commits exactly one ongoing-visible compaction summary.
+- A Compaction-Preserved User Message does not become a new user turn in Ongoing Mode.
 - Transcript display reads bounded pages or a recent tail. Neither the TUI nor Kent keeps the complete transcript in memory for display.
 - Detail Mode can page across compaction boundaries.
 - Rollback/fork is navigation or attachment to a different session target, not same-session transcript mutation.
@@ -112,7 +114,7 @@
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
-- `manual_compaction_carryover`: `D`
+- Compaction-Preserved User Message: `D`. Its persisted message-type value `manual_compaction_carryover` is legacy.
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
 - `workflow_mode`: `OC`
@@ -143,12 +145,12 @@
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
-- `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and `manual_compaction_carryover` remain plaintext.
+- `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
 - Shell tool calls use shared syntax highlighting, faint styling, and shell syntax for the active operating system.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch and edit tools use `⇄` in Ongoing Mode, Detail Mode, and replay. Paths and neutral text use the foreground role. Source lines use shared syntax highlighting. Added and removed counts use their semantic colors. Diff backgrounds blend 20% of Success or Error over the active Detail Mode background.
-- Compaction summaries and manual compaction carryover use secondary text in ongoing and collapsed Detail. Expanded compaction summaries use normal notice text.
+- Compaction summaries and Compaction-Preserved User Messages use secondary text in collapsed Detail. Compaction summaries also use secondary text in Ongoing Mode. Expanded compaction summaries use normal notice text.
 - Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
 - Active-goal continuation initialization uses a developer-context row with compact label `Goal nudge`. The ordinary active-goal continuation nudge reuses the same compact label; goal set, pause, resume, completion, and clear feedback keep their existing compact presentation.

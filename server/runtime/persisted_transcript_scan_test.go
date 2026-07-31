@@ -49,7 +49,11 @@ func TestPersistedTranscriptScanTracksDormantRecentTailWindow(t *testing.T) {
 			t.Fatalf("ApplyPersistedEvent before %d: %v", i, err)
 		}
 	}
-	if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("summary")}})})); err != nil {
+	if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{
+		Role:        llm.RoleUser,
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
+	}})})); err != nil {
 		t.Fatalf("ApplyPersistedEvent(history_replaced): %v", err)
 	}
 	for i := 0; i < 2; i++ {
@@ -300,14 +304,14 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 	}
 }
 
-func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing.T) {
+func TestPersistedTranscriptScanProjectsPreservedUserMessageFromPersistedMessage(t *testing.T) {
 	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
 		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("condensed provider summary"), MessageType: textutil.Value(llm.MessageTypeCompactionSummary)}})}),
 		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{Role: "compaction_summary", Text: "condensed summary"}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionPreservedUserMessage), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
@@ -329,21 +333,21 @@ func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing
 		t.Fatalf("expected persisted compaction summary entry, got %+v", page.Entries[2])
 	}
 	if page.Entries[3].Role != "manual_compaction_carryover" || page.Entries[3].Text != "Last user message before handoff\n\ncarry this forward" {
-		t.Fatalf("expected manual compaction carryover entry, got %+v", page.Entries[3])
+		t.Fatalf("expected compaction-preserved user entry, got %+v", page.Entries[3])
 	}
 	if page.Entries[3].Visibility != transcript.EntryVisibilityDetail {
 		t.Fatalf("expected carryover entry to stay detail-only, got %+v", page.Entries[3])
 	}
 }
 
-func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testing.T) {
+func TestPersistedTranscriptScanProjectsPreservedUserMessageFromHistoryReplacement(t *testing.T) {
 	t.Parallel()
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
 		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{
 			{Role: llm.RoleUser, Content: textutil.Value("condensed provider summary"), MessageType: textutil.Value(llm.MessageTypeCompactionSummary)},
-			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionPreservedUserMessage), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")},
 		})}),
 	}
 	for _, evt := range events {
@@ -360,7 +364,7 @@ func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testi
 		t.Fatalf("expected projected provider compaction summary entry, got %+v", page.Entries[1])
 	}
 	if page.Entries[2].Role != "manual_compaction_carryover" || page.Entries[2].Visibility != transcript.EntryVisibilityDetail {
-		t.Fatalf("expected detail-only manual compaction carryover entry, got %+v", page.Entries[2])
+		t.Fatalf("expected detail-only compaction-preserved user entry, got %+v", page.Entries[2])
 	}
 }
 

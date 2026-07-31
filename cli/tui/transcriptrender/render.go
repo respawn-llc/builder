@@ -748,7 +748,7 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	case clientui.TranscriptMessageCompactionSoonReminder:
 		return StyleRoleWarning
 	case clientui.TranscriptMessageCompactionSummary,
-		clientui.TranscriptMessageManualCompactionCarryover:
+		clientui.TranscriptMessageCompactionPreservedUserMessage:
 		return StyleRoleNoticeSecondary
 	case clientui.TranscriptMessageHandoffFutureMessage,
 		clientui.TranscriptMessageWorktreeMode,

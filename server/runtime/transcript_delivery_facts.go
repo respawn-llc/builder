@@ -375,7 +375,7 @@ func knownTranscriptNoticeRole(role string) bool {
 		transcript.EntryRoleWarning,
 		transcript.EntryRoleCacheWarning,
 		transcript.EntryRoleCompactionSummary,
-		transcript.EntryRoleManualCompactionCarryover,
+		transcript.EntryRoleCompactionPreservedUserMessage,
 		transcript.EntryRoleDeveloperContext,
 		transcript.EntryRoleDeveloperFeedback,
 		transcript.EntryRoleDeveloperErrorFeedback,
@@ -431,7 +431,7 @@ func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibili
 		}
 	}
 	switch transcript.EntryRole(strings.TrimSpace(entry.Role)) {
-	case transcript.EntryRoleManualCompactionCarryover,
+	case transcript.EntryRoleCompactionPreservedUserMessage,
 		transcript.EntryRoleDeveloperContext,
 		transcript.EntryRoleReasoning:
 		return transcript.EntryVisibilityDetail

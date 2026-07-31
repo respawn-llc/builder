@@ -39,26 +39,26 @@ const (
 type MessageType = clientui.MessageType
 
 const (
-	MessageTypeAgentsMD                  = clientui.MessageTypeAgentsMD
-	MessageTypeSkills                    = clientui.MessageTypeSkills
-	MessageTypeSubagents                 = clientui.MessageTypeSubagents
-	MessageTypeEnvironment               = clientui.MessageTypeEnvironment
-	MessageTypeCompactionSummary         = clientui.MessageTypeCompactionSummary
-	MessageTypeInterruption              = clientui.MessageTypeInterruption
-	MessageTypeErrorFeedback             = clientui.MessageTypeErrorFeedback
-	MessageTypeCompactionSoonReminder    = clientui.MessageTypeCompactionSoonReminder
-	MessageTypeHandoffFutureMessage      = clientui.MessageTypeHandoffFutureMessage
-	MessageTypeReviewerFeedback          = clientui.MessageTypeReviewerFeedback
-	MessageTypeBackgroundNotice          = clientui.MessageTypeBackgroundNotice
-	MessageTypeCustomToolCallOutput      = clientui.MessageTypeCustomToolCallOutput
-	MessageTypeManualCompactionCarryover = clientui.MessageTypeManualCompactionCarryover
-	MessageTypeHeadlessMode              = clientui.MessageTypeHeadlessMode
-	MessageTypeHeadlessModeExit          = clientui.MessageTypeHeadlessModeExit
-	MessageTypeWorkflowMode              = clientui.MessageTypeWorkflowMode
-	MessageTypeWorktreeMode              = clientui.MessageTypeWorktreeMode
-	MessageTypeWorktreeModeExit          = clientui.MessageTypeWorktreeModeExit
-	MessageTypeGoal                      = clientui.MessageTypeGoal
-	MessageTypeActiveGoalContinuation    = clientui.MessageTypeActiveGoalContinuation
+	MessageTypeAgentsMD                       = clientui.MessageTypeAgentsMD
+	MessageTypeSkills                         = clientui.MessageTypeSkills
+	MessageTypeSubagents                      = clientui.MessageTypeSubagents
+	MessageTypeEnvironment                    = clientui.MessageTypeEnvironment
+	MessageTypeCompactionSummary              = clientui.MessageTypeCompactionSummary
+	MessageTypeInterruption                   = clientui.MessageTypeInterruption
+	MessageTypeErrorFeedback                  = clientui.MessageTypeErrorFeedback
+	MessageTypeCompactionSoonReminder         = clientui.MessageTypeCompactionSoonReminder
+	MessageTypeHandoffFutureMessage           = clientui.MessageTypeHandoffFutureMessage
+	MessageTypeReviewerFeedback               = clientui.MessageTypeReviewerFeedback
+	MessageTypeBackgroundNotice               = clientui.MessageTypeBackgroundNotice
+	MessageTypeCustomToolCallOutput           = clientui.MessageTypeCustomToolCallOutput
+	MessageTypeCompactionPreservedUserMessage = clientui.MessageTypeCompactionPreservedUserMessage
+	MessageTypeHeadlessMode                   = clientui.MessageTypeHeadlessMode
+	MessageTypeHeadlessModeExit               = clientui.MessageTypeHeadlessModeExit
+	MessageTypeWorkflowMode                   = clientui.MessageTypeWorkflowMode
+	MessageTypeWorktreeMode                   = clientui.MessageTypeWorktreeMode
+	MessageTypeWorktreeModeExit               = clientui.MessageTypeWorktreeModeExit
+	MessageTypeGoal                           = clientui.MessageTypeGoal
+	MessageTypeActiveGoalContinuation         = clientui.MessageTypeActiveGoalContinuation
 )
 
 type Message struct {

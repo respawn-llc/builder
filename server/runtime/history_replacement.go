@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 
 	"core/server/llm"
@@ -35,17 +36,72 @@ func compactionBoundaryMatcher(matchErr *error) func(session.EventRecord) bool {
 	}
 }
 
-func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {
-	if len(items) == 0 {
-		return nil
+func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem, compactionNumber *int) []ChatEntry {
+	entries := make([]ChatEntry, 0, len(items)+1)
+	hasCompactionSummary := false
+	walker := newResponseItemMessageWalker(func(msg llm.Message) {
+		if entry, ok := preservedUserMessageEntry(msg); ok {
+			entries = append(entries, entry)
+			return
+		}
+		for _, entry := range VisibleChatEntriesFromMessage(msg) {
+			if entry.MessageType == llm.MessageTypeCompactionSummary {
+				hasCompactionSummary = true
+			}
+			entries = append(entries, clonePersistedChatEntry(entry))
+		}
+	})
+	for _, item := range items {
+		walker.Apply(item)
 	}
-	entries := visibleChatEntriesFromResponseItems(items)
-	if len(entries) == 0 {
-		return nil
+	walker.Flush()
+
+	// Empty legacy replacements are segment boundaries only. Non-empty
+	// replacements represent compacted working sets and always receive a notice.
+	if !hasCompactionSummary && len(items) > 0 {
+		entries = append(
+			[]ChatEntry{syntheticCompactionSummaryEntry(compactionNumber)},
+			entries...,
+		)
 	}
-	out := make([]ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, clonePersistedChatEntry(entry))
+	return entries
+}
+
+func preservedUserMessageEntry(msg llm.Message) (ChatEntry, bool) {
+	if msg.Role != llm.RoleUser || msg.MessageType != nil || msg.Content == nil ||
+		strings.TrimSpace(*msg.Content) == "" {
+		return ChatEntry{}, false
 	}
-	return out
+	// manual_compaction_carryover is the legacy wire name for any user message
+	// preserved across a compaction boundary.
+	messageType := llm.MessageTypeCompactionPreservedUserMessage
+	preserved := msg
+	preserved.Role = llm.RoleDeveloper
+	preserved.MessageType = &messageType
+	entry, ok := visibleDeveloperChatEntry(preserved)
+	if !ok {
+		return ChatEntry{}, false
+	}
+	return clonePersistedChatEntry(entry), true
+}
+
+func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
+	messageType := llm.MessageTypeCompactionSummary
+	label := compactLabelForMessage(llm.Message{MessageType: &messageType})
+	if compactionNumber != nil {
+		label = compactionSummaryLabel(*compactionNumber)
+	}
+	return compactionSummaryChatEntry(llm.Message{
+		Role:           llm.RoleUser,
+		MessageType:    &messageType,
+		Content:        &label,
+		CompactContent: &label,
+	})
+}
+
+func compactionSummaryLabel(compactionNumber int) string {
+	return fmt.Sprintf(
+		"Context compacted for the %s time.",
+		ordinal(compactionNumber),
+	)
 }

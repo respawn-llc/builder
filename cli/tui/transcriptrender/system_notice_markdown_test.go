@@ -30,7 +30,7 @@ func TestTypedSystemNoticesUseMarkdown(t *testing.T) {
 func TestExcludedSystemNoticesDoNotUseMarkdown(t *testing.T) {
 	for _, messageType := range []clientui.TranscriptMessageType{
 		clientui.TranscriptMessageHandoffFutureMessage,
-		clientui.TranscriptMessageManualCompactionCarryover,
+		clientui.TranscriptMessageCompactionPreservedUserMessage,
 	} {
 		t.Run(string(messageType), func(t *testing.T) {
 			if noticeUsesMarkdown(systemNoticeRow(messageType).Notice) {

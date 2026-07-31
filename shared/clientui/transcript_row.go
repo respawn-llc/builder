@@ -72,26 +72,28 @@ const (
 type TranscriptMessageType string
 
 const (
-	TranscriptMessageAgentsMD                  TranscriptMessageType = "agents.md"
-	TranscriptMessageSkills                    TranscriptMessageType = "skills"
-	TranscriptMessageSubagents                 TranscriptMessageType = "subagents"
-	TranscriptMessageEnvironment               TranscriptMessageType = "environment"
-	TranscriptMessageCompactionSummary         TranscriptMessageType = "compaction_summary"
-	TranscriptMessageInterruption              TranscriptMessageType = "interruption"
-	TranscriptMessageErrorFeedback             TranscriptMessageType = "error_feedback"
-	TranscriptMessageCompactionSoonReminder    TranscriptMessageType = "compaction_soon_reminder"
-	TranscriptMessageHandoffFutureMessage      TranscriptMessageType = "handoff_future_message"
-	TranscriptMessageReviewerFeedback          TranscriptMessageType = "reviewer_feedback"
-	TranscriptMessageBackgroundNotice          TranscriptMessageType = "background_notice"
-	TranscriptMessageCustomToolCallOutput      TranscriptMessageType = "custom_tool_call_output"
-	TranscriptMessageManualCompactionCarryover TranscriptMessageType = "manual_compaction_carryover"
-	TranscriptMessageHeadlessMode              TranscriptMessageType = "headless_mode"
-	TranscriptMessageHeadlessModeExit          TranscriptMessageType = "headless_mode_exit"
-	TranscriptMessageWorkflowMode              TranscriptMessageType = "workflow_mode"
-	TranscriptMessageWorktreeMode              TranscriptMessageType = "worktree_mode"
-	TranscriptMessageWorktreeModeExit          TranscriptMessageType = "worktree_mode_exit"
-	TranscriptMessageGoal                      TranscriptMessageType = "goal"
-	TranscriptMessageActiveGoalContinuation    TranscriptMessageType = "active_goal_continuation"
+	TranscriptMessageAgentsMD               TranscriptMessageType = "agents.md"
+	TranscriptMessageSkills                 TranscriptMessageType = "skills"
+	TranscriptMessageSubagents              TranscriptMessageType = "subagents"
+	TranscriptMessageEnvironment            TranscriptMessageType = "environment"
+	TranscriptMessageCompactionSummary      TranscriptMessageType = "compaction_summary"
+	TranscriptMessageInterruption           TranscriptMessageType = "interruption"
+	TranscriptMessageErrorFeedback          TranscriptMessageType = "error_feedback"
+	TranscriptMessageCompactionSoonReminder TranscriptMessageType = "compaction_soon_reminder"
+	TranscriptMessageHandoffFutureMessage   TranscriptMessageType = "handoff_future_message"
+	TranscriptMessageReviewerFeedback       TranscriptMessageType = "reviewer_feedback"
+	TranscriptMessageBackgroundNotice       TranscriptMessageType = "background_notice"
+	TranscriptMessageCustomToolCallOutput   TranscriptMessageType = "custom_tool_call_output"
+	// TranscriptMessageCompactionPreservedUserMessage retains the legacy wire
+	// value used by existing Session logs.
+	TranscriptMessageCompactionPreservedUserMessage TranscriptMessageType = "manual_compaction_carryover"
+	TranscriptMessageHeadlessMode                   TranscriptMessageType = "headless_mode"
+	TranscriptMessageHeadlessModeExit               TranscriptMessageType = "headless_mode_exit"
+	TranscriptMessageWorkflowMode                   TranscriptMessageType = "workflow_mode"
+	TranscriptMessageWorktreeMode                   TranscriptMessageType = "worktree_mode"
+	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
+	TranscriptMessageGoal                           TranscriptMessageType = "goal"
+	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
 )
 
 type NoticeID string
@@ -338,7 +340,7 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageReviewerFeedback,
 		TranscriptMessageBackgroundNotice,
 		TranscriptMessageCustomToolCallOutput,
-		TranscriptMessageManualCompactionCarryover,
+		TranscriptMessageCompactionPreservedUserMessage,
 		TranscriptMessageHeadlessMode,
 		TranscriptMessageHeadlessModeExit,
 		TranscriptMessageWorkflowMode,

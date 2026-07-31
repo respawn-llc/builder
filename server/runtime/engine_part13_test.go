@@ -139,7 +139,7 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 }
 
-func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCarryover(t *testing.T) {
+func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreservedUserMessage(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -171,20 +171,20 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	foundFutureMessage := false
-	foundManualCarryover := false
+	foundPreservedUserMessage := false
 	for _, message := range messages {
 		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHandoffFutureMessage {
 			foundFutureMessage = true
 		}
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeManualCompactionCarryover {
-			foundManualCarryover = true
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeCompactionPreservedUserMessage {
+			foundPreservedUserMessage = true
 		}
 	}
 	if !foundFutureMessage {
 		t.Fatalf("expected future-agent message in history, got %+v", messages)
 	}
-	if foundManualCarryover {
-		t.Fatalf("did not expect manual compaction carryover for trigger_handoff, got %+v", messages)
+	if foundPreservedUserMessage {
+		t.Fatalf("did not expect a compaction-preserved user message for trigger_handoff, got %+v", messages)
 	}
 }
 

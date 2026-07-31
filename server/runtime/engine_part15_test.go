@@ -87,7 +87,7 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 	}
 }
 
-func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverAtomically(t *testing.T) {
+func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMessageAtomically(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
@@ -152,18 +152,18 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 			}
 		case llm.MessageTypeWorktreeMode:
 			worktreeIndex = idx
-		case llm.MessageTypeManualCompactionCarryover:
+		case llm.MessageTypeCompactionPreservedUserMessage:
 			carryoverIndex = idx
 			if item.Content == nil || !strings.Contains(*item.Content, "seed") {
-				t.Fatalf("manual carryover lost the last visible user message: %+v", item)
+				t.Fatalf("compaction-preserved user message lost the last visible user message: %+v", item)
 			}
 		}
 	}
 	if summaryIndex < 0 || environmentIndex < 0 || goalIndex < 0 || worktreeIndex < 0 || carryoverIndex < 0 || goalCount != 1 {
-		t.Fatalf("replacement payload must embed summary, base meta, one active-goal continuation, worktree context, and manual carryover: %+v", replacement.Items)
+		t.Fatalf("replacement payload must embed summary, base meta, one active-goal continuation, worktree context, and compaction-preserved user message: %+v", replacement.Items)
 	}
 	if !(summaryIndex < environmentIndex && environmentIndex < goalIndex && goalIndex < worktreeIndex && worktreeIndex < carryoverIndex) || carryoverIndex != len(replacement.Items)-1 {
-		t.Fatalf("replacement payload order must be summary, base, active goal, worktree, then manual carryover: %+v", replacement.Items)
+		t.Fatalf("replacement payload order must be summary, base, active goal, worktree, then compaction-preserved user message: %+v", replacement.Items)
 	}
 	for _, evt := range events[historyIndex+1:] {
 		if evt.Kind != "message" {
@@ -173,8 +173,8 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil &&
 			(*msg.MessageType == llm.MessageTypeEnvironment ||
 				*msg.MessageType == llm.MessageTypeActiveGoalContinuation ||
-				*msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
-			t.Fatalf("base meta, active-goal continuation, and manual carryover must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
+				*msg.MessageType == llm.MessageTypeCompactionPreservedUserMessage) {
+			t.Fatalf("base meta, active-goal continuation, and compaction-preserved user message must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
 		}
 	}
 }
