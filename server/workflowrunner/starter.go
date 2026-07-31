@@ -356,6 +356,13 @@ func renderCurrentNodePrompt(text string, input workflowstore.CurrentNodeStartCo
 }
 
 func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
+	if plan.Locked != nil && plan.Locked.WorkflowCompletionMode != nil {
+		mode, err := workflowruntime.ParseCompletionMode(string(*plan.Locked.WorkflowCompletionMode))
+		if err != nil {
+			return "", client, fmt.Errorf("parse retained Session completion mode: %w", err)
+		}
+		return mode, client, nil
+	}
 	configured := s.cfg.Settings.Workflow.CompletionMode
 	if input.Node.CompletionMode != "" {
 		configured = config.WorkflowCompletionMode(input.Node.CompletionMode)
@@ -369,7 +376,18 @@ func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input wo
 		selection.ProviderCapabilities, client = caps, resolved
 	}
 	mode, err := workflowruntime.SelectCompletionMode(selection)
-	return mode, client, err
+	if err != nil {
+		return "", client, err
+	}
+	if plan.Locked != nil {
+		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+			_, backfillErr := store.BackfillLockedWorkflowCompletionMode(mode)
+			return backfillErr
+		}); err != nil {
+			return "", client, fmt.Errorf("backfill retained Session completion mode: %w", err)
+		}
+	}
+	return mode, client, nil
 }
 
 func (s *Starter) withSessionStore(ctx context.Context, descriptor session.SessionDescriptor, callback func(context.Context, *session.Store) error) error {

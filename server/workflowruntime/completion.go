@@ -17,6 +17,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
 )
 
 const (
@@ -29,13 +30,13 @@ const (
 var ErrStructuredOutputUnsupported = errors.New("workflow structured output completion requires provider responses API support")
 var ErrShellCompletionUnavailable = errors.New("workflow shell-command completion requires exec_command")
 
-type CompletionMode string
+type CompletionMode = sessioncontract.WorkflowCompletionMode
 
 const (
-	CompletionModeStructuredOutput   CompletionMode = "structured_output"
-	CompletionModeTool               CompletionMode = "tool"
-	CompletionModeShellCommand       CompletionMode = "shell_command"
-	CompletionModeUnstructuredOutput CompletionMode = "unstructured_output"
+	CompletionModeStructuredOutput   = sessioncontract.WorkflowCompletionModeStructuredOutput
+	CompletionModeTool               = sessioncontract.WorkflowCompletionModeTool
+	CompletionModeShellCommand       = sessioncontract.WorkflowCompletionModeShellCommand
+	CompletionModeUnstructuredOutput = sessioncontract.WorkflowCompletionModeUnstructuredOutput
 )
 
 type CompletionModeSelection struct {
@@ -217,15 +218,7 @@ func ProviderSupportsStructuredOutput(caps llm.ProviderCapabilities) bool {
 }
 
 func ParseCompletionMode(raw string) (CompletionMode, error) {
-	mode := CompletionMode(strings.TrimSpace(raw))
-	switch mode {
-	case CompletionModeStructuredOutput, CompletionModeTool, CompletionModeShellCommand, CompletionModeUnstructuredOutput:
-		return mode, nil
-	case "":
-		return "", errors.New("workflow effective completion mode is required")
-	default:
-		return "", fmt.Errorf("invalid workflow effective completion mode %q", raw)
-	}
+	return sessioncontract.ParseWorkflowCompletionMode(raw)
 }
 
 func StructuredOutput(contract CompletionContract) (*llm.StructuredOutput, error) {

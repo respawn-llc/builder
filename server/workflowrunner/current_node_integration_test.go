@@ -24,6 +24,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 const currentNodeRunnerWait = 5 * time.Second
@@ -264,6 +265,47 @@ func (f *currentNodeRunnerFixture) waitForControllerCurrentNode(t *testing.T, re
 	t.Fatalf("Current Node %v never reached controller admission or live state", reference)
 }
 
+func (f *currentNodeRunnerFixture) waitForControllerCurrentNodeFinalized(t *testing.T, reference workflow.CurrentNodeReference) {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for time.Now().Before(deadline) {
+		if !controllerSnapshotOwnsCurrentNode(f.controller.Snapshot(), reference) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Current Node %v remained owned by the controller after execution finalization", reference)
+}
+
+func controllerSnapshotOwnsCurrentNode(snapshot workflowexecution.CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
+	for _, intent := range snapshot.AutomaticIntents {
+		if intent.CurrentNode.Equal(reference) {
+			return true
+		}
+	}
+	for _, start := range snapshot.ExplicitStarts {
+		if start.CurrentNode.Equal(reference) {
+			return true
+		}
+	}
+	for _, intent := range snapshot.HeldIntents {
+		if intent.CurrentNode.Equal(reference) {
+			return true
+		}
+	}
+	for _, gate := range snapshot.Gates {
+		if gate.CurrentNode.Equal(reference) {
+			return true
+		}
+	}
+	for _, live := range snapshot.LiveScopes {
+		if live.CurrentNode.Equal(reference) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *currentNodeRunnerFixture) waitForPath(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
@@ -282,6 +324,31 @@ func (f *currentNodeRunnerFixture) runtimeRequests() []runtimewire.RuntimeClient
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]runtimewire.RuntimeClientRequest(nil), f.clientRequests...)
+}
+
+func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int) []llm.Request {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for len(f.client.Requests()) < count && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	requests := f.client.Requests()
+	if len(requests) != count {
+		t.Fatalf("model requests = %d, want %d", len(requests), count)
+	}
+	return requests
+}
+
+func requireToolCompletionRequests(t *testing.T, requests []llm.Request) {
+	t.Helper()
+	for index, request := range requests {
+		if request.StructuredOutput != nil {
+			t.Fatalf("request %d changed retained completion mode to structured output", index+1)
+		}
+		if !requestAdvertisesTool(request, toolspec.ToolCompleteNode) {
+			t.Fatalf("request %d omitted retained complete_node tool: %+v", index+1, request.Tools)
+		}
+	}
 }
 
 func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t *testing.T) {
@@ -304,6 +371,93 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	if len(modelRequests) != 1 || modelRequests[0].StructuredOutput == nil {
 		t.Fatalf("model requests = %+v, want structured Current Node completion contract", modelRequests)
 	}
+}
+
+func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next","commentary":"first done"}`),
+			},
+		),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Retained Session completion mode",
+		workflow.ContextModeContinueSession,
+		currentNodeWorkflowStep{
+			kind:           workflow.NodeKindAgent,
+			role:           "coder",
+			prompt:         "Complete the first node.",
+			completionMode: string(config.WorkflowCompletionModeTool),
+		},
+		currentNodeWorkflowStep{
+			kind:           workflow.NodeKindAgent,
+			role:           "coder",
+			prompt:         "Complete the second node.",
+			completionMode: string(config.WorkflowCompletionModeStructuredOutput),
+		},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+
+	requireToolCompletionRequests(t, f.waitForModelRequests(t, 2))
+}
+
+func TestResumeRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedCancellation(),
+		ScriptedCancellation(),
+	)
+	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(
+		t,
+		f.store,
+		string(config.WorkflowCompletionModeTool),
+	)
+	task := f.createTask(t, workflowID)
+	currentNode := f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 1
+	})
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+
+	if _, err := f.store.UpdateNode(context.Background(), workflowstore.NodeRecord{
+		ID:             currentNode.NodeID,
+		WorkflowID:     workflowID,
+		Key:            "execute",
+		Kind:           workflow.NodeKindAgent,
+		DisplayName:    "Execute",
+		SubagentRole:   "coder",
+		PromptTemplate: "Do the work.",
+		CompletionMode: string(config.WorkflowCompletionModeStructuredOutput),
+	}); err != nil {
+		t.Fatalf("change latest node completion mode: %v", err)
+	}
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("resume task: %v", err)
+	}
+
+	requireToolCompletionRequests(t, f.waitForModelRequests(t, 2))
+}
+
+func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
+	for _, tool := range request.Tools {
+		if tool.Name == string(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCurrentNodeAgentUsesDurableCommentCountWithoutReadingCommentBodies(t *testing.T) {
@@ -680,12 +834,17 @@ func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
 
 func createCurrentNodeAgentWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
 	t.Helper()
-	return createCurrentNodeWorkflow(t, store, workflow.NodeKindAgent, "coder", "")
+	return createCurrentNodeAgentWorkflowWithCompletionMode(t, store, "")
+}
+
+func createCurrentNodeAgentWorkflowWithCompletionMode(t *testing.T, store *workflowstore.Store, completionMode string) workflow.WorkflowID {
+	t.Helper()
+	return createCurrentNodeWorkflow(t, store, workflow.NodeKindAgent, "coder", "", completionMode)
 }
 
 func createCurrentNodeScriptWorkflow(t *testing.T, store *workflowstore.Store, scriptPath string) workflow.WorkflowID {
 	t.Helper()
-	return createCurrentNodeWorkflow(t, store, workflow.NodeKindScript, "", scriptPath)
+	return createCurrentNodeWorkflow(t, store, workflow.NodeKindScript, "", scriptPath, "")
 }
 
 func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, mode workflow.ContextMode) workflow.WorkflowID {
@@ -819,10 +978,11 @@ func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Sto
 }
 
 type currentNodeWorkflowStep struct {
-	kind       workflow.NodeKind
-	role       string
-	scriptPath string
-	prompt     string
+	kind           workflow.NodeKind
+	role           string
+	scriptPath     string
+	prompt         string
+	completionMode string
 }
 
 func createCurrentNodeTwoStepWorkflow(
@@ -858,10 +1018,12 @@ func createCurrentNodeTwoStepWorkflow(
 		{
 			ID: firstID, WorkflowID: created.ID, Key: "first", Kind: first.kind, DisplayName: "First",
 			SubagentRole: first.role, ScriptPath: first.scriptPath, PromptTemplate: first.prompt,
+			CompletionMode: first.completionMode,
 		},
 		{
 			ID: secondID, WorkflowID: created.ID, Key: "second", Kind: second.kind, DisplayName: "Second",
 			SubagentRole: second.role, ScriptPath: second.scriptPath, PromptTemplate: second.prompt,
+			CompletionMode: second.completionMode,
 		},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
@@ -900,7 +1062,7 @@ func createCurrentNodeTwoStepWorkflow(
 	return created.ID
 }
 
-func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath string) workflow.WorkflowID {
+func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath, completionMode string) workflow.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node runner"})
@@ -927,6 +1089,7 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
 		ID: nodeID, WorkflowID: created.ID, Key: "execute", Kind: kind, DisplayName: "Execute",
 		SubagentRole: role, PromptTemplate: "Do the work.", ScriptPath: scriptPath,
+		CompletionMode: completionMode,
 	}); err != nil {
 		t.Fatalf("add executable node: %v", err)
 	}
