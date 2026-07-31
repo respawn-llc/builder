@@ -30,10 +30,10 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	if e == nil {
 		return WorkflowSessionState{}
 	}
-	if e.currentNodeExecutionActive() {
+	if execution, active := e.currentNodeExecutionConfig(); active {
 		return WorkflowSessionState{
-			TaskID:     string(e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID),
-			WorkflowID: strings.TrimSpace(e.cfg.CurrentNodeExecution.Instructions.WorkflowID),
+			TaskID:     string(execution.Instructions.CurrentNode.TaskID),
+			WorkflowID: strings.TrimSpace(execution.Instructions.WorkflowID),
 		}
 	}
 	return WorkflowSessionState{}

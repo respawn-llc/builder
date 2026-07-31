@@ -251,7 +251,11 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if !e.workflowPromptActive() {
 		return nil
 	}
-	return e.workflowDelivery.apply(workflowTaskPromptTriggerTaskDelivery, func(trigger workflowTaskPromptTrigger) error {
+	delivery := e.currentNodeExecutionSnapshot().delivery
+	if delivery == nil {
+		return errors.New("workflow prompt delivery state is unavailable")
+	}
+	return delivery.apply(workflowTaskPromptTriggerTaskDelivery, func(trigger workflowTaskPromptTrigger) error {
 		prompt, configured := e.workflowPrompt()
 		if !configured {
 			return errors.New("workflow prompt is unavailable")
@@ -304,6 +308,10 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if e.currentNodeExecutionActive() {
+		delivery := e.currentNodeExecutionSnapshot().delivery
+		if delivery == nil {
+			return nil, errors.New("workflow prompt delivery state is unavailable")
+		}
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		prompt, configured := e.workflowPrompt()
 		if !configured {
@@ -312,7 +320,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		kind, shouldInject := selectWorkflowTaskPrompt(
 			e.transcriptRuntimeState().SnapshotItems(),
 			prompt.Identity,
-			e.workflowDelivery.trigger(workflowTaskPromptTriggerCompaction),
+			delivery.trigger(workflowTaskPromptTriggerCompaction),
 		)
 		if !shouldInject {
 			panic("build compaction meta context: active workflow did not select a workflow task prompt")
@@ -341,12 +349,13 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 }
 
 func (e *Engine) currentWorkflowTaskCommentCount(ctx context.Context) (int64, error) {
-	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.TaskCommentCounter == nil {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.TaskCommentCounter == nil {
 		return 0, nil
 	}
-	taskID := e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID
+	taskID := execution.Instructions.CurrentNode.TaskID
 	if taskID == "" {
 		return 0, nil
 	}
-	return e.cfg.CurrentNodeExecution.TaskCommentCounter.CountTaskComments(ctx, taskID)
+	return execution.TaskCommentCounter.CountTaskComments(ctx, taskID)
 }

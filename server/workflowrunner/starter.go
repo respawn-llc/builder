@@ -302,7 +302,7 @@ func (s *Starter) startCurrentNodeAgent(
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
-	prepared, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
+	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
 	if err != nil {
 		return err
 	}
@@ -350,7 +350,7 @@ func (s *Starter) startCurrentNodeAgent(
 		return prepared.cleanup(err)
 	}
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: sessionruntime.ReplaceAgentResource{},
+		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
 		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
@@ -384,29 +384,30 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
-) (preparedCurrentNodeAgentSession, error) {
+) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
 	if assignmentSteer == nil {
-		return s.prepareCurrentNodeAgentSession(ctx, input, true, true)
+		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
+		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
 	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
 	if !ok {
-		return preparedCurrentNodeAgentSession{}, fmt.Errorf(
+		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
 			"current node %v received incompatible assignment steer %T",
 			input.CurrentNode.Reference,
 			assignmentSteer,
 		)
 	}
 	if !assignment.reference.Equal(input.CurrentNode.Reference) {
-		return preparedCurrentNodeAgentSession{}, fmt.Errorf(
+		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
 			"current node assignment steer %v does not match start %v",
 			assignment.reference,
 			input.CurrentNode.Reference,
 		)
 	}
 	if err := assignment.Wait(ctx); err != nil {
-		return preparedCurrentNodeAgentSession{}, err
+		return preparedCurrentNodeAgentSession{}, nil, err
 	}
-	return assignment.prepared, nil
+	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
 }
 
 func (s *Starter) planCurrentNodeSession(

@@ -191,18 +191,18 @@ type Engine struct {
 	diagnostics                *diagnosticDedupeStore
 	toolCallStarts             *pendingToolCallStartStore
 
-	usageState         *usageTrackingState
-	goalLoop           *goalLoopState
-	compactionState    *compactionRuntimeState
-	handoffState       *handoffRuntimeState
-	phaseState         *phaseProtocolState
-	reviewerState      *reviewerRuntimeState
-	transcriptState    *transcriptRuntimeState
-	lockedState        *lockedContractState
-	modelRequestsState *modelRequestRuntimeState
-	workflowDelivery   *workflowPromptDeliveryState
-	compactionPlanner  *compactionPlanner
-	collaboratorsOnce  sync.Once
+	usageState           *usageTrackingState
+	goalLoop             *goalLoopState
+	compactionState      *compactionRuntimeState
+	handoffState         *handoffRuntimeState
+	phaseState           *phaseProtocolState
+	reviewerState        *reviewerRuntimeState
+	transcriptState      *transcriptRuntimeState
+	lockedState          *lockedContractState
+	modelRequestsState   *modelRequestRuntimeState
+	currentNodeExecution *currentNodeExecutionState
+	compactionPlanner    *compactionPlanner
+	collaboratorsOnce    sync.Once
 
 	phaseProtocol  phaseProtocolEnforcer
 	stepLifecycle  exclusiveStepLifecycle
@@ -281,24 +281,24 @@ func New(
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
 	eng := &Engine{
-		store:              store,
-		eventLog:           eventLog,
-		llm:                client,
-		registry:           registry,
-		cfg:                cfg,
-		diagnostics:        newDiagnosticDedupeStore(),
-		toolCallStarts:     newPendingToolCallStartStore(),
-		usageState:         newUsageTrackingState(),
-		goalLoop:           newGoalLoopState(),
-		compactionState:    newCompactionRuntimeState(),
-		handoffState:       newHandoffRuntimeState(),
-		phaseState:         newPhaseProtocolState(),
-		reviewerState:      newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
-		lockedState:        newLockedContractState(),
-		modelRequestsState: newModelRequestRuntimeState(),
-		workflowDelivery:   newWorkflowPromptDeliveryState(cfg.CurrentNodeExecution),
-		compactionPlanner:  newCompactionPlanner(),
+		store:                store,
+		eventLog:             eventLog,
+		llm:                  client,
+		registry:             registry,
+		cfg:                  cfg,
+		diagnostics:          newDiagnosticDedupeStore(),
+		toolCallStarts:       newPendingToolCallStartStore(),
+		usageState:           newUsageTrackingState(),
+		goalLoop:             newGoalLoopState(),
+		compactionState:      newCompactionRuntimeState(),
+		handoffState:         newHandoffRuntimeState(),
+		phaseState:           newPhaseProtocolState(),
+		reviewerState:        newReviewerRuntimeState(cfg.Reviewer.Client),
+		transcriptState:      newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
+		lockedState:          newLockedContractState(),
+		modelRequestsState:   newModelRequestRuntimeState(),
+		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
+		compactionPlanner:    newCompactionPlanner(),
 	}
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()

@@ -16,6 +16,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/registry"
+	agentruntime "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -602,7 +603,7 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	}
 }
 
-func TestResumeRetainsEstablishedSessionContractAcrossNodeOverride(t *testing.T) {
+func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
 		ScriptedCancellation(),
@@ -649,6 +650,45 @@ func TestResumeRetainsEstablishedSessionContractAcrossNodeOverride(t *testing.T)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	initialRuntime := f.runtimeRequests()[0]
+	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings:     initialRuntime.ActiveSettings,
+		EnabledTools: initialRuntime.EnabledTools,
+		Workdir:      f.workspace,
+		Sources:      initialRuntime.Sources,
+		Client:       f.client,
+	})
+	if err != nil {
+		t.Fatalf("build attached Session runtime: %v", err)
+	}
+	attachment, err := f.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "tui-test-owner",
+		Runtime:   &interactivePlan,
+	})
+	if err != nil {
+		t.Fatalf("attach Session runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, releaseErr := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose)
+		if releaseErr != nil && !errors.Is(releaseErr, serverapi.ErrRuntimeUnavailable) {
+			t.Errorf("release attached Session runtime: %v", releaseErr)
+		}
+	})
+	subscription, err := f.runtimes.SubscribeSessionTranscript(
+		context.Background(),
+		serverapi.TranscriptSubscribeRequest{SessionID: sessionID.String()},
+	)
+	if err != nil {
+		t.Fatalf("subscribe attached Session transcript: %v", err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	hydrationCtx, cancelHydration := context.WithTimeout(context.Background(), currentNodeRunnerWait)
+	if _, err := subscription.Next(hydrationCtx); err != nil {
+		cancelHydration()
+		t.Fatalf("hydrate attached Session transcript: %v", err)
+	}
+	cancelHydration()
 
 	if _, err := f.store.UpdateNode(context.Background(), workflowstore.NodeRecord{
 		ID:             currentNode.NodeID,
@@ -679,6 +719,27 @@ func TestResumeRetainsEstablishedSessionContractAcrossNodeOverride(t *testing.T)
 	}
 	if resumedAssignments[0].sourcePath != initialAssignments[0].sourcePath {
 		t.Fatalf("resumed assignment = %+v, want %+v", resumedAssignments[0], initialAssignments[0])
+	}
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) == 2
+	})
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	if err := f.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *agentruntime.Engine) error {
+		if engine.CurrentNodeExecutionConfigured() {
+			t.Fatal("finalized workflow execution remained bound to attached runtime")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
+	}
+	eventCtx, cancelEvent := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelEvent()
+	if _, err := subscription.Next(eventCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("attached transcript subscription closed on Resume: %v", err)
 	}
 }
 
