@@ -299,66 +299,69 @@ func (c *CurrentNodeController) CurrentTaskQuiescence(taskIDs []workflow.TaskID)
 }
 
 func (c *CurrentNodeController) ensureTaskQuiescentLocked(taskID workflow.TaskID) error {
-	quiescent, err := c.taskQuiescentLocked(taskID)
-	if err != nil {
+	if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 		return err
 	}
-	if !quiescent {
+	if !c.taskExecutionQuiescentLocked(taskID) {
 		return ErrTaskExecutionNotQuiescent
 	}
 	return nil
 }
 
 func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (bool, error) {
-	if err := c.ensureTaskAvailableLocked(taskID); err != nil {
-		if errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			return false, nil
-		}
-		return false, err
+	if c.closed {
+		return false, errors.New("current node workflow controller is closed")
+	}
+	return c.taskExecutionQuiescentLocked(taskID), nil
+}
+
+func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.TaskID) bool {
+	if c.interrupts.taskActive(taskID) {
+		return false
 	}
 	for _, gate := range c.gates {
 		if gate.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, live := range c.live {
 		if live.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, start := range c.automaticQueue {
 		if start.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, intent := range c.automaticReservations {
 		if intent.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, start := range c.explicitQueue {
 		if start.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, start := range c.explicitReservations {
 		if start.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, start := range c.admissionWorkers {
 		if start.reference.TaskID == taskID {
-			return false, nil
+			return false
 		}
 	}
 	for _, starts := range c.heldStarts {
 		for _, start := range starts {
 			if start.reference.TaskID == taskID {
-				return false, nil
+				return false
 			}
 		}
 	}
-	return true, nil
+	return true
 }
 
 func (c *CurrentNodeController) ensureTaskAvailableLocked(taskID workflow.TaskID) error {
