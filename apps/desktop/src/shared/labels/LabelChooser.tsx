@@ -473,6 +473,11 @@ function renderLabelChooserResults({
       </div>
     );
   }
+  const choiceIndexByLabelID = new Map(
+    choices.flatMap((choice, index) =>
+      choice.kind === "label" ? [[choice.label.id, index] as const] : [],
+    ),
+  );
   return (
     <div
       className="grid max-h-[min(calc(10*2.25rem+9*var(--space-1)),calc(var(--radix-popover-content-available-height)-10rem))] gap-[var(--space-1)] overflow-y-auto overscroll-contain pr-[var(--space-1)]"
@@ -519,10 +524,7 @@ function renderLabelChooserResults({
               confirmDelete,
               commitRename,
               deletion,
-              highlighted:
-                choices.findIndex(
-                  (choice) => choice.kind === "label" && choice.label.id === label.id,
-                ) === keyboardHighlightedIndex,
+              highlighted: choiceIndexByLabelID.get(label.id) === keyboardHighlightedIndex,
               invocation,
               rename,
               reorderRow: row,
