@@ -37,7 +37,6 @@ export type VerticalReorderDragSource = "keyboard" | "pointer";
 
 export type VerticalReorderDragSession = Readonly<{
   activeID: UniqueIdentifier;
-  activeRowHeight: number;
   overID: UniqueIdentifier | null;
   source: VerticalReorderDragSource;
 }>;
@@ -89,11 +88,9 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   const onDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeID = event.active.id;
-      const activeRowHeight = event.active.rect.current.initial?.height ?? 0;
       const source = event.activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer";
       setSession({
         activeID,
-        activeRowHeight,
         overID: activeID,
         source,
       });
@@ -116,6 +113,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
           if (destination !== undefined) {
             destination.scrollIntoView({ block: "nearest" });
           }
+          return current;
         }
         return { ...current, overID };
       });
@@ -125,6 +123,15 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
 
   const onDragMove = useCallback(
     (event: DragMoveEvent) => {
+      if (session?.source === "keyboard" && event.delta.y !== 0) {
+        setSession((current) => {
+          if (current === null) {
+            return current;
+          }
+          const nextID = nextKeyboardTargetID(items, getItemID, current, event.delta.y);
+          return nextID === null ? current : { ...current, overID: nextID };
+        });
+      }
       if (session?.source !== "pointer") {
         return;
       }
@@ -133,13 +140,13 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
         edgeScroll.move(pointer);
       }
     },
-    [edgeScroll, session?.source],
+    [edgeScroll, getItemID, items, session?.source],
   );
 
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeID = event.active.id;
-      const overID = event.over?.id;
+      const overID = session?.source === "keyboard" ? session.overID ?? event.over?.id : event.over?.id;
       const source = session?.source;
       const orderedIDs = reorderIDs(items.map(getItemID), activeID, overID);
       clearSession();
@@ -148,7 +155,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       }
       onCommit(orderedIDs);
     },
-    [clearSession, getItemID, items, onCommit, session?.source],
+    [clearSession, getItemID, items, onCommit, session],
   );
 
   const onDragCancel = useCallback(
@@ -161,7 +168,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   useEffect(() => clearSession, [clearSession]);
 
   const activeItem = session === null ? undefined : itemByID.get(session.activeID);
-  const insertionIndex = session === null ? undefined : insertionGapIndex(items, getItemID, session);
 
   return (
     <DndContext
@@ -176,12 +182,11 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     >
       <SortableContext items={items.map(getItemID)} strategy={verticalListSortingStrategy}>
         <div ref={listRef} style={{ display: "grid", gap: "var(--space-3)" }}>
-          {items.map((item, index) => {
+          {items.map((item) => {
             const id = getItemID(item);
             return (
               <VerticalReorderItem
                 id={id}
-                isInsertionGap={insertionIndex === index}
                 item={item}
                 key={id}
                 onRowNodeChange={registerRow}
@@ -191,9 +196,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
               />
             );
           })}
-          {insertionIndex === items.length ? (
-            <VerticalReorderGap height={session?.activeRowHeight ?? 0} />
-          ) : null}
         </div>
       </SortableContext>
       <DragOverlay dropAnimation={useReducedMotion() ? null : undefined}>
@@ -213,7 +215,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
 
 function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
   id,
-  isInsertionGap,
   item,
   onRowNodeChange,
   renderActivator,
@@ -221,7 +222,6 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
   session,
 }: Readonly<{
   id: ID;
-  isInsertionGap: boolean;
   item: Item;
   onRowNodeChange: (id: ID, element: HTMLElement | null) => void;
   renderActivator: (item: Item) => VerticalReorderActivator;
@@ -239,7 +239,7 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
     [id, onRowNodeChange, setNodeRef],
   );
   const style: CSSProperties = isDragging
-    ? { height: 0, overflow: "hidden", pointerEvents: "none" }
+    ? { opacity: 0, pointerEvents: "none" }
     : {
         transform:
           transform === null
@@ -249,50 +249,21 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
       };
 
   return (
-    <>
-      {isInsertionGap ? <VerticalReorderGap height={session?.activeRowHeight ?? 0} /> : null}
-      <div ref={setRowNodeRef} style={style}>
-        {renderItem(item, {
-          activator: cloneElement(renderActivator(item), {
-            ...attributes,
-            ...listeners,
-            ref: setActivatorNodeRef,
-          }),
-          isDragging,
-          isOverlay: false,
-        })}
-      </div>
-    </>
-  );
-}
-
-function VerticalReorderGap({ height }: Readonly<{ height: number }>) {
-  const reducedMotion = useReducedMotion();
-  return (
     <div
-      aria-hidden="true"
-      style={{
-        height,
-        transition: reducedMotion ? undefined : "height var(--motion-fast) ease-out",
-      }}
-    />
+      ref={setRowNodeRef}
+      style={style}
+    >
+      {renderItem(item, {
+        activator: cloneElement(renderActivator(item), {
+          ...attributes,
+          ...listeners,
+          ref: setActivatorNodeRef,
+        }),
+        isDragging,
+        isOverlay: false,
+      })}
+    </div>
   );
-}
-
-function insertionGapIndex<Item>(
-  items: readonly Item[],
-  getItemID: (item: Item) => UniqueIdentifier,
-  session: VerticalReorderDragSession,
-): number | undefined {
-  if (session.overID === null || session.activeID === session.overID) {
-    return undefined;
-  }
-  const activeIndex = items.findIndex((item) => getItemID(item) === session.activeID);
-  const overIndex = items.findIndex((item) => getItemID(item) === session.overID);
-  if (activeIndex < 0 || overIndex < 0) {
-    return undefined;
-  }
-  return activeIndex < overIndex ? overIndex + 1 : overIndex;
 }
 
 function reorderIDs<ID extends UniqueIdentifier>(
@@ -315,6 +286,22 @@ function reorderIDs<ID extends UniqueIdentifier>(
   }
   next.splice(overIndex, 0, moved);
   return next;
+}
+
+function nextKeyboardTargetID<Item>(
+  items: readonly Item[],
+  getItemID: (item: Item) => UniqueIdentifier,
+  session: VerticalReorderDragSession,
+  deltaY: number,
+): UniqueIdentifier | null {
+  const ids = items.map(getItemID);
+  const currentID = session.overID ?? session.activeID;
+  const currentIndex = ids.findIndex((id) => id === currentID);
+  if (currentIndex < 0) {
+    return null;
+  }
+  const nextIndex = currentIndex + (deltaY > 0 ? 1 : -1);
+  return ids[nextIndex] ?? null;
 }
 
 function pointerLocation(event: DragMoveEvent): Readonly<{ x: number; y: number }> | null {

@@ -188,7 +188,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 				if queryErr != nil {
 					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
 				}
-				tasks = boardNodeTaskRecordsUpdatedDescPrevious(rows)
+				tasks = boardNodeTaskRecordsUpdated(rows)
 			} else {
 				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedDesc(ctx, sqlitegen.ListBoardNodeTasksUpdatedDescParams{
 					ProjectID:             projectID,
@@ -207,7 +207,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 				if queryErr != nil {
 					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
 				}
-				tasks = boardNodeTaskRecordsUpdatedDesc(rows)
+				tasks = boardNodeTaskRecordsUpdated(rows)
 			}
 		} else {
 			if cursor.direction == boardNodeCardsPageDirectionNewer {
@@ -227,7 +227,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 				if queryErr != nil {
 					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
 				}
-				tasks = boardNodeTaskRecordsUpdatedAscPrevious(rows)
+				tasks = boardNodeTaskRecordsUpdated(rows)
 			} else {
 				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedAsc(ctx, sqlitegen.ListBoardNodeTasksUpdatedAscParams{
 					ProjectID:             projectID,
@@ -246,7 +246,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 				if queryErr != nil {
 					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
 				}
-				tasks = boardNodeTaskRecordsUpdatedAsc(rows)
+				tasks = boardNodeTaskRecordsUpdated(rows)
 			}
 		}
 	} else {
@@ -449,26 +449,15 @@ func boardNodeTaskRecordsGeneralized(rows []sqlitegen.ListBoardNodeTasksGenerali
 	})
 }
 
-func boardNodeTaskRecordsUpdatedAsc(rows []sqlitegen.ListBoardNodeTasksUpdatedAscRow) []boardNodeCardsPageTask {
-	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedAscRow) boardNodeCardsPageTask {
-		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
-	})
+type boardUpdatedTaskRow interface {
+	sqlitegen.ListBoardNodeTasksUpdatedAscRow |
+		sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow |
+		sqlitegen.ListBoardNodeTasksUpdatedDescRow |
+		sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow
 }
 
-func boardNodeTaskRecordsUpdatedAscPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow) []boardNodeCardsPageTask {
-	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow) boardNodeCardsPageTask {
-		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
-	})
-}
-
-func boardNodeTaskRecordsUpdatedDesc(rows []sqlitegen.ListBoardNodeTasksUpdatedDescRow) []boardNodeCardsPageTask {
-	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedDescRow) boardNodeCardsPageTask {
-		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
-	})
-}
-
-func boardNodeTaskRecordsUpdatedDescPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow) []boardNodeCardsPageTask {
-	return boardNodeCardsPageTasks(rows, func(row sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow) boardNodeCardsPageTask {
+func boardNodeTaskRecordsUpdated[T boardUpdatedTaskRow](rows []T) []boardNodeCardsPageTask {
+	return boardNodeCardsPageTasks(rows, func(row T) boardNodeCardsPageTask {
 		return boardNodeCardsPageTask{task: sqlitegen.TaskRecord(row)}
 	})
 }

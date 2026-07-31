@@ -3692,13 +3692,11 @@ board_node_task_label_values AS (
             PARTITION BY assignment.task_id
             ORDER BY label.ordinal DESC, label.id DESC
         ) AS label_score_row
-    FROM task_label_assignments assignment
+    FROM board_node_tasks board_task
+    JOIN task_label_assignments assignment ON assignment.task_id = board_task.id
     JOIN project_labels label ON label.id = assignment.label_id
-    WHERE EXISTS (
-        SELECT 1
-        FROM board_node_tasks task
-        WHERE task.id = assignment.task_id
-    )
+    CROSS JOIN board_sort_args args
+    WHERE args.sort_field = 'labels'
 ),
 board_node_task_labels AS (
     SELECT
@@ -3935,100 +3933,102 @@ func (q *Queries) ListBoardNodeTasksGeneralized(ctx context.Context, arg ListBoa
 
 const listBoardNodeTasksUpdatedAsc = `-- name: ListBoardNodeTasksUpdatedAsc :many
 SELECT
-        task.id,
-        CAST(?1 AS TEXT) AS project_id,
-        task.project_workflow_link_id,
-        CAST(?2 AS TEXT) AS workflow_id,
-        task.workflow_revision_seen,
-        task.task_seq,
-        task.short_id,
-        task.title,
-        task.body,
-        task.source_url,
-        task.source_workspace_id,
-        task.managed_worktree_id,
-        task.execution_target_mode,
-        task.execution_target_requested_ref,
-        task.execution_target_resolved_ref,
-        task.execution_target_commit_oid,
-        task.execution_target_provenance,
-        task.created_at_unix_ms,
-        task.updated_at_unix_ms,
-        task.metadata_json
-    FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-    WHERE task.project_workflow_link_id = ?3
-      AND (
-          ?4 = 'none'
-          OR (
-              ?4 = 'named'
-              AND ?5 = 'any'
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM json_each(?6) selected_label
-                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                        ON assignment.label_id = selected_label.value
-                      WHERE assignment.task_id = task.id
-                  )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM json_each(?7) excluded_label
-                      WHERE NOT EXISTS (
-                          SELECT 1
-                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                          WHERE assignment.label_id = excluded_label.value
-                            AND assignment.task_id = task.id
-                      )
-                  )
-              )
-          )
-          OR (
-              ?4 = 'named'
-              AND ?5 = 'all'
-              AND NOT EXISTS (
+    task.id,
+    CAST(?1 AS TEXT) AS project_id,
+    task.project_workflow_link_id,
+    CAST(?2 AS TEXT) AS workflow_id,
+    task.workflow_revision_seen,
+    task.task_seq,
+    task.short_id,
+    task.title,
+    task.body,
+    task.source_url,
+    task.source_workspace_id,
+    task.managed_worktree_id,
+    task.execution_target_mode,
+    task.execution_target_requested_ref,
+    task.execution_target_resolved_ref,
+    task.execution_target_commit_oid,
+    task.execution_target_provenance,
+    task.created_at_unix_ms,
+    task.updated_at_unix_ms,
+    task.metadata_json
+FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
+WHERE task.project_workflow_link_id = ?3
+  AND (
+      ?4 = 'none'
+      OR (
+          ?4 = 'named'
+          AND ?5 = 'any'
+          AND (
+              EXISTS (
                   SELECT 1
                   FROM json_each(?6) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = task.id
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM json_each(?7) excluded_label
                   WHERE NOT EXISTS (
                       SELECT 1
                       FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
+                      WHERE assignment.label_id = excluded_label.value
                         AND assignment.task_id = task.id
                   )
               )
-              AND NOT EXISTS (
+          )
+      )
+      OR (
+          ?4 = 'named'
+          AND ?5 = 'all'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(?6) selected_label
+              WHERE NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?7) excluded_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = excluded_label.value
-                  WHERE assignment.task_id = task.id
+                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                  WHERE assignment.label_id = selected_label.value
+                    AND assignment.task_id = task.id
               )
           )
-          OR (
-              ?4 = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = task.id
-              )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(?7) excluded_label
+              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                ON assignment.label_id = excluded_label.value
+              WHERE assignment.task_id = task.id
           )
       )
-      AND EXISTS (
-          SELECT 1
-          FROM task_current_nodes current_node
-          WHERE current_node.task_id = task.id
-            AND current_node.node_id = ?8
-      )
-      AND (
-          ?9 IS NULL
-          OR (
-              ?10 = 'older'
-              AND (task.updated_at_unix_ms, task.task_seq) > (
-                  CAST(?11 AS INTEGER),
-                  CAST(?9 AS INTEGER)
-              )
+      OR (
+          ?4 = 'unlabeled'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM task_label_assignments assignment
+              WHERE assignment.task_id = task.id
           )
       )
-    ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = task.id
+        AND current_node.node_id = ?8
+  )
+
+  AND (
+      ?9 IS NULL
+      OR (
+          ?10 = 'older'
+          AND (task.updated_at_unix_ms, task.task_seq) > (
+              CAST(?11 AS INTEGER),
+              CAST(?9 AS INTEGER)
+          )
+      )
+  )
+
+ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
 LIMIT ?12
 `
 
@@ -4214,11 +4214,13 @@ WHERE task.project_workflow_link_id = ?3
       WHERE current_node.task_id = task.id
         AND current_node.node_id = ?8
   )
+
   AND ?9 IS NOT NULL
   AND (task.updated_at_unix_ms, task.task_seq) < (
       CAST(?10 AS INTEGER),
       CAST(?9 AS INTEGER)
   )
+
 ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
 LIMIT ?11
 `
@@ -4320,100 +4322,102 @@ func (q *Queries) ListBoardNodeTasksUpdatedAscPrevious(ctx context.Context, arg 
 
 const listBoardNodeTasksUpdatedDesc = `-- name: ListBoardNodeTasksUpdatedDesc :many
 SELECT
-        task.id,
-        CAST(?1 AS TEXT) AS project_id,
-        task.project_workflow_link_id,
-        CAST(?2 AS TEXT) AS workflow_id,
-        task.workflow_revision_seen,
-        task.task_seq,
-        task.short_id,
-        task.title,
-        task.body,
-        task.source_url,
-        task.source_workspace_id,
-        task.managed_worktree_id,
-        task.execution_target_mode,
-        task.execution_target_requested_ref,
-        task.execution_target_resolved_ref,
-        task.execution_target_commit_oid,
-        task.execution_target_provenance,
-        task.created_at_unix_ms,
-        task.updated_at_unix_ms,
-        task.metadata_json
-    FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-    WHERE task.project_workflow_link_id = ?3
-      AND (
-          ?4 = 'none'
-          OR (
-              ?4 = 'named'
-              AND ?5 = 'any'
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM json_each(?6) selected_label
-                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                        ON assignment.label_id = selected_label.value
-                      WHERE assignment.task_id = task.id
-                  )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM json_each(?7) excluded_label
-                      WHERE NOT EXISTS (
-                          SELECT 1
-                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                          WHERE assignment.label_id = excluded_label.value
-                            AND assignment.task_id = task.id
-                      )
-                  )
-              )
-          )
-          OR (
-              ?4 = 'named'
-              AND ?5 = 'all'
-              AND NOT EXISTS (
+    task.id,
+    CAST(?1 AS TEXT) AS project_id,
+    task.project_workflow_link_id,
+    CAST(?2 AS TEXT) AS workflow_id,
+    task.workflow_revision_seen,
+    task.task_seq,
+    task.short_id,
+    task.title,
+    task.body,
+    task.source_url,
+    task.source_workspace_id,
+    task.managed_worktree_id,
+    task.execution_target_mode,
+    task.execution_target_requested_ref,
+    task.execution_target_resolved_ref,
+    task.execution_target_commit_oid,
+    task.execution_target_provenance,
+    task.created_at_unix_ms,
+    task.updated_at_unix_ms,
+    task.metadata_json
+FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
+WHERE task.project_workflow_link_id = ?3
+  AND (
+      ?4 = 'none'
+      OR (
+          ?4 = 'named'
+          AND ?5 = 'any'
+          AND (
+              EXISTS (
                   SELECT 1
                   FROM json_each(?6) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = task.id
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM json_each(?7) excluded_label
                   WHERE NOT EXISTS (
                       SELECT 1
                       FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
+                      WHERE assignment.label_id = excluded_label.value
                         AND assignment.task_id = task.id
                   )
               )
-              AND NOT EXISTS (
+          )
+      )
+      OR (
+          ?4 = 'named'
+          AND ?5 = 'all'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(?6) selected_label
+              WHERE NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?7) excluded_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = excluded_label.value
-                  WHERE assignment.task_id = task.id
+                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                  WHERE assignment.label_id = selected_label.value
+                    AND assignment.task_id = task.id
               )
           )
-          OR (
-              ?4 = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = task.id
-              )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(?7) excluded_label
+              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                ON assignment.label_id = excluded_label.value
+              WHERE assignment.task_id = task.id
           )
       )
-      AND EXISTS (
-          SELECT 1
-          FROM task_current_nodes current_node
-          WHERE current_node.task_id = task.id
-            AND current_node.node_id = ?8
-      )
-      AND (
-          ?9 IS NULL
-          OR (
-              ?10 = 'older'
-              AND (task.updated_at_unix_ms, task.task_seq) < (
-                  CAST(?11 AS INTEGER),
-                  CAST(?9 AS INTEGER)
-              )
+      OR (
+          ?4 = 'unlabeled'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM task_label_assignments assignment
+              WHERE assignment.task_id = task.id
           )
       )
-    ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = task.id
+        AND current_node.node_id = ?8
+  )
+
+  AND (
+      ?9 IS NULL
+      OR (
+          ?10 = 'older'
+          AND (task.updated_at_unix_ms, task.task_seq) < (
+              CAST(?11 AS INTEGER),
+              CAST(?9 AS INTEGER)
+          )
+      )
+  )
+
+ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
 LIMIT ?12
 `
 
@@ -4599,11 +4603,13 @@ WHERE task.project_workflow_link_id = ?3
       WHERE current_node.task_id = task.id
         AND current_node.node_id = ?8
   )
+
   AND ?9 IS NOT NULL
   AND (task.updated_at_unix_ms, task.task_seq) > (
       CAST(?10 AS INTEGER),
       CAST(?9 AS INTEGER)
   )
+
 ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
 LIMIT ?11
 `

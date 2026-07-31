@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,7 +49,10 @@ describe("VerticalReorder", () => {
     await user.keyboard("[Space]");
     await user.keyboard("[ArrowDown]");
 
-    await waitFor(() => expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second"));
+    await waitFor(() => {
+      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+      expect(screen.getByTestId("row-third").parentElement?.style.transform).not.toBe("");
+    });
 
     await user.keyboard("[Space]");
 
@@ -57,6 +60,35 @@ describe("VerticalReorder", () => {
       expect(onCommit).toHaveBeenCalledWith(["first", "third", "second"]);
       expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
     });
+  });
+
+  it("keeps the source row as one stable placeholder when pointer dragging starts", () => {
+    const view = render(<ReorderHarness onCommit={vi.fn()} />);
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      clientX: 20,
+      clientY: 50,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(document, {
+      buttons: 1,
+      clientX: 20,
+      clientY: 57,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    expect(screen.getByTestId("row-second")).not.toBeVisible();
+    expect(screen.getAllByTestId(/^row-/)).toHaveLength(3);
+
+    act(() => {
+      cancelPointerDrag();
+    });
+    view.unmount();
   });
 
   it("cancels an active keyboard drag without committing or leaving drag projection behind", async () => {
@@ -79,6 +111,27 @@ describe("VerticalReorder", () => {
     });
   });
 
+  it("keeps one source placeholder and moves one adjacent row after one keyboard Down", async () => {
+    const user = userEvent.setup();
+    mockRowGeometry();
+
+    render(<ReorderHarness onCommit={vi.fn()} />);
+
+    const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
+    secondHandle.focus();
+    await user.keyboard("[Space]");
+
+    expect(screen.getByTestId("row-second")).not.toBeVisible();
+
+    await user.keyboard("[ArrowDown]");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    });
+    expect(screen.getByTestId("row-second")).not.toBeVisible();
+    await user.keyboard("[Escape]");
+  });
+
   it("keeps keyboard projection and final IDs under reduced motion and cleans the listener", async () => {
     const onCommit = vi.fn();
     const user = userEvent.setup();
@@ -96,7 +149,10 @@ describe("VerticalReorder", () => {
     await user.keyboard("[Space]");
     await user.keyboard("[ArrowDown]");
 
-    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    await waitFor(() => {
+      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+      expect(screen.getByTestId("row-third").parentElement?.style.transform).not.toBe("");
+    });
 
     await user.keyboard("[Space]");
     await waitFor(() => {
@@ -286,7 +342,10 @@ function ReorderHarness({
         </button>
       )}
       renderItem={(item, row) => (
-        <div data-testid={row.isOverlay ? "reorder-overlay" : `row-${item.id}`}>
+        <div
+          data-row-id={row.isOverlay ? undefined : item.id}
+          data-testid={row.isOverlay ? "reorder-overlay" : `row-${item.id}`}
+        >
           {row.activator}
         </div>
       )}
@@ -334,7 +393,15 @@ function mockRowGeometry(): void {
         y: 0,
       };
     }
-    const index = items.findIndex((item) => this.textContent.trim() === item.label);
+    const rowID = ["first", "second", "third"].find(
+      (id) => within(this).queryByTestId(`row-${id}`) !== null,
+    );
+    const rowIndexByID: Readonly<Record<string, number>> = {
+      "row-first": 0,
+      "row-second": 1,
+      "row-third": 2,
+    };
+    const index = rowIndexByID[`row-${rowID ?? ""}`] ?? -1;
     const top = index < 0 ? 0 : index * 40;
     return {
       bottom: top + 32,
