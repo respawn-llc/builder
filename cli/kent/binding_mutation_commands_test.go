@@ -537,8 +537,9 @@ func TestProjectDefaultJSONSuccessOmitsAbsentWorkflowFields(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode default envelope: %v", err)
 	}
-	if _, present := decoded.Result.Project["default_workflow_id"]; present {
-		t.Fatal("default JSON encoded absent default_workflow_id")
+	workflowID, present := decoded.Result.Project["default_workflow_id"]
+	if !present || string(workflowID) != "null" {
+		t.Fatalf("default JSON workflow ID = %s, present=%t; want explicit null", workflowID, present)
 	}
 	if _, present := decoded.Result.Project["default_workflow_name"]; present {
 		t.Fatal("default JSON encoded absent default_workflow_name")

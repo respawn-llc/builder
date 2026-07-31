@@ -16,15 +16,10 @@ func (e WorkspacePathIdentityError) RPCErrorCode() int {
 }
 
 func (e WorkspacePathIdentityError) RPCErrorData() json.RawMessage {
-	if strings.TrimSpace(e.WorkspaceRoot) == "" {
-		return nil
-	}
 	return marshalRPCErrorData(struct {
-		Type          string `json:"type"`
-		WorkspaceRoot string `json:"workspace_root"`
+		Type string `json:"type"`
 	}{
-		Type:          "workspace_path_identity_error",
-		WorkspaceRoot: strings.TrimSpace(e.WorkspaceRoot),
+		Type: "workspace_path_identity_error",
 	})
 }
 
@@ -115,14 +110,12 @@ func validWorkspaceMutationIdentity(projectID string, workspaceID string) bool {
 
 func DecodeWorkspacePathIdentityError(data json.RawMessage, message string) error {
 	var envelope struct {
-		Type          string `json:"type"`
-		WorkspaceRoot string `json:"workspace_root"`
+		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_path_identity_error" || strings.TrimSpace(envelope.WorkspaceRoot) == "" {
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_path_identity_error" {
 		return fallbackProjectWorkspaceRPCError(message, ErrWorkspacePathIdentity)
 	}
 	return WorkspacePathIdentityError{
-		WorkspaceRoot: envelope.WorkspaceRoot,
 		remoteMessage: trimmedRPCMessage(message),
 	}
 }

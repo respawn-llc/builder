@@ -97,7 +97,7 @@ type ProjectHomeSummary struct {
 	ProjectKey           string                  `json:"project_key"`
 	DisplayName          string                  `json:"display_name"`
 	PrimaryWorkspace     ProjectWorkspaceSummary `json:"primary_workspace"`
-	DefaultWorkflowID    *runtimeids.WorkflowID  `json:"default_workflow_id,omitempty"`
+	DefaultWorkflowID    *runtimeids.WorkflowID  `json:"default_workflow_id"`
 	DefaultWorkflowName  string                  `json:"default_workflow_name,omitempty"`
 	DefaultWorkflowValid bool                    `json:"default_workflow_valid"`
 	UpdatedAtUnixMs      int64                   `json:"updated_at_unix_ms"`
