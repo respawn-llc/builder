@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
+	remoteclient "core/shared/client"
+	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *testing.T) {
@@ -106,12 +110,40 @@ func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *t
 		t.Fatalf("ambiguous project lookup exit=%d, want 1", exitCode)
 	}
 
+	rpcURL := "ws" + server.URL[len("http"):]
+	remote, err := remoteclient.DialRemoteURL(context.Background(), rpcURL)
+	if err != nil {
+		t.Fatalf("dial gateway for workspace identity: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	canonicalSharedRoot, err := config.CanonicalWorkspaceRoot(sharedRoot)
+	if err != nil {
+		t.Fatalf("canonicalize shared workspace: %v", err)
+	}
+	workspaces, err := remote.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
+		ProjectID: projectB,
+		PageSize:  100,
+	})
+	if err != nil {
+		t.Fatalf("list Project B workspaces: %v", err)
+	}
+	var detachedWorkspaceID string
+	for _, workspace := range workspaces.Workspaces {
+		if workspace.RootPath == canonicalSharedRoot {
+			detachedWorkspaceID = workspace.WorkspaceID
+			break
+		}
+	}
+	if detachedWorkspaceID == "" {
+		t.Fatalf("Project B workspace list = %+v, want shared workspace %q", workspaces.Workspaces, canonicalSharedRoot)
+	}
+
 	detachedOutput, stderr, exitCode := runKent("detach", "--project", projectB, sharedRelativePath)
 	if exitCode != 0 {
 		t.Fatalf("detach project B: exit=%d stderr=%q", exitCode, stderr)
 	}
-	if strings.TrimSpace(detachedOutput) == "" {
-		t.Fatalf("detach output = %q, want detached workspace ID", detachedOutput)
+	if detachedOutput != detachedWorkspaceID+"\n" {
+		t.Fatalf("detach output = %q, want exactly %q", detachedOutput, detachedWorkspaceID+"\n")
 	}
 	remainingOutput, stderr, exitCode := runKent("project", sharedRelativePath)
 	if exitCode != 0 || strings.TrimSpace(remainingOutput) != projectA {

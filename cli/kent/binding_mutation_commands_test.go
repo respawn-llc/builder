@@ -402,6 +402,9 @@ func TestDetachBlockerProjectionIncludesAllBlockersAndPositiveCounts(t *testing.
 	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" || strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
 		t.Fatalf("blocker guidance = %+v, want non-blank guidance", projection.Blockers)
 	}
+	if !strings.Contains(projection.Blockers[0].Guidance, "--workspace <replacement-workspace-id>") {
+		t.Fatalf("default-workspace guidance = %q, want workspace-ID remediation", projection.Blockers[0].Guidance)
+	}
 }
 
 func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
@@ -409,14 +412,24 @@ func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default guidance: %v", err)
 	}
-	if defaultGuidance.Kind != blockerGuidanceDefaultWorkspace || defaultGuidance.Command == nil {
-		t.Fatalf("default guidance = %+v, want command action", defaultGuidance)
+	if defaultGuidance.Kind != blockerGuidanceDefaultWorkspace ||
+		defaultGuidance.PathCommand == nil ||
+		defaultGuidance.WorkspaceIDCommand == nil {
+		t.Fatalf("default guidance = %+v, want path and workspace-ID actions", defaultGuidance)
+	}
+	if got := strings.Join(*defaultGuidance.PathCommand, " "); got != "kent project default --project project-1 <replacement-path>" {
+		t.Fatalf("default path command = %q, want typed path command", got)
+	}
+	if got := strings.Join(*defaultGuidance.WorkspaceIDCommand, " "); got != "kent project default --project project-1 --workspace <replacement-workspace-id>" {
+		t.Fatalf("default workspace-ID command = %q, want typed workspace-ID command", got)
 	}
 	unknownGuidance, err := blockerGuidanceFor("future_code", "project-1")
 	if err != nil {
 		t.Fatalf("unknown guidance: %v", err)
 	}
-	if unknownGuidance.Kind != blockerGuidanceUnknown || unknownGuidance.Command != nil {
+	if unknownGuidance.Kind != blockerGuidanceUnknown ||
+		unknownGuidance.PathCommand != nil ||
+		unknownGuidance.WorkspaceIDCommand != nil {
 		t.Fatalf("unknown guidance = %+v, want commandless unknown action", unknownGuidance)
 	}
 	if _, err := blockerGuidanceFor("default_workspace", " "); err == nil {
@@ -424,7 +437,7 @@ func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
 	}
 }
 
-func TestBindingMutationEnvelopeOmitsOptionalSuccessFields(t *testing.T) {
+func TestBindingMutationEnvelopeProjectsExactDetachSuccess(t *testing.T) {
 	projectID := "project-1"
 	workspaceID := "workspace-1"
 	envelope := bindingMutationEnvelope{
@@ -439,8 +452,44 @@ func TestBindingMutationEnvelopeOmitsOptionalSuccessFields(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
+	if len(decoded) != 2 {
+		t.Fatalf("success envelope keys = %v, want exactly status and result", decoded)
+	}
+	if _, present := decoded["status"]; !present {
+		t.Fatalf("success envelope = %s, want status", stdout.String())
+	}
+	if _, present := decoded["result"]; !present {
+		t.Fatalf("success envelope = %s, want result", stdout.String())
+	}
 	if _, present := decoded["error"]; present {
 		t.Fatalf("success envelope contains error: %s", stdout.String())
+	}
+	var status string
+	if err := json.Unmarshal(decoded["status"], &status); err != nil || status != "ok" {
+		t.Fatalf("status = %q, want ok", status)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(decoded["result"], &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("detach result keys = %v, want exactly project_id and workspace_id", result)
+	}
+	if _, present := result["project_id"]; !present {
+		t.Fatalf("detach result = %s, want project_id", stdout.String())
+	}
+	if _, present := result["workspace_id"]; !present {
+		t.Fatalf("detach result = %s, want workspace_id", stdout.String())
+	}
+	var gotProjectID, gotWorkspaceID string
+	if err := json.Unmarshal(result["project_id"], &gotProjectID); err != nil {
+		t.Fatalf("decode result project_id: %v", err)
+	}
+	if err := json.Unmarshal(result["workspace_id"], &gotWorkspaceID); err != nil {
+		t.Fatalf("decode result workspace_id: %v", err)
+	}
+	if gotProjectID != projectID || gotWorkspaceID != workspaceID {
+		t.Fatalf("detach result IDs = %q/%q, want %q/%q", gotProjectID, gotWorkspaceID, projectID, workspaceID)
 	}
 }
 

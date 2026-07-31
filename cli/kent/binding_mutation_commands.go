@@ -278,8 +278,9 @@ func newCommandTokens(tokens ...string) (*commandTokens, error) {
 }
 
 type blockerGuidance struct {
-	Kind    blockerGuidanceActionKind
-	Command *commandTokens
+	Kind               blockerGuidanceActionKind
+	PathCommand        *commandTokens
+	WorkspaceIDCommand *commandTokens
 }
 
 func blockerGuidanceFor(code string, projectID string) (blockerGuidance, error) {
@@ -296,23 +297,31 @@ func blockerGuidanceFor(code string, projectID string) (blockerGuidance, error) 
 	}
 	guidance := blockerGuidance{Kind: kind}
 	if kind == blockerGuidanceDefaultWorkspace {
-		command, err := newCommandTokens(config.Command, "project", "default", "--project", strings.TrimSpace(projectID), "<replacement-path>")
+		pathCommand, err := newProjectDefaultGuidanceCommand(projectID, "<replacement-path>")
 		if err != nil {
-			return blockerGuidance{}, fmt.Errorf("build default-workspace guidance: %w", err)
+			return blockerGuidance{}, fmt.Errorf("build default-workspace path guidance: %w", err)
 		}
-		guidance.Command = command
+		workspaceIDCommand, err := newProjectDefaultGuidanceCommand(projectID, "--workspace", "<replacement-workspace-id>")
+		if err != nil {
+			return blockerGuidance{}, fmt.Errorf("build default-workspace workspace-ID guidance: %w", err)
+		}
+		guidance.PathCommand = pathCommand
+		guidance.WorkspaceIDCommand = workspaceIDCommand
 	}
 	return guidance, nil
 }
 
+func newProjectDefaultGuidanceCommand(projectID string, selector ...string) (*commandTokens, error) {
+	tokens := []string{config.Command, "project", "default", "--project", strings.TrimSpace(projectID)}
+	return newCommandTokens(append(tokens, selector...)...)
+}
+
 func renderBlockerGuidance(guidance blockerGuidance) string {
-	command := ""
-	if guidance.Command != nil {
-		command = strings.Join(*guidance.Command, " ")
-	}
 	switch guidance.Kind {
 	case blockerGuidanceDefaultWorkspace:
-		return fmt.Sprintf("Choose another attached workspace with `%s`, then retry detach. If it is not attached, run `%s attach --project <project-id> <replacement-path>` first.", command, config.Command)
+		pathCommand := strings.Join(*guidance.PathCommand, " ")
+		workspaceIDCommand := strings.Join(*guidance.WorkspaceIDCommand, " ")
+		return fmt.Sprintf("Choose another attached workspace with `%s` or `%s`, then retry detach. If it is not attached, run `%s attach --project <project-id> <replacement-path>` first.", pathCommand, workspaceIDCommand, config.Command)
 	case blockerGuidanceActiveSessions:
 		return "Stop active runs using this workspace or rebind those Sessions to another attached workspace, then retry detach."
 	case blockerGuidanceNonTerminalTasks:
