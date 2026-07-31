@@ -117,8 +117,8 @@ Detach blockers use these recovery actions:
 
 - `default_workspace`: choose another attached workspace with `kent project default`, then retry.
 - `active_sessions`: stop active runs or rebind their Sessions, then retry.
-- `non_terminal_tasks`: move, complete, manually move, or delete dependent Tasks, then retry.
-- `executable_current_nodes`: stop execution and resolve affected Tasks, then retry.
+- `non_terminal_tasks`: move editable Backlog Tasks to another source workspace, or complete, manually move, or delete dependent Tasks, then retry.
+- `executable_current_nodes`: stop execution and move, complete, or delete affected Tasks until no executable Current Node uses the workspace, then retry.
 - `managed_owned_worktrees`: delete dependent managed worktrees or their quiescent owning Tasks, then retry.
 - `missing_history_snapshot`: re-save the editable Task's source workspace; keep the binding if its history cannot be edited.
 

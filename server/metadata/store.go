@@ -344,17 +344,21 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 		}
 		return Binding{}, fmt.Errorf("check project: %w", err)
 	}
-	if workspaceID, selectedByID := selector.WorkspaceIDValue(); selectedByID {
-		binding, err := s.LookupWorkspaceBindingByID(ctx, workspaceID)
+	if workspaceID := selector.WorkspaceIDValue(); workspaceID != nil {
+		binding, err := s.LookupWorkspaceBindingByID(ctx, *workspaceID)
 		if err != nil {
 			return Binding{}, err
 		}
 		if strings.TrimSpace(binding.ProjectID) != trimmedProjectID {
-			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, workspaceID)
+			return Binding{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, *workspaceID)
 		}
 		return binding, nil
 	}
-	workspaceRoot, _ := selector.WorkspaceRootValue()
+	workspaceRootValue := selector.WorkspaceRootValue()
+	if workspaceRootValue == nil {
+		return Binding{}, errors.New("workspace root selector is required")
+	}
+	workspaceRoot := *workspaceRootValue
 	absoluteRoot, absErr := filepath.Abs(filepath.Clean(workspaceRoot))
 	lookupByRoot := func(root string) (Binding, error) {
 		row, err := s.queries.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{

@@ -74,3 +74,25 @@ func TestProjectWorkspaceRPCFallbackPreservesSentinel(t *testing.T) {
 		t.Fatalf("fallback error = %v, want mutation sentinel", err)
 	}
 }
+
+func TestProjectWorkspaceTypedErrorsTreatBlankRPCMessagesAsAbsentCauses(t *testing.T) {
+	pathErr := DecodeWorkspacePathIdentityError(
+		json.RawMessage(`{"type":"workspace_path_identity_error","workspace_root":"/missing"}`),
+		"  ",
+	)
+	var pathIdentity WorkspacePathIdentityError
+	if !errors.As(pathErr, &pathIdentity) || pathIdentity.Cause != nil {
+		t.Fatalf("path identity error = %+v, want absent cause", pathErr)
+	}
+	mutationErr := DecodeWorkspaceMutationError(
+		json.RawMessage(`{"type":"workspace_mutation_error","project_id":"project-1","workspace_id":"workspace-1"}`),
+		"  ",
+	)
+	var mutation *WorkspaceMutationError
+	if !errors.As(mutationErr, &mutation) || mutation.Cause != nil {
+		t.Fatalf("mutation error = %+v, want absent cause", mutationErr)
+	}
+	if !errors.Is(mutationErr, ErrWorkspaceMutationFailed) {
+		t.Fatalf("blank mutation error = %v, want mutation sentinel", mutationErr)
+	}
+}

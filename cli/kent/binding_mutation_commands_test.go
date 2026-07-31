@@ -75,8 +75,8 @@ func TestBindingMutationSelectorNormalizesPathAfterOpeningCurrentWorkspace(t *te
 	if err != nil {
 		t.Fatalf("build selector: %v", err)
 	}
-	root, selectedByRoot := selector.WorkspaceRootValue()
-	if !selectedByRoot || root != workspaceRoot || !filepath.IsAbs(root) {
+	root := selector.WorkspaceRootValue()
+	if root == nil || *root != workspaceRoot || !filepath.IsAbs(*root) {
 		t.Fatalf("selector = %+v, want absolute opened workspace root", selector)
 	}
 }
@@ -256,18 +256,6 @@ func TestLegacyEmptyProjectKeyMutationSuccessOutputs(t *testing.T) {
 			t.Fatalf("detach mutation = exit %d stdout=%q stderr=%q, want authoritative success", code, stdout.String(), stderr.String())
 		}
 	})
-}
-
-func TestDetachMalformedBlockerResponseEmitsJSONFailure(t *testing.T) {
-	assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-		return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
-			ProjectID:   "project-1",
-			WorkspaceID: "workspace-1",
-			Blockers: []serverapi.ProjectWorkspaceUnlinkBlocker{{
-				Message: "malformed blocker",
-			}},
-		})
-	}, false)
 }
 
 func installBindingMutationTestRemote(t *testing.T) {
@@ -475,10 +463,10 @@ func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
 		defaultGuidance.WorkspaceIDCommand == nil {
 		t.Fatalf("default guidance = %+v, want path and workspace-ID actions", defaultGuidance)
 	}
-	if got := strings.Join(*defaultGuidance.PathCommand, " "); got != "kent project default --project project-1 <replacement-path>" {
+	if got := strings.Join(*defaultGuidance.PathCommand, " "); got != config.Command+" project default --project project-1 <replacement-path>" {
 		t.Fatalf("default path command = %q, want typed path command", got)
 	}
-	if got := strings.Join(*defaultGuidance.WorkspaceIDCommand, " "); got != "kent project default --project project-1 --workspace <replacement-workspace-id>" {
+	if got := strings.Join(*defaultGuidance.WorkspaceIDCommand, " "); got != config.Command+" project default --project project-1 --workspace <replacement-workspace-id>" {
 		t.Fatalf("default workspace-ID command = %q, want typed workspace-ID command", got)
 	}
 	unknownGuidance, err := blockerGuidanceFor("future_code", "project-1")

@@ -301,7 +301,10 @@ VALUES ('task-executable-workspace', 'node-agent', '{}', '{}', 'session-executab
 			t.Fatalf("UnlinkProjectWorkspace: %v", err)
 		}
 		assertWorkspaceUnlinkBlocker(t, blockers, "executable_current_nodes")
-		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, "task-executable-workspace", "session-executable-workspace")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			TaskID:    metadataStringPointer("task-executable-workspace"),
+			SessionID: metadataStringPointer("session-executable-workspace"),
+		})
 	})
 
 	t.Run("managed owned worktree", func(t *testing.T) {
@@ -327,7 +330,7 @@ VALUES ('task-executable-workspace', 'node-agent', '{}', '{}', 'session-executab
 			t.Fatalf("UnlinkProjectWorkspace: %v", err)
 		}
 		assertWorkspaceUnlinkBlocker(t, blockers, "managed_owned_worktrees")
-		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, "", "")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{})
 		var worktreeCount int
 		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worktrees WHERE id = 'managed-owned-worktree'`).Scan(&worktreeCount); err != nil {
 			t.Fatalf("count managed worktree: %v", err)
@@ -355,11 +358,18 @@ VALUES ('task-missing-workspace-snapshot', 'link-1', 1, 1, 'BLD-1', 'Task', 'Bod
 			t.Fatalf("UnlinkProjectWorkspace: %v", err)
 		}
 		assertWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
-		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, "task-missing-workspace-snapshot", "")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			TaskID: metadataStringPointer("task-missing-workspace-snapshot"),
+		})
 	})
 }
 
-func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx context.Context, projectID string, workspaceID string, taskID string, sessionID string) {
+type retainedWorkspaceRecords struct {
+	TaskID    *string
+	SessionID *string
+}
+
+func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx context.Context, projectID string, workspaceID string, retained retainedWorkspaceRecords) {
 	t.Helper()
 	if _, err := store.GetWorkspaceByID(ctx, workspaceID); err != nil {
 		t.Fatalf("workspace after blocked unlink: %v", err)
@@ -371,18 +381,18 @@ func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx c
 	if bindingCount != 1 {
 		t.Fatalf("retained workspace binding count = %d, want 1", bindingCount)
 	}
-	if taskID != "" {
+	if retained.TaskID != nil {
 		var count int
-		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE id = ?`, taskID).Scan(&count); err != nil {
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE id = ?`, *retained.TaskID).Scan(&count); err != nil {
 			t.Fatalf("count retained task: %v", err)
 		}
 		if count != 1 {
 			t.Fatalf("retained task count = %d, want 1", count)
 		}
 	}
-	if sessionID != "" {
+	if retained.SessionID != nil {
 		var count int
-		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = ?`, sessionID).Scan(&count); err != nil {
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = ?`, *retained.SessionID).Scan(&count); err != nil {
 			t.Fatalf("count retained session: %v", err)
 		}
 		if count != 1 {

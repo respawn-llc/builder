@@ -85,13 +85,6 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	if !resp.Unlinked {
 		return resp, nil
 	}
-	projects, err := s.metadata.ListProjectHomeSummaries(ctx, req.ProjectID, 1, 0)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
-	}
-	if len(projects) > 0 {
-		resp.Project = &projects[0]
-	}
 	return resp, nil
 }
 

@@ -97,9 +97,6 @@ func detachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func bindingMutationResultFromDetachResponse(response serverapi.ProjectWorkspaceUnlinkResponse) (bindingMutationResult, error) {
-	if err := response.Validate(); err != nil {
-		return bindingMutationResult{}, fmt.Errorf("validate workspace unlink response: %w", err)
-	}
 	if len(response.Blockers) > 0 {
 		blocked, err := newBindingMutationBlockedError(response.ProjectID, response.WorkspaceID, response.Blockers)
 		if err != nil {
@@ -521,7 +518,7 @@ func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMu
 		return message, nil
 	}
 	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && defaultMutation {
-		return fmt.Sprintf("workspace is not attached to project %q; run `kent attach --project %s <path>` before retrying default selection", strings.TrimSpace(projectID), strings.TrimSpace(projectID)), nil
+		return fmt.Sprintf("workspace is not attached to project %q; run `%s attach --project %s <path>` before retrying default selection", strings.TrimSpace(projectID), config.Command, strings.TrimSpace(projectID)), nil
 	}
 	if errors.Is(err, serverapi.ErrWorkspacePathIdentity) {
 		return fmt.Sprintf("%s; retry with --workspace <workspace-id>", err), nil

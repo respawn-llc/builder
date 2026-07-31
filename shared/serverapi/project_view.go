@@ -311,18 +311,20 @@ func (s ProjectWorkspaceSelector) Validate() error {
 	return nil
 }
 
-func (s ProjectWorkspaceSelector) WorkspaceIDValue() (string, bool) {
+func (s ProjectWorkspaceSelector) WorkspaceIDValue() *string {
 	if s.WorkspaceID == nil {
-		return "", false
+		return nil
 	}
-	return strings.TrimSpace(*s.WorkspaceID), true
+	value := strings.TrimSpace(*s.WorkspaceID)
+	return &value
 }
 
-func (s ProjectWorkspaceSelector) WorkspaceRootValue() (string, bool) {
+func (s ProjectWorkspaceSelector) WorkspaceRootValue() *string {
 	if s.WorkspaceRoot == nil {
-		return "", false
+		return nil
 	}
-	return strings.TrimSpace(*s.WorkspaceRoot), true
+	value := strings.TrimSpace(*s.WorkspaceRoot)
+	return &value
 }
 
 type ProjectAttachWorkspaceResponse struct {
