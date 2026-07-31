@@ -11,11 +11,10 @@ type ChipAppearanceProps = Readonly<{
 
 export type ChipProps = ChipAppearanceProps & HTMLAttributes<HTMLSpanElement>;
 
-export type InteractiveChipProps = ChipAppearanceProps &
-  ButtonHTMLAttributes<HTMLButtonElement>;
+export type InteractiveChipProps = ChipAppearanceProps & ButtonHTMLAttributes<HTMLButtonElement>;
 
 export type InteractiveChipSize = "compact" | "default";
-export type InteractiveChipTone = "neutral" | "primary";
+export type InteractiveChipTone = "neutral" | "primary" | "success";
 
 export function Chip({
   children,
@@ -85,6 +84,8 @@ const interactiveChipToneClassNames = {
     "hover:bg-[color-mix(in_srgb,var(--color-island-2)_72%,transparent)] hover:text-[var(--color-on-island)] focus-visible:border-[var(--color-primary)] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)]",
   primary:
     "hover:bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)]",
+  success:
+    "hover:bg-[color-mix(in_srgb,var(--color-success)_14%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-success)_35%,transparent)]",
 } satisfies Record<InteractiveChipTone, string>;
 
 const chipToneClassNames = {
@@ -92,4 +93,6 @@ const chipToneClassNames = {
     "border-[var(--color-outline)] bg-[color-mix(in_srgb,var(--color-island-1)_58%,transparent)] text-[var(--color-muted)] data-[selected=true]:bg-[color-mix(in_srgb,var(--color-island-2)_68%,transparent)] data-[selected=true]:text-[var(--color-on-island)]",
   primary:
     "border-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_8%,transparent)] text-[var(--color-primary)] data-[selected=true]:bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)]",
+  success:
+    "border-[color-mix(in_srgb,var(--color-success)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-success)_8%,transparent)] text-[var(--color-success)] data-[selected=true]:bg-[color-mix(in_srgb,var(--color-success)_12%,transparent)]",
 } satisfies Record<InteractiveChipTone, string>;

@@ -217,6 +217,7 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 		UseAutomaticToolChoice: execution.UseAutomaticToolChoice,
 		Instructions:           execution.Instructions,
 		Transitions:            append([]workflowruntime.CompletionTransition(nil), execution.Contract.Transitions...),
+		TaskAwareness:          workflowruntime.TaskAwareness{},
 	}, true
 }
 

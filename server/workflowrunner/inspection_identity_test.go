@@ -49,6 +49,10 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
 
+	awareness := &taskAwarenessSource{
+		comments:     &taskCommentCountProbe{},
+		dependencies: &taskDependencyCountProbe{},
+	}
 	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
 		workflowstore.CurrentNodeStartContext{
 			Task:        workflowstore.TaskRecord{ID: "task-1"},
@@ -66,7 +70,7 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 		3,
 		true,
 		nil,
-		nil,
+		awareness,
 	)
 	if err != nil {
 		t.Fatalf("BuildCurrentNodeRuntimeConfig: %v", err)
@@ -82,5 +86,8 @@ func TestCurrentNodeRuntimeConfigWiresAuthorityScopeAndNaturalNodeIdentity(t *te
 	}
 	if len(runtimeConfig.Contract.Transitions) != 1 || runtimeConfig.Contract.Transitions[0].ID != "done" {
 		t.Fatalf("Current Node completion contract = %+v", runtimeConfig.Contract)
+	}
+	if runtimeConfig.TaskAwarenessSource != awareness {
+		t.Fatal("Current Node execution omitted the composed Task awareness source")
 	}
 }

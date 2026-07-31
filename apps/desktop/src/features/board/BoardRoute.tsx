@@ -12,12 +12,12 @@ import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
-  ExecutionTargetContinuationDialog,
-  executeExecutionTargetAction,
-  moveExecutionTargetAction,
-  startExecutionTargetAction,
-  type ExecutionTargetContinuationAction,
-  useExecutionTargetContinuation,
+  TaskInitiatingActionDialogs,
+  executeTaskInitiatingAction,
+  moveTaskInitiatingAction,
+  startTaskInitiatingAction,
+  type TaskInitiatingAction,
+  useTaskInitiatingActionController,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
@@ -222,11 +222,11 @@ function BoardContent({
     stopDragAutoScroll();
     setActiveDrag(null);
   }, [stopDragAutoScroll]);
-  const { openSidebar } = useSidebar();
+  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const executionTargetContinuation = useExecutionTargetContinuation({
-    execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
+  const initiatingAction = useTaskInitiatingActionController({
+    execute: async (action, selection) => executeTaskInitiatingAction(api, action, selection),
     onApplied: async () => {
       await actions.refresh();
     },
@@ -241,9 +241,7 @@ function BoardContent({
     },
   });
   const actionsDisabled =
-    connection.phase !== "connected" ||
-    executionTargetContinuation.running ||
-    executionTargetContinuation.pending !== null;
+    connection.phase !== "connected" || initiatingAction.running || initiatingAction.pending !== null;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -353,7 +351,7 @@ function BoardContent({
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
+      runCardAction(startTaskInitiatingAction(dragPayload.taskID), pendingMove);
       return;
     }
     if (dropAction.kind === "move") {
@@ -362,7 +360,7 @@ function BoardContent({
         targetNodeID: column.id,
       };
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      runCardAction(moveExecutionTargetAction(moveInput), pendingMove);
+      runCardAction(moveTaskInitiatingAction(moveInput), pendingMove);
       return;
     }
     if (dropAction.kind === "confirmRollback") {
@@ -473,7 +471,7 @@ function BoardContent({
     setRollbackDrop(null);
     const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
     runCardAction(
-      moveExecutionTargetAction({
+      moveTaskInitiatingAction({
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
       }),
@@ -490,7 +488,7 @@ function BoardContent({
     setMissingInputDrop(null);
     const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
     runCardAction(
-      moveExecutionTargetAction({
+      moveTaskInitiatingAction({
         taskID: drop.taskID,
         targetNodeID: drop.targetColumn.id,
         outputValues: drop.values,
@@ -499,9 +497,9 @@ function BoardContent({
     );
   }
 
-  function runCardAction(action: ExecutionTargetContinuationAction, pendingMove: PendingBoardCardMove): void {
+  function runCardAction(action: TaskInitiatingAction, pendingMove: PendingBoardCardMove): void {
     setPendingCardMove(pendingMove);
-    void executionTargetContinuation
+    void initiatingAction
       .run(action)
       .catch(action.kind === "start" ? reportStartError : reportMoveError)
       .finally(() => {
@@ -521,6 +519,20 @@ function BoardContent({
     void navigation
       .openProjectTask(board.projectID, board.selectedWorkflow.id, taskID)
       .catch(reportNavigationError);
+  }
+
+  function openTaskDependencies(taskID: string): void {
+    const destination = {
+      kind: "taskDetail" as const,
+      initialFocus: { kind: "dependencies" as const },
+      mode: "overlay" as const,
+      taskID,
+    };
+    if (activeDestination?.kind === "taskDetail") {
+      replaceSidebar(destination);
+      return;
+    }
+    void openSidebar(destination);
   }
 
   function selectWorkflow(workflowID: string): void {
@@ -610,7 +622,10 @@ function BoardContent({
           );
         }}
       />
-      <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
+      <TaskInitiatingActionDialogs
+        continuation={initiatingAction}
+        onViewDependencies={openTaskDependencies}
+      />
       {taskDeleteDialog.fallback}
       {boardRefreshError === null ? null : (
         <BoardBackgroundRefreshNotice error={boardRefreshError} onRetry={onBoardRefreshRetry} />

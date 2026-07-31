@@ -251,8 +251,18 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
+	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
+	}
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
+		RuntimeClientFactory: opts.RuntimeClientFactory,
+		RuntimeAuthority:     runtimeAuthority,
+		MutationPermit:       workflowMutationPermit,
+		TaskDependencies:     workflowTaskDependencies,
+	})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -280,19 +290,20 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: board: %w", err)
 	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController)
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController, workflowTaskDependencies)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
 	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
-		Definitions: workflowDefinitions,
-		Board:       workflowBoard,
-		TaskList:    workflowTaskList,
-		TaskDetail:  workflowTaskDetail,
-		Activity:    workflowActivity,
-		Attention:   workflowAttention,
+		Definitions:      workflowDefinitions,
+		Board:            workflowBoard,
+		TaskList:         workflowTaskList,
+		TaskDetail:       workflowTaskDetail,
+		TaskDependencies: workflowTaskDependencies,
+		Activity:         workflowActivity,
+		Attention:        workflowAttention,
 	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()

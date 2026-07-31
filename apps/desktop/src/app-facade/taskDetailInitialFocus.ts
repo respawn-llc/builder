@@ -37,7 +37,7 @@ export function sameTaskDetailInitialFocus(
   if (left.kind === "approval") {
     return right.kind === "approval" && left.approvalID === right.approvalID;
   }
-  return right.kind === "interrupted_current_node";
+  return right.kind === left.kind;
 }
 
 function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
@@ -47,5 +47,5 @@ function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
   if (focus.kind === "approval") {
     return `approval:${focus.approvalID}`;
   }
-  return "interrupted_current_node";
+  return focus.kind;
 }

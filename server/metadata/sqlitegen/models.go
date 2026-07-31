@@ -242,6 +242,11 @@ type TaskCurrentNode struct {
 	EnteredByEdgeID        sql.NullString
 }
 
+type TaskDependency struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
 type TaskLabelAssignment struct {
 	TaskID  string
 	LabelID string

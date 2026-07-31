@@ -168,6 +168,39 @@ describe("workflow board schemas", () => {
     expect(page.nextPageToken).toBeNull();
   });
 
+  it("decodes server-owned dependency progress and rejects invalid progress", () => {
+    const response = {
+      project_id: "project-1",
+      workflow_id: "workflow-1",
+      node_id: "node-1",
+      cards: [
+        {
+          ...card,
+          dependency_progress: { satisfied_count: 1, total_count: 2 },
+        },
+      ],
+      previous_page_token: null,
+      next_page_token: null,
+      generated_at_unix_ms: 1,
+    };
+
+    expect(boardNodeCardsPageSchema.parse(response).cards[0]?.dependencyProgress).toEqual({
+      satisfiedCount: 1,
+      totalCount: 2,
+    });
+    expect(() =>
+      boardNodeCardsPageSchema.parse({
+        ...response,
+        cards: [
+          {
+            ...card,
+            dependency_progress: { satisfied_count: 1, total_count: 0 },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("rejects legacy full bodies, flat previews, missing nested preview facts, and unknown workspace availability", () => {
     const legacyBodyCard = { ...card, body: "Complete Markdown **body**" };
     Reflect.deleteProperty(legacyBodyCard, "preview");

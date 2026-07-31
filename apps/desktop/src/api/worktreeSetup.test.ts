@@ -68,7 +68,7 @@ describe("worktree setup API", () => {
         throw error;
       },
     });
-    await client.startTask("task-1", startSetupID);
+    await client.startTask({ taskID: "task-1", setupOperationID: startSetupID });
     await client.moveTask({
       taskID: "task-1",
       targetNodeID: "node-1",

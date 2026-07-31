@@ -80,6 +80,9 @@ function focusedAttentionItemID(
   if (initialFocus === undefined) {
     return undefined;
   }
+  if (initialFocus.kind === "dependencies") {
+    return undefined;
+  }
   if (initialFocus.kind === "question") {
     const itemIDByAskID = new Map<string, string>();
     for (const item of attentionItems) {

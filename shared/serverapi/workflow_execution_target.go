@@ -75,8 +75,8 @@ type WorkflowExecutionTargetSelectionRequirement struct {
 type WorkflowExecutionTargetActionOutcome string
 
 const (
-	WorkflowExecutionTargetActionOutcomeApplied           WorkflowExecutionTargetActionOutcome = "applied"
-	WorkflowExecutionTargetActionOutcomeSelectionRequired WorkflowExecutionTargetActionOutcome = "selection_required"
+	WorkflowExecutionTargetActionOutcomeApplied           = "applied"
+	WorkflowExecutionTargetActionOutcomeSelectionRequired = "selection_required"
 )
 
 type WorkflowExecutionTargetResolutionErrorCode string
@@ -345,17 +345,23 @@ func validWorkflowLockedExecutionTargetCause(cause WorkflowLockedExecutionTarget
 }
 
 func (r WorkflowTaskStartResponse) Validate() error {
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil {
+	if r.Outcome == WorkflowTaskActionOutcomeApplied {
+		if r.Applied == nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("start action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskStartApplied(*r.Applied)
 	}
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil {
+	if r.Outcome == WorkflowTaskActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("start action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
+	}
+	if r.Outcome == WorkflowTaskActionOutcomeDependencyConfirmationRequired {
+		if r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
+			return errors.New("start action response dependency confirmation outcome requires only a positive count")
+		}
+		return nil
 	}
 	return errors.New("start action response outcome is invalid")
 }
@@ -377,17 +383,23 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 }
 
 func (r WorkflowTaskMoveResponse) Validate() error {
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil {
+	if r.Outcome == WorkflowTaskActionOutcomeApplied {
+		if r.Applied == nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskMoveApplied(*r.Applied)
 	}
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil {
+	if r.Outcome == WorkflowTaskActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
+	}
+	if r.Outcome == WorkflowTaskActionOutcomeDependencyConfirmationRequired {
+		if r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
+			return errors.New("move action response dependency confirmation outcome requires only a positive count")
+		}
+		return nil
 	}
 	return errors.New("move action response outcome is invalid")
 }

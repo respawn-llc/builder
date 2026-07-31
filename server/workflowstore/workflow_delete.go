@@ -74,6 +74,9 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, string(req.WorkflowID)); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("lock workflow dependency projects: %w", err)
+	}
 	current, err := q.GetWorkflowDeleteImpact(ctx, string(req.WorkflowID))
 	if err != nil {
 		return WorkflowDeleteResult{}, err
@@ -87,6 +90,25 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	resolution, err := workflowAttentionResolution(ctx, q, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
+	}
+	survivorIDs, err := q.ListWorkflowDependencySurvivorIDs(ctx, string(req.WorkflowID))
+	if err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("list workflow dependency survivors: %w", err)
+	}
+	if len(survivorIDs) > 0 {
+		touched, err := q.TouchTasksUpdatedAt(ctx, sqlitegen.TouchTasksUpdatedAtParams{
+			UpdatedAtUnixMs: now,
+			TaskIds:         survivorIDs,
+		})
+		if err != nil {
+			return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors: %w", err)
+		}
+		if touched != int64(len(survivorIDs)) {
+			return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors affected %d rows, want %d", touched, len(survivorIDs))
+		}
+	}
+	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task dependencies: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task pending approvals: %w", err)

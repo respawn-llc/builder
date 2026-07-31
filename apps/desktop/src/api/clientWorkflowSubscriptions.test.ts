@@ -27,6 +27,33 @@ const workflowProjectEvent: WorkflowProjectEvent = {
 };
 
 describe("ApiClient workflow subscriptions", () => {
+  it("adapts dependency change pairs through the typed Task event contract", () => {
+    const transport = new FakeRpcTransport([]);
+    const client: ApiService = new ApiClient(transport);
+    const events: WorkflowProjectEvent[] = [];
+
+    client.subscribeProject("project-1", eventCollector(events));
+    transport.emit("workflow.project", {
+      event: {
+        resource: "task",
+        action: "dependencies_changed",
+        occurred_at_unix_ms: 1,
+        primary_entity_id: "task-1",
+        project_id: "project-1",
+        workflow_id: "workflow-1",
+        related_ids: ["task-2"],
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        action: "dependencies_changed",
+        primaryEntityID: "task-1",
+        relatedIDs: ["task-2"],
+      }),
+    ]);
+  });
+
   it("adapts project subscription events before feature code receives them", () => {
     const transport = new FakeRpcTransport([]);
     const client: ApiService = new ApiClient(transport);

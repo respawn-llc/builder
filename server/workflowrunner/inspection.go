@@ -23,7 +23,7 @@ func BuildCurrentNodeRuntimeConfig(
 	maxInvalidCompletionAttempts int,
 	useRequiredToolCalls bool,
 	controller workflowruntime.Controller,
-	taskCommentCounter workflowruntime.TaskCommentCounter,
+	taskAwarenessSource workflowruntime.TaskAwarenessSource,
 ) (*workflowruntime.CurrentNodeExecutionConfig, error) {
 	instructions, err := BuildCurrentSessionTaskInstructions(input)
 	if err != nil {
@@ -37,7 +37,7 @@ func BuildCurrentNodeRuntimeConfig(
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,
 		UseAutomaticToolChoice:       !useRequiredToolCalls,
 		Controller:                   controller,
-		TaskCommentCounter:           taskCommentCounter,
+		TaskAwarenessSource:          taskAwarenessSource,
 		Instructions:                 instructions,
 	}, nil
 }
@@ -54,7 +54,13 @@ type PersistedWorkflowInspection struct {
 // and prompt contract that live execution uses immediately before a model turn. The
 // supplied session store controls persistence, so callers can use a fileless
 // store for read-only inspection.
-func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessionStore *session.Store, store *workflowstore.Store) (PersistedWorkflowInspection, error) {
+func BuildPersistedWorkflowInspection(
+	ctx context.Context,
+	app config.App,
+	sessionStore *session.Store,
+	store *workflowstore.Store,
+	taskAwarenessSource workflowruntime.TaskAwarenessSource,
+) (PersistedWorkflowInspection, error) {
 	if sessionStore == nil {
 		return PersistedWorkflowInspection{}, errors.New("session store is required")
 	}
@@ -91,6 +97,13 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}
+	awareness := workflowruntime.TaskAwareness{}
+	if taskAwarenessSource != nil {
+		awareness, err = taskAwarenessSource.TaskAwareness(ctx, instructions.CurrentNode.TaskID)
+		if err != nil {
+			return PersistedWorkflowInspection{}, fmt.Errorf("load persisted workflow Task awareness: %w", err)
+		}
+	}
 	return PersistedWorkflowInspection{
 		Plan: plan,
 		Prompt: &workflowruntime.PromptContract{
@@ -99,6 +112,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 			UseAutomaticToolChoice: !plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 			Instructions:           instructions,
 			Transitions:            workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
+			TaskAwareness:          awareness,
 		},
 		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil

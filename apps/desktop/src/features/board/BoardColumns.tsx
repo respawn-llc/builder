@@ -36,6 +36,8 @@ import { boardCardInstanceKey, type BoardCardInstance } from "./BoardCardInstanc
 import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
 import type { KanbanCardVM, KanbanColumnVM, KanbanGroupVM } from "./BoardColumnViewModel";
 import { useBoardCardMotion } from "./BoardCardMotionContext";
+import { BoardDependencyProgressChip } from "./BoardDependencyProgressChip";
+import { useSidebar } from "@/app-facade";
 
 export type KanbanColumnProps = Readonly<{
   cards: readonly KanbanCardVM[];
@@ -365,6 +367,7 @@ const TaskCard = memo(function TaskCard({
   const hasFooter =
     card.statusKind === "running" ||
     card.workspaceChipLabel !== null ||
+    card.dependencyProgress !== null ||
     card.labels.length > 0 ||
     availableActions.canInterrupt ||
     availableActions.canResume;
@@ -455,6 +458,7 @@ const TaskCard = memo(function TaskCard({
                     <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
                   </span>
                 ) : null}
+                <TaskCardDependencyProgress card={card} />
                 {labelItems.length === 0 ? null : (
                   <OneLineOverflowRow
                     ariaLabel={t("labels.filter")}
@@ -491,6 +495,31 @@ const TaskCard = memo(function TaskCard({
     </ContextMenu>
   );
 });
+
+function TaskCardDependencyProgress({ card }: Readonly<{ card: KanbanCardVM }>): ReactNode {
+  const { t } = useTranslation();
+  const { openSidebar } = useSidebar();
+  if (card.dependencyProgress === null) {
+    return null;
+  }
+  return (
+    <BoardDependencyProgressChip
+      label={t("task.dependenciesProgress", {
+        completed: card.dependencyProgress.satisfiedCount,
+        total: card.dependencyProgress.totalCount,
+      })}
+      onActivate={() => {
+        void openSidebar({
+          kind: "taskDetail",
+          initialFocus: { kind: "dependencies" },
+          mode: "overlay",
+          taskID: card.id,
+        });
+      }}
+      progress={card.dependencyProgress}
+    />
+  );
+}
 
 const TaskCardPreview = memo(function TaskCardPreview({
   instance,

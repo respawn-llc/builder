@@ -9,50 +9,69 @@ import type {
 } from "@/api";
 import { newSetupOperationID, type SetupOperationID } from "@/api";
 
-export type ExecutionTargetContinuationAction =
+export type TaskInitiatingAction =
   | Readonly<{
       kind: "start";
       taskID: string;
       setupOperationID: SetupOperationID;
+      proceedDespiteDependencies: boolean;
     }>
   | Readonly<{
       kind: "move";
       input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
-    }>
+      proceedDespiteDependencies: boolean;
+    }>;
 
-export type ExecutionTargetActionResult =
+export type TaskInitiatingActionResult =
   | Readonly<{
       kind: "start";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "start" }>;
+      action: Extract<TaskInitiatingAction, { kind: "start" }>;
       response: TaskStartResponse;
     }>
   | Readonly<{
       kind: "move";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "move" }>;
+      action: Extract<TaskInitiatingAction, { kind: "move" }>;
       response: TaskMoveResponse;
-    }>
+    }>;
 
 export type ExecutionTargetSelectionDraft = Readonly<{
   mode: WorkflowExecutionTargetSelectionMode;
   customRef: string;
 }>;
 
-export function startExecutionTargetAction(
+export function startTaskInitiatingAction(
   taskID: string,
   setupOperationID: SetupOperationID = newSetupOperationID(),
-): Extract<ExecutionTargetContinuationAction, { kind: "start" }> {
-  return { kind: "start", taskID, setupOperationID };
+): Extract<TaskInitiatingAction, { kind: "start" }> {
+  return {
+    kind: "start",
+    taskID,
+    setupOperationID,
+    proceedDespiteDependencies: false,
+  };
 }
 
-export function moveExecutionTargetAction(
+export function moveTaskInitiatingAction(
   input: TaskMoveInput,
-): Extract<ExecutionTargetContinuationAction, { kind: "move" }> {
+): Extract<TaskInitiatingAction, { kind: "move" }> {
   return {
     kind: "move",
     input: {
       ...input,
       setupOperationID: input.setupOperationID ?? newSetupOperationID(),
     },
+    proceedDespiteDependencies: false,
+  };
+}
+
+export function proceedWithTaskInitiatingAction(action: TaskInitiatingAction): TaskInitiatingAction {
+  if (action.kind === "start") {
+    return { ...action, proceedDespiteDependencies: true };
+  }
+  return {
+    ...action,
+    input: { ...action.input, proceedDespiteDependencies: true },
+    proceedDespiteDependencies: true,
   };
 }
 
@@ -78,17 +97,22 @@ export function executionTargetSelectionFromDraft(
   return customRef.length === 0 ? null : { mode: draft.mode, customRef };
 }
 
-export async function executeExecutionTargetAction(
+export async function executeTaskInitiatingAction(
   api: ApiService,
-  action: ExecutionTargetContinuationAction,
+  action: TaskInitiatingAction,
   selection?: WorkflowExecutionTargetSelection,
-): Promise<ExecutionTargetActionResult> {
+): Promise<TaskInitiatingActionResult> {
   switch (action.kind) {
     case "start":
       return {
         kind: action.kind,
         action,
-        response: await api.startTask(action.taskID, action.setupOperationID, selection),
+        response: await api.startTask({
+          taskID: action.taskID,
+          setupOperationID: action.setupOperationID,
+          executionTarget: selection,
+          proceedDespiteDependencies: action.proceedDespiteDependencies,
+        }),
       };
     case "move":
       return {
@@ -97,7 +121,12 @@ export async function executeExecutionTargetAction(
         response: await api.moveTask({
           ...action.input,
           executionTarget: selection,
+          proceedDespiteDependencies: action.proceedDespiteDependencies,
         }),
       };
   }
+}
+
+export function taskInitiatingActionTaskID(action: TaskInitiatingAction): string {
+  return action.kind === "start" ? action.taskID : action.input.taskID;
 }

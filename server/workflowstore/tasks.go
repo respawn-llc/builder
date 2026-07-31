@@ -21,6 +21,7 @@ type CreateTaskRequest struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	LabelIDs          []string
+	DependencyIntent  *workflow.TaskDependencyCreateIntent
 }
 
 type preparedTaskCreate struct {
@@ -32,6 +33,7 @@ type preparedTaskCreate struct {
 	sourceWorkspaceID string
 	taskID            string
 	labelIDs          []label.ID
+	dependencyIntent  *workflow.TaskDependencyCreateIntent
 	nowUnixMs         int64
 }
 
@@ -131,6 +133,16 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
+	if req.DependencyIntent != nil {
+		if strings.TrimSpace(string(req.DependencyIntent.RelatedTaskID)) == "" {
+			return TaskRecord{}, errors.New("dependency related task id is required")
+		}
+		switch req.DependencyIntent.NewTaskRole {
+		case workflow.TaskDependencyRoleBlocker, workflow.TaskDependencyRoleBlocked:
+		default:
+			return TaskRecord{}, errors.New("dependency new task role is invalid")
+		}
+	}
 	labelIDs, _, err := parseUniqueLabelIDs(req.LabelIDs, "label_ids", TaskLabelMutationDuplicateAdd)
 	if err != nil {
 		return TaskRecord{}, err
@@ -139,7 +151,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		projectID: projectID, workflowID: workflowID, title: strings.TrimSpace(req.Title),
 		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
-		labelIDs: labelIDs, nowUnixMs: s.now().UnixMilli(),
+		labelIDs: labelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
 	}
 	if prepared.title == "" {
 		return TaskRecord{}, errors.New("task title is required")
@@ -208,6 +220,27 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	for _, id := range prepared.labelIDs {
 		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{TaskID: prepared.taskID, LabelID: id.String()}); err != nil {
 			return TaskRecord{}, fmt.Errorf("insert task label: %w", err)
+		}
+	}
+	if prepared.dependencyIntent != nil {
+		dependencyRequest := TaskDependencyAddRequest{
+			BlockerTaskID: workflow.TaskID(prepared.taskID),
+			BlockedTaskID: prepared.dependencyIntent.RelatedTaskID,
+		}
+		if prepared.dependencyIntent.NewTaskRole == workflow.TaskDependencyRoleBlocked {
+			dependencyRequest.BlockerTaskID = prepared.dependencyIntent.RelatedTaskID
+			dependencyRequest.BlockedTaskID = workflow.TaskID(prepared.taskID)
+		}
+		decision, err := attachTaskDependencyWithQueries(ctx, q, dependencyRequest)
+		if err != nil {
+			return TaskRecord{}, fmt.Errorf("attach task dependency during task creation: %w", err)
+		}
+		if decision == workflow.TaskDependencyAttachAdded {
+			for _, taskID := range []workflow.TaskID{dependencyRequest.BlockerTaskID, dependencyRequest.BlockedTaskID} {
+				if err := touchTaskUpdatedAt(ctx, q, string(taskID), prepared.nowUnixMs); err != nil {
+					return TaskRecord{}, fmt.Errorf("touch task %q after dependency creation: %w", taskID, err)
+				}
+			}
 		}
 	}
 	return TaskRecord{
@@ -300,6 +333,28 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 	record, err := taskRecordFromTask(task)
 	if err != nil {
 		return DeleteTaskResult{}, err
+	}
+	if _, err := q.AcquireTaskDependencyWriteLock(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, fmt.Errorf("lock task dependency project for task deletion: %w", err)
+	}
+	neighbors, err := q.ListTaskDependencyNeighborIDs(ctx, string(taskID))
+	if err != nil {
+		return DeleteTaskResult{}, fmt.Errorf("list task dependency neighbors for task deletion: %w", err)
+	}
+	if _, err := q.DeleteTaskDependenciesByTask(ctx, string(taskID)); err != nil {
+		return DeleteTaskResult{}, fmt.Errorf("delete task dependencies for task deletion: %w", err)
+	}
+	if len(neighbors) > 0 {
+		touched, err := q.TouchTasksUpdatedAt(ctx, sqlitegen.TouchTasksUpdatedAtParams{
+			UpdatedAtUnixMs: s.now().UnixMilli(),
+			TaskIds:         neighbors,
+		})
+		if err != nil {
+			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors after task deletion: %w", err)
+		}
+		if touched != int64(len(neighbors)) {
+			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors affected %d rows, want %d", touched, len(neighbors))
+		}
 	}
 	resolution, err := taskAttentionResolution(ctx, q, taskID)
 	if err != nil {

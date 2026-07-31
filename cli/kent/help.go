@@ -177,11 +177,11 @@ var (
 	taskUsage               = commandUsage{helpFile: "task.txt"}
 	taskCreateUsage         = leafCommandUsage(config.Command+" task create --title <title> (--body <body>|--body-file <path>) [flags]", "Create a task in a project.")
 	taskEditUsage           = leafCommandUsage(config.Command+" task edit <task> [flags]", "Change a task's title, body, or source workspace.")
-	taskStartUsage          = leafCommandUsage(config.Command+" task start <task> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]", "Move a new task from the start node into its first executable workflow node.", "", "User-only; unavailable inside Kent shell commands.")
+	taskStartUsage          = leafCommandUsage(config.Command+" task start <task> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a new task from the start node into its first executable workflow node.", "", "User-only; unavailable inside Kent shell commands.")
 	taskInterruptUsage      = leafCommandUsage(config.Command+" task interrupt <task> [--project <project>] [--session <session-id>] [--reason <text>]", "Interrupt live workflow work on a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskResumeUsage         = leafCommandUsage(config.Command+" task resume <task> [--project <project>]", "Resume interrupted work on a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskApproveUsage        = leafCommandUsage(config.Command+" task approve <approval-id>", "Approve a pending workflow transition.", "", "User-only; unavailable inside Kent shell commands.")
-	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]", "Move a task to a workflow node.", "", "User-only; unavailable inside Kent shell commands.")
+	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a task to a workflow node.", "", "User-only; unavailable inside Kent shell commands.")
 	taskCompleteUsage       = leafCommandUsage(config.Command+" task complete [--transition <key>] [--commentary <text>] [--param name=value] [--session <session-id>|--task <task> [--project <project>]] [--force]", "Submit your task result.", "", "Use this to submit your task and end your turn. This is the only way to end your turn during a workflow.", "Use `--json` or `--json-file` instead of field flags to submit a JSON transition result.", "Positional arguments are not accepted.", "If you're stuck for any reason, use ask_question to ask for help instead of attempting to submit a final_answer. Invoke this command exactly as is described in the workflow instructions you received in a developer reminder.")
 	taskListUsage           = leafCommandUsage(config.Command+" task list [flags]", "List and filter tasks in a project.")
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
@@ -209,4 +209,11 @@ var (
 	serviceInstallUsage     = commandUsage{helpFile: "service_install.txt", includeEmbeddedFlags: true}
 	serviceUninstallUsage   = commandUsage{helpFile: "service_uninstall.txt", includeEmbeddedFlags: true}
 	serviceRestartUsage     = commandUsage{helpFile: "service_restart.txt", includeEmbeddedFlags: true}
+)
+
+var (
+	taskDependencyUsage       = leafCommandUsage(config.Command+" task dep <add|remove|list> ...", "Manage direct Task Dependencies.")
+	taskDependencyAddUsage    = leafCommandUsage(config.Command+" task dep add --blocker <task> --blocked <task> [--project <project>] [--json]", "Add a direct Task Dependency.")
+	taskDependencyRemoveUsage = leafCommandUsage(config.Command+" task dep remove --blocker <task> --blocked <task> [--project <project>] [--json]", "Remove a direct Task Dependency.")
+	taskDependencyListUsage   = leafCommandUsage(config.Command+" task dep list <task> [--direction blocks|blocked-by] [--project <project>] [--json]", "List a Task's direct dependencies.")
 )

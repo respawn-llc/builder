@@ -2189,7 +2189,11 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, definitions, projector, authority)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDependencies: %v", err)
+	}
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -2202,12 +2206,13 @@ func newWorkflowServiceReadModels(
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}
 	return ReadModels{
-		Definitions: definitions,
-		Board:       board,
-		TaskList:    taskList,
-		TaskDetail:  taskDetail,
-		Activity:    activity,
-		Attention:   attention,
+		Definitions:      definitions,
+		Board:            board,
+		TaskList:         taskList,
+		TaskDetail:       taskDetail,
+		TaskDependencies: dependencies,
+		Activity:         activity,
+		Attention:        attention,
 	}
 }
 

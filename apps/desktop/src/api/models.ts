@@ -522,7 +522,61 @@ export type BoardCard = Readonly<{
   status: TaskStatus;
   actions: TaskActions;
   labelIDs: readonly string[];
+  dependencyProgress: TaskDependencyProgress | null;
   updatedAt: number;
+}>;
+
+export type TaskDependencyProgress = Readonly<{
+  satisfiedCount: number;
+  totalCount: number;
+}>;
+
+export type TaskDependencyDirection = "blocked-by" | "blocks";
+export type TaskDependencySatisfaction = "satisfied" | "unsatisfied";
+
+export type TaskDependencyAddAvailability =
+  Readonly<{ kind: "available"; remainingCapacity: number }> | Readonly<{ kind: "limit_reached" }>;
+
+export type TaskDependencyItem = Readonly<{
+  taskID: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
+  status: TaskStatus;
+  satisfaction: TaskDependencySatisfaction | null;
+}>;
+
+export type TaskDependencyDirectionProjection = Readonly<{
+  direction: TaskDependencyDirection;
+  totalCount: number;
+  unsatisfiedCount: number | null;
+  items: readonly TaskDependencyItem[];
+  addAvailability: TaskDependencyAddAvailability;
+}>;
+
+export type TaskDependencies = Readonly<{
+  blockerCount: number;
+  unsatisfiedBlockerCount: number;
+  directlyBlockedTaskCount: number;
+  directions: readonly TaskDependencyDirectionProjection[];
+}>;
+
+export type TaskDependencyMutationOutcome = "added" | "already_present" | "removed" | "already_absent";
+
+export type TaskDependencyMutationResponse = Readonly<{
+  outcome: TaskDependencyMutationOutcome;
+  blockerTaskID: string;
+  blockerShortID: string;
+  blockedTaskID: string;
+  blockedShortID: string;
+}>;
+
+export type TaskDependencyListDirection = Omit<TaskDependencyDirectionProjection, "addAvailability">;
+
+export type TaskDependencyListResponse = Readonly<{
+  taskID: string;
+  shortID: string;
+  directions: readonly TaskDependencyListDirection[];
 }>;
 
 export type BoardColumn = Readonly<{
@@ -642,6 +696,7 @@ export type TaskDetail = Readonly<{
   actions: TaskActions;
   labelIDs: readonly string[];
   attentionCount: number;
+  dependencies: TaskDependencies;
   executionTarget: WorkflowExecutionTarget | null;
   worktreePath: string | null;
   currentNodes: readonly TaskCurrentNode[];

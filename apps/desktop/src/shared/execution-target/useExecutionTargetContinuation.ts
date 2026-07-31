@@ -9,48 +9,57 @@ import { errorMessage } from "@/api";
 import {
   executionTargetSelectionFromDraft,
   initialExecutionTargetSelectionDraft,
-  type ExecutionTargetActionResult,
-  type ExecutionTargetContinuationAction,
+  proceedWithTaskInitiatingAction,
   type ExecutionTargetSelectionDraft,
+  type TaskInitiatingAction,
+  type TaskInitiatingActionResult,
 } from "./executionTargetContinuation";
 
-export type PendingExecutionTargetContinuation = Readonly<{
-  action: ExecutionTargetContinuationAction;
-  requirement: WorkflowExecutionTargetSelectionRequirement;
-  selection: ExecutionTargetSelectionDraft;
-  phase: "ready" | "submitting" | "failed";
-  error: string | null;
-}>;
+export type PendingTaskInitiatingAction =
+  | Readonly<{
+      kind: "dependency_confirmation";
+      action: TaskInitiatingAction;
+      unsatisfiedDependencyCount: number;
+    }>
+  | Readonly<{
+      kind: "execution_target";
+      action: TaskInitiatingAction;
+      requirement: WorkflowExecutionTargetSelectionRequirement;
+      selection: ExecutionTargetSelectionDraft;
+      phase: "ready" | "submitting" | "failed";
+      error: string | null;
+    }>;
 
-export type ExecutionTargetContinuationController = Readonly<{
-  pending: PendingExecutionTargetContinuation | null;
+export type TaskInitiatingActionController = Readonly<{
+  pending: PendingTaskInitiatingAction | null;
   running: boolean;
-  run(action: ExecutionTargetContinuationAction): Promise<void>;
+  run(action: TaskInitiatingAction): Promise<void>;
   close(): void;
+  proceed(): Promise<void>;
   submit(): Promise<void>;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
   setCustomRef(customRef: string): void;
 }>;
 
-export function useExecutionTargetContinuation({
+export function useTaskInitiatingActionController({
   execute,
   onApplied,
   onAppliedError,
 }: Readonly<{
   execute: (
-    action: ExecutionTargetContinuationAction,
+    action: TaskInitiatingAction,
     selection?: WorkflowExecutionTargetSelection,
-  ) => Promise<ExecutionTargetActionResult>;
-  onApplied: (result: ExecutionTargetActionResult) => void | Promise<void>;
+  ) => Promise<TaskInitiatingActionResult>;
+  onApplied: (result: TaskInitiatingActionResult) => void | Promise<void>;
   onAppliedError: (error: unknown) => void;
-}>): ExecutionTargetContinuationController {
-  const [pending, setPending] = useState<PendingExecutionTargetContinuation | null>(null);
+}>): TaskInitiatingActionController {
+  const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
   const initialRunRef = useRef<Promise<void> | null>(null);
   const submittingRef = useRef(false);
 
   const handleResult = useCallback(
-    async (result: ExecutionTargetActionResult): Promise<void> => {
+    async (result: TaskInitiatingActionResult): Promise<void> => {
       if (result.response.outcome === "applied") {
         setPending(null);
         try {
@@ -60,7 +69,16 @@ export function useExecutionTargetContinuation({
         }
         return;
       }
+      if (result.response.outcome === "dependency_confirmation_required") {
+        setPending({
+          kind: "dependency_confirmation",
+          action: result.action,
+          unsatisfiedDependencyCount: result.response.unsatisfiedDependencyCount,
+        });
+        return;
+      }
       setPending({
+        kind: "execution_target",
         action: result.action,
         requirement: result.response.selectionRequired,
         selection: initialExecutionTargetSelectionDraft(result.response.selectionRequired),
@@ -72,7 +90,7 @@ export function useExecutionTargetContinuation({
   );
 
   const run = useCallback(
-    async (action: ExecutionTargetContinuationAction): Promise<void> => {
+    async (action: TaskInitiatingAction): Promise<void> => {
       if (initialRunRef.current !== null) {
         await initialRunRef.current;
         return;
@@ -95,8 +113,23 @@ export function useExecutionTargetContinuation({
     [execute, handleResult],
   );
 
+  const proceed = useCallback(async (): Promise<void> => {
+    if (pending?.kind !== "dependency_confirmation" || submittingRef.current) {
+      return;
+    }
+    submittingRef.current = true;
+    const action = proceedWithTaskInitiatingAction(pending.action);
+    setRunning(true);
+    try {
+      await handleResult(await execute(action));
+    } finally {
+      submittingRef.current = false;
+      setRunning(false);
+    }
+  }, [execute, handleResult, pending]);
+
   const submit = useCallback(async (): Promise<void> => {
-    if (pending === null || submittingRef.current) {
+    if (pending?.kind !== "execution_target" || submittingRef.current) {
       return;
     }
     const selection = executionTargetSelectionFromDraft(pending.selection);
@@ -105,7 +138,7 @@ export function useExecutionTargetContinuation({
     }
     submittingRef.current = true;
     setPending({ ...pending, phase: "submitting", error: null });
-    let result: ExecutionTargetActionResult;
+    let result: TaskInitiatingActionResult;
     try {
       result = await execute(pending.action, selection);
     } catch (error) {
@@ -118,22 +151,8 @@ export function useExecutionTargetContinuation({
       return;
     }
     submittingRef.current = false;
-    if (result.response.outcome === "selection_required") {
-      setPending({
-        ...pending,
-        requirement: result.response.selectionRequired,
-        phase: "ready",
-        error: null,
-      });
-      return;
-    }
-    setPending(null);
-    try {
-      await onApplied(result);
-    } catch (error) {
-      onAppliedError(error);
-    }
-  }, [execute, onApplied, onAppliedError, pending]);
+    await handleResult(result);
+  }, [execute, handleResult, pending]);
 
   const close = useCallback(() => {
     if (!submittingRef.current) {
@@ -143,15 +162,36 @@ export function useExecutionTargetContinuation({
 
   const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
     setPending((current) =>
-      current === null ? null : { ...current, selection: { ...current.selection, mode }, error: null },
+      current?.kind !== "execution_target"
+        ? current
+        : {
+            ...current,
+            selection: { ...current.selection, mode },
+            error: null,
+          },
     );
   }, []);
 
   const setCustomRef = useCallback((customRef: string) => {
     setPending((current) =>
-      current === null ? null : { ...current, selection: { ...current.selection, customRef }, error: null },
+      current?.kind !== "execution_target"
+        ? current
+        : {
+            ...current,
+            selection: { ...current.selection, customRef },
+            error: null,
+          },
     );
   }, []);
 
-  return { pending, running, run, close, submit, selectMode, setCustomRef };
+  return {
+    pending,
+    running,
+    run,
+    close,
+    proceed,
+    submit,
+    selectMode,
+    setCustomRef,
+  };
 }

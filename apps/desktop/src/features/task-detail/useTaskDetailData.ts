@@ -1,12 +1,17 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import type { QuestionAnswerInput } from "@/api";
+import type { QuestionAnswerInput, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
-import { workflowProjectEventAffectsTask } from "@/app-facade";
+import {
+  dependencyRelatedTaskIDs,
+  optimisticTaskDependencyRemoval,
+  workflowProjectEventAffectsDependencyDetail,
+  type TaskDependencyPair,
+} from "@/shared/task-dependencies";
 
 // useTaskDetailLiveRefresh keeps an open task detail in sync with the server by
 // subscribing to its project's workflow events. Any event that mutates this
@@ -16,7 +21,7 @@ import { workflowProjectEventAffectsTask } from "@/app-facade";
 // standalone task window). Invalidations target active observers only and reuse
 // existing cache data during the background refetch, so the refresh is
 // flicker-free and never collapses the surface back to a loading state.
-export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enabled: boolean) {
+export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
   const { api, logger } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
@@ -24,19 +29,37 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
   const connectionGeneration = connection.generation;
 
   useEffect(() => {
-    if (!enabled || taskID.length === 0 || projectID.length === 0 || connectionPhase !== "connected") {
+    if (
+      !enabled ||
+      detail.id.length === 0 ||
+      detail.projectID.length === 0 ||
+      connectionPhase !== "connected"
+    ) {
       return;
     }
-    const subscription = api.subscribeProject(projectID, {
+    const relatedTaskIDs = dependencyRelatedTaskIDs(detail);
+    const subscription = api.subscribeProject(detail.projectID, {
       onEvent(event) {
-        if (!workflowProjectEventAffectsTask(event, taskID)) {
+        if (!workflowProjectEventAffectsDependencyDetail(event, detail.id, relatedTaskIDs)) {
           return;
         }
         void Promise.all([
-          queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskID), refetchType: "active" }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.task(detail.id),
+            refetchType: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.taskAttention(detail.id),
+            refetchType: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.activity(detail.id),
+            refetchType: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.comments(detail.id),
+            refetchType: "active",
+          }),
           queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
         ]).catch((error: unknown) => {
           void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
@@ -52,7 +75,7 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
     return () => {
       subscription.close();
     };
-  }, [api, connectionGeneration, connectionPhase, enabled, logger, projectID, queryClient, taskID]);
+  }, [api, connectionGeneration, connectionPhase, detail, enabled, logger, queryClient]);
 }
 
 export function useTaskDetail(taskID: string, enabled: boolean) {
@@ -113,7 +136,7 @@ export function usePendingAsks(sessionID: string | null) {
   });
 }
 
-type TaskLifecycleAction = "interrupt" | "resume";
+type TaskLifecycleAction = "dependency_remove" | "interrupt" | "resume";
 
 type TaskMutationCallbacks = Readonly<{
   onChanged?: (() => void) | undefined;
@@ -122,6 +145,7 @@ type TaskMutationCallbacks = Readonly<{
 
 export function useTaskMutations(
   taskID: string,
+  projectID: string,
   { onActionError, onChanged }: TaskMutationCallbacks = {},
 ) {
   const { api } = useAppServices();
@@ -154,6 +178,34 @@ export function useTaskMutations(
     deleteComment: useMutation({
       mutationFn: async (commentID: string) => api.deleteComment(commentID),
       onSuccess: refresh,
+    }),
+    removeDependency: useMutation({
+      mutationFn: async (pair: TaskDependencyPair) =>
+        api.removeTaskDependency(pair.blockerTaskID, pair.blockedTaskID),
+      onMutate: async (pair) => {
+        await queryClient.cancelQueries({ queryKey: queryKeys.task(taskID) });
+        queryClient.setQueryData<TaskDetail>(queryKeys.task(taskID), (current) =>
+          current === undefined ? current : optimisticTaskDependencyRemoval(current, pair),
+        );
+      },
+      onError: async (error) => {
+        onActionError?.("dependency_remove", error);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) });
+      },
+      onSuccess: async (_response, pair) => {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockerTaskID) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockedTaskID) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.projectBoardsRoot(projectID) }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.projectTaskListsRoot(projectID),
+          }),
+        ]);
+        onChanged?.();
+      },
     }),
     interrupt: useMutation({
       mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),

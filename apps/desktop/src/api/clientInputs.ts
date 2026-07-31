@@ -17,6 +17,12 @@ export type TaskMutationInput = Readonly<{
   body: string;
   sourceWorkspaceID: string;
   labelIDs: readonly string[];
+  dependencyIntent?: TaskDependencyCreateIntent | undefined;
+}>;
+
+export type TaskDependencyCreateIntent = Readonly<{
+  relatedTaskID: string;
+  newTaskRole: "blocker" | "blocked";
 }>;
 
 export type TaskListInput = Readonly<{
@@ -118,6 +124,14 @@ export type TaskMoveInput = Readonly<{
   outputValues?: Readonly<Record<string, string>>;
   setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
+}>;
+
+export type TaskStartInput = Readonly<{
+  taskID: string;
+  setupOperationID?: SetupOperationID | undefined;
+  executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
 }>;
 
 export type OrdinaryQuestionAnswerInput = Readonly<{

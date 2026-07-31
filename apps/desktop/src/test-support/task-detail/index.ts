@@ -92,6 +92,26 @@ export const taskDetailResponse = {
     actions: taskActions,
     label_ids: [],
     attention_count: 2,
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
   },
 };
 

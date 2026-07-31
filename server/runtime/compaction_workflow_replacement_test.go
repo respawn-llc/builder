@@ -13,11 +13,14 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
+func TestRemoteCompactionRefreshesWorkflowTaskAwareness(t *testing.T) {
 	t.Parallel()
 	scopeID := runtimeids.NewExecutionScopeID()
 	branchKey := workflow.TransitionBranchKey("implementation")
-	counter := &workflowTaskCommentCounterProbe{count: 3}
+	source := &workflowTaskAwarenessProbe{awareness: workflowruntime.TaskAwareness{
+		CommentCount:               3,
+		UnsatisfiedDependencyCount: 2,
+	}}
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
@@ -26,11 +29,11 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		mustCreateTestSession(t),
 		client,
 		&workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:            scopeID,
-			CompletionMode:     workflowruntime.CompletionModeTool,
-			Controller:         &externallyCompletedWorkflowController{},
-			TaskCommentCounter: counter,
-			Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &branchKey)},
+			ScopeID:             scopeID,
+			CompletionMode:      workflowruntime.CompletionModeTool,
+			Controller:          &externallyCompletedWorkflowController{},
+			TaskAwarenessSource: source,
+			Instructions:        workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task", "node", &branchKey)},
 		},
 		Config{Model: "gpt-5"},
 	)
@@ -73,10 +76,10 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 			workflowModes++
 		}
 	}
-	if counter.calls.Load() != 1 || workflowModes != 1 || len(client.compactionCalls) != 1 {
+	if source.calls.Load() != 1 || workflowModes != 1 || len(client.compactionCalls) != 1 {
 		t.Fatalf(
 			"workflow replacement counter-calls/mode-items/remote-calls = %d/%d/%d, want one/one/one",
-			counter.calls.Load(),
+			source.calls.Load(),
 			workflowModes,
 			len(client.compactionCalls),
 		)
@@ -268,14 +271,14 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 	}
 }
 
-type workflowTaskCommentCounterProbe struct {
-	count int64
-	calls atomic.Int32
+type workflowTaskAwarenessProbe struct {
+	awareness workflowruntime.TaskAwareness
+	calls     atomic.Int32
 }
 
-func (p *workflowTaskCommentCounterProbe) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
+func (p *workflowTaskAwarenessProbe) TaskAwareness(context.Context, workflow.TaskID) (workflowruntime.TaskAwareness, error) {
 	p.calls.Add(1)
-	return p.count, nil
+	return p.awareness, nil
 }
 
 type workflowProtocolBudgetController struct {

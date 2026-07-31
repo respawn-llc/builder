@@ -37,6 +37,7 @@ export const workflowProjectEventActions = [
   "question_cleared",
   "question_answered",
   "labels_changed",
+  "dependencies_changed",
 ] as const;
 export type WorkflowProjectEventAction = (typeof workflowProjectEventActions)[number];
 
@@ -83,6 +84,7 @@ const allowedActions: Readonly<
     "question_cleared",
     "question_answered",
     "labels_changed",
+    "dependencies_changed",
   ]),
   workflow: new Set([
     "updated",

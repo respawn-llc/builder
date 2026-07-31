@@ -36,6 +36,13 @@ import {
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
+import { taskDependenciesSchema } from "./taskDependencies";
+export {
+  taskDependenciesSchema,
+  taskDependencyAddResponseSchema,
+  taskDependencyListResponseSchema,
+  taskDependencyRemoveResponseSchema,
+} from "./taskDependencies";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -161,6 +168,20 @@ const selectionRequiredResponseSchema = z
       }) as const,
   );
 
+const dependencyConfirmationRequiredResponseSchema = z
+  .object({
+    outcome: z.literal("dependency_confirmation_required"),
+    unsatisfied_dependency_count: z.number().int().positive(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        unsatisfiedDependencyCount: value.unsatisfied_dependency_count,
+      }) as const,
+  );
+
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
   z
     .object({
@@ -180,6 +201,7 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
         }) as const,
     ),
   selectionRequiredResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
 ]);
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
@@ -201,6 +223,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
         }) as const,
     ),
   selectionRequiredResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
 ]);
 
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
@@ -387,6 +410,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       actions: taskActionsSchema,
       label_ids: labelIDListSchema,
       attention_count: z.number().int().nonnegative(),
+      dependencies: taskDependenciesSchema,
     }),
   })
   .transform((value) => ({
@@ -405,6 +429,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     actions: value.task.actions,
     labelIDs: value.task.label_ids,
     attentionCount: value.task.attention_count,
+    dependencies: value.task.dependencies,
     executionTarget: value.task.execution_target,
     worktreePath: value.task.worktree_path,
     currentNodes: value.task.current_nodes,
@@ -419,46 +444,45 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     done: value.task.summary.done,
   }));
 
-const activityItemSchema = z
-  .discriminatedUnion("type", [
-    z
-      .object({
-        activity_id: nonBlankString,
-        type: z.literal("comment"),
-        task_id: nonBlankString,
-        occurred_at_unix_ms: z.number(),
-        updated_at_unix_ms: z.number(),
-        comment: commentSchema,
-      })
-      .strict()
-      .transform((value) => ({
-        id: value.activity_id,
-        type: value.type,
-        taskID: value.task_id,
-        occurredAt: value.occurred_at_unix_ms,
-        updatedAt: value.updated_at_unix_ms,
-        comment: value.comment,
-      })),
-    z
-      .object({
-        activity_id: nonBlankString,
-        type: z.literal("session_started"),
-        task_id: nonBlankString,
-        occurred_at_unix_ms: z.number(),
-        updated_at_unix_ms: z.number(),
-        session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
-      })
-      .strict()
-      .transform((value) => ({
-        id: value.activity_id,
-        type: value.type,
-        taskID: value.task_id,
-        occurredAt: value.occurred_at_unix_ms,
-        updatedAt: value.updated_at_unix_ms,
-        sessionID: value.session_started.session_id,
-        sessionName: value.session_started.name,
-      })),
-  ]);
+const activityItemSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("comment"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      comment: commentSchema,
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      comment: value.comment,
+    })),
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("session_started"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      sessionID: value.session_started.session_id,
+      sessionName: value.session_started.name,
+    })),
+]);
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z
   .object({

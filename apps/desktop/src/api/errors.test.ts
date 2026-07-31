@@ -1,4 +1,10 @@
-import { decodeWorkflowLabelError, RpcError, WorkflowLabelError } from "./errors";
+import {
+  decodeWorkflowLabelError,
+  decodeWorkflowTaskDependencyError,
+  RpcError,
+  WorkflowLabelError,
+  WorkflowTaskDependencyError,
+} from "./errors";
 
 const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 
@@ -88,5 +94,34 @@ describe("workflow label RPC errors", () => {
 
     expect(decodeWorkflowLabelError(missing)).toBeNull();
     expect(decodeWorkflowLabelError(malformed)).toBeNull();
+  });
+});
+
+describe("workflow task dependency RPC errors", () => {
+  it("decodes typed limit metadata without inspecting message copy", () => {
+    const error = decodeWorkflowTaskDependencyError(
+      new RpcError({
+        code: -32049,
+        message: "display only",
+        method: "workflow.task.dependency.add",
+        data: {
+          type: "workflow_task_dependency_error",
+          reason: "blocker_limit",
+          blocker_task_id: "task-1",
+          blocked_task_id: "task-2",
+          current_count: 7,
+          limit: 7,
+        },
+      }),
+    );
+
+    expect(error).toBeInstanceOf(WorkflowTaskDependencyError);
+    expect(error).toMatchObject({
+      reason: "blocker_limit",
+      blockerTaskID: "task-1",
+      blockedTaskID: "task-2",
+      currentCount: 7,
+      limit: 7,
+    });
   });
 });

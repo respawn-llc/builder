@@ -9,6 +9,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -265,16 +266,16 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		if err != nil {
 			return err
 		}
-		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
+		awareness, err := e.currentWorkflowTaskAwareness(ctx)
 		if err != nil {
 			return err
 		}
 		metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(metaContextBuildOptions{
-			IncludeWorkflow:          true,
-			WorkflowCompletionMode:   mode,
-			WorkflowPrompt:           prompt,
-			WorkflowTaskCommentCount: commentCount,
-			WorkflowTaskPromptKind:   kind,
+			IncludeWorkflow:        true,
+			WorkflowCompletionMode: mode,
+			WorkflowPrompt:         prompt,
+			WorkflowTaskAwareness:  awareness,
+			WorkflowTaskPromptKind: kind,
 		})
 		if err != nil {
 			return err
@@ -322,11 +323,11 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		opts.WorkflowCompletionMode = mode
 		opts.WorkflowPrompt = prompt
 		opts.WorkflowTaskPromptKind = kind
-		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
+		awareness, err := e.currentWorkflowTaskAwareness(ctx)
 		if err != nil {
 			return nil, err
 		}
-		opts.WorkflowTaskCommentCount = commentCount
+		opts.WorkflowTaskAwareness = awareness
 	} else if goal, ok := e.goalContinuation().activeGoal(); ok {
 		opts.ActiveGoal = &goal
 	}
@@ -337,13 +338,19 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	return metaResult.OrderedMetaMessages(), nil
 }
 
-func (e *Engine) currentWorkflowTaskCommentCount(ctx context.Context) (int64, error) {
-	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.TaskCommentCounter == nil {
-		return 0, nil
+func (e *Engine) currentWorkflowTaskAwareness(ctx context.Context) (workflowruntime.TaskAwareness, error) {
+	if !e.currentNodeExecutionActive() {
+		if prompt, configured := e.workflowPrompt(); configured {
+			return prompt.TaskAwareness, nil
+		}
+		return workflowruntime.TaskAwareness{}, nil
+	}
+	if e.cfg.CurrentNodeExecution.TaskAwarenessSource == nil {
+		return workflowruntime.TaskAwareness{}, nil
 	}
 	taskID := e.cfg.CurrentNodeExecution.Instructions.CurrentNode.TaskID
 	if taskID == "" {
-		return 0, nil
+		return workflowruntime.TaskAwareness{}, nil
 	}
-	return e.cfg.CurrentNodeExecution.TaskCommentCounter.CountTaskComments(ctx, taskID)
+	return e.cfg.CurrentNodeExecution.TaskAwarenessSource.TaskAwareness(ctx, taskID)
 }

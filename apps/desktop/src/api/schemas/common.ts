@@ -334,6 +334,17 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     status: taskStatusSchema,
     actions: taskActionsSchema,
     label_ids: labelIDListSchema,
+    dependency_progress: z
+      .object({
+        satisfied_count: z.number().int().nonnegative(),
+        total_count: z.number().int().positive(),
+      })
+      .strict()
+      .refine((value) => value.satisfied_count <= value.total_count)
+      .optional()
+      .transform((value) =>
+        value === undefined ? null : { satisfiedCount: value.satisfied_count, totalCount: value.total_count },
+      ),
     updated_at_unix_ms: z.number(),
   })
   .strict()
@@ -348,6 +359,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     status: value.status,
     actions: value.actions,
     labelIDs: value.label_ids,
+    dependencyProgress: value.dependency_progress,
     updatedAt: value.updated_at_unix_ms,
   }));
 

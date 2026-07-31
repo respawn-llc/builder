@@ -75,7 +75,7 @@ type CurrentNodeExecutionConfig struct {
 	MaxInvalidCompletionAttempts int
 	UseAutomaticToolChoice       bool
 	Controller                   Controller
-	TaskCommentCounter           TaskCommentCounter
+	TaskAwarenessSource          TaskAwarenessSource
 	Instructions                 TaskInstructions
 }
 
@@ -88,11 +88,16 @@ type PromptContract struct {
 	UseAutomaticToolChoice bool
 	Instructions           TaskInstructions
 	Transitions            []CompletionTransition
-	TaskCommentCount       int64
+	TaskAwareness          TaskAwareness
 }
 
-type TaskCommentCounter interface {
-	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
+type TaskAwareness struct {
+	CommentCount               int64
+	UnsatisfiedDependencyCount int64
+}
+
+type TaskAwarenessSource interface {
+	TaskAwareness(context.Context, workflow.TaskID) (TaskAwareness, error)
 }
 
 type TaskInstructions struct {

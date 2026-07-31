@@ -26,6 +26,25 @@ func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID s
 	return result.RowsAffected()
 }
 
+const acquireTaskDependencyWriteLock = `-- name: AcquireTaskDependencyWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = ?1
+)
+RETURNING id
+`
+
+func (q *Queries) AcquireTaskDependencyWriteLock(ctx context.Context, taskID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, acquireTaskDependencyWriteLock, taskID)
+	var id string
+	err := recordQueryError(ctx, row.Scan(&id), acquireTaskDependencyWriteLock, 1)
+
+	return id, err
+}
+
 const acquireTaskLabelWriteLock = `-- name: AcquireTaskLabelWriteLock :one
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -43,6 +62,25 @@ func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) 
 	err := recordQueryError(ctx, row.Scan(&id), acquireTaskLabelWriteLock, 1)
 
 	return id, err
+}
+
+const acquireWorkflowDependencyWriteLock = `-- name: AcquireWorkflowDependencyWriteLock :execrows
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id IN (
+    SELECT DISTINCT task_records.project_id
+    FROM task_records
+    WHERE task_records.workflow_id = ?1
+)
+`
+
+func (q *Queries) AcquireWorkflowDependencyWriteLock(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireWorkflowDependencyWriteLock, workflowID)
+	err = recordQueryError(ctx, err, acquireWorkflowDependencyWriteLock, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const acquireWorkflowGraphSaveWriteLock = `-- name: AcquireWorkflowGraphSaveWriteLock :execrows
@@ -584,6 +622,34 @@ func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (int64, 
 	return column_1, err
 }
 
+const countTaskDependenciesByBlocked = `-- name: CountTaskDependenciesByBlocked :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocked_task_id = ?1
+`
+
+func (q *Queries) CountTaskDependenciesByBlocked(ctx context.Context, blockedTaskID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocked, blockedTaskID)
+	var dependency_count int64
+	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocked, 1)
+
+	return dependency_count, err
+}
+
+const countTaskDependenciesByBlocker = `-- name: CountTaskDependenciesByBlocker :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocker_task_id = ?1
+`
+
+func (q *Queries) CountTaskDependenciesByBlocker(ctx context.Context, blockerTaskID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocker, blockerTaskID)
+	var dependency_count int64
+	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocker, 1)
+
+	return dependency_count, err
+}
+
 const countTaskEdgeReferences = `-- name: CountTaskEdgeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
@@ -943,6 +1009,41 @@ func (q *Queries) DeleteTaskCurrentNodes(ctx context.Context, taskID string) (in
 	return result.RowsAffected()
 }
 
+const deleteTaskDependenciesByTask = `-- name: DeleteTaskDependenciesByTask :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = ?1
+   OR blocked_task_id = ?1
+`
+
+func (q *Queries) DeleteTaskDependenciesByTask(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskDependenciesByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskDependenciesByTask, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskDependency = `-- name: DeleteTaskDependency :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = ?1
+  AND blocked_task_id = ?2
+`
+
+type DeleteTaskDependencyParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+func (q *Queries) DeleteTaskDependency(ctx context.Context, arg DeleteTaskDependencyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
+	err = recordQueryError(ctx, err, deleteTaskDependency, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskLabelAssignment = `-- name: DeleteTaskLabelAssignment :execrows
 DELETE FROM task_label_assignments
 WHERE task_id = ?1
@@ -1097,6 +1198,29 @@ WHERE task_id IN (
 func (q *Queries) DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCurrentNodesByWorkflowID, workflowID)
 	err = recordQueryError(ctx, err, deleteWorkflowTaskCurrentNodesByWorkflowID, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteWorkflowTaskDependenciesByWorkflowID = `-- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = ?1
+)
+OR blocked_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = ?1
+)
+`
+
+func (q *Queries) DeleteWorkflowTaskDependenciesByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskDependenciesByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskDependenciesByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1812,6 +1936,27 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
 	), getTaskByProjectShortID, 2)
+
+	return i, err
+}
+
+const getTaskDependency = `-- name: GetTaskDependency :one
+SELECT blocker_task_id, blocked_task_id
+FROM task_dependencies
+WHERE blocker_task_id = ?1
+  AND blocked_task_id = ?2
+LIMIT 1
+`
+
+type GetTaskDependencyParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+func (q *Queries) GetTaskDependency(ctx context.Context, arg GetTaskDependencyParams) (TaskDependency, error) {
+	row := q.db.QueryRowContext(ctx, getTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
+	var i TaskDependency
+	err := recordQueryError(ctx, row.Scan(&i.BlockerTaskID, &i.BlockedTaskID), getTaskDependency, 2)
 
 	return i, err
 }
@@ -2853,6 +2998,22 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 	return err
 }
 
+const insertTaskDependency = `-- name: InsertTaskDependency :exec
+INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+VALUES (?1, ?2)
+`
+
+type InsertTaskDependencyParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+func (q *Queries) InsertTaskDependency(ctx context.Context, arg InsertTaskDependencyParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
+	err = recordQueryError(ctx, err, insertTaskDependency, 2)
+	return err
+}
+
 const insertTaskLabelAssignment = `-- name: InsertTaskLabelAssignment :exec
 INSERT INTO task_label_assignments (task_id, label_id)
 VALUES (?1, ?2)
@@ -3668,10 +3829,76 @@ newer_page AS (
       )
     ORDER BY t.updated_at_unix_ms ASC, t.id ASC
     LIMIT ?11
+),
+dependency_progress AS (
+    SELECT
+        td.blocked_task_id AS task_id,
+        CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+        CAST(SUM(CASE WHEN (
+            SELECT status.is_done
+            FROM workflow_task_status_records status
+            WHERE status.task_id = td.blocker_task_id
+            LIMIT 1
+        ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+    FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+    WHERE td.blocked_task_id IN (
+        SELECT id FROM older_page
+        UNION ALL
+        SELECT id FROM newer_page
+    )
+    GROUP BY td.blocked_task_id
 )
-SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM older_page
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM older_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
 UNION ALL
-SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM newer_page
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM newer_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
 `
 
 type ListBoardNodeTasksParams struct {
@@ -3709,6 +3936,8 @@ type ListBoardNodeTasksRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
+	DependencySatisfiedCount    sql.NullInt64
+	DependencyTotalCount        sql.NullInt64
 }
 
 func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]ListBoardNodeTasksRow, error) {
@@ -3755,6 +3984,8 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.MetadataJson,
+			&i.DependencySatisfiedCount,
+			&i.DependencyTotalCount,
 		), listBoardNodeTasks, 11); err != nil {
 			return nil, err
 		}
@@ -5209,6 +5440,225 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 	return items, nil
 }
 
+const listTaskDependenciesByBlocked = `-- name: ListTaskDependenciesByBlocked :many
+SELECT
+    td.blocker_task_id,
+    td.blocked_task_id
+FROM task_dependencies td
+WHERE td.blocked_task_id = ?1
+ORDER BY td.blocker_task_id ASC
+LIMIT 50
+`
+
+func (q *Queries) ListTaskDependenciesByBlocked(ctx context.Context, blockedTaskID string) ([]TaskDependency, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDependenciesByBlocked, blockedTaskID)
+	err = recordQueryError(ctx, err, listTaskDependenciesByBlocked, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDependency
+	for rows.Next() {
+		var i TaskDependency
+		if err := recordQueryError(ctx, rows.Scan(&i.BlockerTaskID, &i.BlockedTaskID), listTaskDependenciesByBlocked, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskDependenciesByBlocked, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskDependenciesByBlocked, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDependenciesByBlocker = `-- name: ListTaskDependenciesByBlocker :many
+SELECT
+    td.blocker_task_id,
+    td.blocked_task_id
+FROM task_dependencies td
+WHERE td.blocker_task_id = ?1
+ORDER BY td.blocked_task_id ASC
+LIMIT 50
+`
+
+func (q *Queries) ListTaskDependenciesByBlocker(ctx context.Context, blockerTaskID string) ([]TaskDependency, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDependenciesByBlocker, blockerTaskID)
+	err = recordQueryError(ctx, err, listTaskDependenciesByBlocker, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskDependency
+	for rows.Next() {
+		var i TaskDependency
+		if err := recordQueryError(ctx, rows.Scan(&i.BlockerTaskID, &i.BlockedTaskID), listTaskDependenciesByBlocker, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskDependenciesByBlocker, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskDependenciesByBlocker, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDependencyBlockedByProjectionRows = `-- name: ListTaskDependencyBlockedByProjectionRows :many
+SELECT
+    CAST('blocked-by' AS TEXT) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    related.workflow_id
+FROM task_dependencies td
+JOIN task_records related ON related.id = td.blocker_task_id
+WHERE td.blocked_task_id = ?1
+ORDER BY related.short_id ASC, related.id ASC
+LIMIT 51
+`
+
+type ListTaskDependencyBlockedByProjectionRowsRow struct {
+	Direction  string
+	TaskID     string
+	ShortID    string
+	Title      string
+	WorkflowID string
+}
+
+func (q *Queries) ListTaskDependencyBlockedByProjectionRows(ctx context.Context, taskID string) ([]ListTaskDependencyBlockedByProjectionRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDependencyBlockedByProjectionRows, taskID)
+	err = recordQueryError(ctx, err, listTaskDependencyBlockedByProjectionRows, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskDependencyBlockedByProjectionRowsRow
+	for rows.Next() {
+		var i ListTaskDependencyBlockedByProjectionRowsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.Direction,
+			&i.TaskID,
+			&i.ShortID,
+			&i.Title,
+			&i.WorkflowID,
+		), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyBlockedByProjectionRows, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDependencyNeighborIDs = `-- name: ListTaskDependencyNeighborIDs :many
+SELECT DISTINCT
+    CAST(CASE
+        WHEN td.blocker_task_id = ?1 THEN td.blocked_task_id
+        ELSE td.blocker_task_id
+    END AS TEXT) AS task_id
+FROM task_dependencies td
+WHERE td.blocker_task_id = ?1
+   OR td.blocked_task_id = ?1
+ORDER BY task_id ASC
+LIMIT 100
+`
+
+func (q *Queries) ListTaskDependencyNeighborIDs(ctx context.Context, taskID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDependencyNeighborIDs, taskID)
+	err = recordQueryError(ctx, err, listTaskDependencyNeighborIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var task_id string
+		if err := recordQueryError(ctx, rows.Scan(&task_id), listTaskDependencyNeighborIDs, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, task_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyNeighborIDs, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyNeighborIDs, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskDependencyProjectionRows = `-- name: ListTaskDependencyProjectionRows :many
+SELECT
+    CAST(
+        CASE
+            WHEN td.blocked_task_id = ?1 THEN 'blocked-by'
+            ELSE 'blocks'
+        END AS TEXT
+    ) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    related.workflow_id
+FROM task_dependencies td
+JOIN task_records related
+  ON related.id = CASE
+      WHEN td.blocked_task_id = ?1 THEN td.blocker_task_id
+      ELSE td.blocked_task_id
+  END
+WHERE td.blocker_task_id = ?1
+   OR td.blocked_task_id = ?1
+ORDER BY direction ASC, related.short_id ASC, related.id ASC
+LIMIT 101
+`
+
+type ListTaskDependencyProjectionRowsRow struct {
+	Direction  string
+	TaskID     string
+	ShortID    string
+	Title      string
+	WorkflowID string
+}
+
+func (q *Queries) ListTaskDependencyProjectionRows(ctx context.Context, taskID string) ([]ListTaskDependencyProjectionRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskDependencyProjectionRows, taskID)
+	err = recordQueryError(ctx, err, listTaskDependencyProjectionRows, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskDependencyProjectionRowsRow
+	for rows.Next() {
+		var i ListTaskDependencyProjectionRowsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.Direction,
+			&i.TaskID,
+			&i.ShortID,
+			&i.Title,
+			&i.WorkflowID,
+		), listTaskDependencyProjectionRows, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskDependencyProjectionRows, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskDependencyProjectionRows, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskPendingApprovalBranches = `-- name: ListTaskPendingApprovalBranches :many
 SELECT
     approval_id,
@@ -5456,6 +5906,54 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowDependencySurvivorIDs = `-- name: ListWorkflowDependencySurvivorIDs :many
+WITH deleted_tasks AS (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = ?1
+)
+SELECT DISTINCT CAST(
+    CASE
+        WHEN td.blocker_task_id IN (SELECT id FROM deleted_tasks) THEN td.blocked_task_id
+        ELSE td.blocker_task_id
+    END AS TEXT
+) AS task_id
+FROM task_dependencies td
+WHERE (
+    td.blocker_task_id IN (SELECT id FROM deleted_tasks)
+    OR td.blocked_task_id IN (SELECT id FROM deleted_tasks)
+)
+AND (
+    td.blocker_task_id NOT IN (SELECT id FROM deleted_tasks)
+    OR td.blocked_task_id NOT IN (SELECT id FROM deleted_tasks)
+)
+ORDER BY task_id ASC
+`
+
+func (q *Queries) ListWorkflowDependencySurvivorIDs(ctx context.Context, workflowID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowDependencySurvivorIDs, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowDependencySurvivorIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var task_id string
+		if err := recordQueryError(ctx, rows.Scan(&task_id), listWorkflowDependencySurvivorIDs, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, task_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowDependencySurvivorIDs, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowDependencySurvivorIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7410,6 +7908,37 @@ type TouchTaskUpdatedAtParams struct {
 func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAtParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, touchTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
 	err = recordQueryError(ctx, err, touchTaskUpdatedAt, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const touchTasksUpdatedAt = `-- name: TouchTasksUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = ?1
+WHERE id IN (/*SLICE:task_ids*/?)
+`
+
+type TouchTasksUpdatedAtParams struct {
+	UpdatedAtUnixMs int64
+	TaskIds         []string
+}
+
+func (q *Queries) TouchTasksUpdatedAt(ctx context.Context, arg TouchTasksUpdatedAtParams) (int64, error) {
+	query := touchTasksUpdatedAt
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.UpdatedAtUnixMs)
+	if len(arg.TaskIds) > 0 {
+		for _, v := range arg.TaskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(arg.TaskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	result, err := q.db.ExecContext(ctx, query, queryParams...)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return 0, err
 	}

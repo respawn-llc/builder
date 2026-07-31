@@ -292,6 +292,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	jsonOut := fs.Bool("json", false, "write the typed start outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
@@ -317,7 +318,12 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return 1
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
-			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID, ExecutionTarget: executionTarget})
+			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+				SetupOperationID:           setupOperationID,
+				TaskID:                     taskID,
+				ExecutionTarget:            executionTarget,
+				ProceedDespiteDependencies: *ignoreDependencies,
+			})
 		})
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) {
@@ -329,7 +335,15 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+			} else {
+				writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
+			}
+			return 1
+		}
+		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeSelectionRequired {
 			if *jsonOut {
 				_ = writeCommandJSON(stdout, stderr, resp)
 			} else {
@@ -555,7 +569,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
+		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -579,6 +593,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
+	jsonOut := fs.Bool("json", false, "write the typed move outcome as JSON")
 	outputs := stringMapFlag{}
 	fs.Var(&outputs, "output", "transition value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
@@ -606,12 +622,13 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-				TaskID:           taskID,
-				TargetNodeID:     positionals[1],
-				OutputValues:     outputs.values,
-				Commentary:       *commentary,
-				SetupOperationID: setupOperationID,
-				ExecutionTarget:  executionTarget,
+				TaskID:                     taskID,
+				TargetNodeID:               positionals[1],
+				OutputValues:               outputs.values,
+				Commentary:                 *commentary,
+				SetupOperationID:           setupOperationID,
+				ExecutionTarget:            executionTarget,
+				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
@@ -624,12 +641,28 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
+		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+			} else {
+				writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
+			}
+			return 1
+		}
+		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeSelectionRequired {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+			} else {
+				writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
+			}
 			return 1
 		}
 		if _, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
+		}
+		if *jsonOut {
+			return writeCommandJSON(stdout, stderr, resp)
 		}
 		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 		if err != nil {
@@ -641,19 +674,23 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 }
 
-func workflowActionRequiresExecutionTargetSelection(
-	stderr io.Writer,
-	outcome serverapi.WorkflowExecutionTargetActionOutcome,
-	requirement *serverapi.WorkflowExecutionTargetSelectionRequirement,
-) bool {
-	if outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		return false
+func writeTaskDependencyConfirmationRequired(stderr io.Writer, taskRef string, count *int) {
+	if count == nil {
+		panic("dependency confirmation outcome requires an unsatisfied dependency count")
 	}
-	writeWorkflowExecutionTargetSelectionRequired(stderr, requirement)
-	return true
+	fmt.Fprintf(stderr, "Task %s has %d unsatisfied dependencies.\n", taskRef, *count)
+	fmt.Fprintf(stderr, "Review them with `%s task show %s`.\n", config.Command, taskRef)
+	fmt.Fprintln(stderr, "Rerun with `--ignore-dependencies` to proceed.")
 }
 
-func requireAppliedWorkflowAction[T any](outcome serverapi.WorkflowExecutionTargetActionOutcome, applied *T) (*T, error) {
+func requireAppliedWorkflowAction[T any](outcome serverapi.WorkflowTaskActionOutcome, applied *T) (*T, error) {
+	if outcome != serverapi.WorkflowTaskActionOutcomeApplied || applied == nil {
+		return nil, errors.New("workflow action requires execution target selection")
+	}
+	return applied, nil
+}
+
+func requireAppliedExecutionTargetAction[T any](outcome serverapi.WorkflowExecutionTargetActionOutcome, applied *T) (*T, error) {
 	if outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || applied == nil {
 		return nil, errors.New("workflow action requires execution target selection")
 	}

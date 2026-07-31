@@ -27,6 +27,12 @@ type WorkflowTaskDetailReadModel interface {
 	GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 }
 
+type WorkflowTaskDependencyReadModel interface {
+	GetTaskDependencies(context.Context, string) (serverapi.WorkflowTaskDependencies, error)
+	CountUnsatisfiedBlockers(context.Context, string) (int, error)
+	ListTaskDependencies(context.Context, string, *serverapi.WorkflowTaskDependencyDirection) (serverapi.WorkflowTaskDependencyListResponse, error)
+}
+
 type WorkflowActivityReadModel interface {
 	List(context.Context, serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error)
 }
@@ -37,12 +43,13 @@ type WorkflowAttentionReadModel interface {
 }
 
 type ReadModels struct {
-	Definitions WorkflowDefinitionReadModel
-	Board       WorkflowBoardReadModel
-	TaskList    WorkflowTaskListReadModel
-	TaskDetail  WorkflowTaskDetailReadModel
-	Activity    WorkflowActivityReadModel
-	Attention   WorkflowAttentionReadModel
+	Definitions      WorkflowDefinitionReadModel
+	Board            WorkflowBoardReadModel
+	TaskList         WorkflowTaskListReadModel
+	TaskDetail       WorkflowTaskDetailReadModel
+	TaskDependencies WorkflowTaskDependencyReadModel
+	Activity         WorkflowActivityReadModel
+	Attention        WorkflowAttentionReadModel
 }
 
 func (r ReadModels) validate() error {
@@ -55,6 +62,8 @@ func (r ReadModels) validate() error {
 		return errors.New("workflow task list read model is required")
 	case r.TaskDetail == nil:
 		return errors.New("workflow task detail read model is required")
+	case r.TaskDependencies == nil:
+		return errors.New("workflow task dependency read model is required")
 	case r.Activity == nil:
 		return errors.New("workflow activity read model is required")
 	case r.Attention == nil:

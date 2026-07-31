@@ -59,7 +59,7 @@ describe("ApiClient", () => {
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
     });
-    await expect(client.startTask("task-1")).resolves.toMatchObject({
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
       outcome: "applied",
       applied: {
         currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }],
@@ -484,9 +484,7 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(
-      client.listWorkflows({ offset: 0, limit: 10, query: "ship" }),
-    ).resolves.toMatchObject({
+    await expect(client.listWorkflows({ offset: 0, limit: 10, query: "ship" })).resolves.toMatchObject({
       nextOffset: 10,
       workflows: [
         {
@@ -922,6 +920,26 @@ const emptyTaskDetailResponse = {
     },
     label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
     attention_count: 0,
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
     worktree_path: null,
     current_nodes: [],
     live_session_ids: [],

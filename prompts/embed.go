@@ -174,21 +174,22 @@ type systemPromptTemplateData struct {
 }
 
 type WorkflowNodeContextArgs struct {
-	TaskId               string
-	TaskShortId          string
-	TaskTitle            string
-	TaskBody             string
-	WorkflowId           string
-	WorkflowName         string
-	NodeId               string
-	NodeKey              string
-	NodeDisplayName      string
-	ContextMode          string
-	SourceSessionID      string
-	CompletionMode       string
-	TaskNumberOfComments int64
-	Transitions          []WorkflowTransition
-	NodePrompt           string
+	TaskId                         string
+	TaskShortId                    string
+	TaskTitle                      string
+	TaskBody                       string
+	WorkflowId                     string
+	WorkflowName                   string
+	NodeId                         string
+	NodeKey                        string
+	NodeDisplayName                string
+	ContextMode                    string
+	SourceSessionID                string
+	CompletionMode                 string
+	TaskNumberOfComments           int64
+	TaskUnsatisfiedDependencyCount int64
+	Transitions                    []WorkflowTransition
+	NodePrompt                     string
 }
 
 type WorkflowTaskPromptKind uint8
@@ -238,11 +239,14 @@ type WorkflowInputValue struct {
 
 type workflowTaskInstructionsTemplateData struct {
 	WorkflowNodeContextArgs
-	LaunchCommand              string
-	NodeCompletionInstructions string
-	ShowTaskCommentsReminder   bool
-	TaskCommentsLabel          string
-	TaskCommentListCommand     string
+	LaunchCommand                string
+	NodeCompletionInstructions   string
+	ShowTaskCommentsReminder     bool
+	TaskCommentsLabel            string
+	TaskCommentListCommand       string
+	ShowTaskDependenciesReminder bool
+	TaskDependenciesLabel        string
+	TaskShowCommand              string
 }
 
 type workflowNudgeTemplateData struct {
@@ -542,12 +546,15 @@ func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goal
 
 func newWorkflowTaskInstructionsTemplateData(args WorkflowNodeContextArgs, nodeCompletionInstructions string) workflowTaskInstructionsTemplateData {
 	return workflowTaskInstructionsTemplateData{
-		WorkflowNodeContextArgs:    args,
-		LaunchCommand:              LaunchCommand(),
-		NodeCompletionInstructions: strings.TrimSpace(nodeCompletionInstructions),
-		ShowTaskCommentsReminder:   args.TaskNumberOfComments > 0,
-		TaskCommentsLabel:          taskCommentsLabel(args.TaskNumberOfComments),
-		TaskCommentListCommand:     strings.Join([]string{LaunchCommand(), "task", "comment", "list", strings.TrimSpace(args.TaskShortId)}, " "),
+		WorkflowNodeContextArgs:      args,
+		LaunchCommand:                LaunchCommand(),
+		NodeCompletionInstructions:   strings.TrimSpace(nodeCompletionInstructions),
+		ShowTaskCommentsReminder:     args.TaskNumberOfComments > 0,
+		TaskCommentsLabel:            taskCommentsLabel(args.TaskNumberOfComments),
+		TaskCommentListCommand:       strings.Join([]string{LaunchCommand(), "task", "comment", "list", strings.TrimSpace(args.TaskShortId)}, " "),
+		ShowTaskDependenciesReminder: args.TaskUnsatisfiedDependencyCount > 0,
+		TaskDependenciesLabel:        taskDependenciesLabel(args.TaskUnsatisfiedDependencyCount),
+		TaskShowCommand:              strings.Join([]string{LaunchCommand(), "task", "show", strings.TrimSpace(args.TaskShortId)}, " "),
 	}
 }
 
@@ -556,6 +563,13 @@ func taskCommentsLabel(numberOfComments int64) string {
 		return "1 comment"
 	}
 	return fmt.Sprintf("%d comments", numberOfComments)
+}
+
+func taskDependenciesLabel(count int64) string {
+	if count == 1 {
+		return "1 unsatisfied dependency"
+	}
+	return fmt.Sprintf("%d unsatisfied dependencies", count)
 }
 
 func RenderWorkflowToolCompletionInstructions(workflowShortId string) (string, error) {
