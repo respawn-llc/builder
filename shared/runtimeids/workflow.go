@@ -27,13 +27,6 @@ func NewWorkflowID() WorkflowID {
 	return WorkflowID{uuidv4Value: newUUIDv4Value()}
 }
 
-func (id WorkflowID) MarshalJSON() ([]byte, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("workflow_id is required")
-	}
-	return json.Marshal(id.String())
-}
-
 func (id *WorkflowID) UnmarshalJSON(data []byte) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {

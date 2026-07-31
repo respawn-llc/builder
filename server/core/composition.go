@@ -112,7 +112,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		PromptFeed:      runtimeRegistry,
 		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
 			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
-				panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+				if cfg.Settings.Debug {
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+				}
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,
@@ -128,7 +131,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 			Kind:  runtime.EventSleepGuardFailed,
 			Error: err.Error(),
 		}); publishErr != nil {
-			panic(fmt.Sprintf("publish sleep-guard runtime event: %v", publishErr))
+			if cfg.Settings.Debug {
+				panic(fmt.Sprintf("publish sleep-guard runtime event: %v", publishErr))
+			}
+			fmt.Fprintf(os.Stderr, "publish sleep-guard runtime event: %v\n", publishErr)
 		}
 	})
 	if sleepErr != nil {
