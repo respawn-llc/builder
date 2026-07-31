@@ -26,6 +26,14 @@ func TestNodeWorkflowIDReturnsNilForAbsentNode(t *testing.T) {
 	}
 }
 
+func TestNodeWorkflowIDPreservesInvalidZeroIdentity(t *testing.T) {
+	node := workflow.StartNode{}
+	workflowID := workflow.NodeWorkflowID(node)
+	if workflowID == nil || !workflowID.IsZero() {
+		t.Fatalf("NodeWorkflowID(zero identity) = %v, want a preserved invalid zero identity", workflowID)
+	}
+}
+
 func TestNewNodeDropsUnsupportedFieldsForNonExecutableNodes(t *testing.T) {
 	fields := workflow.NodeFields{
 		SubagentRole:   "coder",

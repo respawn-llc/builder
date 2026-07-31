@@ -404,6 +404,16 @@ func workflowExecutionTargetPoliciesEqual(a workflow.ExecutionTargetPolicy, b wo
 	return *a.CustomRef == *b.CustomRef
 }
 
+func validateWorkflowGraphRecordWorkflowID(expected runtimeids.WorkflowID, actual runtimeids.WorkflowID, kind string, recordID string) error {
+	if actual.IsZero() {
+		return fmt.Errorf("workflow %s workflow id is required", kind)
+	}
+	if actual != expected {
+		return fmt.Errorf("workflow %s %q belongs to workflow %q: %w", kind, recordID, actual, ErrBelongsToOtherWorkflow)
+	}
+	return nil
+}
+
 func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName string, executionTargetPolicy workflow.ExecutionTargetPolicy, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
 	prepared := preparedWorkflowGraphSave{
 		nodeGroups:       append([]NodeGroupRecord(nil), req.NodeGroups...),
@@ -414,8 +424,8 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 	groupsByKey := map[workflow.ModelKey]string{}
 	groupsByID := map[string]bool{}
 	for i, group := range prepared.nodeGroups {
-		if group.WorkflowID.IsZero() {
-			group.WorkflowID = workflowID
+		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "node group", group.ID); err != nil {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		group.ID = strings.TrimSpace(group.ID)
 		if group.ID == "" {
@@ -424,9 +434,6 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		group.Key = workflow.ModelKey(strings.TrimSpace(string(group.Key)))
 		if group.Key == "" {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, errors.New("workflow node group key is required")
-		}
-		if group.WorkflowID != workflowID {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group %q belongs to workflow %q: %w", group.ID, group.WorkflowID, ErrBelongsToOtherWorkflow)
 		}
 		group.DisplayName = strings.TrimSpace(group.DisplayName)
 		if group.SortOrder == 0 {
@@ -446,8 +453,8 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: executionTargetPolicy}
 	groupNodeIDs := map[string][]workflow.NodeID{}
 	for i, node := range prepared.nodes {
-		if node.WorkflowID.IsZero() {
-			node.WorkflowID = workflowID
+		if err := validateWorkflowGraphRecordWorkflowID(workflowID, node.WorkflowID, "node", string(node.ID)); err != nil {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		node.GroupID = strings.TrimSpace(node.GroupID)
 		node.GroupKey = strings.TrimSpace(node.GroupKey)
@@ -479,15 +486,15 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: group.Key, DisplayName: group.DisplayName, MemberNodeIDs: groupNodeIDs[group.ID]})
 	}
 	for i, group := range prepared.transitionGroups {
-		if group.WorkflowID.IsZero() {
-			group.WorkflowID = workflowID
+		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "transition group", string(group.ID)); err != nil {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		prepared.transitionGroups[i] = group
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: group.WorkflowID, ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for i, edge := range prepared.edges {
-		if edge.WorkflowID.IsZero() {
-			edge.WorkflowID = workflowID
+		if err := validateWorkflowGraphRecordWorkflowID(workflowID, edge.WorkflowID, "edge", string(edge.ID)); err != nil {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
 		prepared.edges[i] = edge

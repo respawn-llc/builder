@@ -17,9 +17,9 @@ const taskListDefaultLimit = 100
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
-	workflowID := fs.String("workflow", "", "workflow UUID")
-	offset := fs.Int("offset", 0, "zero-based task offset")
-	limit := fs.Int("limit", taskListDefaultLimit, "maximum tasks to print")
+	workflowID := fs.String("workflow", "", "workflow selector `<uuid>`")
+	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
+	pageToken := fs.String("page-token", "", "page token from a previous task list response")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
 	var attentionFlags repeatedStringFlag

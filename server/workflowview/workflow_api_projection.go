@@ -9,7 +9,7 @@ import (
 func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
 	derived := workflow.DeriveWiring(def)
 	resp := serverapi.WorkflowDerivedWiring{
-		Diagnostics: ValidationErrors(workflow.OptionalWorkflowID(def.ID), derived.Diagnostics),
+		Diagnostics: ValidationErrors(workflow.WorkflowIDPointer(def.ID), derived.Diagnostics),
 	}
 	for _, node := range def.Nodes {
 		nodeID := workflow.NodeIDOf(node)

@@ -759,6 +759,9 @@ func cloneWorkflowEventWorkflowID(id *runtimeids.WorkflowID) *runtimeids.Workflo
 }
 
 func (s *Store) AddTransitionGroup(ctx context.Context, group TransitionGroupRecord) (int64, error) {
+	if group.WorkflowID.IsZero() {
+		return 0, errors.New("workflow id is required")
+	}
 	if group.ID == "" {
 		group.ID = workflow.TransitionGroupID(prefixedID("group"))
 	}
@@ -799,6 +802,9 @@ func (s *Store) UpdateTransitionGroup(ctx context.Context, group TransitionGroup
 }
 
 func (s *Store) AddEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
+	if edge.WorkflowID.IsZero() {
+		return 0, errors.New("workflow id is required")
+	}
 	if edge.ID == "" {
 		edge.ID = workflow.EdgeID(prefixedID("edge"))
 	}

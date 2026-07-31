@@ -24,7 +24,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	title := fs.String("title", "", "task title")
 	body := fs.String("body", "", "task body")
 	bodyFile := fs.String("body-file", "", "read the task body from this file")
-	workflowRef := fs.String("workflow", "", "workflow UUID; defaults to the project's default workflow")
+	workflowRef := fs.String("workflow", "", "workflow selector `<uuid>`; defaults to the project's default workflow")
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
 	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
 	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")

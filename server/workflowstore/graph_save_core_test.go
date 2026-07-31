@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -61,6 +62,60 @@ func (f graphSaveFixture) current(t *testing.T) (workflow.Definition, WorkflowRe
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	return def, record
+}
+
+func TestWorkflowGraphSaveRejectsMissingNestedWorkflowIDs(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	tests := []struct {
+		name   string
+		mutate func(*WorkflowGraphSaveRequest)
+	}{
+		{
+			name: "node group",
+			mutate: func(req *WorkflowGraphSaveRequest) {
+				req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: "missing-workflow-id-group", WorkflowID: runtimeids.WorkflowID{}, Key: "missing_workflow_id", DisplayName: "Missing workflow ID"})
+			},
+		},
+		{
+			name: "node",
+			mutate: func(req *WorkflowGraphSaveRequest) {
+				req.Nodes[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+		{
+			name: "transition group",
+			mutate: func(req *WorkflowGraphSaveRequest) {
+				req.TransitionGroups[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+		{
+			name: "edge",
+			mutate: func(req *WorkflowGraphSaveRequest) {
+				req.Edges[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := f.request(f.record.Version, false, f.def)
+			test.mutate(&req)
+			_, err := f.store.PreviewWorkflowGraphSave(f.ctx, req)
+			if err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+				t.Fatalf("PreviewWorkflowGraphSave error = %v, want missing nested workflow identity rejection", err)
+			}
+		})
+	}
+}
+
+func TestWorkflowGraphElementMutationsRejectMissingWorkflowIDs(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "missing-workflow-id-group"}); err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+		t.Fatalf("AddTransitionGroup error = %v, want missing workflow identity rejection", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "missing-workflow-id-edge"}); err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+		t.Fatalf("AddEdge error = %v, want missing workflow identity rejection", err)
+	}
 }
 
 type blockingGraphSaveRoleResolver struct {

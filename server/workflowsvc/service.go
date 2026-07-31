@@ -1707,7 +1707,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 
 func workflowValidationResponse(workflowID runtimeids.WorkflowID, result workflow.ValidationResult) serverapi.WorkflowValidateResponse {
 	resp := serverapi.WorkflowValidateResponse{Valid: !result.HasBlockingErrors()}
-	resp.Errors = workflowview.ValidationErrors(workflow.OptionalWorkflowID(workflowID), result.Errors)
+	resp.Errors = workflowview.ValidationErrors(workflow.WorkflowIDPointer(workflowID), result.Errors)
 	return resp
 }
 

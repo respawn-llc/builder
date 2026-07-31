@@ -175,7 +175,7 @@ var (
 	workflowValidateUsage   = leafCommandUsage(config.Command+" workflow validate <uuid> [--mode <mode>] [--json]", "Check whether a workflow is valid for draft editing, task creation, or execution.")
 	workflowInspectUsage    = leafCommandUsage(config.Command+" workflow inspect <uuid> [--summary] [--json]", "Inspect a workflow graph or metadata summary.")
 	taskUsage               = commandUsage{helpFile: "task.txt"}
-	taskCreateUsage         = leafCommandUsage(config.Command+" task create --title <title> (--body <body>|--body-file <path>) [flags]", "Create a task in a project.")
+	taskCreateUsage         = leafCommandUsage(config.Command+" task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [flags]", "Create a task in a project.")
 	taskEditUsage           = leafCommandUsage(config.Command+" task edit <task> [flags]", "Change a task's title, body, or source workspace.")
 	taskStartUsage          = leafCommandUsage(config.Command+" task start <task> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]", "Move a new task from the start node into its first executable workflow node.", "", "User-only; unavailable inside Kent shell commands.")
 	taskInterruptUsage      = leafCommandUsage(config.Command+" task interrupt <task> [--project <project>] [--session <session-id>] [--reason <text>]", "Interrupt live workflow work on a task.", "", "User-only; unavailable inside Kent shell commands.")
@@ -183,7 +183,7 @@ var (
 	taskApproveUsage        = leafCommandUsage(config.Command+" task approve <approval-id>", "Approve a pending workflow transition.", "", "User-only; unavailable inside Kent shell commands.")
 	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]", "Move a task to a workflow node.", "", "User-only; unavailable inside Kent shell commands.")
 	taskCompleteUsage       = leafCommandUsage(config.Command+" task complete [--transition <key>] [--commentary <text>] [--param name=value] [--session <session-id>|--task <task> [--project <project>]] [--force]", "Submit your task result.", "", "Use this to submit your task and end your turn. This is the only way to end your turn during a workflow.", "Use `--json` or `--json-file` instead of field flags to submit a JSON transition result.", "Positional arguments are not accepted.", "If you're stuck for any reason, use ask_question to ask for help instead of attempting to submit a final_answer. Invoke this command exactly as is described in the workflow instructions you received in a developer reminder.")
-	taskListUsage           = leafCommandUsage(config.Command+" task list [flags]", "List and filter tasks in a project.")
+	taskListUsage           = leafCommandUsage(config.Command+" task list [--workflow <uuid>] [flags]", "List and filter tasks in a project.")
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
