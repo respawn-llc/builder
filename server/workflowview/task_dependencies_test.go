@@ -161,7 +161,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 	}
 }
 
-func TestListTaskDependenciesReturnsBothEmptyDirectionEnvelopesWithoutFilter(t *testing.T) {
+func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	definitions, err := NewDefinitionProjection(fixture.store)
 	if err != nil {
@@ -177,17 +177,20 @@ func TestListTaskDependenciesReturnsBothEmptyDirectionEnvelopesWithoutFilter(t *
 	if err != nil {
 		t.Fatalf("ListTaskDependencies: %v", err)
 	}
-	if len(listed.Directions) != 2 {
-		t.Fatalf("directions = %+v, want both direction envelopes", listed.Directions)
+	if listed.Directions == nil || len(listed.Directions) != 0 {
+		t.Fatalf("directions = %+v, want empty list", listed.Directions)
 	}
-	for _, direction := range []serverapi.WorkflowTaskDependencyDirection{
-		serverapi.WorkflowTaskDependencyDirectionBlockedBy,
-		serverapi.WorkflowTaskDependencyDirectionBlocks,
-	} {
-		projection := listedDependencyDirection(t, listed, direction)
-		if projection.TotalCount != 0 || projection.Items == nil || len(projection.Items) != 0 {
-			t.Fatalf("direction %q = %+v, want zero count and non-nil empty items", direction, projection)
-		}
+	direction := serverapi.WorkflowTaskDependencyDirectionBlocks
+	filtered, err := dependencies.ListTaskDependencies(
+		fixture.ctx,
+		string(task.ID),
+		&direction,
+	)
+	if err != nil {
+		t.Fatalf("ListTaskDependencies filtered: %v", err)
+	}
+	if filtered.Directions == nil || len(filtered.Directions) != 0 {
+		t.Fatalf("filtered directions = %+v, want empty list", filtered.Directions)
 	}
 }
 

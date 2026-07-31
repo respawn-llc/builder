@@ -149,6 +149,9 @@ func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID stri
 			continue
 		}
 		rows := facts.rows[direction]
+		if len(rows) == 0 {
+			continue
+		}
 		items := projectDependencyItems(rows, direction == serverapi.WorkflowTaskDependencyDirectionBlockedBy)
 		projection := serverapi.WorkflowTaskDependencyListDirectionProjection{
 			Direction:  direction,
