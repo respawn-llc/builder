@@ -116,6 +116,13 @@ func requireCurrentNodeExecutionRoot(input workflowstore.CurrentNodeStartContext
 }
 
 func persistedInspectionCompletionMode(plan launch.SessionPlan, input workflowstore.CurrentNodeStartContext) (workflowruntime.CompletionMode, error) {
+	if plan.Locked != nil && plan.Locked.WorkflowCompletionMode != nil {
+		mode, err := workflowruntime.ParseCompletionMode(string(*plan.Locked.WorkflowCompletionMode))
+		if err != nil {
+			return "", fmt.Errorf("parse retained Session completion mode: %w", err)
+		}
+		return mode, nil
+	}
 	configured := plan.ActiveSettings.Workflow.CompletionMode
 	if input.Node.CompletionMode != "" {
 		configured = config.WorkflowCompletionMode(input.Node.CompletionMode)

@@ -229,7 +229,26 @@ func (e *Engine) workflowCompletionMode(ctx context.Context) (workflowruntime.Co
 	if !configured {
 		return "", nil
 	}
-	return workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+	promptMode, err := workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+	if err != nil {
+		return "", err
+	}
+	locked, lockedConfigured := e.lockedContractState().Snapshot()
+	if !lockedConfigured || locked.WorkflowCompletionMode == nil {
+		return promptMode, nil
+	}
+	lockedMode, err := workflowruntime.ParseCompletionMode(string(*locked.WorkflowCompletionMode))
+	if err != nil {
+		return "", fmt.Errorf("parse Session-locked workflow completion mode: %w", err)
+	}
+	if lockedMode != promptMode {
+		return "", fmt.Errorf(
+			"workflow completion mode invariant violated: Session contract has %q while live execution has %q",
+			lockedMode,
+			promptMode,
+		)
+	}
+	return lockedMode, nil
 }
 
 func (e *Engine) systemPrompt(locked session.LockedContract) (string, error) {

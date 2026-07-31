@@ -830,6 +830,13 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 			return &enabled
 		}(),
 	}
+	if prompt, configured := e.workflowPrompt(); configured {
+		mode, err := workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+		if err != nil {
+			return session.LockedContract{}, err
+		}
+		lock.WorkflowCompletionMode = &mode
+	}
 	if hasProviderContract {
 		lock.ProviderContract = llm.LockedProviderCapabilitiesFromContract(providerContract)
 	}

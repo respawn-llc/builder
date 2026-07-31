@@ -13,6 +13,8 @@ type ManagedWorktreePathContext struct {
 	currentRoot *string
 }
 
+const ForeignManagedWorktreeEditDeniedMessage = "Directly reaching into another agent's worktree is not permitted. Enter the worktree first instead with `kent worktree enter`"
+
 func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
 	base, err := config.ResolveExistingPathRealPath(strings.TrimSpace(baseDir))
 	if err != nil {
@@ -33,7 +35,7 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) 
 	return context, nil
 }
 
-func (c ManagedWorktreePathContext) WarnsFor(requestedPath string, resolvedPath string) bool {
+func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(requestedPath string, resolvedPath string) bool {
 	if !filepath.IsAbs(requestedPath) || !pathWithin(c.baseRoot, resolvedPath) {
 		return false
 	}

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,7 +12,6 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
-	patchtool "core/server/tools/patch"
 	"core/shared/toolspec"
 )
 
@@ -46,34 +43,24 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	base := t.TempDir()
-	currentRoot := filepath.Join(base, "current")
-	foreignRoot := filepath.Join(base, "foreign")
-	for _, path := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", path, err)
-		}
-	}
-	managedContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
-	if err != nil {
-		t.Fatalf("new managed worktree path context: %v", err)
-	}
-	patchHandler, err := patchtool.New(currentRoot, true, patchtool.WithManagedWorktreePathContext(managedContext))
-	if err != nil {
-		t.Fatalf("new patch handler: %v", err)
+	handler := &toolExecutionProbe{
+		warnings: []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()},
 	}
 	engine := mustNewTestEngine(
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: patchHandler}),
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolPatch,
+			Handler: handler,
+		}),
 		Config{Model: "gpt-5"},
 	)
 
 	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 		ID:    "warned-patch",
 		Name:  string(toolspec.ToolPatch),
-		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: ` + filepath.Join(foreignRoot, "a.txt") + `\n+ok\n*** End Patch\n"}`),
+		Input: json.RawMessage(`{}`),
 	}})
 	if err != nil {
 		t.Fatalf("execute warned tool: %v", err)
@@ -311,17 +298,19 @@ func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
 }
 
 type toolExecutionProbe struct {
-	called bool
-	calls  atomic.Int32
+	called   bool
+	calls    atomic.Int32
+	warnings []tools.ModelWarning
 }
 
 func (p *toolExecutionProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {
 	p.called = true
 	p.calls.Add(1)
 	return tools.Result{
-		CallID: call.ID,
-		Name:   call.Name,
-		Output: json.RawMessage(`{"ok":true}`),
+		CallID:        call.ID,
+		Name:          call.Name,
+		Output:        json.RawMessage(`{"ok":true}`),
+		ModelWarnings: append([]tools.ModelWarning(nil), p.warnings...),
 	}, nil
 }
 
