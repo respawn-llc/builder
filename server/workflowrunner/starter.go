@@ -461,6 +461,9 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, disposable, err
 		}
 	}
+	if sessionPrepared {
+		return plan, disposable, nil
+	}
 	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}

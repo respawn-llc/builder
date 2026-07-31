@@ -602,7 +602,7 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	}
 }
 
-func TestResumeRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
+func TestResumeRetainsEstablishedSessionContractAcrossNodeOverride(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
 		ScriptedCancellation(),
@@ -623,6 +623,32 @@ func TestResumeRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
 			len(f.client.Requests()) == 1
 	})
 	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+
+	meta := f.onlyProjectSessionMeta(t)
+	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
+	if err != nil {
+		t.Fatalf("parse workflow Session id: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("open workflow Session descriptor: %v", err)
+	}
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for {
+		admission, clearErr := f.authority.WithDormantSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
+			return store.SetContinuationContext(session.ContinuationContext{})
+		})
+		if clearErr != nil {
+			t.Fatalf("clear legacy workflow Session role: %v", clearErr)
+		}
+		if !admission.RuntimeAvailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("workflow Session runtime remained available after execution finalized")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if _, err := f.store.UpdateNode(context.Background(), workflowstore.NodeRecord{
 		ID:             currentNode.NodeID,
