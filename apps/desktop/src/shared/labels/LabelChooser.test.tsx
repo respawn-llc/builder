@@ -350,12 +350,17 @@ function snapshotLabelRowGeometry(): void {
   const rows = screen.getAllByRole("listitem").filter((row) =>
     handles.some((handle) => row.contains(handle)),
   );
+  const rowIndexByElement = new Map(rows.map((row, index) => [row, index] as const));
   const next = new WeakMap<HTMLElement, number>();
   for (const element of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
     const matchingRows = rows.filter((row) => row.contains(element) || element.contains(row));
     const matchingRow = matchingRows[0];
-    if (matchingRow !== undefined && matchingRows.length === 1) {
-      next.set(element, rows.indexOf(matchingRow));
+    if (matchingRow === undefined || matchingRows.length !== 1) {
+      continue;
+    }
+    const rowIndex = rowIndexByElement.get(matchingRow);
+    if (rowIndex !== undefined) {
+      next.set(element, rowIndex);
     }
   }
   labelGeometryIndexByElement = next;
@@ -376,8 +381,8 @@ function mockLabelRowGeometry(): void {
         y: 0,
       };
     }
-    const index = labelGeometryIndexByElement.get(this) ?? -1;
-    const top = (index < 0 ? 0 : index) * 40;
+    const index = labelGeometryIndexByElement.get(this);
+    const top = index === undefined ? 0 : index * 40;
     return {
       bottom: top + 32,
       height: 32,

@@ -336,9 +336,9 @@ function reorderEdgeParameters(
     if (workingIDs[index] === desiredID) {
       continue;
     }
-    const activeIndex = workingIDs.indexOf(desiredID);
+    const activeIndex = new Map(workingIDs.map((id, rowIndex) => [id, rowIndex] as const)).get(desiredID);
     const overID = workingIDs[index];
-    if (activeIndex < 0 || overID === undefined) {
+    if (activeIndex === undefined || overID === undefined) {
       return;
     }
     controller.dispatch({
