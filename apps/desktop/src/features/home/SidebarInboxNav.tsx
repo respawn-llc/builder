@@ -7,7 +7,7 @@ import { useSidebar } from "@/app-facade";
 import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
 import { IconTooltipButton } from "@/ui";
 import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
-import { useGlobalAttentionPages } from "./useHomeData";
+import { useSidebarGlobalAttentionPages } from "./useHomeData";
 
 type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>;
 
@@ -20,7 +20,7 @@ type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>
 export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDetailDestination }>) {
   const { t } = useTranslation();
   const { openSidebar } = useSidebar();
-  const attention = useGlobalAttentionPages();
+  const attention = useSidebarGlobalAttentionPages();
   // Remembers the open task's last position so Next still works after it is
   // resolved and drops out of the live inbox; updated only while it is present.
   const [anchorIndex, setAnchorIndex] = useState(0);
