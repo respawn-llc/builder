@@ -900,19 +900,28 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
 	}
-	releaseRuntimeBlocker := func() {}
-	if runtimeBlocker != nil {
-		runtimeBlockers, release, err := runtimeBlocker(ctx, preparedSessionIDs)
+	releases := make([]func(), 0, 2)
+	defer func() {
+		for index := len(releases) - 1; index >= 0; index-- {
+			releases[index]()
+		}
+	}()
+	collectRuntimeBlockers := func(sessionIDs []string) error {
+		if runtimeBlocker == nil {
+			return nil
+		}
+		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
 		if release != nil {
-			releaseRuntimeBlocker = release
-			defer releaseRuntimeBlocker()
+			releases = append(releases, release)
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if len(runtimeBlockers) > 0 {
-			blockers = append(blockers, runtimeBlockers...)
-		}
+		blockers = append(blockers, runtimeBlockers...)
+		return nil
+	}
+	if err := collectRuntimeBlockers(preparedSessionIDs); err != nil {
+		return nil, err
 	}
 	if len(blockers) > 0 {
 		return blockers, nil
@@ -952,6 +961,9 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 		return nil, err
 	}
 	if len(blockers) > 0 {
+		if err := collectRuntimeBlockers(commitSessionIDs); err != nil {
+			return nil, err
+		}
 		return blockers, nil
 	}
 	if !SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
@@ -1015,7 +1027,15 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)
 	}
-	addCountBlocker("missing_history_snapshot", "Historical task references do not have a durable workspace path/name snapshot.", missingSnapshots)
+	missingSessionSnapshots, err := q.CountSessionsMissingWorkspaceSnapshot(ctx, workspace.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count missing session workspace snapshots: %w", err)
+	}
+	addCountBlocker(
+		"missing_history_snapshot",
+		"Historical task or retained Session references do not have a durable workspace path/name snapshot.",
+		missingSnapshots+missingSessionSnapshots,
+	)
 	return blockers, nil
 }
 

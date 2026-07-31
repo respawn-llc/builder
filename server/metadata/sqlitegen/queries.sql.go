@@ -674,6 +674,25 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	return task_count, err
 }
 
+const countSessionsMissingWorkspaceSnapshot = `-- name: CountSessionsMissingWorkspaceSnapshot :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE workspace_id = ?1
+  AND (
+      NOT json_valid(metadata_json)
+      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
+      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
+  )
+`
+
+func (q *Queries) CountSessionsMissingWorkspaceSnapshot(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSessionsMissingWorkspaceSnapshot, workspaceID)
+	var session_count int64
+	err := recordQueryError(ctx, row.Scan(&session_count), countSessionsMissingWorkspaceSnapshot, 1)
+
+	return session_count, err
+}
+
 const countWorkflowNodesByGroup = `-- name: CountWorkflowNodesByGroup :one
 SELECT CAST(COUNT(*) AS INTEGER) AS node_count
 FROM workflow_nodes

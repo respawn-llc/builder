@@ -370,6 +370,30 @@ VALUES ('task-missing-workspace-snapshot', 'link-1', 1, 1, 'BLD-1', 'Task', 'Bod
 			TaskID: metadataStringPointer("task-missing-workspace-snapshot"),
 		})
 	})
+
+	t.Run("missing retained session snapshot", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		execSeed(t, store.db, "session missing workspace snapshot", `INSERT INTO sessions (
+	id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms, metadata_json
+)
+VALUES ('session-missing-workspace-snapshot', ?, ?, 'session-missing-workspace-snapshot', ?, ?, '{}')`,
+			binding.ProjectID, attached.WorkspaceID, now, now)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			SessionID: metadataStringPointer("session-missing-workspace-snapshot"),
+		})
+	})
 }
 
 type retainedWorkspaceRecords struct {
@@ -426,7 +450,7 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
 		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
 			if len(preparedSessionIDs) != 0 {
-				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+				return nil, func() {}, nil
 			}
 			mutated := make(chan error, 1)
 			go func() {
@@ -467,6 +491,56 @@ func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
 		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
 	}
 	assertWorkspaceUnlinkBlocker(t, blockers, "default_workspace")
+	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
+}
+
+func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	callbackCalls := 0
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(
+		ctx,
+		binding.ProjectID,
+		attached.WorkspaceID,
+		nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			callbackCalls++
+			if callbackCalls == 1 {
+				if len(preparedSessionIDs) != 0 {
+					return nil, nil, fmt.Errorf("prepared session IDs = %v, want none", preparedSessionIDs)
+				}
+				if err := addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "commit-runtime-blocker", attached.CanonicalRoot, attached.WorkspaceID); err != nil {
+					return nil, nil, err
+				}
+				return nil, func() {}, nil
+			}
+			if len(preparedSessionIDs) == 0 {
+				return nil, nil, errors.New("commit runtime blocker check received no session IDs")
+			}
+			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Code:    "active_sessions",
+				Message: "Active runtime sessions still depend on this workspace.",
+				Count:   1,
+			}}, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	if callbackCalls != 2 {
+		t.Fatalf("runtime blocker callback calls = %d, want 2", callbackCalls)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
 	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
 }
 
