@@ -25,6 +25,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1049,7 +1050,7 @@ func TestResolveSessionActionOpenSessionRequiresCurrentSession(t *testing.T) {
 		&testEmbeddedServer{},
 		nil,
 		"",
-		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: "draft reply"},
+		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: textutil.Value("draft reply")},
 	)
 	if err == nil {
 		t.Fatal("open-session navigation without a current session unexpectedly succeeded")

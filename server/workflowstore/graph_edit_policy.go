@@ -132,6 +132,7 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 	currentGroups := workflowGraphTransitionGroupsByID(current.transitionGroups)
 	nextGroups := workflowGraphTransitionGroupsByID(next.transitionGroups)
 	currentEdgesByGroupID := workflowGraphEdgesByTransitionGroupID(current.edges)
+	nextEdgesByGroupID := workflowGraphEdgesByTransitionGroupID(next.edges)
 	for _, currentGroup := range current.transitionGroups {
 		nextGroup, exists := nextGroups[currentGroup.ID]
 		if exists && workflowTransitionGroupMetadataOnlyChange(currentGroup, nextGroup) {
@@ -141,7 +142,23 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			SourceNodeID: currentGroup.SourceNodeID,
 			EdgeIDs:      workflowGraphEdgeIDsSlice(currentEdgesByGroupID[currentGroup.ID]),
 		})
+		if exists && nextGroup.SourceNodeID != currentGroup.SourceNodeID {
+			descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
+				SourceNodeID: nextGroup.SourceNodeID,
+				EdgeIDs:      workflowGraphEdgeIDsSlice(nextEdgesByGroupID[nextGroup.ID]),
+			})
+		}
 	}
+	for _, nextGroup := range next.transitionGroups {
+		if _, exists := currentGroups[nextGroup.ID]; exists {
+			continue
+		}
+		descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
+			SourceNodeID: nextGroup.SourceNodeID,
+			EdgeIDs:      workflowGraphEdgeIDsSlice(nextEdgesByGroupID[nextGroup.ID]),
+		})
+	}
+	currentEdges := workflowGraphEdgesByID(current.edges)
 	nextEdges := workflowGraphEdgesByID(next.edges)
 	for _, currentEdge := range current.edges {
 		nextEdge, exists := nextEdges[currentEdge.ID]
@@ -157,18 +174,45 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			}
 			continue
 		}
-		if workflowEdgeHistoryReinterpretingChange(currentEdge, nextEdge) {
+		transitionGroupChanged := workflowEdgeHistoryReinterpretingChange(currentEdge, nextEdge)
+		if transitionGroupChanged {
 			descriptor.HistoryEdgeChanges = append(descriptor.HistoryEdgeChanges, currentEdge.ID)
 		}
 		if workflowEdgeMetadataOnlyChange(currentEdge, nextEdge) {
 			continue
 		}
-		if currentGroup, hasGroup := currentGroups[currentEdge.TransitionGroupID]; hasGroup {
+		currentGroup, hasCurrentGroup := currentGroups[currentEdge.TransitionGroupID]
+		if hasCurrentGroup {
 			descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
 				SourceNodeID: currentGroup.SourceNodeID,
 				EdgeIDs:      []workflow.EdgeID{currentEdge.ID},
 			})
 		}
+		if transitionGroupChanged {
+			nextGroup, hasNextGroup := nextGroups[nextEdge.TransitionGroupID]
+			if hasNextGroup && (!hasCurrentGroup || nextGroup.SourceNodeID != currentGroup.SourceNodeID) {
+				descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
+					SourceNodeID: nextGroup.SourceNodeID,
+					EdgeIDs:      []workflow.EdgeID{nextEdge.ID},
+				})
+			}
+		}
+	}
+	for _, nextEdge := range next.edges {
+		if _, exists := currentEdges[nextEdge.ID]; exists {
+			continue
+		}
+		nextGroup, groupExists := nextGroups[nextEdge.TransitionGroupID]
+		if !groupExists {
+			continue
+		}
+		if _, groupExisted := currentGroups[nextEdge.TransitionGroupID]; !groupExisted {
+			continue
+		}
+		descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
+			SourceNodeID: nextGroup.SourceNodeID,
+			EdgeIDs:      []workflow.EdgeID{nextEdge.ID},
+		})
 	}
 	return descriptor
 }

@@ -56,10 +56,20 @@ type CompletionTransition struct {
 	Parameters  []workflow.Parameter
 }
 
+// TaskPromptDelivery identifies whether the first turn in one process-local
+// execution delivers a new Node assignment or resumes the current assignment.
+type TaskPromptDelivery uint8
+
+const (
+	TaskPromptDeliveryAssignment TaskPromptDelivery = iota
+	TaskPromptDeliveryResume
+)
+
 // CurrentNodeExecutionConfig is the live, process-local control contract for
 // one admitted Current Node.
 type CurrentNodeExecutionConfig struct {
 	ScopeID                      runtimeids.ExecutionScopeID
+	TaskPromptDelivery           TaskPromptDelivery
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
 	MaxInvalidCompletionAttempts int

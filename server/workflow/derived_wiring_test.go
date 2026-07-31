@@ -147,6 +147,48 @@ func TestDeriveWiringSkipsNonAgentSourceParameters(t *testing.T) {
 	assertOutputFields(t, derived.RequiredProvisionFieldsForTransitionGroup("group_join_consume"), nil)
 }
 
+func TestDeriveWiringKeepsPriorTransitionNamespaceSeparateFromProviderNode(t *testing.T) {
+	def := parameterWorkflow()
+	def.Nodes = append(def.Nodes, testAgentNode(
+		def.ID,
+		"node_audit",
+		"audit",
+		"Audit",
+		workflow.NodeFields{SubagentRole: "coder"},
+	))
+	def.TransitionGroups[2] = workflow.TransitionGroup{
+		WorkflowID:   def.ID,
+		ID:           "group_implement_audit",
+		SourceNodeID: "node_implement",
+		TransitionID: "audit",
+		DisplayName:  "Audit",
+	}
+	def.Edges[2] = workflow.Edge{
+		WorkflowID:        def.ID,
+		ID:                "edge_implement_audit",
+		Key:               "audit",
+		TransitionGroupID: "group_implement_audit",
+		TargetNodeID:      "node_audit",
+		ContextMode:       workflow.ContextModeNewSession,
+		PromptTemplate:    "Audit {{.Params.implement.plan}}.",
+	}
+
+	derived := workflow.DeriveWiring(def)
+
+	requirements := derived.PriorParameterRequirementsForNode("node_audit")
+	want := []workflow.PriorTransitionParameterRequirement{{
+		ProviderNode:  "plan",
+		TransitionKey: "implement",
+		ParameterName: "plan",
+	}}
+	if !reflect.DeepEqual(requirements, want) {
+		t.Fatalf("prior value requirements = %+v, want %+v", requirements, want)
+	}
+	if beforeProvider := derived.PriorParameterRequirementsForNode("node_plan"); len(beforeProvider) != 0 {
+		t.Fatalf("provider current node requirements = %+v, want no value before the transition runs", beforeProvider)
+	}
+}
+
 func parameterWorkflow() workflow.Definition {
 	return workflow.Definition{
 		ID:          "workflow_parameters",

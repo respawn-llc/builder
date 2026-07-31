@@ -8,15 +8,17 @@ import (
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
 
 const explicitAdmissionConcurrency = 8
 
 type currentNodeQueuedStart struct {
-	reference workflow.CurrentNodeReference
-	automatic bool
-	done      chan struct{}
+	reference          workflow.CurrentNodeReference
+	taskPromptDelivery workflowruntime.TaskPromptDelivery
+	automatic          bool
+	done               chan struct{}
 }
 
 type currentNodeAdmissionGate struct {
@@ -136,7 +138,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, lease, c); err != nil {
+	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, lease, c); err != nil {
 		return currentNodeAdmissionError{
 			cause:    c.discardAdmission(reference, key, lease, err),
 			admitted: true,
@@ -224,7 +226,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 		if start.automatic {
 			err = c.queueAutomaticStartLocked(start.reference)
 		} else {
-			err = c.queueExplicitStartLocked(start.reference)
+			err = c.queueExplicitStartLocked(start)
 		}
 		if err != nil {
 			c.workerErr = errors.Join(c.workerErr, err)
@@ -234,15 +236,18 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 	c.wakeAdmissionWorker()
 }
 
-func (c *CurrentNodeController) queueExplicitStartLocked(reference workflow.CurrentNodeReference) error {
-	key, err := reference.Key()
+func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueuedStart) error {
+	if start.automatic {
+		return errors.New("explicit current node start cannot be automatic")
+	}
+	key, err := start.reference.Key()
 	if err != nil {
 		return err
 	}
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
-	c.explicitQueue = append(c.explicitQueue, reference)
+	c.explicitQueue = append(c.explicitQueue, start)
 	c.explicitQueued[key] = struct{}{}
 	c.wakeAdmissionWorker()
 	return nil
@@ -343,14 +348,15 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, boo
 	if c.closed || c.inFlightAdmissionCountLocked(false) >= explicitAdmissionConcurrency || len(c.explicitQueue) == 0 {
 		return currentNodeQueuedStart{}, false
 	}
-	reference := c.explicitQueue[0]
+	start := c.explicitQueue[0]
 	c.explicitQueue = c.explicitQueue[1:]
+	reference := start.reference
 	key, err := reference.Key()
 	if err != nil {
 		panic(fmt.Sprintf("take explicit current node start: %v", err))
 	}
 	delete(c.explicitQueued, key)
-	start := currentNodeQueuedStart{reference: reference, done: make(chan struct{})}
+	start.done = make(chan struct{})
 	c.explicitReservations[key] = start
 	c.admissionWorkers[key] = start
 	c.admissionWG.Add(1)

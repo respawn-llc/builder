@@ -288,7 +288,6 @@ type CurrentNodeStartContext struct {
 	HasContinueSessionOutgoingEdge bool
 	PromptTemplate                 string
 	ParameterValues                map[string]string
-	PriorParameterValues           map[string]map[string]string
 	ExecutionRoot                  *ExecutionRoot
 }
 

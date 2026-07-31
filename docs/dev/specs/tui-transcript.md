@@ -91,7 +91,7 @@
 - Detail does not enable terminal mouse capture.
 - Detail may enable alternate-scroll `?1007` only while active and must disable it on exit.
 - Full-screen overlay surfaces (`/status`, `/goal`, `/worktree`, `/ps`) follow the same rule as detail: they enable alternate-scroll `?1007` while active and disable it on exit, regardless of which transcript mode they were opened from, so the mouse wheel scrolls overlay content.
-- Rollback/edit picker uses detail rendering inside alt-screen but does not enable alternate-scroll and ignores mouse events.
+- Rollback picker uses detail rendering inside alt-screen but does not enable alternate-scroll and ignores mouse events.
 
 ## Transcript Visibility
 

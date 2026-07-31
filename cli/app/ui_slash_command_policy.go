@@ -1,14 +1,14 @@
 package app
 
-const slashCommandEditModeError = "Slash commands are unavailable while editing a message"
+const slashCommandRollbackSelectionError = "Slash commands are unavailable while selecting a rollback message"
 
 func (m *uiModel) slashCommandDisabledReason() string {
 	if m == nil {
 		return ""
 	}
 	switch m.inputMode() {
-	case uiInputModeRollbackSelection, uiInputModeRollbackEdit:
-		return slashCommandEditModeError
+	case uiInputModeRollbackSelection:
+		return slashCommandRollbackSelectionError
 	default:
 		return ""
 	}

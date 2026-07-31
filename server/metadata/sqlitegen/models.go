@@ -66,10 +66,11 @@ type MigrationPriorValueCandidate struct {
 	ParallelBatchTransitionID sql.NullString
 	TransitionBranchKey       sql.NullString
 	NodeKey                   string
+	TransitionKey             string
 	OutputValuesJson          string
 	AppliedAtUnixMs           int64
 	CreatedAtUnixMs           int64
-	TransitionID              string
+	TransitionRecordID        string
 }
 
 type MigrationSessionMetadataError struct {
@@ -90,10 +91,16 @@ type MigrationUnfinishedCurrentNodeError struct {
 
 type MigrationWorkflowGraphEdge struct {
 	WorkflowID     string
-	SourceNodeID   string
-	TargetNodeID   string
 	EdgeID         string
+	TransitionKey  string
+	SourceNodeID   string
+	SourceNodeKey  string
+	SourceNodeKind string
+	TargetNodeID   string
+	TargetNodeKey  string
+	TargetNodeKind string
 	PromptTemplate string
+	ParametersJson string
 }
 
 type Project struct {

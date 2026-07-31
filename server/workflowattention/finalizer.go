@@ -27,7 +27,6 @@ type ApprovalProjection struct {
 	TaskShortID      string
 	TaskTitle        string
 	SessionID        string
-	Message          string
 	OccurredAtUnixMs int64
 }
 
@@ -42,7 +41,6 @@ type InterruptedCurrentNodeProjection struct {
 	TaskShortID      string
 	TaskTitle        string
 	SessionID        string
-	Message          string
 	Reason           string
 	DetailJSON       string
 	OccurredAtUnixMs int64
@@ -274,7 +272,6 @@ func approvalNotification(projection ApprovalProjection) clientui.AttentionNotif
 		Revision:   1,
 		WorkflowApproval: &clientui.AttentionNotificationWorkflowApprovalState{
 			ApprovalID: projection.ApprovalID.String(),
-			Message:    strings.TrimSpace(projection.Message),
 		},
 		Target: workflowTaskTarget(projection.ProjectID, projection.WorkflowID, projection.Source, projection.TaskShortID, projection.TaskTitle, projection.SessionID, clientui.AttentionNotificationFocusApproval, projection.ApprovalID.String()),
 	}
@@ -287,7 +284,6 @@ func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProject
 		OccurredAt: time.UnixMilli(projection.OccurredAtUnixMs).UTC(),
 		Revision:   1,
 		InterruptedCurrentNode: &clientui.AttentionNotificationInterruptedCurrentNodeState{
-			Message:    strings.TrimSpace(projection.Message),
 			Reason:     strings.TrimSpace(projection.Reason),
 			DetailJSON: strings.TrimSpace(projection.DetailJSON),
 		},

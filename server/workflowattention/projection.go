@@ -11,7 +11,6 @@ func ApprovalProjectionFromStore(projection workflowstore.ApprovalAttentionProje
 		TaskShortID:      projection.TaskShortID,
 		TaskTitle:        projection.TaskTitle,
 		SessionID:        projection.SessionID,
-		Message:          ApprovalRequiredMessage,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}
 }
@@ -32,7 +31,6 @@ func InterruptedCurrentNodeProjectionFromStore(projection workflowstore.Interrup
 		TaskShortID:      projection.TaskShortID,
 		TaskTitle:        projection.TaskTitle,
 		SessionID:        projection.SessionID,
-		Message:          InterruptedCurrentNodeMessage(projection.InterruptionReason, projection.InterruptionDetailJSON),
 		Reason:           projection.InterruptionReason,
 		DetailJSON:       projection.InterruptionDetailJSON,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,

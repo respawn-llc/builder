@@ -144,7 +144,6 @@ func TestFinalizerPublishesAndResolvesInterruptedCurrentNode(t *testing.T) {
 		TaskShortID:      "WOR-1",
 		TaskTitle:        "Interrupted task",
 		SessionID:        "session-1",
-		Message:          "Workflow execution interrupted",
 		Reason:           "server_restart",
 		DetailJSON:       `{"error":"process stopped"}`,
 		OccurredAtUnixMs: 1,

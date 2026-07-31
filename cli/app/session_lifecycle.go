@@ -459,7 +459,7 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 			Action:                       transition.Action,
 			InitialPrompt:                transition.InitialPrompt,
 			InitialPromptHistoryRecorded: transition.InitialPromptHistoryRecorded,
-			InitialInput:                 transition.InitialInput,
+			InitialInput:                 sessionTransitionInitialInput(transition),
 			TargetSessionID:              transition.TargetSessionID,
 			ForkRollbackTargetID:         transition.ForkRollbackTargetID,
 			PreviousSessionID:            transition.PreviousSessionID,
@@ -478,4 +478,13 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		}
 	}
 	return resolved, nil
+}
+
+func sessionTransitionInitialInput(transition UITransition) *string {
+	switch transition.Action {
+	case UIActionForkRollback, UIActionOpenSession:
+		return textutil.Pointer(transition.InitialInput)
+	default:
+		return nil
+	}
 }

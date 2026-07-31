@@ -73,7 +73,11 @@ func completeCurrentNodeJoinArrival(
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	joinSource, err := newNonExecutableCurrentNode(source.Reference.TaskID, workflow.NodeIDOf(resolution.Join))
+	joinSource, err := newNonExecutableCurrentNodeWithPriorValues(
+		source.Reference.TaskID,
+		workflow.NodeIDOf(resolution.Join),
+		source.PriorValues,
+	)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
@@ -183,19 +187,24 @@ func aggregateCurrentFanoutJoinValues(
 	for branchKey, edge := range resolution.BranchJoinEdges {
 		branchByJoinEdge[edge.ID] = branchKey
 	}
+	derived := workflow.DeriveWiring(definition)
+	// Incoming branch parameter contracts are the provider authority. A second
+	// persisted provider map can drift from the executable Workflow wiring.
 	providerByInput := make(map[string]workflow.EdgeID)
-	for _, provider := range workflow.NodeJoinInputProviders(resolution.Join) {
-		inputName := strings.TrimSpace(provider.InputName)
-		if inputName == "" {
-			return nil, currentFanoutJoinTopologyError(definition, "")
+	for _, edge := range resolution.BranchJoinEdges {
+		for _, field := range derived.RequiredProviderFieldsForJoinEdge(edge.ID) {
+			inputName := strings.TrimSpace(field.Name)
+			if inputName == "" {
+				return nil, currentFanoutJoinTopologyError(definition, "")
+			}
+			if providerEdgeID, exists := providerByInput[inputName]; exists && providerEdgeID != edge.ID {
+				return nil, currentFanoutJoinTopologyError(definition, "")
+			}
+			providerByInput[inputName] = edge.ID
 		}
-		if _, exists := providerByInput[inputName]; exists {
-			return nil, currentFanoutJoinTopologyError(definition, "")
-		}
-		providerByInput[inputName] = provider.ProviderEdgeID
 	}
 	values := make(map[string]string)
-	for _, field := range workflow.DeriveWiring(definition).JoinOutputFieldsForNode(workflow.NodeIDOf(resolution.Join)) {
+	for _, field := range derived.JoinOutputFieldsForNode(workflow.NodeIDOf(resolution.Join)) {
 		inputName := strings.TrimSpace(field.Name)
 		providerEdgeID, exists := providerByInput[inputName]
 		if !exists {
