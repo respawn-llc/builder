@@ -97,6 +97,9 @@ func detachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func bindingMutationResultFromDetachResponse(response serverapi.ProjectWorkspaceUnlinkResponse) (bindingMutationResult, error) {
+	if err := response.Validate(); err != nil {
+		return bindingMutationResult{}, fmt.Errorf("validate workspace unlink response: %w", err)
+	}
 	if len(response.Blockers) > 0 {
 		blocked, err := newBindingMutationBlockedError(response.ProjectID, response.WorkspaceID, response.Blockers)
 		if err != nil {
@@ -143,14 +146,14 @@ func runBindingMutationCommand(
 	if err = closeBindingMutationRemote(remote, err); err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}
+	if err := result.validate(); err != nil {
+		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
+	}
 	if arguments.JSON {
 		return writeBindingMutationEnvelope(stdout, stderr, bindingMutationEnvelope{
 			Status: "ok",
 			Result: &result,
 		})
-	}
-	if err := result.validate(); err != nil {
-		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}
 	return writeBindingMutationPlainResult(stdout, stderr, result, defaultMutation)
 }
@@ -330,7 +333,7 @@ func (r bindingMutationResult) validate() error {
 		if r.ProjectID != nil || r.WorkspaceID != nil {
 			return errors.New("binding mutation result mixes project and workspace identity")
 		}
-		return nil
+		return r.Project.Validate()
 	}
 	if r.ProjectID == nil || r.WorkspaceID == nil || strings.TrimSpace(*r.ProjectID) == "" || strings.TrimSpace(*r.WorkspaceID) == "" {
 		return errors.New("binding mutation result requires project and workspace IDs")

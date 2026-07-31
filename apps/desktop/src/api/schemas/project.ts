@@ -6,6 +6,7 @@ import type {
   ProjectDeleteResponse,
   ProjectMutationResponse,
   ProjectPage,
+  ProjectSummary,
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "../models";
@@ -25,13 +26,13 @@ export const projectSummarySchema = z
     attention_count: z.number(),
     workflow_count: z.number(),
   })
-  .transform((value) => ({
+  .transform((value): ProjectSummary => ({
     id: value.project_id,
     key: value.project_key,
     name: value.display_name,
     primaryWorkspace: value.primary_workspace,
-    defaultWorkflowID: value.default_workflow_id,
-    defaultWorkflowName: value.default_workflow_name,
+    ...(value.default_workflow_id === undefined ? {} : { defaultWorkflowID: value.default_workflow_id }),
+    ...(value.default_workflow_name === undefined ? {} : { defaultWorkflowName: value.default_workflow_name }),
     defaultWorkflowValid: value.default_workflow_valid,
     updatedAt: value.updated_at_unix_ms,
     taskCount: value.task_count,

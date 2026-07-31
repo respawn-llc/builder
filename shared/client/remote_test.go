@@ -63,16 +63,18 @@ func TestProtocolErrorPreservesBlankWorktreeBlockedDiagnostic(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorPreservesRemoteDiagnosticWithoutJoinedNewline(t *testing.T) {
+func TestProtocolErrorPreservesRemoteDiagnosticWithJoinedSentinel(t *testing.T) {
+	message := "workspace is not attached to the selected project"
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkspaceNotRegistered,
-		Message: "workspace is not attached to the selected project",
+		Message: message,
 	})
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("decoded error = %v, want workspace-not-registered sentinel", err)
 	}
-	if err.Error() != "workspace is not attached to the selected project" {
-		t.Fatalf("decoded error message = %q, want remote diagnostic only", err.Error())
+	want := errors.Join(serverapi.ErrWorkspaceNotRegistered, errors.New(message)).Error()
+	if err.Error() != want {
+		t.Fatalf("decoded error message = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -133,6 +135,76 @@ func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
 			})
 			if !test.wantAs(err) {
 				t.Fatalf("remote error = %T %v, want typed error", err, err)
+			}
+		})
+	}
+}
+
+func TestRemoteProjectWorkspaceMutationsRejectMalformedSuccessResponses(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		result any
+		call   func(*Remote, serverapi.ProjectWorkspaceSelector) error
+	}{
+		{
+			name:   "default workspace summary",
+			method: protocol.MethodProjectSetDefaultWorkspace,
+			result: map[string]any{"project": map[string]any{}},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "unlink blocker",
+			method: protocol.MethodProjectUnlinkWorkspace,
+			result: map[string]any{
+				"project_id":   "project-1",
+				"workspace_id": "workspace-1",
+				"unlinked":     false,
+				"blockers":     []any{map[string]any{"message": "malformed"}},
+			},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive mutation request: %v", err)
+					return
+				}
+				if request.Method != test.method {
+					t.Errorf("method = %q, want %q", request.Method, test.method)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.result)); err != nil {
+					t.Errorf("send malformed mutation response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			if err := test.call(remote, selector); err == nil {
+				t.Fatal("malformed mutation response was accepted")
 			}
 		})
 	}

@@ -369,7 +369,10 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 		}
 		return bindingFromProjectCanonicalRootRow(row), nil
 	}
-	canonicalRoot, canonicalErr := canonicalFilesystemPath(workspaceRoot)
+	// Use the same workspace identity policy as persisted bindings. Missing
+	// roots retain their absolute lexical identity; existing roots resolve
+	// symlinks before the Project-scoped point lookup.
+	canonicalRoot, canonicalErr := config.CanonicalWorkspaceRoot(workspaceRoot)
 	if canonicalErr != nil {
 		if absErr != nil {
 			return Binding{}, fmt.Errorf("%w: %q: %v", serverapi.ErrWorkspacePathIdentity, workspaceRoot, absErr)
@@ -387,13 +390,6 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 	}
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		return Binding{}, err
-	}
-	if absErr == nil && filepath.Clean(absoluteRoot) != canonicalRoot {
-		if binding, err := lookupByRoot(filepath.Clean(absoluteRoot)); err == nil {
-			return binding, nil
-		} else if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
-			return Binding{}, err
-		}
 	}
 	return Binding{}, err
 }

@@ -1,9 +1,9 @@
 package serverapi
 
 import (
-	"errors"
-
 	"core/shared/runtimeids"
+	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/clientui"
@@ -182,6 +182,56 @@ type ProjectWorkspaceUnlinkBlocker struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Count   int    `json:"count,omitempty"`
+}
+
+func (s ProjectHomeSummary) Validate() error {
+	for field, value := range map[string]string{
+		"project_id":               s.ProjectID,
+		"project_key":              s.ProjectKey,
+		"display_name":             s.DisplayName,
+		"primary_workspace_id":     s.PrimaryWorkspace.WorkspaceID,
+		"primary_workspace_name":   s.PrimaryWorkspace.DisplayName,
+		"primary_workspace_root":   s.PrimaryWorkspace.RootPath,
+		"primary_workspace_status": s.PrimaryWorkspace.Availability,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return errors.New(field + " must not be blank")
+		}
+	}
+	return nil
+}
+
+func (r ProjectDefaultWorkspaceSetResponse) Validate() error {
+	return r.Project.Validate()
+}
+
+func (r ProjectWorkspaceUnlinkResponse) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id must not be blank")
+	}
+	if strings.TrimSpace(r.WorkspaceID) == "" {
+		return errors.New("workspace_id must not be blank")
+	}
+	if r.Unlinked == (len(r.Blockers) > 0) {
+		return errors.New("unlinked must be true exactly when blockers are absent")
+	}
+	for _, blocker := range r.Blockers {
+		if strings.TrimSpace(blocker.Code) == "" {
+			return errors.New("unlink blocker code must not be blank")
+		}
+		if strings.TrimSpace(blocker.Message) == "" {
+			return errors.New("unlink blocker message must not be blank")
+		}
+		if blocker.Count < 0 {
+			return errors.New("unlink blocker count must not be negative")
+		}
+	}
+	if r.Project != nil {
+		if err := r.Project.Validate(); err != nil {
+			return fmt.Errorf("unlink response project: %w", err)
+		}
+	}
+	return nil
 }
 
 type ProjectDeleteRequest struct {

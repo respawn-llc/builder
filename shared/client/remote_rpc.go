@@ -584,47 +584,57 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	switch resp.Code {
 	case protocol.ErrCodeMethodNotFound:
-		return protocol.NewSentinelError(serverapi.ErrMethodNotFound, message)
+		return errors.Join(serverapi.ErrMethodNotFound, errors.New(message))
 	case protocol.ErrCodeAuthRequired:
 		if message == serverapi.ErrServerAuthRequired.Error() {
 			return serverapi.ErrServerAuthRequired
 		}
-		return protocol.NewSentinelError(serverapi.ErrServerAuthRequired, message)
+		return errors.Join(serverapi.ErrServerAuthRequired, errors.New(message))
 	case protocol.ErrCodeModelStreamStalled:
-		return protocol.NewSentinelError(llmerrors.ErrModelStreamStalled, message)
+		return errors.Join(llmerrors.ErrModelStreamStalled, errors.New(message))
 	case protocol.ErrCodeUnsupportedProvider:
-		return protocol.NewSentinelError(serverapi.ErrUnsupportedProvider, message)
+		return errors.Join(serverapi.ErrUnsupportedProvider, errors.New(message))
 	case protocol.ErrCodeStreamGap:
-		return protocol.NewSentinelError(serverapi.ErrStreamGap, message)
+		return errors.Join(serverapi.ErrStreamGap, errors.New(message))
 	case protocol.ErrCodeWorkspaceNotRegistered:
-		return protocol.NewSentinelError(serverapi.ErrWorkspaceNotRegistered, message)
+		return errors.Join(serverapi.ErrWorkspaceNotRegistered, errors.New(message))
 	case protocol.ErrCodeProjectNotFound:
-		return protocol.NewSentinelError(serverapi.ErrProjectNotFound, message)
+		return errors.Join(serverapi.ErrProjectNotFound, errors.New(message))
 	case protocol.ErrCodeProjectUnavailable:
-		return protocol.NewSentinelError(serverapi.ErrProjectUnavailable, message)
+		return errors.Join(serverapi.ErrProjectUnavailable, errors.New(message))
 	case protocol.ErrCodeRuntimeUnavailable:
-		return protocol.NewSentinelError(serverapi.ErrRuntimeUnavailable, message)
+		return protocolSentinelError(serverapi.ErrRuntimeUnavailable, message)
 	case protocol.ErrCodeRuntimeNoActiveRun:
-		return protocol.NewSentinelError(serverapi.ErrRuntimeNoActiveRun, message)
+		return protocolSentinelError(serverapi.ErrRuntimeNoActiveRun, message)
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
-		return protocol.NewSentinelError(serverapi.ErrRuntimeNoFinalAnswer, message)
+		return protocolSentinelError(serverapi.ErrRuntimeNoFinalAnswer, message)
 	case protocol.ErrCodeStreamUnavailable:
-		return protocol.NewSentinelError(serverapi.ErrStreamUnavailable, message)
+		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
-		return protocol.NewSentinelError(serverapi.ErrStreamFailed, message)
+		return errors.Join(serverapi.ErrStreamFailed, errors.New(message))
 	case protocol.ErrCodePromptNotFound:
-		return protocol.NewSentinelError(serverapi.ErrPromptNotFound, message)
+		return errors.Join(serverapi.ErrPromptNotFound, errors.New(message))
 	case protocol.ErrCodePromptResolved:
-		return protocol.NewSentinelError(serverapi.ErrPromptAlreadyResolved, message)
+		return errors.Join(serverapi.ErrPromptAlreadyResolved, errors.New(message))
 	case protocol.ErrCodePromptUnsupported:
-		return protocol.NewSentinelError(serverapi.ErrPromptUnsupported, message)
+		return errors.Join(serverapi.ErrPromptUnsupported, errors.New(message))
 	case protocol.ErrCodeWorkflowTaskNotFound:
-		return protocol.NewSentinelError(serverapi.ErrWorkflowTaskNotFound, message)
+		return errors.Join(serverapi.ErrWorkflowTaskNotFound, errors.New(message))
 	case protocol.ErrCodeWorkflowTaskCompleteNotFound:
-		return protocol.NewSentinelError(serverapi.ErrWorkflowTaskCompleteTargetNotFound, message)
+		return errors.Join(serverapi.ErrWorkflowTaskCompleteTargetNotFound, errors.New(message))
 	case protocol.ErrCodeWorkflowTaskCompleteAmbiguous:
-		return protocol.NewSentinelError(serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous, message)
+		return errors.Join(serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous, errors.New(message))
 	default:
 		return errors.New(message)
 	}
+}
+
+func protocolSentinelError(sentinel error, message string) error {
+	if sentinel == nil {
+		return errors.New(message)
+	}
+	if strings.TrimSpace(message) == "" || message == sentinel.Error() {
+		return sentinel
+	}
+	return errors.Join(sentinel, errors.New(message))
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,7 +84,7 @@ func TestBindingMutationSelectorNormalizesPathAfterOpeningCurrentWorkspace(t *te
 func TestBindingMutationResultValidationRejectsMixedAndMissingIdentity(t *testing.T) {
 	projectID := "project-1"
 	workspaceID := "workspace-1"
-	project := serverapi.ProjectHomeSummary{ProjectID: projectID}
+	project := validProjectHomeSummaryForBindingMutationTest()
 	for name, result := range map[string]bindingMutationResult{
 		"missing detach identity": {},
 		"mixed result":            {ProjectID: &projectID, WorkspaceID: &workspaceID, Project: &project},
@@ -99,6 +100,20 @@ func TestBindingMutationResultValidationRejectsMixedAndMissingIdentity(t *testin
 	}
 	if err := (bindingMutationResult{Project: &project}).validate(); err != nil {
 		t.Fatalf("valid default result rejected: %v", err)
+	}
+}
+
+func validProjectHomeSummaryForBindingMutationTest() serverapi.ProjectHomeSummary {
+	return serverapi.ProjectHomeSummary{
+		ProjectID:   "project-1",
+		ProjectKey:  "project",
+		DisplayName: "Authoritative",
+		PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
+			WorkspaceID:  "workspace-1",
+			DisplayName:  "Workspace",
+			RootPath:     "/workspace",
+			Availability: "available",
+		},
 	}
 }
 
@@ -160,6 +175,74 @@ func TestDetachUnexpectedIncompleteResponseEmitsJSONFailure(t *testing.T) {
 		t.Fatalf("envelope = %+v, want request_failed error", envelope)
 	}
 	if envelope.Error.ProjectID != "" || envelope.Error.WorkspaceID != "" {
+		t.Fatalf("envelope = %+v, want no resolved identity", envelope)
+	}
+}
+
+func TestProjectDefaultMalformedResponseEmitsJSONFailure(t *testing.T) {
+	assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+		return bindingMutationResult{Project: &serverapi.ProjectHomeSummary{}}, nil
+	}, true)
+}
+
+func TestDetachMalformedBlockerResponseEmitsJSONFailure(t *testing.T) {
+	assertBindingMutationJSONFailure(t, func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+		return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
+			ProjectID:   "project-1",
+			WorkspaceID: "workspace-1",
+			Blockers: []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Message: "malformed blocker",
+			}},
+		})
+	}, false)
+}
+
+func assertBindingMutationJSONFailure(
+	t *testing.T,
+	mutate func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error),
+	defaultMutation bool,
+) {
+	t.Helper()
+	originalOpener := bindingCommandRemoteOpener
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		return config.App{}, nil, nil
+	}
+	t.Cleanup(func() {
+		bindingCommandRemoteOpener = originalOpener
+	})
+
+	workspaceID := "workspace-1"
+	arguments := bindingMutationArguments{
+		ProjectID:   "project-1",
+		WorkspaceID: &workspaceID,
+		JSON:        true,
+	}
+	var stdout, stderr bytes.Buffer
+	code := runBindingMutationCommand(arguments, &stdout, &stderr, mutate, defaultMutation)
+	if code != 1 {
+		t.Fatalf("command exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	var envelope struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code        string  `json:"code"`
+			ProjectID   *string `json:"project_id"`
+			WorkspaceID *string `json:"workspace_id"`
+		} `json:"error"`
+	}
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode failure envelope: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		t.Fatalf("stdout contains more than one JSON object: extra=%v err=%v output=%q", extra, err, stdout.String())
+	}
+	if envelope.Status != "error" || envelope.Error.Code != "request_failed" {
+		t.Fatalf("envelope = %+v, want request_failed error", envelope)
+	}
+	if envelope.Error.ProjectID != nil || envelope.Error.WorkspaceID != nil {
 		t.Fatalf("envelope = %+v, want no resolved identity", envelope)
 	}
 }
@@ -342,7 +425,14 @@ func TestProjectDefaultJSONSuccessOmitsAbsentWorkflowFields(t *testing.T) {
 		Result: &bindingMutationResult{
 			Project: &serverapi.ProjectHomeSummary{
 				ProjectID:   "project-1",
+				ProjectKey:  "project",
 				DisplayName: "Authoritative",
+				PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
+					WorkspaceID:  "workspace-1",
+					DisplayName:  "Workspace",
+					RootPath:     "/workspace",
+					Availability: "available",
+				},
 			},
 		},
 	}
