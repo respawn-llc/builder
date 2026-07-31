@@ -128,6 +128,57 @@ func TestCurrentNodeControllerDoesNotStartApprovalTargetWhenSteeringFails(t *tes
 	}
 }
 
+func TestCompleteIdleCurrentNodeMakesSuccessorResumableWhenAssignmentWaitFails(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-source")
+	target := currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-target")
+	sourceNode := workflow.CurrentNode{
+		Reference:  source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflow.CurrentNodeReference{target},
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	cause := errors.New("assignment persistence failed")
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    &recordingCurrentNodeAssignmentSteerer{waitErr: cause},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	taskID := source.TaskID
+	if _, err := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+		"next",
+		nil,
+		"forced completion",
+	); !errors.Is(err, cause) {
+		t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", err, cause)
+	}
+	if starts := runner.starts(); starts != 0 {
+		t.Fatalf("runner starts = %d, want none after assignment failure", starts)
+	}
+	interruption, interrupted := store.interruption(target)
+	if !interrupted {
+		t.Fatal("forced-completion successor was not made resumable after assignment failure")
+	}
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("forced-completion successor interruption = %+v, want runtime start failure", interruption)
+	}
+}
+
 func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetires(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -288,6 +339,89 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("successor did not start after source retirement")
+	}
+}
+
+func TestExecutionFinalizationMakesHeldSuccessorResumableWhenAssignmentWaitFails(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-source")
+	successor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-successor")
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflow.CurrentNodeReference{successor},
+		},
+	}
+	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    steerer,
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start source: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, controller, source)
+	cause := errors.New("assignment persistence failed")
+	steerer.setWaitError(cause)
+	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+		ScopeID:      sourceScope,
+		TransitionID: "next",
+	}); err != nil {
+		t.Fatalf("complete source: %v", err)
+	}
+	sourceHandle, live := authority.ExecutionByScope(sourceScope)
+	if !live {
+		t.Fatal("completed source scope retired before stop")
+	}
+	if err := sourceHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop source: %v", err)
+	}
+
+	interruption, interrupted := store.interruption(successor)
+	if !interrupted {
+		t.Fatal("held successor was not made resumable after assignment failure")
+	}
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("held successor interruption = %+v, want runtime start failure", interruption)
+	}
+	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
+		t.Fatalf("successful successor recovery latched controller failure: %v", err)
+	}
+	select {
+	case started := <-runner.started:
+		t.Fatalf("successor %v started after assignment failure", started)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

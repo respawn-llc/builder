@@ -19,6 +19,7 @@ SET continuation_json = CASE (
         WHERE ranked_agent_roles.session_id = sessions.id
           AND ranked_agent_roles.recency_rank = 1
     )
+        WHEN '' THEN json_remove(continuation_json, '$.agent_role')
         WHEN 'default' THEN json_remove(continuation_json, '$.agent_role')
         ELSE json_set(
             continuation_json,

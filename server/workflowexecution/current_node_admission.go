@@ -290,16 +290,16 @@ func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, star
 	return steered, nil
 }
 
-func (c *CurrentNodeController) steerAndWaitExplicitStarts(
+func (c *CurrentNodeController) steerAndWaitStarts(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
 ) ([]currentNodeQueuedStart, error) {
 	steered, err := c.steerStartsAssignments(ctx, starts)
 	if err != nil {
-		return nil, errors.Join(err, c.interruptCurrentNodeStartFailures(ctx, starts, false, err))
+		return nil, errors.Join(err, c.recoverCurrentNodeStartFailures(ctx, starts, false, err))
 	}
 	if err := waitCurrentNodeAssignmentSteers(ctx, steered); err != nil {
-		return nil, errors.Join(err, c.interruptCurrentNodeStartFailures(ctx, steered, false, err))
+		return nil, errors.Join(err, c.recoverCurrentNodeStartFailures(ctx, steered, false, err))
 	}
 	return steered, nil
 }
@@ -613,6 +613,14 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 }
 
 func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.CurrentNodeReference, admitted bool, cause error) {
+	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause)
+}
+
+func (c *CurrentNodeController) handleCurrentNodeStartFailures(
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) {
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
@@ -621,15 +629,24 @@ func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.Curren
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	err := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		return c.interruptCurrentNodeStartFailures(ctx, []currentNodeQueuedStart{{reference: reference}}, admitted, cause)
-	})
+	err := c.recoverCurrentNodeStartFailures(cleanupCtx, starts, admitted, cause)
 	if err == nil {
 		return
 	}
 	c.mu.Lock()
 	c.workerErr = errors.Join(c.workerErr, cause, err)
 	c.mu.Unlock()
+}
+
+func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) error {
+	return c.permit.Run(ctx, func(ctx context.Context) error {
+		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
+	})
 }
 
 func (c *CurrentNodeController) interruptCurrentNodeStartFailures(

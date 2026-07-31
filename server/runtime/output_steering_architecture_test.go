@@ -61,6 +61,9 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 					"constructs or returns session.MessageRecord outside the canonical runtime adapter",
 				))
 			}
+			if function.Body == nil {
+				continue
+			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok {

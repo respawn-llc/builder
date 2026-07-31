@@ -70,6 +70,7 @@ type recordingCurrentNodeAssignmentSteerer struct {
 	mu      sync.Mutex
 	steered []workflow.CurrentNodeReference
 	err     error
+	waitErr error
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ context.Context, reference workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
@@ -79,13 +80,19 @@ func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ con
 	if s.err != nil {
 		return nil, s.err
 	}
-	return completedCurrentNodeAssignmentSteer{}, nil
+	return completedCurrentNodeAssignmentSteer{err: s.waitErr}, nil
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]workflow.CurrentNodeReference(nil), s.steered...)
+}
+
+func (s *recordingCurrentNodeAssignmentSteerer) setWaitError(err error) {
+	s.mu.Lock()
+	s.waitErr = err
+	s.mu.Unlock()
 }
 
 func startCurrentNodeForControllerTest(
@@ -198,6 +205,7 @@ type currentNodeControllerStore struct {
 	interruptStarted  chan struct{}
 	interruptRelease  chan struct{}
 	interruptOnce     sync.Once
+	idleResolved      *workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
@@ -341,8 +349,11 @@ func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Conte
 	return append([]workflow.CurrentNodeReference(nil), s.recovered...), nil
 }
 
-func (*currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
-	return workflow.CurrentNode{}, sql.ErrNoRows
+func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
+	if s.idleResolved == nil {
+		return workflow.CurrentNode{}, sql.ErrNoRows
+	}
+	return *s.idleResolved, nil
 }
 
 func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {

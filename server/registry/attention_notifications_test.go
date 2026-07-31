@@ -171,6 +171,58 @@ func TestRuntimeRegistryPublishesQuestionWaitingEventWithoutRedeliveringBatchAtt
 	}
 }
 
+func TestRuntimeRegistrySkipsQuestionWaitingEventsWithMissingIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*askquestion.AskQuestionRequest, *string)
+	}{
+		{
+			name: "project",
+			mutate: func(request *askquestion.AskQuestionRequest, _ *string) {
+				request.AttentionTarget.ProjectID = " "
+			},
+		},
+		{
+			name: "task",
+			mutate: func(request *askquestion.AskQuestionRequest, _ *string) {
+				request.AttentionTarget.TaskID = " "
+			},
+		},
+		{
+			name: "session",
+			mutate: func(_ *askquestion.AskQuestionRequest, sessionID *string) {
+				*sessionID = " "
+			},
+		},
+		{
+			name: "ask",
+			mutate: func(request *askquestion.AskQuestionRequest, _ *string) {
+				request.ID = " "
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := &recordingWorkflowEventPublisher{}
+			registry := NewRuntimeRegistry().WithWorkflowEventPublisher(events.PublishWorkflowEvent)
+			request := taskBatchAskRequest("ask-1")
+			request.AttentionTarget.ProjectID = "project-1"
+			sessionID := "session-1"
+			test.mutate(&request, &sessionID)
+
+			registry.publishTaskQuestionWaiting(sessionID, PendingPromptSnapshot{
+				Request:   request,
+				CreatedAt: time.Now().UTC(),
+			})
+
+			if len(events.events) != 0 {
+				t.Fatalf("invalid question identity published events: %+v", events.events)
+			}
+		})
+	}
+}
+
 func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAttention(t *testing.T) {
 	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)

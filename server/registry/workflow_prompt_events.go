@@ -26,13 +26,26 @@ func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot 
 		return
 	}
 	projectID := strings.TrimSpace(target.ProjectID)
+	taskID := strings.TrimSpace(target.TaskID)
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	askID := strings.TrimSpace(snapshot.Request.ID)
+	if projectID == "" || taskID == "" || trimmedSessionID == "" || askID == "" {
+		slog.Warn(
+			"skip workflow question waiting event with invalid identifiers",
+			"project_id", projectID,
+			"task_id", taskID,
+			"session_id", trimmedSessionID,
+			"ask_id", askID,
+		)
+		return
+	}
 	event := serverapi.WorkflowProjectEvent{
 		ProjectID:        &projectID,
 		WorkflowID:       target.WorkflowID,
 		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           serverapi.WorkflowProjectEventActionQuestionWaiting,
-		PrimaryEntityID:  strings.TrimSpace(target.TaskID),
-		RelatedIDs:       []string{strings.TrimSpace(sessionID), strings.TrimSpace(snapshot.Request.ID)},
+		PrimaryEntityID:  taskID,
+		RelatedIDs:       []string{trimmedSessionID, askID},
 		OccurredAtUnixMs: snapshot.CreatedAt.UTC().UnixMilli(),
 	}
 	if err := r.workflowEventPublisher(context.Background(), event); err != nil {

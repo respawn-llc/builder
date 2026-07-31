@@ -413,11 +413,8 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		starts, err := c.steerStartsAssignments(ctx, automaticQueuedStarts(intents))
+		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents))
 		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
-		}
-		if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
 		c.mu.Lock()
@@ -556,9 +553,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		return
 	}
 	if err := waitCurrentNodeAssignmentSteers(context.Background(), starts); err != nil {
-		c.mu.Lock()
-		c.workerErr = errors.Join(c.workerErr, err)
-		c.mu.Unlock()
+		c.handleCurrentNodeStartFailures(starts, false, err)
 		return
 	}
 	c.enqueueStarts(starts)
