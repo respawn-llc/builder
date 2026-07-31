@@ -67,7 +67,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 
 func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids.WorkflowID) ([]workflow.TaskID, error) {
 	if workflowID.IsZero() {
-		return nil, errors.New("workflow id is required")
+		return nil, ErrWorkflowIDRequired
 	}
 	rows, err := s.queries.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
@@ -534,7 +534,7 @@ func validateWorkflowListScopes(projectID *string, workflowID *runtimeids.Workfl
 
 func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {
 	if node.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 		return 0, err
@@ -570,7 +570,7 @@ func (s *Store) UpdateNode(ctx context.Context, node NodeRecord) (int64, error) 
 		return 0, errors.New("node id is required")
 	}
 	if node.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 		return 0, err
@@ -627,7 +627,7 @@ func executableNodeKind(kind workflow.NodeKind) bool {
 
 func (s *Store) AddNodeGroup(ctx context.Context, group NodeGroupRecord) (NodeGroupRecord, int64, error) {
 	if group.WorkflowID.IsZero() {
-		return NodeGroupRecord{}, 0, errors.New("workflow id is required")
+		return NodeGroupRecord{}, 0, ErrWorkflowIDRequired
 	}
 	if strings.TrimSpace(string(group.Key)) == "" {
 		return NodeGroupRecord{}, 0, errors.New("group key is required")
@@ -657,7 +657,7 @@ func (s *Store) UpdateNodeGroup(ctx context.Context, group NodeGroupRecord) (Nod
 		return NodeGroupRecord{}, 0, errors.New("group id is required")
 	}
 	if group.WorkflowID.IsZero() {
-		return NodeGroupRecord{}, 0, errors.New("workflow id is required")
+		return NodeGroupRecord{}, 0, ErrWorkflowIDRequired
 	}
 	if strings.TrimSpace(string(group.Key)) == "" {
 		return NodeGroupRecord{}, 0, errors.New("group key is required")
@@ -681,7 +681,7 @@ func (s *Store) UpdateNodeGroup(ctx context.Context, group NodeGroupRecord) (Nod
 
 func (s *Store) DeleteNodeGroup(ctx context.Context, workflowID runtimeids.WorkflowID, groupID string) (int64, error) {
 	if workflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	if strings.TrimSpace(groupID) == "" {
 		return 0, errors.New("group id is required")
@@ -760,7 +760,7 @@ func cloneWorkflowEventWorkflowID(id *runtimeids.WorkflowID) *runtimeids.Workflo
 
 func (s *Store) AddTransitionGroup(ctx context.Context, group TransitionGroupRecord) (int64, error) {
 	if group.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	if group.ID == "" {
 		group.ID = workflow.TransitionGroupID(prefixedID("group"))
@@ -784,7 +784,7 @@ func (s *Store) UpdateTransitionGroup(ctx context.Context, group TransitionGroup
 		return 0, errors.New("transition group id is required")
 	}
 	if group.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	return s.withWorkflowGraphMutation(ctx, group.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		current, exists := workflowGraphRecordByID(currentGraph.transitionGroups, group.ID, func(record TransitionGroupRecord) workflow.TransitionGroupID { return record.ID })
@@ -803,7 +803,7 @@ func (s *Store) UpdateTransitionGroup(ctx context.Context, group TransitionGroup
 
 func (s *Store) AddEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
 	if edge.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	if edge.ID == "" {
 		edge.ID = workflow.EdgeID(prefixedID("edge"))
@@ -830,7 +830,7 @@ func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) 
 		return 0, errors.New("edge id is required")
 	}
 	if edge.WorkflowID.IsZero() {
-		return 0, errors.New("workflow id is required")
+		return 0, ErrWorkflowIDRequired
 	}
 	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		current, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID })

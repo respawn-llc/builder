@@ -112,7 +112,7 @@ func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphS
 func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
 	workflowID := req.WorkflowID
 	if workflowID.IsZero() {
-		return WorkflowGraphSavePlan{}, errors.New("workflow id is required")
+		return WorkflowGraphSavePlan{}, ErrWorkflowIDRequired
 	}
 	if req.ExpectedVersion < 0 {
 		return WorkflowGraphSavePlan{}, errors.New("expected version must be non-negative")
@@ -199,7 +199,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
 	workflowID := req.WorkflowID
 	if workflowID.IsZero() {
-		return WorkflowGraphSaveResult{}, errors.New("workflow id is required")
+		return WorkflowGraphSaveResult{}, ErrWorkflowIDRequired
 	}
 	if s.graphSaves == nil {
 		return WorkflowGraphSaveResult{}, errors.New("workflow graph save lanes are required")
@@ -406,7 +406,7 @@ func workflowExecutionTargetPoliciesEqual(a workflow.ExecutionTargetPolicy, b wo
 
 func validateWorkflowGraphRecordWorkflowID(expected runtimeids.WorkflowID, actual runtimeids.WorkflowID, kind string, recordID string) error {
 	if actual.IsZero() {
-		return fmt.Errorf("workflow %s workflow id is required", kind)
+		return fmt.Errorf("workflow %s %w", kind, ErrWorkflowIDRequired)
 	}
 	if actual != expected {
 		return fmt.Errorf("workflow %s %q belongs to workflow %q: %w", kind, recordID, actual, ErrBelongsToOtherWorkflow)

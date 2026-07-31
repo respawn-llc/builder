@@ -2,7 +2,7 @@ package workflowstore
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"sync"
 	"testing"
 
@@ -101,7 +101,7 @@ func TestWorkflowGraphSaveRejectsMissingNestedWorkflowIDs(t *testing.T) {
 			req := f.request(f.record.Version, false, f.def)
 			test.mutate(&req)
 			_, err := f.store.PreviewWorkflowGraphSave(f.ctx, req)
-			if err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+			if !errors.Is(err, ErrWorkflowIDRequired) {
 				t.Fatalf("PreviewWorkflowGraphSave error = %v, want missing nested workflow identity rejection", err)
 			}
 		})
@@ -110,10 +110,10 @@ func TestWorkflowGraphSaveRejectsMissingNestedWorkflowIDs(t *testing.T) {
 
 func TestWorkflowGraphElementMutationsRejectMissingWorkflowIDs(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "missing-workflow-id-group"}); err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "missing-workflow-id-group"}); !errors.Is(err, ErrWorkflowIDRequired) {
 		t.Fatalf("AddTransitionGroup error = %v, want missing workflow identity rejection", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "missing-workflow-id-edge"}); err == nil || !strings.Contains(err.Error(), "workflow id is required") {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "missing-workflow-id-edge"}); !errors.Is(err, ErrWorkflowIDRequired) {
 		t.Fatalf("AddEdge error = %v, want missing workflow identity rejection", err)
 	}
 }
