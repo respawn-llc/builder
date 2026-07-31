@@ -342,7 +342,7 @@ VALUES (?, ?, 1, ?, ?)`, task.runID, task.placementID, now, now)
 	t.Cleanup(func() { _ = store.Close() })
 
 	var policy string
-	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = 'workflow-1'`).Scan(&policy); err != nil {
+	if err := store.db.QueryRow(`SELECT execution_target_policy FROM workflows WHERE id = ?`, workflowTestID(t, "1")).Scan(&policy); err != nil {
 		t.Fatalf("read migrated workflow policy: %v", err)
 	}
 	if policy != "head" {

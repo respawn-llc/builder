@@ -46,7 +46,7 @@ type Authority struct {
 	nextExecution      ExecutionGeneration
 	nextResource       runtimeids.ResourceGeneration
 	byScope            map[runtimeids.ExecutionScopeID]*execution
-	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
+	workflowExecutions map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
 	executionFinalized ExecutionFinalized
@@ -57,7 +57,7 @@ type Authority struct {
 func NewAuthority(options AuthorityOptions) *Authority {
 	authority := &Authority{
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
-		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
+		workflowExecutions: make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
 		executionFinalized: options.ExecutionFinalized,
@@ -163,7 +163,7 @@ func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workfl
 func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
 	byProject := a.workflowExecutions[ref.ProjectID]
 	if byProject == nil {
-		byProject = make(map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
+		byProject = make(map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution)
 		a.workflowExecutions[ref.ProjectID] = byProject
 	}
 	byWorkflow := byProject[ref.WorkflowID]

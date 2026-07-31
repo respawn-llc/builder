@@ -1,6 +1,10 @@
 package clientui
 
-import "time"
+import (
+	"time"
+
+	"core/shared/runtimeids"
+)
 
 type AttentionNotificationEventType string
 
@@ -97,7 +101,7 @@ type AttentionNotificationInterruptedCurrentNodeState struct {
 type AttentionNotificationTarget struct {
 	Kind                 AttentionNotificationTargetKind       `json:"kind"`
 	ProjectID            string                                `json:"project_id,omitempty"`
-	WorkflowID           string                                `json:"workflow_id,omitempty"`
+	WorkflowID           *runtimeids.WorkflowID                `json:"workflow_id,omitempty"`
 	TaskID               string                                `json:"task_id,omitempty"`
 	TaskShortID          string                                `json:"task_short_id,omitempty"`
 	TaskTitle            string                                `json:"task_title,omitempty"`

@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"testing"
 
+	"core/internal/testharness/testsetup"
+
 	"core/shared/serverapi"
 )
 
 func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show")},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
 			NodeID:    "node-1",
 			SessionID: &sessionID,
@@ -59,7 +63,7 @@ func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNode
 		},
 		Project: serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowTaskWorkflowSummary{
-			WorkflowID:  "workflow-1",
+			WorkflowID:  testsetup.WorkflowID(t, "task-show"),
 			DisplayName: "Workflow",
 		},
 		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{

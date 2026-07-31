@@ -20,6 +20,7 @@ import { emptyWorkflowDerivedWiring } from "../models";
 import {
   emptyString,
   validationErrorSchema,
+  workflowIDSchema,
   workflowOutputFieldSchema,
   workflowParameterSchema,
 } from "./common";
@@ -46,7 +47,7 @@ const workflowExecutionTargetPolicySchema: z.ZodType<WorkflowExecutionTargetPoli
 
 const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
   .object({
-    id: z.string(),
+    id: workflowIDSchema,
     name: z.string(),
     description: emptyString,
     version: z.number(),
@@ -80,7 +81,7 @@ const projectWorkflowLinkSchema: z.ZodType<ProjectWorkflowLink> = z
   .object({
     id: z.string(),
     project_id: z.string(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     default: z.boolean(),
   })
   .transform((value) => ({
@@ -113,7 +114,7 @@ const workflowNodeGroupsSchema = z
     z
       .object({
         group_id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         group_key: z.string(),
         display_name: z.string(),
         sort_order: z.number(),
@@ -136,7 +137,7 @@ const workflowNodesSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         key: z.string(),
         kind: z.string(),
         display_name: z.string(),
@@ -188,7 +189,7 @@ const workflowTransitionGroupsSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         source_node_id: z.string(),
         transition_id: z.string(),
         display_name: z.string(),
@@ -314,7 +315,7 @@ const workflowEdgesSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         transition_group_id: z.string(),
         key: z.string(),
         target_node_id: z.string(),
@@ -481,7 +482,7 @@ export const workflowGraphSaveSchema: z.ZodType<WorkflowGraphSaveResult> = z
 
 const workflowDeleteImpactSchema: z.ZodType<WorkflowDeleteImpact> = z
   .object({
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     version: z.number(),
     project_count: z.number(),
     link_count: z.number(),

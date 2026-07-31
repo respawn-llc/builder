@@ -64,7 +64,7 @@ export type ProjectSummary = Readonly<{
   key: string;
   name: string;
   primaryWorkspace: WorkspaceSummary;
-  defaultWorkflowID: string;
+  defaultWorkflowID: string | null;
   defaultWorkflowName: string;
   defaultWorkflowValid: boolean;
   updatedAt: number;
@@ -168,7 +168,7 @@ export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionP
 export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
-  workflowID: string;
+  workflowID: string | null;
   nodeID: string;
   transitionGroupID: string;
   edgeID: string;

@@ -11,11 +11,12 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
+	"core/shared/runtimeids"
 )
 
 type CreateTaskRequest struct {
 	ProjectID         string
-	WorkflowID        *workflow.WorkflowID
+	WorkflowID        *runtimeids.WorkflowID
 	Title             string
 	Body              string
 	SourceURL         string
@@ -25,7 +26,7 @@ type CreateTaskRequest struct {
 
 type preparedTaskCreate struct {
 	projectID         string
-	workflowID        *workflow.WorkflowID
+	workflowID        *runtimeids.WorkflowID
 	title             string
 	body              string
 	sourceURL         string
@@ -48,7 +49,7 @@ type StartTaskResult struct {
 
 type TaskExecutionScope struct {
 	ProjectID  string
-	WorkflowID workflow.WorkflowID
+	WorkflowID runtimeids.WorkflowID
 }
 
 func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) (TaskExecutionScope, error) {
@@ -59,10 +60,10 @@ func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) 
 	if err != nil {
 		return TaskExecutionScope{}, err
 	}
-	if strings.TrimSpace(row.ProjectID) == "" || strings.TrimSpace(row.WorkflowID) == "" {
+	if strings.TrimSpace(row.ProjectID) == "" || row.WorkflowID.IsZero() {
 		return TaskExecutionScope{}, fmt.Errorf("task %q has incomplete execution scope", taskID)
 	}
-	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: workflow.WorkflowID(row.WorkflowID)}, nil
+	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: row.WorkflowID}, nil
 }
 
 type CompletionValidationIssue struct {
@@ -119,9 +120,9 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	if projectID == "" {
 		return TaskRecord{}, errors.New("project id is required")
 	}
-	var workflowID *workflow.WorkflowID
+	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
-		if strings.TrimSpace(string(*req.WorkflowID)) == "" {
+		if req.WorkflowID.IsZero() {
 			return TaskRecord{}, errors.New("workflow id is required when provided")
 		}
 		value := *req.WorkflowID
@@ -168,7 +169,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	definition, record, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(link.WorkflowID))
+	definition, record, err := workflowDefinitionFromQueries(ctx, q, link.WorkflowID)
 	if err != nil {
 		return TaskRecord{}, err
 	}
@@ -211,7 +212,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		}
 	}
 	return TaskRecord{
-		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: workflow.WorkflowID(link.WorkflowID),
+		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: link.WorkflowID,
 		LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body,
 		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: record.Version,
 	}, nil
@@ -418,7 +419,7 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
@@ -472,7 +473,7 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 		return TaskRecord{}, err
 	}
 	return TaskRecord{
-		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: workflow.WorkflowID(row.WorkflowID),
+		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: row.WorkflowID,
 		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
 		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
 		ManagedWorktreeID: strings.TrimSpace(row.ManagedWorktreeID.String), ExecutionTarget: target,

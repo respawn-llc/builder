@@ -19,7 +19,7 @@ export const taskUpdateParamsSchema = jsonObjectSchema.and(
 );
 
 const workflow = {
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   display_name: "Delivery",
   version: 1,
 };
@@ -42,7 +42,7 @@ const taskActions = {
 
 const attentionBase = {
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "T-1",
   task_title: "Resolve blocker",
@@ -54,7 +54,7 @@ export const taskDetailResponse = {
     summary: {
       id: "task-1",
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       short_id: "T-1",
       title: "Resolve blocker",
       created_at_unix_ms: 1,
@@ -214,7 +214,7 @@ export const taskQuestionWaitingEvent = {
     primary_entity_id: "task-1",
     project_id: "project-1",
     related_ids: ["session-1", "ask-1"],
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 
@@ -225,7 +225,7 @@ export const taskUpdatedEvent = {
     occurred_at_unix_ms: 1,
     primary_entity_id: "task-1",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 

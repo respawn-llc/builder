@@ -49,7 +49,7 @@ func TestTaskDeleteActionUsesWorkflowExecutionQuiescence(t *testing.T) {
 	}
 	cards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -73,7 +73,7 @@ func TestTaskDeleteActionUsesWorkflowExecutionQuiescence(t *testing.T) {
 	}
 	cards, err = fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -92,7 +92,7 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "List task")
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
 	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
@@ -138,7 +138,7 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 	}
 	sort.Strings(want)
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
 	limit := 1
 	request := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
@@ -255,7 +255,7 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 	fixture.setTaskUpdatedAt(t, interrupted.task.ID, 1_000)
 	fixture.setTaskUpdatedAt(t, backlog.ID, 2_000)
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
 	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
@@ -360,7 +360,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
 	board, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(terminalNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -377,7 +377,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	}
 
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
 	doneLimit := 20
 	doneOnly, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
@@ -512,7 +512,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 	}
 	queuedCards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -534,7 +534,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 	}
 
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
 	listLimit := 20
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,

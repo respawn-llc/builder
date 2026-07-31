@@ -45,7 +45,7 @@ func (s *Starter) startCurrentNodeScript(
 	env := tools.EnrichShellEnv(os.Environ())
 	env = append(env,
 		"KENT_WORKFLOW_TASK_ID="+string(input.Task.ID),
-		"KENT_WORKFLOW_ID="+string(input.Task.WorkflowID),
+		"KENT_WORKFLOW_ID="+input.Task.WorkflowID.String(),
 		"KENT_WORKFLOW_NODE_ID="+string(input.Node.ID),
 		"KENT_EXECUTION_ROOT="+executionRoot.EffectiveRoot(),
 	)

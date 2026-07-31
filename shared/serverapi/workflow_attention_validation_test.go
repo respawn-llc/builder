@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -36,9 +37,7 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "blank task identity", item: question(func(item *WorkflowAttentionItem) { item.TaskID = "" }), want: false},
 		{name: "blank task short identity", item: question(func(item *WorkflowAttentionItem) { item.TaskShortID = "" }), want: false},
 		{name: "blank task title", item: question(func(item *WorkflowAttentionItem) { item.TaskTitle = "" }), want: false},
-		{name: "blank workflow identity", item: question(func(item *WorkflowAttentionItem) { item.WorkflowID = "" }), want: false},
-		{name: "question without message", item: question(func(item *WorkflowAttentionItem) { item.Message = nil }), want: false},
-		{name: "question with blank message", item: question(func(item *WorkflowAttentionItem) { item.Message = textutil.Value("") }), want: false},
+		{name: "blank workflow identity", item: question(func(item *WorkflowAttentionItem) { item.WorkflowID = runtimeids.WorkflowID{} }), want: false},
 		{name: "question without current node", item: question(func(item *WorkflowAttentionItem) { item.CurrentNode = nil }), want: false},
 		{name: "question without question", item: question(func(item *WorkflowAttentionItem) { item.QuestionID = nil }), want: false},
 		{name: "question with approval snapshot", item: question(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
@@ -202,7 +201,7 @@ func validWorkflowAttentionQuestion() WorkflowAttentionItem {
 		TaskID:                 "task-1",
 		TaskShortID:            "KENT-1",
 		TaskTitle:              "Task",
-		WorkflowID:             "workflow-1",
+		WorkflowID:             runtimeids.NewWorkflowID(),
 		Kind:                   "question",
 		Message:                textutil.Value("Continue?"),
 		CurrentNode:            &WorkflowTaskCurrentNode{NodeID: "node-1", SessionID: &sessionID},
@@ -226,7 +225,7 @@ func validWorkflowAttentionApproval() WorkflowAttentionItem {
 		TaskID:           "task-1",
 		TaskShortID:      "KENT-1",
 		TaskTitle:        "Task",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		ApprovalID:       textutil.Value("approval-1"),
 		ApprovalSnapshot: workflowAttentionApprovalSnapshot(),
 	}
@@ -240,8 +239,7 @@ func validWorkflowAttentionInterrupted() WorkflowAttentionItem {
 		TaskID:      "task-1",
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
-		WorkflowID:  "workflow-1",
-		DetailJSON:  textutil.Value(`{"code":"restart","fields":{}}`),
+		WorkflowID:  runtimeids.NewWorkflowID(),
 		CurrentNode: &WorkflowTaskCurrentNode{NodeID: "node-1"},
 	}
 }

@@ -4,6 +4,7 @@ import { compactJsonObject } from "./json";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 import type { BoardNodeCardsPage, WorkflowBoard } from "./models";
 import { boardNodeCardsPageSchema, workflowBoardSchema } from "./schemas/workflowBoard";
+import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import type { TaskLabelFilter } from "./workflowLabels";
 
@@ -20,7 +21,7 @@ export async function getBoard(
       "workflow.board.get",
       compactJsonObject({
         project_id: projectID,
-        workflow_id: workflowID,
+        workflow_id: workflowID === undefined ? undefined : workflowIDSchema.parse(workflowID),
         label_filter: taskLabelFilterPayload(labelFilter),
       }),
     ),
@@ -38,7 +39,7 @@ export async function listBoardNodeCards(
       "workflow.board.nodeCards.list",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id: input.workflowID,
+        workflow_id: workflowIDSchema.parse(input.workflowID),
         node_id: input.nodeID,
         label_filter: taskLabelFilterPayload(input.labelFilter),
         page_size: 25,

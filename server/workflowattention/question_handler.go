@@ -143,10 +143,11 @@ func TaskApprovalQuestionAttentionTarget(context TaskQuestionContext, askID stri
 
 func taskQuestionAttentionTarget(context TaskQuestionContext, focusKind clientui.AttentionNotificationFocusKind, askIDs []string) *clientui.AttentionNotificationTarget {
 	nodeID := string(context.CurrentNode.NodeID)
+	workflowID := context.Task.WorkflowID
 	target := &clientui.AttentionNotificationTarget{
 		Kind:          clientui.AttentionNotificationTargetWorkflowTask,
 		ProjectID:     strings.TrimSpace(context.Task.ProjectID),
-		WorkflowID:    strings.TrimSpace(string(context.Task.WorkflowID)),
+		WorkflowID:    &workflowID,
 		TaskID:        strings.TrimSpace(string(context.Task.ID)),
 		TaskShortID:   strings.TrimSpace(context.Task.ShortID),
 		TaskTitle:     strings.TrimSpace(context.Task.Title),

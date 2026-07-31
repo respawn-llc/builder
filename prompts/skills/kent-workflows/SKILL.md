@@ -48,7 +48,7 @@ To understand what `--agent` roles are available (the reminder in your memory mi
 Important CLI behavior:
 - Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context. `--json` is **very verbose**, avoid it except for scripting.
 - `workflow create` auto-creates the initial backlog/start and done/terminal shape; inspect after create before adding duplicate start or terminal nodes.
-- Workflow selectors use bare canonical UUIDv4 values emitted by the CLI. Names and `workflow-...` persistence IDs are rejected.
+- Workflow selectors use bare canonical UUIDv4 values emitted by the CLI.
 - `workflow list --project <path-or-id>` discovers linked workflows with the default first. `workflow inspect <uuid> --summary` reads metadata without loading the graph.
 - Agent-targeting edges require `--prompt <text>`. Omit `--prompt` for edges targeting `start`, `join`, or `terminal` nodes, as there's nobody to prompt.
 - Script nodes use `--kind script --script-path <path>` and can appear anywhere an agent node can appear. Absolute paths resolve on the Kent server; relative paths resolve against the task managed worktree when the script runs.

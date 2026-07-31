@@ -5,9 +5,9 @@ VALUES ('session-minimal', 'project-minimal', 'projects/project-minimal/sessions
 INSERT INTO runtime_leases (id, session_id, client_id, request_id, created_at_unix_ms, acquired_at_unix_ms, metadata_json)
 VALUES ('lease-minimal', 'session-minimal', 'client', 'request', 1, 2, '{"trace":true}');
 INSERT INTO workflows (id, name, description, graph_revision, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('workflow-minimal', 'Workflow', '', 1, 1, 1, '{}');
+VALUES ('workflow-550e8400-e29b-41d4-a716-446655440010', 'Workflow', '', 1, 1, 1, '{}');
 INSERT INTO project_workflow_links (id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms)
-VALUES ('link-minimal', 'project-minimal', 'workflow-minimal', 1, 1);
+VALUES ('link-minimal', 'project-minimal', 'workflow-550e8400-e29b-41d4-a716-446655440010', 1, 1);
 INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-minimal', 'link-minimal', 1, 1, 'MIN-1', 'Task', '', 1, 1, '{}');
 INSERT INTO task_comments (id, task_id, body, author_kind, author_id, source_run_id, created_at_unix_ms, updated_at_unix_ms, deleted_at_unix_ms, metadata_json)
