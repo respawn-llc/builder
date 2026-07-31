@@ -7,7 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
-import { ContractError, errorMessage } from "@/api";
+import { errorMessage } from "@/api";
 import type { ProjectBinding, WorkflowProjectEvent } from "@/api";
 import type { AppServices } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
@@ -84,9 +84,6 @@ export function useGlobalAttentionEvents() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" });
       void queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" });
     };
-    const logSubscriptionWarning = (message: string, error: Error) => {
-      void logger.append("warn", message, { error: errorMessage(error) });
-    };
     const subscription = api.subscribeProject("", {
       onOpen() {
         const shouldReconcile = subscriptionLifecycle !== "initial";
@@ -105,13 +102,8 @@ export function useGlobalAttentionEvents() {
         return;
       },
       onError(error) {
-        if (error instanceof ContractError) {
-          refreshAttention();
-          logSubscriptionWarning("Global attention event payload failed.", error);
-          return;
-        }
         subscriptionLifecycle = "recovery-pending";
-        logSubscriptionWarning("Global attention subscription failed.", error);
+        void logger.append("warn", "Global attention subscription failed.", { error: errorMessage(error) });
       },
     });
     return () => {

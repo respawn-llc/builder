@@ -1,13 +1,18 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppRoot } from "./AppRoot";
 import { removeBrowserStorage } from "@/app-facade";
 import { createTestServices, startupRoutes, type TestAppServices } from "@/test-support/app-services";
-import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
-
-const globalAttentionMethod = "workflow.attention.list";
-const globalSubscriptionMethod = "workflow.subscribeProject";
+import {
+  flushQueuedWork,
+  installAnimationFrameTestSupport,
+  waitForMacrotask,
+} from "@/test-support/scheduling";
+import {
+  workflowAttentionCallCount,
+  workflowAttentionRpcMethods,
+} from "@/test-support/workflow-attention";
 
 describe("application reconnect attention refresh", () => {
   beforeEach(() => {
@@ -25,51 +30,58 @@ describe("application reconnect attention refresh", () => {
   it("coordinates central reconnect refresh with replacement subscription readiness", async () => {
     const services = createTestServices(startupRoutes);
     render(<AppRoot services={services} />);
+    await flushQueuedWork();
 
     await waitFor(() => {
-      expect(attentionCalls(services)).toHaveLength(1);
+      expect(workflowAttentionCallCount(services.transport)).toBe(1);
     });
     await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
     });
-
-    act(() => {
-      services.transport.open(globalSubscriptionMethod);
+    await waitFor(() => {
+      expect(screen.getByTestId("home-route-root")).toBeInTheDocument();
     });
     await flushQueuedWork();
-    expect(attentionCalls(services)).toHaveLength(1);
 
-    act(() => {
+    await act(async () => {
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
+      await waitForMacrotask();
+    });
+    expect(workflowAttentionCallCount(services.transport)).toBe(1);
+
+    await act(async () => {
       services.transport.connection.set("disconnected");
+      await waitForMacrotask();
     });
     await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(0);
     });
+    await flushQueuedWork();
 
-    act(() => {
+    await act(async () => {
       services.transport.connection.set("connected");
+      await waitForMacrotask();
     });
     await waitFor(() => {
       expect(activeProjectSubscriptions(services)).toHaveLength(1);
     });
     await waitFor(() => {
-      expect(attentionCalls(services)).toHaveLength(2);
-    });
-
-    act(() => {
-      services.transport.open(globalSubscriptionMethod);
+      expect(workflowAttentionCallCount(services.transport)).toBe(2);
     });
     await flushQueuedWork();
-    expect(attentionCalls(services)).toHaveLength(2);
+
+    await act(async () => {
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
+      await waitForMacrotask();
+    });
+    expect(workflowAttentionCallCount(services.transport)).toBe(2);
   });
 });
 
-function attentionCalls(services: TestAppServices) {
-  return services.transport.calls.filter((call) => call.method === globalAttentionMethod);
-}
-
 function activeProjectSubscriptions(services: TestAppServices) {
-  return services.transport.subscriptions.filter((subscription) => subscription.method === globalSubscriptionMethod);
+  return services.transport.subscriptions.filter(
+    (subscription) => subscription.method === workflowAttentionRpcMethods.subscribeProject,
+  );
 }
 
 function clearRoutePersistence(): void {

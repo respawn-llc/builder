@@ -12,10 +12,14 @@ export function installAnimationFrameTestSupport(): void {
   });
 }
 
+export async function waitForMacrotask(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+}
+
 export async function flushQueuedWork(): Promise<void> {
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
+    await waitForMacrotask();
   });
 }

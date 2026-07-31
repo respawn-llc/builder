@@ -8,12 +8,13 @@ import { SidebarContext, type SidebarController, type SidebarDestination } from 
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRpcTransport, FakeRoute } from "@/test-support/api";
 import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
+import {
+  workflowAttentionCallCount,
+  workflowAttentionCalls,
+  workflowAttentionRpcMethods,
+} from "@/test-support/workflow-attention";
 import { SidebarInboxNav } from "./SidebarInboxNav";
 import { useGlobalAttentionEvents, useGlobalAttentionPages } from "./useHomeData";
-
-const globalSubscriptionMethod = "workflow.subscribeProject";
-const globalEventMethod = "workflow.project";
-const globalAttentionMethod = "workflow.attention.list";
 
 describe("Home global attention data", () => {
   beforeEach(() => {
@@ -31,24 +32,24 @@ describe("Home global attention data", () => {
     await expectAttentionCalls(services.transport, 1);
 
     act(() => {
-      services.transport.open(globalSubscriptionMethod);
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
     });
     await flushQueuedWork();
     expect(attentionPageTokens(services.transport)).toEqual([""]);
 
     act(() => {
-      services.transport.emit(globalEventMethod, attentionChangingProjectEvent);
+      services.transport.emit(workflowAttentionRpcMethods.projectEvent, attentionChangingProjectEvent);
     });
     await expectAttentionCalls(services.transport, 2);
 
     act(() => {
-      services.transport.fail(globalSubscriptionMethod, new Error("stream failed"));
+      services.transport.fail(workflowAttentionRpcMethods.subscribeProject, new Error("stream failed"));
     });
     await flushQueuedWork();
     expect(attentionPageTokens(services.transport)).toHaveLength(2);
 
     act(() => {
-      services.transport.open(globalSubscriptionMethod);
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
     });
     await expectAttentionCalls(services.transport, 3);
   });
@@ -60,29 +61,16 @@ describe("Home global attention data", () => {
     await expectAttentionCalls(services.transport, 1);
 
     act(() => {
-      services.transport.fail(globalSubscriptionMethod, new Error("stream failed before open"));
+      services.transport.fail(
+        workflowAttentionRpcMethods.subscribeProject,
+        new Error("stream failed before open"),
+      );
     });
     await flushQueuedWork();
     expect(attentionPageTokens(services.transport)).toEqual([""]);
 
     act(() => {
-      services.transport.open(globalSubscriptionMethod);
-    });
-    await expectAttentionCalls(services.transport, 2);
-  });
-
-  it("refreshes Inbox when a live subscription reports an invalid event payload", async () => {
-    const services = createAttentionServices();
-    renderHome(services, <HomeAttentionEventsHarness />);
-
-    await expectAttentionCalls(services.transport, 1);
-    act(() => {
-      services.transport.open(globalSubscriptionMethod);
-    });
-    await flushQueuedWork();
-
-    act(() => {
-      services.transport.emit(globalEventMethod, invalidProjectEvent);
+      services.transport.open(workflowAttentionRpcMethods.subscribeProject);
     });
     await expectAttentionCalls(services.transport, 2);
   });
@@ -235,7 +223,7 @@ function attentionRoute(
   page: (pageToken: string, callIndex: number) => Readonly<Record<string, JsonValue>>,
 ): FakeRoute {
   return {
-    method: globalAttentionMethod,
+    method: workflowAttentionRpcMethods.list,
     handler(params, callIndex) {
       const pageToken = attentionRequestParamsSchema.parse(params).page_token;
       return page(pageToken, callIndex);
@@ -274,16 +262,12 @@ function attentionItem(taskID: string): Readonly<Record<string, JsonValue>> {
 }
 
 function attentionPageTokens(transport: FakeRpcTransport): string[] {
-  return transport.calls
-    .filter((call) => call.method === globalAttentionMethod)
-    .map((call) => {
-      return attentionRequestParamsSchema.parse(call.params).page_token;
-    });
+  return workflowAttentionCalls(transport).map((call) => attentionRequestParamsSchema.parse(call.params).page_token);
 }
 
 async function expectAttentionCalls(transport: FakeRpcTransport, count: number): Promise<void> {
   await waitFor(() => {
-    expect(transport.calls.filter((call) => call.method === globalAttentionMethod)).toHaveLength(count);
+    expect(workflowAttentionCallCount(transport)).toBe(count);
   });
 }
 
@@ -329,17 +313,6 @@ const attentionChangingProjectEvent = {
     related_ids: [],
     resource: "task",
     workflow_id: "workflow-1",
-  },
-} as const;
-
-const invalidProjectEvent = {
-  event: {
-    action: "updated",
-    occurred_at_unix_ms: 3,
-    primary_entity_id: "task-1",
-    project_id: "project-1",
-    related_ids: [],
-    resource: "task",
   },
 } as const;
 
