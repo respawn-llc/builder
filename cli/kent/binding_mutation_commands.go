@@ -142,9 +142,18 @@ func runBindingMutationCommand(
 	}
 	rpcCtx, cancel := context.WithTimeout(context.Background(), bindingCommandRPCTimeout)
 	defer cancel()
-	result, err := mutate(rpcCtx, remote, selector)
-	if err = closeBindingMutationRemote(remote, err); err != nil {
-		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
+	result, mutationErr := mutate(rpcCtx, remote, selector)
+	cleanupErr := closeBindingMutationRemote(remote, nil)
+	if mutationErr != nil {
+		if cleanupErr != nil {
+			mutationErr = errors.Join(mutationErr, cleanupErr)
+		}
+		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, mutationErr, arguments.ProjectID, defaultMutation)
+	}
+	if cleanupErr != nil {
+		// The mutation has already committed. Preserve its authoritative result
+		// and surface connection cleanup as a non-fatal diagnostic.
+		_, _ = fmt.Fprintf(stderr, "%v\n", cleanupErr)
 	}
 	if err := result.validate(); err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
@@ -163,7 +172,11 @@ func closeBindingMutationRemote(remote *client.Remote, cause error) error {
 	if closeErr == nil {
 		return cause
 	}
-	return errors.Join(cause, fmt.Errorf("close binding mutation remote: %w", closeErr))
+	closeFailure := fmt.Errorf("close binding mutation remote: %w", closeErr)
+	if cause == nil {
+		return closeFailure
+	}
+	return errors.Join(cause, closeFailure)
 }
 
 func writeBindingMutationPlainResult(stdout io.Writer, stderr io.Writer, result bindingMutationResult, defaultMutation bool) int {

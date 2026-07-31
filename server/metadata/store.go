@@ -369,10 +369,10 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 		}
 		return bindingFromProjectCanonicalRootRow(row), nil
 	}
-	// Use the same workspace identity policy as persisted bindings. Missing
-	// roots retain their absolute lexical identity; existing roots resolve
-	// symlinks before the Project-scoped point lookup.
-	canonicalRoot, canonicalErr := config.CanonicalWorkspaceRoot(workspaceRoot)
+	// Resolve the nearest existing ancestor before appending missing path
+	// components so a removed workspace remains addressable through the
+	// symlinked path it was attached from.
+	canonicalRoot, canonicalErr := canonicalFilesystemPath(workspaceRoot)
 	if canonicalErr != nil {
 		if absErr != nil {
 			return Binding{}, fmt.Errorf("%w: %q: %v", serverapi.ErrWorkspacePathIdentity, workspaceRoot, absErr)
@@ -390,6 +390,16 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 	}
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		return Binding{}, err
+	}
+	// Bindings persisted with a lexical missing-path identity remain
+	// detachable, but only consider that fallback when the selected path is
+	// actually absent so a replaced symlink cannot revive a stale binding.
+	if _, statErr := os.Stat(absoluteRoot); errors.Is(statErr, os.ErrNotExist) {
+		if binding, lexicalErr := lookupByRoot(filepath.Clean(absoluteRoot)); lexicalErr == nil {
+			return binding, nil
+		} else if !errors.Is(lexicalErr, serverapi.ErrWorkspaceNotRegistered) {
+			return Binding{}, lexicalErr
+		}
 	}
 	return Binding{}, err
 }

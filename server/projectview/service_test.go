@@ -692,6 +692,34 @@ func TestMetadataServiceWorkspaceSelectorCanonicalizesMissingPath(t *testing.T) 
 	}
 }
 
+func TestMetadataServiceWorkspaceSelectorCanonicalizesMissingPathThroughSymlinkedAncestor(t *testing.T) {
+	realParent := t.TempDir()
+	symlinkParent := filepath.Join(t.TempDir(), "current")
+	if err := os.Symlink(realParent, symlinkParent); err != nil {
+		t.Fatalf("create symlinked workspace parent: %v", err)
+	}
+	workspaceRoot := filepath.Join(symlinkParent, "repo")
+	if err := os.Mkdir(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("create workspace root: %v", err)
+	}
+
+	store, _, binding := newProjectViewMetadataStoreForWorkspace(t, workspaceRoot)
+	if err := os.Remove(workspaceRoot); err != nil {
+		t.Fatalf("remove workspace root: %v", err)
+	}
+	selector, err := serverapi.NewProjectWorkspaceSelectorForRoot(workspaceRoot)
+	if err != nil {
+		t.Fatalf("workspace selector: %v", err)
+	}
+	resolved, err := store.ResolveProjectWorkspaceSelector(context.Background(), binding.ProjectID, selector)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceSelector: %v", err)
+	}
+	if resolved.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("resolved workspace id = %q, want %q", resolved.WorkspaceID, binding.WorkspaceID)
+	}
+}
+
 func TestMetadataServiceWorkspaceSelectorRejectsStaleLexicalBindingAfterSymlinkReplacement(t *testing.T) {
 	originalRoot := t.TempDir()
 	store, _, binding := newProjectViewMetadataStoreForWorkspace(t, originalRoot)
