@@ -252,6 +252,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowexecution.NewCurrentNodeController",
 		"core/server/workflowsvc.New",
 		"core/server/projectview.WithWorkflowExecution",
+		"core/server/workflowview.NewTaskSearch",
 	} {
 		if !callReferencesExactly(calls[key][0], permitType, permitObject) {
 			findings = append(findings, currentNodeStructureFinding{

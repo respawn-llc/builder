@@ -2191,7 +2191,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority)
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority, workflowexecution.NewMutationPermit())
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}

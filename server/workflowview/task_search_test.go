@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 
@@ -25,21 +26,21 @@ import (
 )
 
 func TestNewTaskSearchRequiresCurrentNodeAuthority(t *testing.T) {
-	if _, err := NewTaskSearch(nil, NewTaskProjector(), nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent metadata and authority")
+	if _, err := NewTaskSearch(nil, NewTaskProjector(), nil, nil); err == nil {
+		t.Fatal("NewTaskSearch accepted absent metadata, authority, and mutation permit")
 	}
 	store, err := metadata.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open metadata: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := NewTaskSearch(store, nil, nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent projector and authority")
+	if _, err := NewTaskSearch(store, nil, nil, nil); err == nil {
+		t.Fatal("NewTaskSearch accepted absent projector, authority, and mutation permit")
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	t.Cleanup(func() { _ = authority.Close(context.Background()) })
-	if _, err := NewTaskSearch(store, NewTaskProjector(), authority); err != nil {
-		t.Fatalf("NewTaskSearch with Current Node authority: %v", err)
+	if _, err := NewTaskSearch(store, NewTaskProjector(), authority, workflowexecution.NewMutationPermit()); err != nil {
+		t.Fatalf("NewTaskSearch with Current Node authority and mutation permit: %v", err)
 	}
 }
 
@@ -180,6 +181,27 @@ func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *
 	}
 	if err := <-mutationsDone; err != nil {
 		t.Fatalf("canonical mutation: %v", err)
+	}
+}
+
+func TestTaskSearchExcludesSchemaContractProbe(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	for _, request := range []serverapi.TaskSearchRequest{
+		taskSearchRequest("abc"),
+		{
+			Mode:     serverapi.TaskSearchModeFTS5,
+			Query:    "title:abc",
+			Context:  serverapi.TaskSearchDefaultContext,
+			PageSize: serverapi.TaskSearchDefaultPageSize,
+		},
+	} {
+		response, err := search.Search(fixture.ctx, request)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(response.Groups) != 0 || response.NextPageToken != nil {
+			t.Fatalf("schema-contract probe was visible in Task Search response: %+v", response)
+		}
 	}
 }
 
@@ -832,11 +854,90 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	}
 }
 
+func TestTaskSearchFencesLifecycleMutationUntilLiveStateFinalizes(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh is unavailable: %v", err)
+	}
+	fixture := newCurrentNodeViewFixture(t, false)
+	task := createTaskSearchTask(t, fixture, "Lifecycle fence", "needle")
+	started := startTaskSearchTask(t, fixture, task)
+	permit := workflowexecution.NewMutationPermit()
+	search := newTaskSearchWithPermit(t, fixture.metadata, fixture.authority, permit)
+	lease := newTaskSearchLease(t, fixture, started)
+	handle := startTaskSearchScript(t, fixture, shellPath, &lease)
+	t.Cleanup(func() {
+		lease.Cancel()
+		handle.RequestStop()
+		if _, waitErr := handle.Wait(context.Background()); waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			t.Errorf("wait lifecycle script: %v", waitErr)
+		}
+	})
+	lease.Release()
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(
+			fixture.binding.ProjectID,
+			fixture.workflowID,
+		)
+		if snapshotErr != nil {
+			return false
+		}
+		executions := snapshots[task.ID].Executions
+		return len(executions) == 1 && !executions[0].Queued
+	}, "timed out waiting for a running Current Node execution")
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- permit.Run(fixture.ctx, func(ctx context.Context) error {
+			if err := fixture.store.InterruptCurrentNode(
+				ctx,
+				started.currentNode,
+				workflow.CurrentNodeInterruptionReason("server_restart"),
+				workflow.CurrentNodeInterruptionDetail{Code: "restart"},
+			); err != nil {
+				return fmt.Errorf("interrupt Current Node: %w", err)
+			}
+			close(writerEntered)
+			<-releaseWriter
+			handle.RequestStop()
+			if _, waitErr := handle.Wait(ctx); waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+				return fmt.Errorf("wait lifecycle script: %w", waitErr)
+			}
+			return nil
+		})
+	}()
+	<-writerEntered
+	writerReleased := false
+	t.Cleanup(func() {
+		if !writerReleased {
+			close(releaseWriter)
+		}
+	})
+
+	captureCtx, cancel := context.WithTimeout(fixture.ctx, 150*time.Millisecond)
+	defer cancel()
+	_, err = search.Search(captureCtx, taskSearchRequest("needle"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Search during permit-fenced lifecycle mutation = %v, want context deadline exceeded", err)
+	}
+
+	close(releaseWriter)
+	writerReleased = true
+	if err := <-writerDone; err != nil {
+		t.Fatalf("complete lifecycle mutation: %v", err)
+	}
+	request := taskSearchRequest("needle")
+	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindInterrupted}
+	assertTaskSearchTask(t, fixture.ctx, search, request, task.ID, serverapi.WorkflowTaskStatusKindInterrupted)
+}
+
 func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
-	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), question.authority)
+	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), question.authority, workflowexecution.NewMutationPermit())
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
@@ -873,11 +974,22 @@ func TestTaskSearchRanksEquivalentBodyBeforeComment(t *testing.T) {
 func newTaskSearchFixture(t *testing.T, requiresApproval bool) (currentNodeViewFixture, *TaskSearch) {
 	t.Helper()
 	fixture := newCurrentNodeViewFixture(t, requiresApproval)
-	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), fixture.authority)
+	search := newTaskSearchWithPermit(t, fixture.metadata, fixture.authority, workflowexecution.NewMutationPermit())
+	return fixture, search
+}
+
+func newTaskSearchWithPermit(
+	t *testing.T,
+	metadataStore *metadata.Store,
+	authority *sessionruntime.Authority,
+	permit *workflowexecution.MutationPermit,
+) *TaskSearch {
+	t.Helper()
+	search, err := NewTaskSearch(metadataStore, NewTaskProjector(), authority, permit)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
-	return fixture, search
+	return search
 }
 
 func createTaskSearchTask(t *testing.T, fixture currentNodeViewFixture, title string, body string) workflowstore.TaskRecord {

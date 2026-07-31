@@ -290,6 +290,11 @@ type TaskSearchContent struct {
 	Comment    interface{}
 }
 
+type TaskSearchContractProbe struct {
+	DocumentID int64
+	Title      string
+}
+
 type TaskSearchDocument struct {
 	DocumentID int64
 	SourceKind string

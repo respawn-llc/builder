@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/shared/serverapi"
 	"core/shared/tasksearchtext"
 
@@ -29,6 +30,13 @@ type TaskSearch struct {
 	queries   *sqlitegen.Queries
 	projector *TaskProjector
 	authority *sessionruntime.Authority
+	permit    *workflowexecution.MutationPermit
+}
+
+type taskSearchReadSnapshot struct {
+	queries       *sqlitegen.Queries
+	liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	close         func() error
 }
 
 type taskSearchPageToken struct {
@@ -39,7 +47,12 @@ type taskSearchPageToken struct {
 	TaskID      string `json:"task_id"`
 }
 
-func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskSearch, error) {
+func NewTaskSearch(
+	metadataStore *metadata.Store,
+	projector *TaskProjector,
+	authority *sessionruntime.Authority,
+	permit *workflowexecution.MutationPermit,
+) (*TaskSearch, error) {
 	switch {
 	case metadataStore == nil || metadataStore.Queries() == nil:
 		return nil, errors.New("metadata store is required")
@@ -47,18 +60,21 @@ func NewTaskSearch(metadataStore *metadata.Store, projector *TaskProjector, auth
 		return nil, errors.New("task projector is required")
 	case authority == nil:
 		return nil, errors.New("session runtime authority is required")
+	case permit == nil:
+		return nil, errors.New("workflow mutation permit is required")
 	default:
 		return &TaskSearch{
 			metadata:  metadataStore,
 			queries:   metadataStore.Queries(),
 			projector: projector,
 			authority: authority,
+			permit:    permit,
 		}, nil
 	}
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil || s.permit == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -75,33 +91,25 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+	snapshot, err := s.captureReadSnapshot(ctx, req)
 	if err != nil {
-		return serverapi.TaskSearchResponse{}, err
-	}
-	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return serverapi.TaskSearchResponse{}, fmt.Errorf("begin task search read transaction: %w", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && err == nil {
-			response = serverapi.TaskSearchResponse{}
-			err = fmt.Errorf("rollback task search read transaction: %w", rollbackErr)
-		}
-	}()
-	queries := s.queries.WithTx(tx)
-	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
 		}
 		return serverapi.TaskSearchResponse{}, err
 	}
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			response = serverapi.TaskSearchResponse{}
+			err = errors.Join(err, fmt.Errorf("close task search read snapshot: %w", closeErr))
+		}
+	}()
 	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
+		if _, validationErr := snapshot.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, queries, liveSnapshots, req, cursor, hasCursor)
+	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveSnapshots, req, cursor, hasCursor)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -112,7 +120,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if hasNext {
 		rows = rows[:req.PageSize]
 	}
-	groups, err := s.materializeGroups(ctx, queries, req, rows)
+	groups, err := s.materializeGroups(ctx, snapshot.queries, req, rows)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -136,6 +144,58 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
 	}
 	return response, nil
+}
+
+func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {
+	var snapshot *taskSearchReadSnapshot
+	err := s.permit.Run(ctx, func(ctx context.Context) error {
+		tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return fmt.Errorf("begin task search read transaction: %w", err)
+		}
+		closeTransaction := func() error {
+			rollbackErr := tx.Rollback()
+			if errors.Is(rollbackErr, sql.ErrTxDone) {
+				return nil
+			}
+			return rollbackErr
+		}
+		queries := s.queries.WithTx(tx)
+		if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
+			return errors.Join(err, closeTransaction())
+		}
+		if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
+			return errors.Join(err, closeTransaction())
+		}
+		liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+		if err != nil {
+			return errors.Join(err, closeTransaction())
+		}
+		snapshot = &taskSearchReadSnapshot{
+			queries:       queries,
+			liveSnapshots: liveSnapshots,
+			close:         closeTransaction,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil {
+		return nil, errors.New("task search read snapshot capture ended without a result")
+	}
+	return snapshot, nil
+}
+
+func (s *taskSearchReadSnapshot) Close() error {
+	if s == nil || s.close == nil {
+		return nil
+	}
+	close := s.close
+	s.close = nil
+	s.queries = nil
+	s.liveSnapshots = nil
+	return close()
 }
 
 func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest) error {

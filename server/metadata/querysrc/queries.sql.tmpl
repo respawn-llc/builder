@@ -1274,6 +1274,12 @@ FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id ASC;
 
+-- name: AnchorTaskSearchReadSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM task_search_documents
+) AS anchored;
+
 -- name: GetTaskByProjectShortID :one
 SELECT
     id,
@@ -3319,6 +3325,7 @@ WITH
 required_objects(object_kind, object_name, owner_name) AS (
     VALUES
         ('table', 'task_search_documents', 'task_search_documents'),
+        ('table', 'task_search_contract_probe', 'task_search_contract_probe'),
         ('table', 'task_search_fts', 'task_search_fts'),
         ('view', 'task_search_content', 'task_search_content'),
         ('index', 'task_search_documents_task_title_unique', 'task_search_documents'),
@@ -3476,14 +3483,36 @@ fts_virtual_table_contract_failures AS (
             FROM expected_fts_columns
        )
 ),
-fts_match_probe AS (
-    SELECT COUNT(*) AS match_count
-    FROM task_search_fts
-    WHERE task_search_fts MATCH 'tasksearchcontractprobe'
+expected_fts_contract_probe(document_id, title) AS (
+    VALUES (-1, 'ZÀBcQ')
 ),
-fts_match_contract_failures AS (
-    SELECT 'fts_match' AS failure
-    WHERE (SELECT match_count FROM fts_match_probe) < 0
+fts_contract_probe AS (
+    SELECT task_search_fts.rowid AS document_id, task_search_fts.title
+    FROM task_search_fts
+    WHERE task_search_fts.rowid = (SELECT document_id FROM expected_fts_contract_probe)
+),
+fts_configuration_contract_failures AS (
+    SELECT 'fts_configuration' AS failure
+    WHERE EXISTS (
+            SELECT document_id, title
+            FROM expected_fts_contract_probe
+            EXCEPT
+            SELECT document_id, title
+            FROM fts_contract_probe
+        )
+       OR EXISTS (
+            SELECT document_id, title
+            FROM fts_contract_probe
+            EXCEPT
+            SELECT document_id, title
+            FROM expected_fts_contract_probe
+        )
+       OR NOT EXISTS (
+            SELECT 1
+            FROM task_search_fts
+            WHERE rowid = (SELECT document_id FROM expected_fts_contract_probe)
+              AND task_search_fts MATCH 'title:abc'
+        )
 )
 SELECT failure FROM object_contract_failures
 UNION ALL
@@ -3495,7 +3524,7 @@ SELECT failure FROM mapping_index_contract_failures
 UNION ALL
 SELECT failure FROM fts_virtual_table_contract_failures
 UNION ALL
-SELECT failure FROM fts_match_contract_failures
+SELECT failure FROM fts_configuration_contract_failures
 ORDER BY failure ASC;
 {{end}}
 

@@ -20,6 +20,9 @@ type taskSearchCanonicalSource struct {
 	text string
 }
 
+const taskSearchContractProbeDocumentID int64 = -1
+const taskSearchContractProbeTitle = "ZÀBcQ"
+
 var taskSearchTriggerNames = []string{
 	"task_search_comment_body_after_update",
 	"task_search_comment_body_before_update",
@@ -60,7 +63,7 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 }
 
 func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) {
-	for _, checkpoint := range []int64{59, 60, 61, 62} {
+	for _, checkpoint := range []int64{59, 60, 61, 62, 63} {
 		t.Run(fmt.Sprintf("version_%d", checkpoint), func(t *testing.T) {
 			legacy, root := openVersion59TaskSearchFixture(t)
 			if checkpoint > 59 {
@@ -92,6 +95,51 @@ func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) 
 			assertTaskSearchInvariants(t, store.db)
 			assertTaskSearchLegacySourcesSearchable(t, store.db)
 		})
+	}
+}
+
+func TestTaskSearchSchemaContractRejectsSameShapedIncompatibleFTS(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	tx, err := store.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("begin incompatible FTS transaction: %v", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE task_search_fts`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("drop Task Search FTS: %v", err)
+	}
+	if _, err := tx.Exec(`CREATE VIRTUAL TABLE task_search_fts
+USING fts5(
+    title,
+    body,
+    comment,
+    content = 'task_search_content',
+    content_rowid = 'document_id',
+    tokenize = 'trigram case_sensitive 1'
+)`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("create incompatible Task Search FTS: %v", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO task_search_fts(task_search_fts) VALUES ('rebuild')`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("rebuild incompatible Task Search FTS: %v", err)
+	}
+	failures, err := store.Queries().WithTx(tx).ListTaskSearchSchemaContractFailures(t.Context())
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("ListTaskSearchSchemaContractFailures: %v", err)
+	}
+	if !slices.Contains(failures, "fts_configuration") {
+		_ = tx.Rollback()
+		t.Fatalf("incompatible Task Search FTS failures = %v, want fts_configuration", failures)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("roll back incompatible Task Search FTS: %v", err)
 	}
 }
 
@@ -592,6 +640,7 @@ func assertTaskSearchSchemaObjects(t *testing.T, db *sql.DB) {
 		name string
 	}{
 		{kind: "table", name: "task_search_documents"},
+		{kind: "table", name: "task_search_contract_probe"},
 		{kind: "table", name: "task_search_fts"},
 		{kind: "view", name: "task_search_content"},
 	} {
@@ -784,6 +833,9 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 	mappings := queryTaskSearchMappings(t, db)
 	content := queryTaskSearchContent(t, db)
 	ftsRowIDs := queryTaskSearchFTSRowIDs(t, db)
+	assertTaskSearchContractProbe(t, content, ftsRowIDs)
+	delete(content, taskSearchContractProbeDocumentID)
+	delete(ftsRowIDs, taskSearchContractProbeDocumentID)
 	if len(canonical) != len(mappings) || len(canonical) != len(content) || len(canonical) != len(ftsRowIDs) {
 		t.Fatalf("task-search source counts = canonical:%d mapping:%d content:%d fts:%d, want one-to-one", len(canonical), len(mappings), len(content), len(ftsRowIDs))
 	}
@@ -798,6 +850,20 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 		if !ftsRowIDs[documentID] {
 			t.Fatalf("canonical source %s document id %d is absent from FTS", identity, documentID)
 		}
+	}
+}
+
+func assertTaskSearchContractProbe(t *testing.T, content map[int64]string, ftsRowIDs map[int64]bool) {
+	t.Helper()
+	if content[taskSearchContractProbeDocumentID] != taskSearchContractProbeTitle {
+		t.Fatalf(
+			"task-search contract probe content = %q, want %q",
+			content[taskSearchContractProbeDocumentID],
+			taskSearchContractProbeTitle,
+		)
+	}
+	if !ftsRowIDs[taskSearchContractProbeDocumentID] {
+		t.Fatalf("task-search contract probe document id %d is absent from FTS", taskSearchContractProbeDocumentID)
 	}
 }
 
