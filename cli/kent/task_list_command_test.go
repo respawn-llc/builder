@@ -10,6 +10,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -19,6 +20,15 @@ const (
 	taskListCommandBetaID        = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	taskListCommandBangID        = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 )
+
+func taskListCommandWorkflowID(t *testing.T, raw string) runtimeids.WorkflowID {
+	t.Helper()
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse workflow ID %q: %v", raw, err)
+	}
+	return workflowID
+}
 
 type taskListCommandRemote struct {
 	apicontract.WorkflowService
@@ -86,7 +96,7 @@ func TestTaskListUsesNumericOffsetsAndWritesStructuredContinuation(t *testing.T)
 		Tasks: []serverapi.WorkflowTaskListItem{{
 			TaskID:     "task-1",
 			ShortID:    "KENT-1",
-			WorkflowID: "workflow-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			WorkflowID: taskListCommandWorkflowID(t, taskListCommandAlphaID),
 			Title:      "Task",
 			Status: serverapi.WorkflowTaskStatus{
 				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
@@ -377,14 +387,13 @@ func TestTaskListRetryCommandRetainsBothSelectorPolarities(t *testing.T) {
 
 func TestTaskListRetryCommandRendersWorkflowPlaceholderAtSelectorBoundary(t *testing.T) {
 	args := taskListRetryCommandArgsForSelector(
-		taskListCommandContext{ProjectRef: "project-ref", PageSize: 100},
+		taskListCommandContext{ProjectRef: "project-ref", Limit: 100},
 		taskWorkflowRetryWorkflowPlaceholder{},
-		false,
 	)
 	want := []string{
 		config.Command, "task", "list", "--project", "project-ref",
 		"--workflow", "<uuid>",
-		"--page-size", "100",
+		"--limit", "100",
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("retry args = %v, want %v", args, want)

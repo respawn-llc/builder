@@ -837,7 +837,7 @@ func createCurrentNodeAgentWorkflow(t *testing.T, store *workflowstore.Store) ru
 	return createCurrentNodeAgentWorkflowWithCompletionMode(t, store, "")
 }
 
-func createCurrentNodeAgentWorkflowWithCompletionMode(t *testing.T, store *workflowstore.Store, completionMode string) workflow.WorkflowID {
+func createCurrentNodeAgentWorkflowWithCompletionMode(t *testing.T, store *workflowstore.Store, completionMode string) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeWorkflow(t, store, workflow.NodeKindAgent, "coder", "", completionMode)
 }
@@ -857,6 +857,77 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "First."},
 		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Second."},
 	)
+}
+
+func createCurrentNodeFanoutContinuationWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+) (runtimeids.WorkflowID, map[workflow.TransitionBranchKey]workflow.NodeID) {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node fan-out continuation"})
+	if err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get workflow: %v", err)
+	}
+	var startID, doneID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			doneID = workflow.NodeIDOf(node)
+		}
+	}
+	workflowSuffix := created.ID.String()
+	sourceID := workflow.NodeID("node-source-" + workflowSuffix)
+	branchNodeIDs := map[workflow.TransitionBranchKey]workflow.NodeID{
+		"branch_a": workflow.NodeID("node-branch-a-" + workflowSuffix),
+		"branch_b": workflow.NodeID("node-branch-b-" + workflowSuffix),
+	}
+	joinID := workflow.NodeID("node-join-" + workflowSuffix)
+	for _, node := range []workflowstore.NodeRecord{
+		{ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent, DisplayName: "Source", SubagentRole: "coder", PromptTemplate: "Source."},
+		{ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent, DisplayName: "Branch A", SubagentRole: "coder", PromptTemplate: "Branch A."},
+		{ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent, DisplayName: "Branch B", SubagentRole: "coder", PromptTemplate: "Branch B."},
+		{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join"},
+	} {
+		if _, err := store.AddNode(ctx, node); err != nil {
+			t.Fatalf("add node: %v", err)
+		}
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + workflowSuffix)
+	splitGroup := workflow.TransitionGroupID("group-split-" + workflowSuffix)
+	branchAGroup := workflow.TransitionGroupID("group-branch-a-" + workflowSuffix)
+	branchBGroup := workflow.TransitionGroupID("group-branch-b-" + workflowSuffix)
+	doneGroup := workflow.TransitionGroupID("group-done-" + workflowSuffix)
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
+		{ID: branchAGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_a"], TransitionID: "join", DisplayName: "Join"},
+		{ID: branchBGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_b"], TransitionID: "join", DisplayName: "Join"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("add transition group: %v", err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{ID: workflow.EdgeID("edge-start-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source."},
+		{ID: workflow.EdgeID("edge-branch-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"], ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch A."},
+		{ID: workflow.EdgeID("edge-branch-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"], ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch B."},
+		{ID: workflow.EdgeID("edge-join-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-join-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("add edge: %v", err)
+		}
+	}
+	return created.ID, branchNodeIDs
 }
 
 func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) runtimeids.WorkflowID {
@@ -956,7 +1027,7 @@ func createCurrentNodeTwoStepWorkflow(
 	return created.ID
 }
 
-func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath string) runtimeids.WorkflowID {
+func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath, completionMode string) runtimeids.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node runner"})

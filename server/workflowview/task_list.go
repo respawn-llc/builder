@@ -161,24 +161,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	}, nil
 }
 
-func (l *TaskList) resolveScope(ctx context.Context, projectIDValue *string, workflowIDValue *runtimeids.WorkflowID, token *workflowTaskListPageTokenPayload) (string, *runtimeids.WorkflowID, error) {
-	if token != nil {
-		if projectIDValue != nil && *projectIDValue != token.Scope.ProjectID {
-			return "", nil, ErrInvalidPageToken
-		}
-		var tokenWorkflowID *runtimeids.WorkflowID
-		if token.Scope.Narrowed != nil {
-			value := token.Scope.Narrowed.WorkflowID
-			tokenWorkflowID = &value
-		}
-		if workflowIDValue != nil {
-			if tokenWorkflowID == nil || *workflowIDValue != *tokenWorkflowID {
-				return "", nil, ErrInvalidPageToken
-			}
-		}
-		projectIDValue = &token.Scope.ProjectID
-		workflowIDValue = tokenWorkflowID
-	}
+func (l *TaskList) resolveScope(ctx context.Context, projectIDValue *string, workflowIDValue *runtimeids.WorkflowID) (string, *runtimeids.WorkflowID, error) {
 	if projectIDValue != nil && workflowIDValue != nil {
 
 		if _, err := l.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{

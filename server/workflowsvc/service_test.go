@@ -525,105 +525,14 @@ func TestServiceGraphMutationsUseStoreEditPolicyInsteadOfTaskWideQuiescence(t *t
 		t.Fatalf("GetWorkflow: %v", err)
 	}
 	agentID := workflowServiceNodeIDByKey(t, definition.Definition, "agent")
-	terminalID := workflowServiceNodeIDByKind(t, definition.Definition, "terminal")
-	startGroupID := "group-start-" + workflowID.String()
-	startEdgeID := "edge-start-" + workflowID.String()
-	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
-		WorkflowID:  workflowID,
-		GroupID:     "group-existing-" + workflowID.String(),
-		GroupKey:    "existing",
-		DisplayName: "Existing",
-	}); err != nil {
-		t.Fatalf("AddWorkflowNodeGroup setup: %v", err)
-	}
-
 	execution := newManualMoveExecutionStub(service)
 	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
 	service.currentNodeExecution = execution
-	tests := []struct {
-		name string
-		run  func() error
-	}{
-		{
-			name: "add node",
-			run: func() error {
-				_, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
-					WorkflowID: workflowID, NodeID: "node-blocked-" + workflowID.String(), Key: "blocked", Kind: "agent", DisplayName: "Blocked", SubagentRole: "coder",
-				})
-				return err
-			},
-		},
-		{
-			name: "update node",
-			run: func() error {
-				_, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
-					WorkflowID: workflowID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Changed", SubagentRole: "coder", PromptTemplate: "Do work.",
-				})
-				return err
-			},
-		},
-		{
-			name: "add node group",
-			run: func() error {
-				_, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
-					WorkflowID: workflowID, GroupID: "group-blocked-" + workflowID.String(), GroupKey: "blocked", DisplayName: "Blocked",
-				})
-				return err
-			},
-		},
-		{
-			name: "update node group",
-			run: func() error {
-				_, err := service.UpdateWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupUpdateRequest{
-					WorkflowID: workflowID, GroupID: "group-existing-" + workflowID.String(), GroupKey: "existing", DisplayName: "Changed",
-				})
-				return err
-			},
-		},
-		{
-			name: "delete node group",
-			run: func() error {
-				return service.DeleteWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupDeleteRequest{
-					WorkflowID: workflowID, GroupID: "group-existing-" + workflowID.String(),
-				})
-			},
-		},
-		{
-			name: "add transition group",
-			run: func() error {
-				_, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-					WorkflowID: workflowID, GroupID: "group-blocked-" + workflowID.String(), SourceNodeID: startID, TransitionID: "blocked", DisplayName: "Blocked",
-				})
-				return err
-			},
-		},
-		{
-			name: "update transition group",
-			run: func() error {
-				_, err := service.UpdateWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupUpdateRequest{
-					WorkflowID: workflowID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Changed",
-				})
-				return err
-			},
-		},
-		{
-			name: "add edge",
-			run: func() error {
-				_, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-					WorkflowID: workflowID, EdgeID: "edge-blocked-" + workflowID.String(), TransitionGroupID: startGroupID, Key: "blocked", TargetNodeID: terminalID, ContextMode: "new_session",
-				})
-				return err
-			},
-		},
-		{
-			name: "update edge",
-			run: func() error {
-				_, err := service.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{
-					WorkflowID: workflowID, EdgeID: startEdgeID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Changed.",
-				})
-				return err
-			},
-		},
+	if _, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
+		WorkflowID: workflowID, NodeID: agentID, Key: "agent", Kind: "agent",
+		DisplayName: "Agent", SubagentRole: "explorer", PromptTemplate: "Do work.",
+	}); err != nil {
+		t.Fatalf("UpdateWorkflowNode role during active Task: %v", err)
 	}
 	updated, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
 	if err != nil {

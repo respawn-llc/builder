@@ -93,10 +93,16 @@ type MigrationUnfinishedCurrentNodeError struct {
 
 type MigrationWorkflowGraphEdge struct {
 	WorkflowID     string
-	SourceNodeID   string
-	TargetNodeID   string
 	EdgeID         string
+	TransitionKey  string
+	SourceNodeID   string
+	SourceNodeKey  string
+	SourceNodeKind string
+	TargetNodeID   string
+	TargetNodeKey  string
+	TargetNodeKind string
 	PromptTemplate string
+	ParametersJson string
 }
 
 type Project struct {

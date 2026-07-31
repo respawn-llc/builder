@@ -591,7 +591,6 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 }
 
 func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
-	detailJSON := `{"code":"restart","fields":{}}`
 	return &serverapi.WorkflowAttentionItem{
 		ProjectID:   "project-1",
 		Kind:        "interrupted_current_node",

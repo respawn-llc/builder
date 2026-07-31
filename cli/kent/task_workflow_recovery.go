@@ -196,7 +196,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		}
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommandForWorkflowPlaceholder(false),
+			commandContext.retryCommandForWorkflowPlaceholder(),
 			{Kind: taskWorkflowRecoveryCommandLinkSelectedWorkflow, Args: []string{config.Command, "workflow", "link", commandContext.projectRef, failure.workflowID.String()}},
 		}
 	case taskWorkflowRecoveryWorkflowRequiredColumns:
@@ -205,7 +205,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		}
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommandForWorkflowPlaceholder(false),
+			commandContext.retryCommandForWorkflowPlaceholder(),
 		}
 	case taskWorkflowRecoveryAmbiguousWithoutDefault:
 		if commandContext.create == nil || failure.workflowID != nil || selectedWorkflowID != nil {
@@ -213,7 +213,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 		}
 		recovery.Commands = []taskWorkflowRecoveryCommand{
 			listProjectWorkflows,
-			commandContext.retryCommandForWorkflowPlaceholder(false),
+			commandContext.retryCommandForWorkflowPlaceholder(),
 			{Kind: taskWorkflowRecoveryCommandSetDefaultWorkflow, Args: []string{config.Command, "workflow", "default", commandContext.projectRef, "<uuid>"}},
 		}
 	default:
@@ -247,19 +247,19 @@ func taskWorkflowRetrySelectorForWorkflowID(workflowID *runtimeids.WorkflowID) t
 	return taskWorkflowRetryWorkflowID{value: *workflowID}
 }
 
-func (c taskWorkflowRecoveryContext) retryCommandForWorkflowPlaceholder(preservePageToken bool) taskWorkflowRecoveryCommand {
-	return c.retryCommandForWorkflowSelector(taskWorkflowRetryWorkflowPlaceholder{}, preservePageToken)
+func (c taskWorkflowRecoveryContext) retryCommandForWorkflowPlaceholder() taskWorkflowRecoveryCommand {
+	return c.retryCommandForWorkflowSelector(taskWorkflowRetryWorkflowPlaceholder{})
 }
 
-func (c taskWorkflowRecoveryContext) retryCommand(workflowID *runtimeids.WorkflowID, preservePageToken bool) taskWorkflowRecoveryCommand {
-	return c.retryCommandForWorkflowSelector(taskWorkflowRetrySelectorForWorkflowID(workflowID), preservePageToken)
+func (c taskWorkflowRecoveryContext) retryCommand(workflowID *runtimeids.WorkflowID) taskWorkflowRecoveryCommand {
+	return c.retryCommandForWorkflowSelector(taskWorkflowRetrySelectorForWorkflowID(workflowID))
 }
 
-func (c taskWorkflowRecoveryContext) retryCommandForWorkflowSelector(selector taskWorkflowRetrySelector, preservePageToken bool) taskWorkflowRecoveryCommand {
+func (c taskWorkflowRecoveryContext) retryCommandForWorkflowSelector(selector taskWorkflowRetrySelector) taskWorkflowRecoveryCommand {
 	if c.list != nil {
 		return taskWorkflowRecoveryCommand{
 			Kind: taskWorkflowRecoveryCommandRetryTaskList,
-			Args: taskListRetryCommandArgsForSelector(*c.list, selector, preservePageToken),
+			Args: taskListRetryCommandArgsForSelector(*c.list, selector),
 		}
 	}
 	return taskWorkflowRecoveryCommand{
@@ -314,11 +314,11 @@ func taskCreateRetryCommandArgsForSelector(commandContext taskCreateCommandConte
 	return args
 }
 
-func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *runtimeids.WorkflowID, preservePageToken bool) []string {
-	return taskListRetryCommandArgsForSelector(commandContext, taskWorkflowRetrySelectorForWorkflowID(workflowID), preservePageToken)
+func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID *runtimeids.WorkflowID) []string {
+	return taskListRetryCommandArgsForSelector(commandContext, taskWorkflowRetrySelectorForWorkflowID(workflowID))
 }
 
-func taskListRetryCommandArgsForSelector(commandContext taskListCommandContext, selector taskWorkflowRetrySelector, preservePageToken bool) []string {
+func taskListRetryCommandArgsForSelector(commandContext taskListCommandContext, selector taskWorkflowRetrySelector) []string {
 	args := []string{config.Command, "task", "list", "--project", commandContext.ProjectRef}
 	if selector != nil {
 		args = selector.appendCLIArgs(args)

@@ -302,67 +302,6 @@ WHERE workflows.id = COALESCE(sqlc.narg(workflow_id), workflows.id)
       sqlc.narg(project_id) IS NULL
       OR project_link.id IS NOT NULL
   )
-  AND (
-      sqlc.arg(cursor_active) = 0
-      OR (
-          sqlc.narg(project_id) IS NULL
-          AND (
-              MAX(
-                  workflows.updated_at_unix_ms,
-                  COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                  ), workflows.updated_at_unix_ms)
-              ) < sqlc.narg(cursor_activity_at_unix_ms)
-              OR (
-                  MAX(
-                      workflows.updated_at_unix_ms,
-                      COALESCE((
-                          SELECT MAX(task_records.updated_at_unix_ms)
-                          FROM task_records
-                          WHERE task_records.workflow_id = workflows.id
-                      ), workflows.updated_at_unix_ms)
-                  ) = sqlc.narg(cursor_activity_at_unix_ms)
-                  AND workflows.id < sqlc.narg(cursor_workflow_id)
-              )
-          )
-      )
-      OR (
-          sqlc.narg(project_id) IS NOT NULL
-          AND (
-              project_link.is_default < sqlc.narg(cursor_project_default)
-              OR (
-                  project_link.is_default = sqlc.narg(cursor_project_default)
-                  AND (
-                      (
-                          sqlc.narg(cursor_activity_at_unix_ms) IS NOT NULL
-                          AND (
-                              project_latest_task.updated_at_unix_ms IS NULL
-                              OR project_latest_task.updated_at_unix_ms < sqlc.narg(cursor_activity_at_unix_ms)
-                          )
-                      )
-                      OR (
-                          (
-                              project_latest_task.updated_at_unix_ms = sqlc.narg(cursor_activity_at_unix_ms)
-                              OR (
-                                  project_latest_task.updated_at_unix_ms IS NULL
-                                  AND sqlc.narg(cursor_activity_at_unix_ms) IS NULL
-                              )
-                          )
-                          AND (
-                              lower(workflows.name) > sqlc.narg(cursor_project_name)
-                              OR (
-                                  lower(workflows.name) = sqlc.narg(cursor_project_name)
-                                  AND workflows.id > sqlc.narg(cursor_workflow_id)
-                              )
-                          )
-                      )
-                  )
-              )
-          )
-      )
-  )
 ORDER BY
     project_link_default DESC,
     CASE

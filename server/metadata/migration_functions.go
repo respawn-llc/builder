@@ -17,6 +17,7 @@ import (
 )
 
 const migrationCurrentInputValuesFunction = "kent_migration_current_input_values_v1"
+const migrationPriorParametersFunction = "kent_migration_prior_transition_parameters_v1"
 const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
 const migrationWorkflowIDBlobFunction = "kent_migration_workflow_id_blob_v1"
 const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
@@ -304,7 +305,10 @@ func migrationPriorParameterRequirements(currentNodeID string, graph []migration
 }
 
 func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
-	const migrationWorkflowID workflow.WorkflowID = "migration-workflow"
+	migrationWorkflowID, err := runtimeids.ParseWorkflowID("00000000-0000-4000-8000-000000000001")
+	if err != nil {
+		return workflow.Definition{}, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
+	}
 	graphByEdgeID := make(map[string]migrationGraphEdge, len(graph))
 	for _, edge := range graph {
 		edgeID := strings.TrimSpace(edge.EdgeID)
@@ -405,7 +409,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 
 func addMigrationWorkflowNode(
 	nodesByID map[workflow.NodeID]workflow.Node,
-	workflowID workflow.WorkflowID,
+	workflowID runtimeids.WorkflowID,
 	nodeID string,
 	nodeKey string,
 	kind workflow.NodeKind,

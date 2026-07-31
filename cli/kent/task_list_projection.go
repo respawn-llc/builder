@@ -48,6 +48,13 @@ type taskListExpectedScope struct {
 	WorkflowOwner taskListExpectedWorkflowOwner
 }
 
+type taskListExpectedWorkflowOwner uint8
+
+const (
+	taskListExpectedWorkflowFromRequest taskListExpectedWorkflowOwner = iota
+	taskListExpectedWorkflowFromToken
+)
+
 func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope) (taskListProjection, error) {
 	if strings.TrimSpace(expectedScope.ProjectID) == "" || strings.TrimSpace(expectedScope.ProjectID) != expectedScope.ProjectID {
 		return taskListProjection{}, errors.New("task list request scope is missing project_id")

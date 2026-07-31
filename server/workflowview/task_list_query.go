@@ -12,12 +12,8 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-)
-
-const (
-	workflowTaskListPageTokenVersion = 7
-	workflowTaskStatusModelVersion   = 3
 )
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
@@ -37,172 +33,6 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 		}
 	}
 	return false
-}
-
-type workflowTaskListPageTokenPayload struct {
-	Version                     int                                                   `json:"version"`
-	Scope                       workflowTaskListPageTokenScope                        `json:"scope"`
-	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	StatusModelVersion          int                                                   `json:"status_model_version"`
-	Fingerprint                 string                                                `json:"fingerprint"`
-	Cursor                      workflowTaskListCursor                                `json:"cursor"`
-}
-
-type workflowTaskListPageTokenScope struct {
-	ProjectID   string                                          `json:"project_id"`
-	ProjectWide *workflowTaskListProjectWidePageTokenInvariants `json:"project_wide,omitempty"`
-	Narrowed    *workflowTaskListNarrowedPageTokenInvariants    `json:"narrowed,omitempty"`
-}
-
-type workflowTaskListProjectWidePageTokenInvariants struct{}
-
-type workflowTaskListNarrowedPageTokenInvariants struct {
-	WorkflowID          runtimeids.WorkflowID `json:"workflow_id"`
-	WorkflowVersion     int64                 `json:"workflow_version"`
-	ColumnStructureHash string                `json:"column_structure_hash"`
-}
-
-type workflowTaskListCursor struct {
-	TaskID            string `json:"task_id"`
-	CreatedAtUnixMs   int64  `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs   int64  `json:"updated_at_unix_ms"`
-	PrimaryStatusRank int    `json:"primary_status_rank"`
-	ColumnRank        *int   `json:"column_rank,omitempty"`
-	TitleSort         string `json:"title_sort"`
-}
-
-func parseWorkflowTaskListPageToken(raw string) (workflowTaskListPageTokenPayload, bool, error) {
-	if strings.TrimSpace(raw) == "" {
-		return workflowTaskListPageTokenPayload{}, false, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	var payload workflowTaskListPageTokenPayload
-	if err := json.Unmarshal(decoded, &payload); err != nil {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	if payload.Version != workflowTaskListPageTokenVersion ||
-		strings.TrimSpace(payload.Scope.ProjectID) == "" ||
-		strings.TrimSpace(payload.Scope.ProjectID) != payload.Scope.ProjectID ||
-		(payload.Scope.ProjectWide == nil) == (payload.Scope.Narrowed == nil) ||
-		!workflowTaskListContinuationCardinalityValid(payload.MatchingWorkflowCardinality) ||
-		payload.StatusModelVersion != workflowTaskStatusModelVersion ||
-		strings.TrimSpace(payload.Cursor.TaskID) == "" ||
-		strings.TrimSpace(payload.Fingerprint) == "" {
-		return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-	}
-	if narrowed := payload.Scope.Narrowed; narrowed != nil {
-		if narrowed.WorkflowID.IsZero() ||
-			narrowed.WorkflowVersion < 1 ||
-			strings.TrimSpace(narrowed.ColumnStructureHash) == "" ||
-			strings.TrimSpace(narrowed.ColumnStructureHash) != narrowed.ColumnStructureHash {
-			return workflowTaskListPageTokenPayload{}, false, ErrInvalidPageToken
-		}
-	}
-	return payload, true, nil
-}
-
-func workflowTaskListContinuationCardinalityValid(cardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality) bool {
-	return cardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne ||
-		cardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
-}
-
-func workflowTaskListPageToken(payload workflowTaskListPageTokenPayload) (string, error) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list page token: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-type workflowTaskListProjectWideFingerprintInvariants struct{}
-
-type workflowTaskListNarrowedFingerprintInvariants struct {
-	ColumnStructureHash string `json:"column_structure_hash"`
-}
-
-type workflowTaskListFingerprintScope struct {
-	ProjectWide *workflowTaskListProjectWideFingerprintInvariants `json:"project_wide,omitempty"`
-	Narrowed    *workflowTaskListNarrowedFingerprintInvariants    `json:"narrowed,omitempty"`
-}
-
-func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, labelFilter workflowTaskLabelFilterFacts, sortSelectors []serverapi.WorkflowTaskListSort, scope workflowTaskListFingerprintScope) (string, error) {
-	if (scope.ProjectWide == nil) == (scope.Narrowed == nil) {
-		return "", errors.New("task list fingerprint requires exactly one scope mode")
-	}
-	if scope.Narrowed != nil &&
-		(strings.TrimSpace(scope.Narrowed.ColumnStructureHash) == "" ||
-			strings.TrimSpace(scope.Narrowed.ColumnStructureHash) != scope.Narrowed.ColumnStructureHash) {
-		return "", errors.New("task list narrowed fingerprint requires column structure hash")
-	}
-	statusKinds := make([]string, 0, len(req.StatusKinds))
-	for _, kind := range req.StatusKinds {
-		statusKinds = append(statusKinds, string(kind))
-	}
-	attentionKinds := make([]string, 0, len(req.AttentionKinds))
-	for _, kind := range req.AttentionKinds {
-		attentionKinds = append(attentionKinds, string(kind))
-	}
-	payload := struct {
-		ColumnKeys         []string                         `json:"column_keys"`
-		StatusKinds        []string                         `json:"status_kinds"`
-		AttentionKinds     []string                         `json:"attention_kinds"`
-		LabelFilter        workflowTaskLabelFilterFacts     `json:"label_filter"`
-		Sort               []serverapi.WorkflowTaskListSort `json:"sort"`
-		Scope              workflowTaskListFingerprintScope `json:"scope"`
-		StatusModelVersion int                              `json:"status_model_version"`
-	}{
-		ColumnKeys:         dedupeSortedStrings(req.ColumnKeys),
-		StatusKinds:        dedupeSortedStrings(statusKinds),
-		AttentionKinds:     dedupeSortedStrings(attentionKinds),
-		LabelFilter:        labelFilter,
-		Sort:               sortSelectors,
-		Scope:              scope,
-		StatusModelVersion: workflowTaskStatusModelVersion,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list fingerprint: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
-}
-
-func workflowTaskListColumnStructureHash(def serverapi.WorkflowDefinition, columns []serverapi.WorkflowBoardColumn) (string, error) {
-	columnFacts := make([]string, 0, len(columns))
-	for _, column := range columns {
-		columnFacts = append(columnFacts, strings.Join([]string{column.Node.NodeID, column.Node.Key, column.Node.Kind, strconv.Itoa(column.SortOrder), strconv.FormatBool(column.IsBacklog), strconv.FormatBool(column.IsDone)}, "\x00"))
-	}
-	payload := struct {
-		Columns            []string `json:"columns"`
-		StatusModelVersion int      `json:"status_model_version"`
-	}{
-		Columns:            columnFacts,
-		StatusModelVersion: workflowTaskStatusModelVersion,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal task list column structure: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
-}
-
-func dedupeSortedStrings(values []string) []string {
-	if len(values) == 0 {
-		return []string{}
-	}
-	sorted := append([]string(nil), values...)
-	sort.Strings(sorted)
-	out := make([]string, 0, len(sorted))
-	for _, value := range sorted {
-		if len(out) == 0 || out[len(out)-1] != value {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 type workflowTaskListQueryRequest struct {
@@ -364,7 +194,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 			item: serverapi.WorkflowTaskListItem{
 				TaskID:          row.ID.String,
 				ShortID:         row.ShortID.String,
-				WorkflowID:      row.WorkflowID.String,
+				WorkflowID:      *row.WorkflowID,
 				WorkflowName:    workflowName,
 				Title:           row.Title.String,
 				CreatedAtUnixMs: row.CreatedAtUnixMs.Int64,

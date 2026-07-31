@@ -93,6 +93,7 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 	started := fixture.startTask(t, "List task")
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
+	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
@@ -138,6 +139,7 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 	sort.Strings(want)
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
+	limit := 1
 	request := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
@@ -254,6 +256,7 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 	fixture.setTaskUpdatedAt(t, backlog.ID, 2_000)
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
+	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
@@ -375,6 +378,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
+	doneLimit := 20
 	doneOnly, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
@@ -531,6 +535,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
+	listLimit := 20
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,

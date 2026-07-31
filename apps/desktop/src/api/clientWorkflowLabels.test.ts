@@ -201,7 +201,7 @@ describe("ApiClient workflow labels", () => {
         projectID: "project-1",
         workflowID: "workflow-11111111-1111-4111-8111-111111111111",
         labelFilter: { kind: "none" },
-        pageSize: 25,
+        limit: 25,
       }),
     ).rejects.toThrow();
 

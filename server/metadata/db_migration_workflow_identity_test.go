@@ -160,8 +160,8 @@ func TestWorkflowIdentityMigrationRejectsMalformedIdentityWithoutMutation(t *tes
 	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil {
 		t.Fatalf("read migration version after failure: %v", err)
 	}
-	if version != 60 {
-		t.Fatalf("migration version after failure = %d, want 60", version)
+	if version != 61 {
+		t.Fatalf("migration version after failure = %d, want 61", version)
 	}
 }
 

@@ -290,7 +290,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("legacy prior node placeholder is unsupported even when the node is guaranteed prior", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Nodes.implementation.summary}}."
 
 		result := validateForTask(def)

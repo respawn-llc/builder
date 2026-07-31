@@ -236,24 +236,30 @@ SELECT
 FROM workflow_nodes;
 
 UPDATE task_pending_approvals
-SET transition_snapshot_json = json_set(
-    transition_snapshot_json,
-    '$.workflow_id',
-    kent_migration_workflow_id_text_v1(
-        json_extract(transition_snapshot_json, '$.workflow_id'),
-        'task_pending_approvals.transition_snapshot_json row=' || id
+SET transition_snapshot_json = CASE
+    WHEN json_type(transition_snapshot_json, '$.workflow_id') IS NULL THEN transition_snapshot_json
+    ELSE json_set(
+        transition_snapshot_json,
+        '$.workflow_id',
+        kent_migration_workflow_id_text_v1(
+            json_extract(transition_snapshot_json, '$.workflow_id'),
+            'task_pending_approvals.transition_snapshot_json row=' || id
+        )
     )
-);
+END;
 
 UPDATE task_pending_approval_branches
-SET effective_edge_configuration_json = json_set(
-    effective_edge_configuration_json,
-    '$.workflow_id',
-    kent_migration_workflow_id_text_v1(
-        json_extract(effective_edge_configuration_json, '$.workflow_id'),
-        'task_pending_approval_branches.effective_edge_configuration_json row=' || approval_id || ':' || transition_branch_key
+SET effective_edge_configuration_json = CASE
+    WHEN json_type(effective_edge_configuration_json, '$.workflow_id') IS NULL THEN effective_edge_configuration_json
+    ELSE json_set(
+        effective_edge_configuration_json,
+        '$.workflow_id',
+        kent_migration_workflow_id_text_v1(
+            json_extract(effective_edge_configuration_json, '$.workflow_id'),
+            'task_pending_approval_branches.effective_edge_configuration_json row=' || approval_id || ':' || transition_branch_key
+        )
     )
-);
+END;
 
 DROP TABLE workflow_nodes;
 DROP TABLE workflow_node_groups;

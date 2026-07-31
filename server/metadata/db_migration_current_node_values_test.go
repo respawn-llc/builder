@@ -212,9 +212,9 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, subagent_role,
     prompt_template, input_fields_json, output_fields_json
 ) VALUES
-    ('node-review', 'workflow-1', 'review', 'agent', 'Review', 'coder',
+    ('node-review', 'workflow-550e8400-e29b-41d4-a716-446655440001', 'review', 'agent', 'Review', 'coder',
      'Review.', '[]', '[]'),
-    ('node-audit', 'workflow-1', 'audit', 'agent', 'Audit', 'coder',
+    ('node-audit', 'workflow-550e8400-e29b-41d4-a716-446655440001', 'audit', 'agent', 'Audit', 'coder',
      'Audit.', '[]', '[]');
 
 UPDATE workflow_transition_groups
@@ -580,7 +580,7 @@ INSERT INTO workflow_nodes (
     prompt_template, input_fields_json, output_fields_json
 ) VALUES (
     'node-plan-invalid-values',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'plan',
     'agent',
     'Plan',

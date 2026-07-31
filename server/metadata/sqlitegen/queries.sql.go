@@ -5947,15 +5947,11 @@ OFFSET ?4
 `
 
 type ListWorkflowRecordsPageParams struct {
-	ProjectID              sql.NullString
-	WorkflowID             *runtimeids.WorkflowID
-	SearchQuery            interface{}
-	CursorActive           interface{}
-	CursorActivityAtUnixMs sql.NullInt64
-	CursorWorkflowID       *runtimeids.WorkflowID
-	CursorProjectDefault   sql.NullInt64
-	CursorProjectName      sql.NullString
-	PageLimit              int64
+	ProjectID   sql.NullString
+	WorkflowID  *runtimeids.WorkflowID
+	SearchQuery interface{}
+	PageOffset  int64
+	PageLimit   int64
 }
 
 type ListWorkflowRecordsPageRow struct {
@@ -6494,52 +6490,46 @@ ORDER BY
 `
 
 type ListWorkflowTaskListRowsParams struct {
-	ProjectID               string
-	WorkflowID              *runtimeids.WorkflowID
-	VisibleColumnsJson      sql.NullString
-	ColumnFilterSet         int64
-	ColumnKeysJson          sql.NullString
-	StatusFilterSet         int64
-	StatusKindsJson         string
-	AttentionFilterSet      int64
-	AttentionKindsJson      string
-	LabelFilterKind         string
-	LabelFilterMode         sql.NullString
-	LabelIdsJson            string
-	CursorSet               int64
-	CursorCreatedAtUnixMs   int64
-	CursorUpdatedAtUnixMs   int64
-	CursorPrimaryStatusRank int64
-	CursorColumnRank        sql.NullInt64
-	CursorTitleSort         string
-	CursorTaskID            string
-	Sort1Field              string
-	Sort1Desc               int64
-	Sort2Field              string
-	Sort2Desc               int64
-	Sort3Field              string
-	Sort3Desc               int64
-	Sort4Field              string
-	Sort4Desc               int64
-	Sort5Field              string
-	Sort5Desc               int64
-	LiveTaskStatesJson      string
-	LimitRows               int64
-	ExcludedLabelIdsJson    interface{}
+	ProjectID            string
+	WorkflowID           *runtimeids.WorkflowID
+	VisibleColumnsJson   sql.NullString
+	ColumnFilterSet      int64
+	ColumnKeysJson       sql.NullString
+	StatusFilterSet      int64
+	StatusKindsJson      string
+	AttentionFilterSet   int64
+	AttentionKindsJson   string
+	LabelFilterKind      string
+	LabelFilterMode      sql.NullString
+	LabelIdsJson         string
+	OffsetRows           int64
+	Sort1Field           string
+	Sort1Desc            int64
+	Sort2Field           string
+	Sort2Desc            int64
+	Sort3Field           string
+	Sort3Desc            int64
+	Sort4Field           string
+	Sort4Desc            int64
+	Sort5Field           string
+	Sort5Desc            int64
+	LiveTaskStatesJson   string
+	LimitRows            int64
+	ExcludedLabelIdsJson interface{}
 }
 
 type ListWorkflowTaskListRowsRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  runtimeids.WorkflowID
-	WorkflowName                string
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
+	ID                          sql.NullString
+	ProjectID                   sql.NullString
+	ProjectWorkflowLinkID       sql.NullString
+	WorkflowID                  *runtimeids.WorkflowID
+	WorkflowName                sql.NullString
+	WorkflowRevisionSeen        sql.NullInt64
+	TaskSeq                     sql.NullInt64
+	ShortID                     sql.NullString
+	Title                       sql.NullString
+	Body                        sql.NullString
+	SourceUrl                   sql.NullString
 	SourceWorkspaceID           sql.NullString
 	ManagedWorktreeID           sql.NullString
 	ExecutionTargetMode         sql.NullString

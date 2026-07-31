@@ -257,6 +257,10 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.WorkflowListResponse{}, err
+	}
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID

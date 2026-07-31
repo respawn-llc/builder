@@ -18,8 +18,8 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
 	workflowID := fs.String("workflow", "", "workflow selector `<uuid>`")
-	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task list response")
+	offset := fs.Int("offset", 0, "zero-based task offset")
+	limit := fs.Int("limit", taskListDefaultLimit, "maximum tasks to print")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
 	var attentionFlags repeatedStringFlag
@@ -137,8 +137,9 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		expectedScope := taskListExpectedScope{
-			ProjectID:  projectID,
-			WorkflowID: selectedWorkflowID,
+			ProjectID:     projectID,
+			WorkflowID:    selectedWorkflowID,
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})

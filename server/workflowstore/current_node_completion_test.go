@@ -221,7 +221,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		source := nodeByKey(t, def, "plan")
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		groupID := workflow.TransitionGroupID("group-alternate-" + string(workflowID))
+		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -230,7 +230,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -747,7 +747,7 @@ type reworkContextCompletionFixture struct {
 	store      *Store
 	binding    metadata.Binding
 	cfg        config.App
-	workflowID workflow.WorkflowID
+	workflowID runtimeids.WorkflowID
 	review     workflow.CurrentNode
 	audit      workflow.CurrentNode
 }

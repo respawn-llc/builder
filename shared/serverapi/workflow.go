@@ -379,8 +379,8 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowListRequest struct {
-	PageSize   int                    `json:"page_size,omitempty"`
-	PageToken  string                 `json:"page_token,omitempty"`
+	Offset     *int                   `json:"offset,omitempty"`
+	Limit      *int                   `json:"limit,omitempty"`
 	Query      string                 `json:"query,omitempty"`
 	ProjectID  *string                `json:"project_id,omitempty"`
 	WorkflowID *runtimeids.WorkflowID `json:"workflow_id,omitempty"`
@@ -2816,14 +2816,8 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 	if err := validateOptionalWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if r.PageSize > WorkflowTaskListMaxPageSize {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowTaskListMaxPageSize))
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
+		return err
 	}
 	return nil
 }

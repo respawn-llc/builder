@@ -976,6 +976,7 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		if *summary {
+			limit := 1
 			persistedWorkflowID := selector
 			response, listErr := listWorkflowPage(context.Background(), remote, serverapi.WorkflowListRequest{
 				Limit:      &limit,
