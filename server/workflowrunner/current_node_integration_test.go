@@ -49,6 +49,34 @@ type currentNodeRunnerFixture struct {
 	clientErr      error
 }
 
+type currentNodeRunnerStepLifecycle struct {
+	runtimes *registry.RuntimeRegistry
+}
+
+func (s currentNodeRunnerStepLifecycle) StepBegan(
+	ctx context.Context,
+	resource sessionruntime.AgentResourceDescriptor,
+	_ sessionruntime.ExecutionScope,
+	snapshot agentruntime.StepLifecycleSnapshot,
+) error {
+	return runtimewire.NewStepLifecycleSink(
+		resource.Ref.SessionID().String(),
+		s.runtimes,
+	).StepBegan(ctx, snapshot)
+}
+
+func (s currentNodeRunnerStepLifecycle) StepEnded(
+	ctx context.Context,
+	resource sessionruntime.AgentResourceDescriptor,
+	_ sessionruntime.ExecutionScope,
+	snapshot agentruntime.StepLifecycleSnapshot,
+) error {
+	return runtimewire.NewStepLifecycleSink(
+		resource.Ref.SessionID().String(),
+		s.runtimes,
+	).StepEnded(ctx, snapshot)
+}
+
 type currentNodeStartContextStore struct {
 	RuntimeStore
 	transform func(workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext
@@ -124,8 +152,12 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			controller.ExecutionFinalized(scope)
 		}),
-		PromptFeed:        fixture.runtimes,
+		PromptFeed: fixture.runtimes,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event agentruntime.Event) {
+			fixture.runtimes.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		},
 		ResourceLifecycle: fixture.runtimes,
+		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
 	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {
@@ -705,6 +737,15 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("resume task: %v", err)
 	}
+	eventCtx, cancelEvent := context.WithTimeout(context.Background(), currentNodeRunnerWait)
+	event, err := subscription.Next(eventCtx)
+	cancelEvent()
+	if err != nil {
+		t.Fatalf("attached transcript subscription did not receive resumed runtime event: %v", err)
+	}
+	if event.Sequence <= 1 {
+		t.Fatalf("resumed runtime event sequence = %d, want post-hydration delivery", event.Sequence)
+	}
 
 	requests := f.waitForModelRequests(t, 2)
 	requireToolCompletionRequests(t, requests)
@@ -735,11 +776,6 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		return nil
 	}); err != nil {
 		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
-	}
-	eventCtx, cancelEvent := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelEvent()
-	if _, err := subscription.Next(eventCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("attached transcript subscription closed on Resume: %v", err)
 	}
 }
 
