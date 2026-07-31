@@ -5923,7 +5923,7 @@ LEFT JOIN tasks project_latest_task
         ORDER BY latest_task.updated_at_unix_ms DESC, latest_task.id DESC
         LIMIT 1
     )
-WHERE (?2 IS NULL OR workflows.id = ?2)
+WHERE workflows.id = COALESCE(?2, workflows.id)
   AND (
       ?3 = ''
       OR lower(workflows.name) LIKE '%' || lower(?3) || '%'
@@ -5948,7 +5948,7 @@ OFFSET ?4
 
 type ListWorkflowRecordsPageParams struct {
 	ProjectID              sql.NullString
-	WorkflowID             interface{}
+	WorkflowID             *runtimeids.WorkflowID
 	SearchQuery            interface{}
 	CursorActive           interface{}
 	CursorActivityAtUnixMs sql.NullInt64

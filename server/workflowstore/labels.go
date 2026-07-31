@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -28,7 +29,7 @@ type TaskLabelUpdateRequest struct {
 
 type TaskLabelScope struct {
 	ProjectID  string
-	WorkflowID workflow.WorkflowID
+	WorkflowID runtimeids.WorkflowID
 }
 
 func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawName string) (ProjectLabelRecord, error) {

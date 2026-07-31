@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
@@ -107,7 +108,7 @@ const (
 type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
-	WorkflowID        WorkflowID
+	WorkflowID        runtimeids.WorkflowID
 	NodeID            NodeID
 	TransitionGroupID TransitionGroupID
 	EdgeID            EdgeID

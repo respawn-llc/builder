@@ -24,3 +24,8 @@ sql:
               import: "core/shared/runtimeids"
               type: "WorkflowID"
               pointer: true
+          - column: "project_default_workflow_identity.workflow_id"
+            go_type:
+              import: "core/shared/runtimeids"
+              type: "WorkflowID"
+              pointer: true

@@ -25,7 +25,7 @@ type Store struct {
 	roleResolver workflow.RoleResolver
 	now          func() time.Time
 	approvalGate chan struct{}
-	graphSaves   *requestmemo.MutationLaneRegistry[workflow.WorkflowID]
+	graphSaves   *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
 	eventMu      sync.RWMutex
 	eventSink    WorkflowEventPublisher
 }
@@ -56,7 +56,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		queries:      metadataStore.Queries(),
 		now:          func() time.Time { return time.Now().UTC() },
 		approvalGate: make(chan struct{}, 1),
-		graphSaves:   requestmemo.NewMutationLaneRegistry[workflow.WorkflowID](),
+		graphSaves:   requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
 		eventSink:    noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {
@@ -65,7 +65,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 	return store, nil
 }
 
-func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID workflow.WorkflowID) ([]workflow.TaskID, error) {
+func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID runtimeids.WorkflowID) ([]workflow.TaskID, error) {
 	if workflowID.IsZero() {
 		return nil, errors.New("workflow id is required")
 	}
@@ -84,7 +84,7 @@ func (s *Store) ListWorkflowTaskIDs(ctx context.Context, workflowID workflow.Wor
 	return taskIDs, nil
 }
 
-func (s *Store) incrementWorkflowVersion(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (int64, error) {
+func (s *Store) incrementWorkflowVersion(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (int64, error) {
 	revision, err := q.IncrementWorkflowVersion(ctx, sqlitegen.IncrementWorkflowVersionParams{ID: workflowID, UpdatedAtUnixMs: s.now().UnixMilli()})
 	if err != nil {
 		return 0, fmt.Errorf("increment workflow version: %w", err)
@@ -92,7 +92,7 @@ func (s *Store) incrementWorkflowVersion(ctx context.Context, q *sqlitegen.Queri
 	return revision, nil
 }
 
-func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID workflow.WorkflowID, nextGraph func(preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error), apply func(context.Context, *sqlitegen.Queries, *sql.Tx) error) (int64, error) {
+func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID runtimeids.WorkflowID, nextGraph func(preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error), apply func(context.Context, *sqlitegen.Queries, *sql.Tx) error) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -124,7 +124,7 @@ func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID workfl
 }
 
 type WorkflowRecord struct {
-	ID                    workflow.WorkflowID
+	ID                    runtimeids.WorkflowID
 	Name                  string
 	Description           string
 	Version               int64
@@ -138,7 +138,7 @@ type WorkflowListProjectLink struct {
 
 type NodeRecord struct {
 	ID                 workflow.NodeID
-	WorkflowID         workflow.WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	Key                workflow.ModelKey
 	Kind               workflow.NodeKind
 	DisplayName        string
@@ -183,7 +183,7 @@ func workflowNodeFromRecord(node NodeRecord) (workflow.Node, error) {
 
 type NodeGroupRecord struct {
 	ID          string
-	WorkflowID  workflow.WorkflowID
+	WorkflowID  runtimeids.WorkflowID
 	Key         workflow.ModelKey
 	DisplayName string
 	SortOrder   int64
@@ -203,7 +203,7 @@ func (noopWorkflowEventPublisher) PublishWorkflowEvent(context.Context, Workflow
 
 type TransitionGroupRecord struct {
 	ID           workflow.TransitionGroupID
-	WorkflowID   workflow.WorkflowID
+	WorkflowID   runtimeids.WorkflowID
 	SourceNodeID workflow.NodeID
 	TransitionID workflow.TransitionID
 	DisplayName  string
@@ -213,7 +213,7 @@ type TransitionGroupRecord struct {
 
 type EdgeRecord struct {
 	ID                 workflow.EdgeID
-	WorkflowID         workflow.WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
@@ -230,14 +230,14 @@ type EdgeRecord struct {
 type ProjectWorkflowLinkRecord struct {
 	ID         string
 	ProjectID  string
-	WorkflowID workflow.WorkflowID
+	WorkflowID runtimeids.WorkflowID
 	IsDefault  bool
 }
 
 type ProjectWorkflowUnlinkResult struct {
 	LinkID     string
 	ProjectID  string
-	WorkflowID workflow.WorkflowID
+	WorkflowID runtimeids.WorkflowID
 	Unlinked   bool
 	Blockers   []ProjectWorkflowUnlinkBlocker
 }
@@ -258,7 +258,7 @@ type ProjectWorkflowUnlinkTaskReference struct {
 type TaskRecord struct {
 	ID                workflow.TaskID
 	ProjectID         string
-	WorkflowID        workflow.WorkflowID
+	WorkflowID        runtimeids.WorkflowID
 	LinkID            string
 	ShortID           string
 	Title             string
@@ -338,7 +338,7 @@ type ListWorkflowsRequest struct {
 	Limit      int
 	Query      string
 	ProjectID  *string
-	WorkflowID *workflow.WorkflowID
+	WorkflowID *runtimeids.WorkflowID
 }
 
 type ListWorkflowsResult struct {
@@ -451,7 +451,7 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	return WorkflowRecord{ID: workflowID, Name: name, Description: description, Version: 1, ExecutionTargetPolicy: policy}, nil
 }
 
-func (s *Store) UpdateWorkflowInfo(ctx context.Context, workflowID workflow.WorkflowID, name string, description string) error {
+func (s *Store) UpdateWorkflowInfo(ctx context.Context, workflowID runtimeids.WorkflowID, name string, description string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ErrWorkflowNameRequired
@@ -476,7 +476,7 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	rows, err := s.queries.ListWorkflowRecordsPage(ctx, sqlitegen.ListWorkflowRecordsPageParams{
 		PageLimit:              int64(pageSize + 1),
 		ProjectID:              nullableStringPointer(projectID),
-		WorkflowID:             nullableWorkflowFilter(workflowID),
+		WorkflowID:             workflowID,
 		SearchQuery:            query,
 		CursorActive:           cursorActive,
 		CursorActivityAtUnixMs: cursorActivityAtUnixMs,
@@ -521,7 +521,7 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	return ListWorkflowsResult{Workflows: out, ProjectID: responseProjectID, NextOffset: nextOffset}, nil
 }
 
-func validateWorkflowListScopes(projectID *string, workflowID *workflow.WorkflowID) error {
+func validateWorkflowListScopes(projectID *string, workflowID *runtimeids.WorkflowID) error {
 	if projectID != nil &&
 		(strings.TrimSpace(*projectID) == "" || strings.TrimSpace(*projectID) != *projectID) {
 		return errors.New("workflow list project scope must be non-blank and unpadded")
@@ -679,7 +679,7 @@ func (s *Store) UpdateNodeGroup(ctx context.Context, group NodeGroupRecord) (Nod
 	return group, revision, nil
 }
 
-func (s *Store) DeleteNodeGroup(ctx context.Context, workflowID workflow.WorkflowID, groupID string) (int64, error) {
+func (s *Store) DeleteNodeGroup(ctx context.Context, workflowID runtimeids.WorkflowID, groupID string) (int64, error) {
 	if workflowID.IsZero() {
 		return 0, errors.New("workflow id is required")
 	}
@@ -750,7 +750,7 @@ func cloneWorkflowEventID(id *string) *string {
 	return &value
 }
 
-func cloneWorkflowEventWorkflowID(id *workflow.WorkflowID) *workflow.WorkflowID {
+func cloneWorkflowEventWorkflowID(id *runtimeids.WorkflowID) *runtimeids.WorkflowID {
 	if id == nil {
 		return nil
 	}
@@ -924,11 +924,11 @@ func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
 	return tx.Commit()
 }
 
-func (s *Store) GetDefinition(ctx context.Context, workflowID workflow.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
+func (s *Store) GetDefinition(ctx context.Context, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
 	return workflowDefinitionFromQueries(ctx, s.queries, workflowID)
 }
 
-func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
+func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
 	row, err := q.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
@@ -1190,21 +1190,14 @@ func sqliteLowerASCII(value string) string {
 	return string(bytes)
 }
 
-func optionalWorkflowID(value workflow.WorkflowID) *workflow.WorkflowID {
+func optionalWorkflowID(value runtimeids.WorkflowID) *runtimeids.WorkflowID {
 	if value.IsZero() {
 		return nil
 	}
 	return &value
 }
 
-func nullableWorkflowFilter(value *workflow.WorkflowID) interface{} {
-	if value == nil {
-		return nil
-	}
-	return *value
-}
-
-func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, groupID string, groupKey string) (string, error) {
+func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, groupID string, groupKey string) (string, error) {
 	trimmedGroupID := strings.TrimSpace(groupID)
 	if trimmedGroupID != "" {
 		row, err := q.GetWorkflowNodeGroupByID(ctx, trimmedGroupID)
@@ -1233,7 +1226,7 @@ func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workf
 	return row.ID, nil
 }
 
-func ensureWorkflowNodeID(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, nodeID workflow.NodeID) error {
+func ensureWorkflowNodeID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, nodeID workflow.NodeID) error {
 	trimmedNodeID := strings.TrimSpace(string(nodeID))
 	if trimmedNodeID == "" {
 		return errors.New("workflow node id is required")
@@ -1251,7 +1244,7 @@ func ensureWorkflowNodeID(ctx context.Context, q *sqlitegen.Queries, workflowID 
 	return nil
 }
 
-func ensureWorkflowTransitionGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, groupID workflow.TransitionGroupID) error {
+func ensureWorkflowTransitionGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, groupID workflow.TransitionGroupID) error {
 	trimmedGroupID := strings.TrimSpace(string(groupID))
 	if trimmedGroupID == "" {
 		return errors.New("workflow transition group id is required")

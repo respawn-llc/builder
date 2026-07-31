@@ -252,7 +252,7 @@ func coreWorkflowValidationDefinition(role string) workflow.Definition {
 	}
 }
 
-func coreWorkflowValidationWorkflowID() workflow.WorkflowID {
+func coreWorkflowValidationWorkflowID() runtimeids.WorkflowID {
 	workflowID, err := runtimeids.ParseWorkflowID("0190f1aa-0000-4000-8000-000000000001")
 	if err != nil {
 		panic(err)
@@ -260,7 +260,7 @@ func coreWorkflowValidationWorkflowID() workflow.WorkflowID {
 	return workflowID
 }
 
-func coreWorkflowNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
+func coreWorkflowNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
 	node, err := workflow.NewNode(workflow.NodeIdentity{
 		WorkflowID:  workflowID,
 		ID:          id,

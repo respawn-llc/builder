@@ -84,10 +84,6 @@ func migrationWorkflowIDArgument(args []driver.Value) (uuid.UUID, error) {
 	if len(args) != 2 {
 		return uuid.Nil, fmt.Errorf("workflow ID migration function requires 2 arguments")
 	}
-	raw, err := migrationStringArgument(args[0], "workflow ID")
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("workflow ID migration failure: %w", err)
-	}
 	location, err := migrationStringArgument(args[1], "workflow identity location")
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("workflow ID migration failure: %w", err)
@@ -95,6 +91,13 @@ func migrationWorkflowIDArgument(args []driver.Value) (uuid.UUID, error) {
 	location = strings.TrimSpace(location)
 	if location == "" {
 		return uuid.Nil, errors.New("workflow ID migration failure: workflow identity location is required")
+	}
+	raw, err := migrationStringArgument(args[0], "workflow ID")
+	if err != nil {
+		return uuid.Nil, &workflowIdentityMigrationDiagnostic{
+			Location: location,
+			Cause:    err,
+		}
 	}
 	return parseMigrationWorkflowID(raw, location)
 }

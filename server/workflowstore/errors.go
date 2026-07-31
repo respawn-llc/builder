@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -21,7 +22,7 @@ const (
 type TaskWorkflowSelectionError struct {
 	Reason     TaskWorkflowSelectionReason
 	ProjectID  string
-	WorkflowID *workflow.WorkflowID
+	WorkflowID *runtimeids.WorkflowID
 }
 
 func (e TaskWorkflowSelectionError) Error() string {

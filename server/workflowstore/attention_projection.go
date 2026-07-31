@@ -170,7 +170,7 @@ func taskApprovalAttentionResolution(ctx context.Context, q *sqlitegen.Queries, 
 	return resolution, nil
 }
 
-func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (TaskAttentionResolution, error) {
+func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (TaskAttentionResolution, error) {
 	taskIDs, err := q.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
 		return TaskAttentionResolution{}, err

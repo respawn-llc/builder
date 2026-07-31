@@ -15,7 +15,7 @@ type ExecutionGeneration uint64
 
 type WorkflowExecutionRef struct {
 	ProjectID   string
-	WorkflowID  workflow.WorkflowID
+	WorkflowID  runtimeids.WorkflowID
 	CurrentNode workflow.CurrentNodeReference
 }
 

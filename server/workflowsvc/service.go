@@ -203,7 +203,7 @@ func (s *Service) publishWorkflowEvent(ctx context.Context, event workflowstore.
 	}
 }
 
-func (s *Service) publishProjectWorkflowEvent(ctx context.Context, projectID string, workflowID workflow.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+func (s *Service) publishProjectWorkflowEvent(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
 	s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
 		ProjectID:       &projectID,
 		WorkflowID:      &workflowID,
@@ -214,7 +214,7 @@ func (s *Service) publishProjectWorkflowEvent(ctx context.Context, projectID str
 	})
 }
 
-func (s *Service) publishGlobalWorkflowEvent(ctx context.Context, workflowID workflow.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+func (s *Service) publishGlobalWorkflowEvent(ctx context.Context, workflowID runtimeids.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
 	s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
 		WorkflowID:      &workflowID,
 		Resource:        resource,
@@ -224,7 +224,7 @@ func (s *Service) publishGlobalWorkflowEvent(ctx context.Context, workflowID wor
 	})
 }
 
-func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID workflow.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID runtimeids.WorkflowID, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
 	s.publishGlobalWorkflowEvent(ctx, workflowID, resource, action, primaryEntityID, relatedIDs...)
 	links, err := s.store.ListWorkflowProjectLinks(ctx, workflowID)
 	if err != nil {
@@ -257,11 +257,7 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
-	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
-	if err != nil {
-		return serverapi.WorkflowListResponse{}, err
-	}
-	var workflowID *workflow.WorkflowID
+	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID
 	}
@@ -501,7 +497,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	})
 }
 
-func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID workflow.WorkflowID) error {
+func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID runtimeids.WorkflowID) error {
 	if s == nil || s.currentNodeExecution == nil {
 		return errors.New("current node workflow execution is required")
 	}
@@ -517,7 +513,7 @@ func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID w
 	return nil
 }
 
-func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, mutation func(context.Context) (T, error)) (T, error) {
+func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
 	var result T
 	if service == nil {
 		return result, errors.New("workflow service is required")
@@ -664,7 +660,7 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
-	var workflowID *workflow.WorkflowID
+	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID
 	}
@@ -1583,7 +1579,7 @@ func workflowDeleteImpact(impact workflowstore.WorkflowDeleteImpact) serverapi.W
 	}
 }
 
-func (s *Service) workflowGraphValidationResults(ctx context.Context, workflowID workflow.WorkflowID, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, modes []serverapi.WorkflowValidationMode) (map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse, error) {
+func (s *Service) workflowGraphValidationResults(ctx context.Context, workflowID runtimeids.WorkflowID, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, modes []serverapi.WorkflowValidationMode) (map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse, error) {
 	def, err := s.workflowGraphDraftDefinition(ctx, workflowID, metadata, graph)
 	if err != nil {
 		return nil, err
@@ -1604,7 +1600,7 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 	return out
 }
 
-func scriptPathValidationError(workflowID workflow.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
+func scriptPathValidationError(workflowID runtimeids.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
 	workflowIDValue := workflowID
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
@@ -1624,7 +1620,7 @@ func workflowValidationErrorsValid(errors []serverapi.WorkflowValidationError) b
 	return true
 }
 
-func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID workflow.WorkflowID, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
+func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID runtimeids.WorkflowID, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
 	current, _, err := s.store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		return workflow.Definition{}, err
@@ -1709,7 +1705,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID w
 	return def, nil
 }
 
-func workflowValidationResponse(workflowID workflow.WorkflowID, result workflow.ValidationResult) serverapi.WorkflowValidateResponse {
+func workflowValidationResponse(workflowID runtimeids.WorkflowID, result workflow.ValidationResult) serverapi.WorkflowValidateResponse {
 	resp := serverapi.WorkflowValidateResponse{Valid: !result.HasBlockingErrors()}
 	resp.Errors = workflowview.ValidationErrors(workflowID, result.Errors)
 	return resp
@@ -1728,7 +1724,7 @@ func workflowGraphSaveValidationResponses(result workflowstore.WorkflowGraphSave
 	return out
 }
 
-func workflowGraphStoreSaveRequest(workflowID workflow.WorkflowID, expectedVersion int64, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, confirmation *serverapi.WorkflowGraphSaveConfirmation) workflowstore.WorkflowGraphSaveRequest {
+func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVersion int64, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, confirmation *serverapi.WorkflowGraphSaveConfirmation) workflowstore.WorkflowGraphSaveRequest {
 	req := workflowstore.WorkflowGraphSaveRequest{WorkflowID: workflowID, ExpectedVersion: expectedVersion}
 	if metadata != nil {
 		req.Metadata = &workflowstore.WorkflowGraphSaveMetadata{Name: metadata.Name, Description: metadata.Description}

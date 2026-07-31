@@ -235,7 +235,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID workflow.WorkflowID, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
+func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
 	if len(taskIDs) == 0 {
 		return map[string][]sessionruntime.TaskExecution{}, nil
 	}
@@ -524,7 +524,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 	return definitions, picker, nil
 }
 
-func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID workflow.WorkflowID, labelFilter workflowTaskLabelFilterFacts) error {
+func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID runtimeids.WorkflowID, labelFilter workflowTaskLabelFilterFacts) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
 		return err

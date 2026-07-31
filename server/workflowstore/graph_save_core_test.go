@@ -7,15 +7,16 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
-type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) workflow.WorkflowID
+type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) runtimeids.WorkflowID
 
 type graphSaveFixture struct {
 	ctx        context.Context
 	store      *Store
-	workflowID workflow.WorkflowID
+	workflowID runtimeids.WorkflowID
 	def        workflow.Definition
 	record     WorkflowRecord
 }
@@ -658,7 +659,7 @@ func hasWorkflowValidationCode(errors []workflow.ValidationError, want workflow.
 }
 
 func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
-	f := newGraphSaveFixture(t, func(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+	f := newGraphSaveFixture(t, func(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 		return createScriptStartWorkflow(t, ctx, store, "scripts/old")
 	})
 	scriptID := workflow.NodeID("node-script-" + f.workflowID.String())

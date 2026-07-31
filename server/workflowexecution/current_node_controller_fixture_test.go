@@ -128,7 +128,7 @@ func hasAutomaticCurrentNodeIntent(snapshot CurrentNodeExecutionSnapshot, refere
 	return false
 }
 
-var currentNodeControllerTestWorkflowID = func() workflow.WorkflowID {
+var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {
 	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440201")
 	if err != nil {
 		panic(err)

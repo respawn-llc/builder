@@ -3,6 +3,7 @@ package metadata
 import (
 	"bytes"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -46,31 +47,49 @@ func TestMigrationWorkflowIDFunctionsConvertCanonicalAndLegacyText(t *testing.T)
 
 func TestMigrationWorkflowIDFunctionsRejectInvalidTextWithContext(t *testing.T) {
 	const location = "workflow_nodes.workflow_id row=node-1"
-	for _, raw := range []string{
-		"workflow-11111111-1111-1111-8111-111111111111",
-		"workflow-00000000-0000-4000-0000-000000000000",
-		"workflow-" + migrationWorkflowIDTestValue + " ",
-		"not-a-workflow-id",
+	for _, testCase := range []struct {
+		name string
+		raw  driver.Value
+	}{
+		{name: "invalid UUID version", raw: "workflow-11111111-1111-1111-8111-111111111111"},
+		{name: "invalid UUID variant", raw: "workflow-00000000-0000-4000-0000-000000000000"},
+		{name: "trailing whitespace", raw: "workflow-" + migrationWorkflowIDTestValue + " "},
+		{name: "non-workflow text", raw: "not-a-workflow-id"},
+		{name: "NULL", raw: nil},
+		{name: "integer", raw: int64(1)},
+		{name: "boolean", raw: true},
+		{name: "JSON", raw: json.RawMessage(`{"workflow_id":"` + migrationWorkflowIDTestValue + `"}`)},
 	} {
-		t.Run(raw, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
 			for name, function := range map[string]func(*sqlitedriver.FunctionContext, []driver.Value) (driver.Value, error){
 				"blob": migrationWorkflowIDBlob,
 				"text": migrationWorkflowIDText,
 			} {
 				t.Run(name, func(t *testing.T) {
-					_, err := function(nil, []driver.Value{raw, location})
+					_, err := function(nil, []driver.Value{testCase.raw, location})
 					if err == nil {
-						t.Fatalf("%s(%q) succeeded", name, raw)
+						t.Fatalf("%s(%T) succeeded", name, testCase.raw)
 					}
 					var diagnostic *workflowIdentityMigrationDiagnostic
 					if !errors.As(err, &diagnostic) {
-						t.Fatalf("%s(%q) error = %T, want workflowIdentityMigrationDiagnostic", name, raw, err)
+						t.Fatalf("%s(%T) error = %T, want workflowIdentityMigrationDiagnostic", name, testCase.raw, err)
 					}
 					if diagnostic.Location != location {
-						t.Fatalf("%s(%q) diagnostic location = %q, want %q", name, raw, diagnostic.Location, location)
+						t.Fatalf("%s(%T) diagnostic location = %q, want %q", name, testCase.raw, diagnostic.Location, location)
 					}
 				})
 			}
 		})
+	}
+}
+
+func TestMigrationWorkflowIDArgumentValidatesLocationBeforeRawIdentity(t *testing.T) {
+	_, err := migrationWorkflowIDArgument([]driver.Value{nil, nil})
+	if err == nil {
+		t.Fatal("migrationWorkflowIDArgument succeeded with invalid location and raw identity")
+	}
+	var diagnostic *workflowIdentityMigrationDiagnostic
+	if errors.As(err, &diagnostic) {
+		t.Fatalf("invalid location error = %T, want location validation before raw diagnostic", err)
 	}
 }

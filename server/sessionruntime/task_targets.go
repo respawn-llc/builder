@@ -29,7 +29,7 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
-func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
+func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
 	if err != nil {
 		return TaskExecutionSnapshot{}, err
@@ -93,7 +93,7 @@ func (a *Authority) CurrentProjectTaskExecutionSnapshots(projectID string) (map[
 	return snapshots, nil
 }
 
-func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID string, workflowID workflow.WorkflowID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID string, workflowID runtimeids.WorkflowID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -118,7 +118,7 @@ func (a *Authority) CurrentProjectWorkflowTaskExecutionSnapshots(projectID strin
 	return snapshots, nil
 }
 
-func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workflowID workflow.WorkflowID, taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+func (a *Authority) CurrentScopedTaskExecutionSnapshots(projectID string, workflowID runtimeids.WorkflowID, taskIDs []workflow.TaskID) (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}

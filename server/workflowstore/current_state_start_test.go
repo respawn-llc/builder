@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *testing.T) {
@@ -15,7 +16,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 		store      *Store
 		ctx        context.Context
 		task       TaskRecord
-		workflowID workflow.WorkflowID
+		workflowID runtimeids.WorkflowID
 		targetID   workflow.NodeID
 	}
 

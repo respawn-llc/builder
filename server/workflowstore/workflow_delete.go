@@ -6,11 +6,11 @@ import (
 	"fmt"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type WorkflowDeleteImpact struct {
-	WorkflowID                     workflow.WorkflowID
+	WorkflowID                     runtimeids.WorkflowID
 	Version                        int64
 	ProjectCount                   int64
 	LinkCount                      int64
@@ -22,7 +22,7 @@ type WorkflowDeleteImpact struct {
 }
 
 type WorkflowDeleteRequest struct {
-	WorkflowID           workflow.WorkflowID
+	WorkflowID           runtimeids.WorkflowID
 	Confirmed            bool
 	ExpectedVersion      int64
 	ExpectedProjectCount int64
@@ -44,7 +44,7 @@ type WorkflowDeleteBlocker struct {
 	Count   int64
 }
 
-func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID workflow.WorkflowID) (WorkflowDeleteImpact, error) {
+func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
 	if workflowID.IsZero() {
 		return WorkflowDeleteImpact{}, errors.New("workflow id is required")
 	}

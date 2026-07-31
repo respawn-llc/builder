@@ -184,7 +184,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	return fixture
 }
 
-func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID workflow.WorkflowID) workflowstore.TaskRecord {
+func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeids.WorkflowID) workflowstore.TaskRecord {
 	t.Helper()
 	if _, err := f.store.LinkWorkflow(context.Background(), f.projectID, workflowID, true); err != nil {
 		t.Fatalf("link workflow: %v", err)
@@ -832,7 +832,7 @@ func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
 	}
 }
 
-func createCurrentNodeAgentWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
+func createCurrentNodeAgentWorkflow(t *testing.T, store *workflowstore.Store) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeAgentWorkflowWithCompletionMode(t, store, "")
 }
@@ -842,12 +842,12 @@ func createCurrentNodeAgentWorkflowWithCompletionMode(t *testing.T, store *workf
 	return createCurrentNodeWorkflow(t, store, workflow.NodeKindAgent, "coder", "", completionMode)
 }
 
-func createCurrentNodeScriptWorkflow(t *testing.T, store *workflowstore.Store, scriptPath string) workflow.WorkflowID {
+func createCurrentNodeScriptWorkflow(t *testing.T, store *workflowstore.Store, scriptPath string) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeWorkflow(t, store, workflow.NodeKindScript, "", scriptPath, "")
 }
 
-func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, mode workflow.ContextMode) workflow.WorkflowID {
+func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, mode workflow.ContextMode) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeTwoStepWorkflow(
 		t,
@@ -859,113 +859,7 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 	)
 }
 
-func createCurrentNodeFanoutContinuationWorkflow(
-	t *testing.T,
-	store *workflowstore.Store,
-) (workflow.WorkflowID, map[workflow.TransitionBranchKey]workflow.NodeID) {
-	t.Helper()
-	ctx := context.Background()
-	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node fan-out continuation"})
-	if err != nil {
-		t.Fatalf("create workflow: %v", err)
-	}
-	definition, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("get workflow: %v", err)
-	}
-	var startID, doneID workflow.NodeID
-	for _, node := range definition.Nodes {
-		switch node.Kind() {
-		case workflow.NodeKindStart:
-			startID = workflow.NodeIDOf(node)
-		case workflow.NodeKindTerminal:
-			doneID = workflow.NodeIDOf(node)
-		}
-	}
-	sourceID := workflow.NodeID("node-source-" + string(created.ID))
-	branchNodeIDs := map[workflow.TransitionBranchKey]workflow.NodeID{
-		"branch_a": workflow.NodeID("node-branch-a-" + string(created.ID)),
-		"branch_b": workflow.NodeID("node-branch-b-" + string(created.ID)),
-	}
-	joinID := workflow.NodeID("node-join-" + string(created.ID))
-	for _, node := range []workflowstore.NodeRecord{
-		{
-			ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent,
-			DisplayName: "Source", SubagentRole: "coder", PromptTemplate: "Source.",
-		},
-		{
-			ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent,
-			DisplayName: "Branch A", SubagentRole: "coder", PromptTemplate: "Branch A.",
-		},
-		{
-			ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent,
-			DisplayName: "Branch B", SubagentRole: "coder", PromptTemplate: "Branch B.",
-		},
-		{
-			ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin,
-			DisplayName: "Join",
-		},
-	} {
-		if _, err := store.AddNode(ctx, node); err != nil {
-			t.Fatalf("add node: %v", err)
-		}
-	}
-	startGroup := workflow.TransitionGroupID("group-start-" + string(created.ID))
-	splitGroup := workflow.TransitionGroupID("group-split-" + string(created.ID))
-	branchAGroup := workflow.TransitionGroupID("group-branch-a-" + string(created.ID))
-	branchBGroup := workflow.TransitionGroupID("group-branch-b-" + string(created.ID))
-	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
-	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
-		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
-		{ID: branchAGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_a"], TransitionID: "join", DisplayName: "Join"},
-		{ID: branchBGroup, WorkflowID: created.ID, SourceNodeID: branchNodeIDs["branch_b"], TransitionID: "join", DisplayName: "Join"},
-		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
-	} {
-		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
-			t.Fatalf("add transition group: %v", err)
-		}
-	}
-	for _, edge := range []workflowstore.EdgeRecord{
-		{
-			ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID,
-			ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source.",
-		},
-		{
-			ID: workflow.EdgeID("edge-branch-a-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"],
-			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch A.",
-		},
-		{
-			ID: workflow.EdgeID("edge-branch-b-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"],
-			ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch B.",
-		},
-		{
-			ID: workflow.EdgeID("edge-join-a-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID,
-			ContextMode: workflow.ContextModeNewSession,
-		},
-		{
-			ID: workflow.EdgeID("edge-join-b-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID,
-			ContextMode: workflow.ContextModeNewSession,
-		},
-		{
-			ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID,
-			TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID,
-			ContextMode: workflow.ContextModeNewSession,
-		},
-	} {
-		if _, err := store.AddEdge(ctx, edge); err != nil {
-			t.Fatalf("add edge: %v", err)
-		}
-	}
-	return created.ID, branchNodeIDs
-}
-
-func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) workflow.WorkflowID {
+func createCurrentNodeScriptChainWorkflow(t *testing.T, store *workflowstore.Store, sourcePath, successorPath string) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeTwoStepWorkflow(
 		t,
@@ -992,7 +886,7 @@ func createCurrentNodeTwoStepWorkflow(
 	mode workflow.ContextMode,
 	first currentNodeWorkflowStep,
 	second currentNodeWorkflowStep,
-) workflow.WorkflowID {
+) runtimeids.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name})
@@ -1062,7 +956,7 @@ func createCurrentNodeTwoStepWorkflow(
 	return created.ID
 }
 
-func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath, completionMode string) workflow.WorkflowID {
+func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind workflow.NodeKind, role, scriptPath string) runtimeids.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Current Node runner"})

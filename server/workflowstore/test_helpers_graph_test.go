@@ -13,6 +13,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
 
@@ -63,7 +64,7 @@ func workflowGraphEditPolicyErrorHasBlocker(err error, code string) bool {
 	return false
 }
 
-func forceWorkflowGraphRowsForSnapshotTest(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, nodes []NodeRecord, groups []TransitionGroupRecord, edges []EdgeRecord) {
+func forceWorkflowGraphRowsForSnapshotTest(t *testing.T, ctx context.Context, store *Store, workflowID runtimeids.WorkflowID, nodes []NodeRecord, groups []TransitionGroupRecord, edges []EdgeRecord) {
 	t.Helper()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -162,7 +163,7 @@ func createTestSession(t *testing.T, ctx context.Context, store *Store, binding 
 	return sessionStore.Meta().SessionID
 }
 
-func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID workflow.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
+func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID runtimeids.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
 	t.Helper()
 	link, err := store.LinkWorkflow(ctx, projectID, workflowID, isDefault)
 	if err != nil {
@@ -171,7 +172,7 @@ func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID str
 	return link
 }
 
-func createLinkedValidWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string) workflow.WorkflowID {
+func createLinkedValidWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string) runtimeids.WorkflowID {
 	t.Helper()
 	workflowID := createValidWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, projectID, workflowID, true)
@@ -201,7 +202,7 @@ func startTask(t *testing.T, ctx context.Context, store *Store, taskID workflow.
 	return started
 }
 
-func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Workflow"})
 	if err != nil {
@@ -226,7 +227,7 @@ func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) workfl
 	return created.ID
 }
 
-func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Approval Workflow"})
 	if err != nil {
@@ -256,7 +257,7 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) wor
 	return workflowID
 }
 
-func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Fanout Workflow"})
 	if err != nil {
@@ -308,7 +309,7 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) w
 	return workflowID
 }
 
-func requireApprovalOnWorkflowEdge(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, edgeKey string) {
+func requireApprovalOnWorkflowEdge(t *testing.T, ctx context.Context, store *Store, workflowID runtimeids.WorkflowID, edgeKey string) {
 	t.Helper()
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := edgeByKey(t, def, edgeKey)
@@ -316,7 +317,7 @@ func requireApprovalOnWorkflowEdge(t *testing.T, ctx context.Context, store *Sto
 	})
 }
 
-func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, scriptPath string) workflow.WorkflowID {
+func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, scriptPath string) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Workflow"})
 	if err != nil {
@@ -344,7 +345,7 @@ func createScriptStartWorkflow(t *testing.T, ctx context.Context, store *Store, 
 type scriptExecutionFixture struct {
 	ctx        context.Context
 	store      *Store
-	workflowID workflow.WorkflowID
+	workflowID runtimeids.WorkflowID
 	scriptID   workflow.NodeID
 	task       TaskRecord
 }
@@ -412,7 +413,7 @@ WHERE id = ?`,
 	}
 }
 
-func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *Store, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {
+func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *Store, contextMode workflow.ContextMode, targetRole string) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Chained Context Workflow"})
 	if err != nil {
@@ -445,7 +446,7 @@ func createChainedContextModeWorkflow(t *testing.T, ctx context.Context, store *
 	return created.ID
 }
 
-func createPromptNodeReferenceWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+func createPromptNodeReferenceWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Prompt Node Reference Workflow"})
 	if err != nil {
@@ -483,7 +484,7 @@ func createPromptNodeReferenceWorkflow(t *testing.T, ctx context.Context, store 
 	return created.ID
 }
 
-func createSelectedContextSourceWorkflow(t *testing.T, ctx context.Context, store *Store, contextMode workflow.ContextMode) workflow.WorkflowID {
+func createSelectedContextSourceWorkflow(t *testing.T, ctx context.Context, store *Store, contextMode workflow.ContextMode) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Selected Context Source Workflow"})
 	if err != nil {

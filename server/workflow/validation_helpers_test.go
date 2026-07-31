@@ -5,9 +5,10 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
-func testNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
+func testNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
 	node, err := workflow.NewNode(workflow.NodeIdentity{
 		WorkflowID:  workflowID,
 		ID:          id,
@@ -20,19 +21,19 @@ func testNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.M
 	return node
 }
 
-func testStartNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
+func testStartNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
 	return testNode(workflowID, id, key, displayName, workflow.NodeKindStart, workflow.NodeFields{})
 }
 
-func testAgentNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, fields workflow.NodeFields) workflow.Node {
+func testAgentNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, fields workflow.NodeFields) workflow.Node {
 	return testNode(workflowID, id, key, displayName, workflow.NodeKindAgent, fields)
 }
 
-func testJoinNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
+func testJoinNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
 	return testNode(workflowID, id, key, displayName, workflow.NodeKindJoin, workflow.NodeFields{})
 }
 
-func testTerminalNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
+func testTerminalNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string) workflow.Node {
 	return testNode(workflowID, id, key, displayName, workflow.NodeKindTerminal, workflow.NodeFields{})
 }
 

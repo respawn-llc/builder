@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/workflowkey"
 )
@@ -574,7 +575,7 @@ func (s *validationState) validateKindConstraints() {
 	}
 }
 
-func validateAgentRoleRequirement(workflowID WorkflowID, node Node, requiredTool toolspec.ID, resolver RoleResolver) (ValidationError, bool) {
+func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, requiredTool toolspec.ID, resolver RoleResolver) (ValidationError, bool) {
 	ref := ValidationError{WorkflowID: workflowID, NodeID: NodeIDOf(node)}
 	role := strings.TrimSpace(NodeSubagentRole(node))
 	if role == "" {

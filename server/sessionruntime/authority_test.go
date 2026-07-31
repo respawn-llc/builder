@@ -1025,7 +1025,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 	})
 	grace := 50 * time.Millisecond
-	start := func(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
+	start := func(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
 		t.Helper()
 		ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID(uuid.NewString()), nil)
 		ref.ProjectID, ref.WorkflowID = projectID, workflowID
@@ -2212,7 +2212,7 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	}
 }
 
-func authorityWorkflowID(t *testing.T, name string) workflow.WorkflowID {
+func authorityWorkflowID(t *testing.T, name string) runtimeids.WorkflowID {
 	t.Helper()
 	raw, found := map[string]string{
 		"test": "550e8400-e29b-41d4-a716-446655440101",

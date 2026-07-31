@@ -11,11 +11,12 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
+	"core/shared/runtimeids"
 )
 
 type CreateTaskRequest struct {
 	ProjectID         string
-	WorkflowID        *workflow.WorkflowID
+	WorkflowID        *runtimeids.WorkflowID
 	Title             string
 	Body              string
 	SourceURL         string
@@ -25,7 +26,7 @@ type CreateTaskRequest struct {
 
 type preparedTaskCreate struct {
 	projectID         string
-	workflowID        *workflow.WorkflowID
+	workflowID        *runtimeids.WorkflowID
 	title             string
 	body              string
 	sourceURL         string
@@ -48,7 +49,7 @@ type StartTaskResult struct {
 
 type TaskExecutionScope struct {
 	ProjectID  string
-	WorkflowID workflow.WorkflowID
+	WorkflowID runtimeids.WorkflowID
 }
 
 func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) (TaskExecutionScope, error) {
@@ -119,7 +120,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	if projectID == "" {
 		return TaskRecord{}, errors.New("project id is required")
 	}
-	var workflowID *workflow.WorkflowID
+	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		if req.WorkflowID.IsZero() {
 			return TaskRecord{}, errors.New("workflow id is required when provided")

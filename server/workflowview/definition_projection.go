@@ -60,7 +60,7 @@ func workflowNodesByID(def serverapi.WorkflowDefinition) map[string]serverapi.Wo
 	return nodes
 }
 
-func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID workflow.WorkflowID) (definitionSnapshot, error) {
+func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID runtimeids.WorkflowID) (definitionSnapshot, error) {
 	if p == nil {
 		return definitionSnapshot{}, errors.New("definition projection is required")
 	}

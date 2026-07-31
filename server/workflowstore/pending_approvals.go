@@ -22,7 +22,7 @@ type PendingApprovalApplyResult struct {
 }
 
 type pendingApprovalTransitionSnapshot struct {
-	WorkflowID        workflow.WorkflowID        `json:"workflow_id"`
+	WorkflowID        runtimeids.WorkflowID      `json:"workflow_id"`
 	ID                workflow.TransitionGroupID `json:"id"`
 	SourceNodeID      workflow.NodeID            `json:"source_node_id"`
 	TransitionID      workflow.TransitionID      `json:"transition_id"`
@@ -43,7 +43,7 @@ type pendingApprovalTargetSnapshot struct {
 }
 
 type pendingApprovalEffectiveEdgeSnapshot struct {
-	WorkflowID         workflow.WorkflowID          `json:"workflow_id"`
+	WorkflowID         runtimeids.WorkflowID        `json:"workflow_id"`
 	ID                 workflow.EdgeID              `json:"id"`
 	Key                workflow.ModelKey            `json:"key"`
 	TransitionGroupID  workflow.TransitionGroupID   `json:"transition_group_id"`

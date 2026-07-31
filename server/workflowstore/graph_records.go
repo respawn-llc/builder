@@ -5,9 +5,10 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
-func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (preparedWorkflowGraphSave, error) {
+func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (preparedWorkflowGraphSave, error) {
 	nodeGroups, err := q.ListWorkflowNodeGroups(ctx, workflowID)
 	if err != nil {
 		return preparedWorkflowGraphSave{}, err

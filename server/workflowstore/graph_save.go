@@ -12,10 +12,11 @@ import (
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/server/workflowscript"
+	"core/shared/runtimeids"
 )
 
 type WorkflowGraphSaveRequest struct {
-	WorkflowID                          workflow.WorkflowID
+	WorkflowID                          runtimeids.WorkflowID
 	ExpectedVersion                     int64
 	Metadata                            *WorkflowGraphSaveMetadata
 	Confirmed                           bool
@@ -67,7 +68,7 @@ type WorkflowGraphSaveResult struct {
 }
 
 type WorkflowGraphSavePlan struct {
-	WorkflowID        workflow.WorkflowID
+	WorkflowID        runtimeids.WorkflowID
 	Version           int64
 	Prepared          preparedWorkflowGraphSave
 	Metadata          *WorkflowGraphSaveMetadata
@@ -403,7 +404,7 @@ func workflowExecutionTargetPoliciesEqual(a workflow.ExecutionTargetPolicy, b wo
 	return *a.CustomRef == *b.CustomRef
 }
 
-func prepareWorkflowGraphSave(workflowID workflow.WorkflowID, displayName string, executionTargetPolicy workflow.ExecutionTargetPolicy, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
+func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName string, executionTargetPolicy workflow.ExecutionTargetPolicy, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
 	prepared := preparedWorkflowGraphSave{
 		nodeGroups:       append([]NodeGroupRecord(nil), req.NodeGroups...),
 		nodes:            append([]NodeRecord(nil), req.Nodes...),
@@ -599,7 +600,7 @@ type comparableWorkflowGraphSave struct {
 
 type comparableWorkflowGraphSaveNodeGroup struct {
 	ID          string
-	WorkflowID  workflow.WorkflowID
+	WorkflowID  runtimeids.WorkflowID
 	Key         workflow.ModelKey
 	DisplayName string
 	SortOrder   int64
@@ -607,7 +608,7 @@ type comparableWorkflowGraphSaveNodeGroup struct {
 
 type comparableWorkflowGraphSaveNode struct {
 	ID                 workflow.NodeID
-	WorkflowID         workflow.WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	Key                workflow.ModelKey
 	Kind               workflow.NodeKind
 	DisplayName        string
@@ -624,7 +625,7 @@ type comparableWorkflowGraphSaveNode struct {
 
 type comparableWorkflowGraphSaveTransitionGroup struct {
 	ID           workflow.TransitionGroupID
-	WorkflowID   workflow.WorkflowID
+	WorkflowID   runtimeids.WorkflowID
 	SourceNodeID workflow.NodeID
 	TransitionID workflow.TransitionID
 	DisplayName  string
@@ -634,7 +635,7 @@ type comparableWorkflowGraphSaveTransitionGroup struct {
 
 type comparableWorkflowGraphSaveEdge struct {
 	ID                 workflow.EdgeID
-	WorkflowID         workflow.WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
@@ -683,7 +684,7 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 	return out
 }
 
-func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID, prepared preparedWorkflowGraphSave, removed removedWorkflowGraphRows) error {
+func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave, removed removedWorkflowGraphRows) error {
 	for _, edgeID := range removed.edges {
 		if deleted, err := q.DeleteWorkflowEdge(ctx, string(edgeID)); err != nil {
 			return fmt.Errorf("delete removed workflow edge: %w", err)

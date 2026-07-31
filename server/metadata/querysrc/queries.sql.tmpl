@@ -292,7 +292,7 @@ LEFT JOIN tasks project_latest_task
         ORDER BY latest_task.updated_at_unix_ms DESC, latest_task.id DESC
         LIMIT 1
     )
-WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
+WHERE workflows.id = COALESCE(sqlc.narg(workflow_id), workflows.id)
   AND (
       sqlc.arg(search_query) = ''
       OR lower(workflows.name) LIKE '%' || lower(sqlc.arg(search_query)) || '%'

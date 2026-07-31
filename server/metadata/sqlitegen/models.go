@@ -91,6 +91,14 @@ type MigrationUnfinishedCurrentNodeError struct {
 	UnfinishedRunCount  int64
 }
 
+type MigrationWorkflowGraphEdge struct {
+	WorkflowID     string
+	SourceNodeID   string
+	TargetNodeID   string
+	EdgeID         string
+	PromptTemplate string
+}
+
 type Project struct {
 	ID                           string
 	DisplayName                  string
@@ -105,7 +113,7 @@ type Project struct {
 
 type ProjectDefaultWorkflowIdentity struct {
 	ProjectID    string
-	WorkflowID   []byte
+	WorkflowID   *runtimeids.WorkflowID
 	WorkflowName sql.NullString
 }
 

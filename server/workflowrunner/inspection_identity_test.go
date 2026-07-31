@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/shared/runtimeids"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"

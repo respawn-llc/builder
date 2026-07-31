@@ -8,11 +8,12 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 const projectWorkflowUnlinkTaskPreviewLimit = 10
 
-func (s *Store) LinkWorkflow(ctx context.Context, projectID string, workflowID workflow.WorkflowID, isDefault bool) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) LinkWorkflow(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, isDefault bool) (ProjectWorkflowLinkRecord, error) {
 	policy := WorkflowLinkDefaultNever
 	if isDefault {
 		policy = WorkflowLinkDefaultAlways
@@ -20,7 +21,7 @@ func (s *Store) LinkWorkflow(ctx context.Context, projectID string, workflowID w
 	return s.LinkWorkflowWithDefaultPolicy(ctx, projectID, workflowID, policy)
 }
 
-func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID string, workflowID workflow.WorkflowID, policy WorkflowLinkDefaultPolicy) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, policy WorkflowLinkDefaultPolicy) (ProjectWorkflowLinkRecord, error) {
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -38,7 +39,7 @@ func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID str
 	return link, nil
 }
 
-func (s *Store) linkWorkflowInTx(ctx context.Context, q *sqlitegen.Queries, now int64, projectID string, workflowID workflow.WorkflowID, policy WorkflowLinkDefaultPolicy) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) linkWorkflowInTx(ctx context.Context, q *sqlitegen.Queries, now int64, projectID string, workflowID runtimeids.WorkflowID, policy WorkflowLinkDefaultPolicy) (ProjectWorkflowLinkRecord, error) {
 	existing, err := q.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: projectID, WorkflowID: workflowID})
 	if err == nil {
 		link := linkRecordFromRow(existing)
@@ -127,7 +128,7 @@ func (s *Store) ListProjectWorkflowLinks(ctx context.Context, projectID string) 
 	return out, nil
 }
 
-func (s *Store) ListWorkflowProjectLinks(ctx context.Context, workflowID workflow.WorkflowID) ([]ProjectWorkflowLinkRecord, error) {
+func (s *Store) ListWorkflowProjectLinks(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ProjectWorkflowLinkRecord, error) {
 	rows, err := s.queries.ListWorkflowProjectLinks(ctx, workflowID)
 	if err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func (s *Store) GetProjectWorkflowLink(ctx context.Context, linkID string) (Proj
 	return linkRecordFromRow(row), nil
 }
 
-func (s *Store) SetDefaultProjectWorkflowLink(ctx context.Context, projectID string, workflowID workflow.WorkflowID) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) SetDefaultProjectWorkflowLink(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID) (ProjectWorkflowLinkRecord, error) {
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -252,7 +253,7 @@ func (s *Store) UnlinkProjectWorkflow(ctx context.Context, linkID string, replac
 	return result, nil
 }
 
-func resolveTaskWorkflowLinkWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workflowID *workflow.WorkflowID) (sqlitegen.ProjectWorkflowLinkRecord, error) {
+func resolveTaskWorkflowLinkWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workflowID *runtimeids.WorkflowID) (sqlitegen.ProjectWorkflowLinkRecord, error) {
 	if workflowID == nil {
 		link, err := q.GetDefaultProjectWorkflowLink(ctx, projectID)
 		if err == nil {
