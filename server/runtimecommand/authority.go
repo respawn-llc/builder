@@ -31,6 +31,11 @@ type Authority struct {
 func (a *Authority) WithExecutionScopeAuthority(authority *sessionruntime.Authority) *Authority {
 	if a != nil {
 		a.scopeAuthority = authority
+		a.mu.Lock()
+		for _, resource := range a.resources {
+			resource.scopeAuthority = authority
+		}
+		a.mu.Unlock()
 	}
 	return a
 }
@@ -186,7 +191,9 @@ func (a *Authority) Admit(ref runtimeids.SessionResourceRef) error {
 		}
 		return fmt.Errorf("%w: session resource generation %d is already admitted", ErrResourceUnavailable, existing.ref.Generation())
 	}
-	a.resources[sessionID] = newResourceQueue(ref, a.capacity)
+	resource := newResourceQueue(ref, a.capacity)
+	resource.scopeAuthority = a.scopeAuthority
+	a.resources[sessionID] = resource
 	return nil
 }
 
@@ -261,6 +268,7 @@ type resourceQueue struct {
 	closeOnce       sync.Once
 	done            chan struct{}
 	worker          sync.WaitGroup
+	scopeAuthority  *sessionruntime.Authority
 
 	mu          sync.Mutex
 	lifecycleMu sync.Mutex

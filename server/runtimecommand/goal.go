@@ -219,10 +219,28 @@ func (a *GoalAuthority) withLive(
 		return GoalCommandResult{}, err
 	}
 	var result GoalCommandResult
-	err := a.execution.RunAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine, nil)
-		result = applied
-		return applyErr
+	if a.execution.commands == nil {
+		err := a.execution.RunAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
+			applied, applyErr := mutate(engine, nil)
+			result = applied
+			return applyErr
+		})
+		if result.Accepted() {
+			result.Err = err
+			return result, nil
+		}
+		return GoalCommandResult{}, err
+	}
+	err := a.execution.RunAgentExecutionOrderedWithPreparation(ctx, a.execution.commands, sessionID.String(), func(turn runtime.OrderedMutationTurn) error {
+		return a.execution.WithLiveExecutionRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+			return turn.Apply(func() error {
+				applied, applyErr := mutate(engine, turn)
+				result = applied
+				return applyErr
+			})
+		})
+	}, func(_ context.Context, _ *runtime.Engine) error {
+		return nil
 	})
 	if result.Accepted() {
 		result.Err = err

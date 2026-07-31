@@ -154,13 +154,14 @@ type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
 type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestionRequest) (tools.AskQuestionResponse, error)
 
 type AgentExecutionRequest struct {
-	Descriptor   session.SessionDescriptor
-	Runtime      *AgentRuntimePlan
-	Workflow     *WorkflowExecutionLease
-	Resource     AgentResourceSelection
-	Ask          ExecutionAskHandler
-	CommandLease ResourceExecutionLease
-	Runner       AgentRunner
+	Descriptor              session.SessionDescriptor
+	Runtime                 *AgentRuntimePlan
+	Workflow                *WorkflowExecutionLease
+	Resource                AgentResourceSelection
+	Ask                     ExecutionAskHandler
+	CommandLease            ResourceExecutionLease
+	DeferCommandLeaseCommit bool
+	Runner                  AgentRunner
 }
 
 type agentResource struct {
@@ -837,7 +838,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		})
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
-	if commandLease != nil {
+	if commandLease != nil && !request.DeferCommandLeaseCommit {
 		if commitErr := commandLease.Commit(); commitErr != nil {
 			_ = commandLease.Abort(commitErr)
 		}
@@ -873,6 +874,9 @@ func (a *Authority) RunCurrentAgentExecution(
 	select {
 	case outcome = <-submittedTurn:
 	case <-ctx.Done():
+		if handle, live := a.SessionExecution(descriptor.SessionID()); live {
+			_ = handle.Stop(context.Background())
+		}
 		return context.Cause(ctx)
 	}
 	if outcome.Err != nil {

@@ -290,7 +290,7 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 				eventType = runtime.BackgroundShellEventKilled
 			}
 			preview, previewRemoved := summary.RuntimePreview()
-			if err := engine.HandleBackgroundShellUpdateWithOrderedTurn(turn, runtime.BackgroundShellEvent{
+			future, err := engine.HandleBackgroundShellUpdateWithOrderedTurnResult(turn, runtime.BackgroundShellEvent{
 				Type:              eventType,
 				ID:                event.Snapshot.ID,
 				ActivityID:        event.Snapshot.ActivityID,
@@ -307,8 +307,16 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 				ExitCode:          event.Snapshot.ExitCode,
 				UserRequestedKill: event.Snapshot.KillRequested,
 				NoticeSuppressed:  event.NoticeSuppressed,
-			}, !event.NoticeSuppressed); err != nil {
+			}, !event.NoticeSuppressed)
+			if err != nil {
 				return err
+			}
+			if future != nil && resource.logger != nil {
+				future.Observe(func(result runtime.BackgroundNoticeResult) {
+					if result.Err != nil {
+						resource.logger.Logf("runtime.background.notice.failed process_id=%s disposition=%s error=%q", event.Snapshot.ID, result.Disposition, result.Err.Error())
+					}
+				})
 			}
 			return nil
 		})

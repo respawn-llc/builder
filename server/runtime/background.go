@@ -101,8 +101,11 @@ type BackgroundNoticeResult struct {
 }
 
 type BackgroundNoticeFuture struct {
-	result chan BackgroundNoticeResult
-	once   sync.Once
+	result  chan BackgroundNoticeResult
+	once    sync.Once
+	mu      sync.Mutex
+	ready   *BackgroundNoticeResult
+	observe func(BackgroundNoticeResult)
 }
 
 func newBackgroundNoticeFuture() *BackgroundNoticeFuture {
@@ -125,7 +128,31 @@ func (f *BackgroundNoticeFuture) resolve(result BackgroundNoticeResult) {
 	if f == nil {
 		return
 	}
-	f.once.Do(func() { f.result <- result })
+	f.once.Do(func() {
+		f.mu.Lock()
+		f.ready = &result
+		observe := f.observe
+		f.mu.Unlock()
+		if observe != nil {
+			observe(result)
+		}
+		f.result <- result
+	})
+}
+
+func (f *BackgroundNoticeFuture) Observe(observe func(BackgroundNoticeResult)) {
+	if f == nil || observe == nil {
+		return
+	}
+	f.mu.Lock()
+	if f.ready != nil {
+		result := *f.ready
+		f.mu.Unlock()
+		observe(result)
+		return
+	}
+	f.observe = observe
+	f.mu.Unlock()
 }
 
 // backgroundNoticeBatch is the sole owner of claimed entries. Callers cannot
@@ -147,8 +174,13 @@ func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNoti
 }
 
 func (e *Engine) HandleBackgroundShellUpdateWithOrderedTurn(turn OrderedMutationTurn, evt BackgroundShellEvent, queueNotice bool) error {
+	_, err := e.HandleBackgroundShellUpdateWithOrderedTurnResult(turn, evt, queueNotice)
+	return err
+}
+
+func (e *Engine) HandleBackgroundShellUpdateWithOrderedTurnResult(turn OrderedMutationTurn, evt BackgroundShellEvent, queueNotice bool) (*BackgroundNoticeFuture, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.HandleBackgroundShellUpdateWithOrderedTurn(evt, queueNotice, turn)
+	return e.backgroundFlow.(*defaultBackgroundNoticeScheduler).handleBackgroundShellUpdateWithOrderedTurnResult(evt, queueNotice, turn)
 }
 
 func (e *Engine) ScheduleBackgroundNoticesIfIdle() {
@@ -164,27 +196,32 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdateWithOrderedTurn(evt BackgroundShellEvent, queueNotice bool, turn OrderedMutationTurn) error {
+	_, err := b.handleBackgroundShellUpdateWithOrderedTurnResult(evt, queueNotice, turn)
+	return err
+}
+
+func (b *defaultBackgroundNoticeScheduler) handleBackgroundShellUpdateWithOrderedTurnResult(evt BackgroundShellEvent, queueNotice bool, turn OrderedMutationTurn) (*BackgroundNoticeFuture, error) {
 	var lease OrderedMutationLease
 	if queueNotice && evt.Type.IsTerminal() && turn != nil {
 		var err error
 		lease, err = turn.RetainLease()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := b.engine.steerAndTurn(turn, "", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt})); err != nil {
 		if lease != nil {
-			return errors.Join(err, lease.Release())
+			return nil, errors.Join(err, lease.Release())
 		}
-		return err
+		return nil, err
 	}
 	if !queueNotice {
-		return nil
+		return nil, nil
 	}
 	if !evt.Type.IsTerminal() {
-		return nil
+		return nil, nil
 	}
-	b.queueDeveloperNotice(llm.Message{
+	future := b.queueDeveloperNotice(llm.Message{
 		Role:                 llm.RoleDeveloper,
 		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:                 textutil.OptionalTrimmedString(evt.ID),
@@ -193,7 +230,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdateWithOrdere
 		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
 	}, turn == nil, lease)
-	return nil
+	return future, nil
 }
 
 func formatBackgroundShellNotice(evt BackgroundShellEvent) string {
@@ -229,9 +266,9 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	b.queueDeveloperNotice(msg, true, nil)
 }
 
-func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool, lease OrderedMutationLease) {
+func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool, lease OrderedMutationLease) *BackgroundNoticeFuture {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
-		return
+		return nil
 	}
 	processID, _ := textutil.OptionalTrimmed(msg.Name)
 	notice := queuedBackgroundNotice{
@@ -240,6 +277,7 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message,
 		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
 	}
 	shouldSchedule := false
+	future := newBackgroundNoticeFuture()
 	b.mu.Lock()
 	b.ensureEntriesLocked()
 	b.entries[notice.id] = &backgroundNoticeEntry{
@@ -247,7 +285,7 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message,
 		state:    backgroundNoticePending,
 		capacity: backgroundNoticeCapacityPending,
 		lease:    lease,
-		future:   newBackgroundNoticeFuture(),
+		future:   future,
 	}
 	b.order = append(b.order, notice.id)
 	if !b.task && (b.steps == nil || !b.steps.IsBusy()) {
@@ -257,6 +295,7 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message,
 	if shouldSchedule && schedule {
 		b.scheduleStandalone()
 	}
+	return future
 }
 
 func (b *defaultBackgroundNoticeScheduler) scheduleStandalone() {
@@ -460,6 +499,9 @@ func (b *defaultBackgroundNoticeScheduler) ensureEntriesLocked() {
 
 func (b *defaultBackgroundNoticeScheduler) invariantFailure(err error) {
 	if b != nil && b.engine != nil && err != nil {
+		if b.engine.cfg.Debug {
+			panic(fmt.Sprintf("background notice scheduler invariant: %v", err))
+		}
 		b.engine.surfaceRunError(err)
 	}
 }

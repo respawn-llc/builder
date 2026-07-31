@@ -180,7 +180,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority).WithCommandAuthority(runtimeCommandAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeCommandAuthority(runtimeCommandAuthority).

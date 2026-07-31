@@ -508,7 +508,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem, turn Ordere
 		}
 		if transition != nil {
 			if commitErr := transition.Commit(); commitErr != nil {
-				err = errors.Join(err, commitErr)
+				err = errors.Join(err, commitErr, transition.Abort())
+				return err
 			}
 			err = errors.Join(err, e.emitRaw(Event{
 				Kind:       EventBackgroundUpdated,

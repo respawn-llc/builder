@@ -15,6 +15,7 @@ type CompletionFence struct {
 	target     Target
 	generation uint64
 	fenced     bool
+	reserved   bool
 }
 
 type CompletionAttempt struct {
@@ -50,7 +51,7 @@ func (f *CompletionFence) Begin() (CompletionAttempt, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced {
+	if f.fenced || f.reserved {
 		return CompletionAttempt{}, ErrCompletionFenced
 	}
 	return CompletionAttempt{fence: f, generation: f.generation}, nil
@@ -119,13 +120,31 @@ func (a CompletionAttempt) Acquire() (CompletionLease, error) {
 	}
 	a.fence.mu.Lock()
 	defer a.fence.mu.Unlock()
-	if a.fence.fenced {
+	if a.fence.fenced || a.fence.reserved {
 		return CompletionLease{}, ErrCompletionFenced
 	}
 	if a.fence.generation != a.generation {
 		return CompletionLease{}, ErrCompletionSuperseded
 	}
 	return CompletionLease{fence: a.fence, generation: a.generation}, nil
+}
+
+func (l *CompletionLease) Reserve() error {
+	if l == nil || l.fence == nil {
+		return errors.New("runtime command completion lease is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.terminal {
+		return errors.New("runtime command completion lease is already terminal")
+	}
+	l.fence.mu.Lock()
+	defer l.fence.mu.Unlock()
+	if l.fence.generation != l.generation {
+		return ErrCompletionSuperseded
+	}
+	l.fence.reserved = true
+	return nil
 }
 
 func (l *CompletionLease) Commit() error {
@@ -143,6 +162,7 @@ func (l *CompletionLease) Commit() error {
 		return ErrCompletionSuperseded
 	}
 	l.fence.fenced = true
+	l.fence.reserved = false
 	l.terminal = true
 	return nil
 }
@@ -161,6 +181,7 @@ func (l *CompletionLease) Abort() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
+	l.fence.reserved = false
 	l.terminal = true
 	return nil
 }

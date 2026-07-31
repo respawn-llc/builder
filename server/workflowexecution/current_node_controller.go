@@ -38,6 +38,7 @@ type CurrentNodeAttentionLifecycle interface {
 }
 
 type CompletionFenceLease interface {
+	Reserve() error
 	Commit() error
 	Abort() error
 }
@@ -293,6 +294,11 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 		return workflowruntime.CompletionResult{}, err
 	}
 	apply := func() error {
+		if fence != nil {
+			if err := fence.Reserve(); err != nil {
+				return err
+			}
+		}
 		if _, err := c.completeLiveCurrentNode(applicationCtx, req); err != nil {
 			return err
 		}
@@ -352,6 +358,11 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	var completed workflowstore.CurrentNodeCompletionResult
 	err = c.authority.WithExecutionMutation(ctx, handle.Scope().ID(), func(turn runtime.OrderedMutationTurn) error {
 		return turn.Apply(func() error {
+			if fence != nil {
+				if err := fence.Reserve(); err != nil {
+					return err
+				}
+			}
 			var err error
 			completed, err = c.completeLiveCurrentNode(applicationCtx, workflowruntime.CompletionRequest{
 				ScopeID:      handle.Scope().ID(),

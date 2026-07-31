@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	runtimepkg "core/server/runtime"
+	"core/server/sessionruntime"
 )
 
 type Continuation struct {
@@ -88,6 +89,12 @@ func Reenter[T any](
 		target:   continuation.target,
 		state:    state,
 		execute: func(turn Turn) bool {
+			if err := continuation.validateTarget(); err != nil {
+				state.valid.Store(false)
+				result <- futureResult[T]{err: err}
+				continuation.stageFinished(false)
+				return true
+			}
 			value, applyErr := apply(turn)
 			state.valid.Store(false)
 			result <- futureResult[T]{value: value, err: applyErr}
@@ -98,6 +105,34 @@ func Reenter[T any](
 	resource.mu.Unlock()
 	continuation.mu.Unlock()
 	return Future[T]{done: result}, nil
+}
+
+func (c *Continuation) validateTarget() error {
+	if c == nil || c.resource == nil {
+		return ErrTurnExpired
+	}
+	c.mu.Lock()
+	target := c.target
+	authority := c.resource.scopeAuthority
+	c.mu.Unlock()
+	if target.kind != targetAgent {
+		return nil
+	}
+	if authority == nil {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	scope, ok := authority.CurrentExecutionScope(target.scopeID)
+	if !ok {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	current, err := AgentTarget(scope)
+	if err != nil {
+		return err
+	}
+	if !target.same(current) {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	return nil
 }
 
 func EnqueueTerminal[T any](

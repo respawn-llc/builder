@@ -382,3 +382,17 @@
 - [ ] Rerun focused race suites, repository server/no-argument scripts, executable build, and diff audits after this round; record exact evidence here and in the ticket.
 
 Remediation progress: the ordered execution adapter now registers the Agent owner from a FIFO stage, uses the resource lifecycle context, and separates the submitted-turn milestone from `ExecutionHandle` termination. Exact Agent scope lookup is now performed at queued application. The shared gate and typed background notice result/future are in place. Remaining work is verification and any failures exposed by the full checks.
+
+## Review remediation round 2
+
+- [x] Reserve the Completion Fence before live Workflow mutation, commit only after the durable transaction, and abort the reservation on failure.
+- [x] Route production idle Goal starts through the ordered execution handoff; preserve the no-command test/embedded authority path only where no FIFO authority is composed.
+- [x] Revalidate Agent targets centrally on every retained continuation re-entry, not only explicit DispatchAgent calls.
+- [x] Treat shell transition commit failure as non-commit and suppress background/tool-success publication.
+- [x] Return and observe typed background-notice futures through resource-scoped background routing.
+- [x] Add debug-only scheduler invariant panic while retaining surfaced production recovery.
+- [x] Preserve explicit Interrupt cancellation semantics and unavailable-runtime error classification in LiveSteer.
+- [x] Record the operator's explicit authorization to retain the unified implementation scope above the original numeric estimate.
+- [ ] Run final focused race/build/diff checks and commit this remediation round.
+
+Round 2 progress: the live-control regressions now pass in isolation; Completion Fence reservation, exact continuation validation, Goal ordered-start handoff, shell non-commit handling, typed notice observation, and debug invariant behavior are implemented. The operator explicitly authorized retaining the unified scope; the fixed repository test cap is not used as a bypass for focused correctness checks.

@@ -14,6 +14,7 @@ import (
 
 type ExecutionAdapter struct {
 	authority *sessionruntime.Authority
+	commands  *Authority
 }
 
 type orderedExecutionStart struct {
@@ -25,6 +26,13 @@ func NewExecutionAdapter(authority *sessionruntime.Authority) *ExecutionAdapter 
 	return &ExecutionAdapter{authority: authority}
 }
 
+func (a *ExecutionAdapter) WithCommandAuthority(commands *Authority) *ExecutionAdapter {
+	if a != nil {
+		a.commands = commands
+	}
+	return a
+}
+
 func (a *ExecutionAdapter) RunAgentExecution(
 	ctx context.Context,
 	sessionID string,
@@ -32,6 +40,9 @@ func (a *ExecutionAdapter) RunAgentExecution(
 ) error {
 	if a == nil || a.authority == nil {
 		return errors.New("session runtime authority is required")
+	}
+	if a.commands != nil {
+		return a.RunAgentExecutionOrdered(ctx, a.commands, sessionID, run)
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
@@ -60,6 +71,26 @@ func (a *ExecutionAdapter) RunAgentExecutionOrdered(
 	sessionID string,
 	run func(context.Context, *runtime.Engine) error,
 ) error {
+	return a.runAgentExecutionOrdered(ctx, commands, sessionID, nil, run)
+}
+
+func (a *ExecutionAdapter) RunAgentExecutionOrderedWithPreparation(
+	ctx context.Context,
+	commands *Authority,
+	sessionID string,
+	prepare func(runtime.OrderedMutationTurn) error,
+	run func(context.Context, *runtime.Engine) error,
+) error {
+	return a.runAgentExecutionOrdered(ctx, commands, sessionID, prepare, run)
+}
+
+func (a *ExecutionAdapter) runAgentExecutionOrdered(
+	ctx context.Context,
+	commands *Authority,
+	sessionID string,
+	prepare func(runtime.OrderedMutationTurn) error,
+	run func(context.Context, *runtime.Engine) error,
+) error {
 	if a == nil || a.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
@@ -85,9 +116,10 @@ func (a *ExecutionAdapter) RunAgentExecutionOrdered(
 		}
 		submitted := make(chan sessionruntime.SubmittedTurnOutcome, 1)
 		handle, startErr := a.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
-			Descriptor:   descriptor,
-			Resource:     sessionruntime.CurrentAgentResource{},
-			CommandLease: lease,
+			Descriptor:              descriptor,
+			Resource:                sessionruntime.CurrentAgentResource{},
+			CommandLease:            lease,
+			DeferCommandLeaseCommit: true,
 			Runner: func(executionCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 				return sessionruntime.RunSubmittedAgentExecution(executionCtx, bridge, run, func(outcome sessionruntime.SubmittedTurnOutcome) {
 					submitted <- outcome
@@ -98,6 +130,18 @@ func (a *ExecutionAdapter) RunAgentExecutionOrdered(
 			_ = lease.Abort(startErr)
 			_ = lease.Release()
 			return orderedExecutionStart{}, startErr
+		}
+		if prepare != nil {
+			if prepareErr := prepare(turn); prepareErr != nil {
+				_ = lease.Abort(prepareErr)
+				_ = lease.Release()
+				return orderedExecutionStart{}, prepareErr
+			}
+		}
+		if commitErr := lease.Commit(); commitErr != nil {
+			_ = lease.Abort(commitErr)
+			_ = lease.Release()
+			return orderedExecutionStart{}, commitErr
 		}
 		return orderedExecutionStart{handle: handle, submitted: submitted}, nil
 	})
