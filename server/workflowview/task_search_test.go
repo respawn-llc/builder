@@ -176,6 +176,64 @@ func TestTaskSearchSearchKeepsLiteralResponseCoherentDuringCanonicalMutation(t *
 	}
 }
 
+func TestTaskSearchStableReadCaptureRetriesAuthorityChangeDuringAnchor(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh is unavailable: %v", err)
+	}
+	fixture := newCurrentNodeViewFixture(t, false)
+	task := createTaskSearchTask(t, fixture, "Stable capture", "needle")
+	lease := newTaskSearchLease(t, fixture, startTaskSearchTask(t, fixture, task))
+	var handle sessionruntime.ExecutionHandle
+	t.Cleanup(func() {
+		lease.Cancel()
+		if handle != nil {
+			_, _ = handle.Wait(context.Background())
+		}
+	})
+
+	var opened int
+	var closed int
+	snapshot, err := taskSearchStableReadCapture(
+		fixture.ctx,
+		func() (taskSearchLiveSnapshot, error) {
+			executions, revision, snapshotErr := fixture.authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
+			return taskSearchLiveSnapshot{executions: executions, revision: revision}, snapshotErr
+		},
+		func(context.Context) (*taskSearchReadSnapshot, error) {
+			opened++
+			return &taskSearchReadSnapshot{
+				anchor: func(context.Context) error {
+					if opened == 1 {
+						handle = startTaskSearchScript(t, fixture, shellPath, &lease)
+					}
+					return nil
+				},
+				close: func() error {
+					closed++
+					return nil
+				},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("capture stable Task Search read snapshot: %v", err)
+	}
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			t.Errorf("close stable Task Search read snapshot: %v", closeErr)
+		}
+	}()
+
+	if opened != 2 || closed != 1 {
+		t.Fatalf("stable capture attempts = opened:%d closed:%d, want 2/1 after an Authority change during anchor", opened, closed)
+	}
+	executions := snapshot.live.executions[task.ID].Executions
+	if len(executions) != 1 || !executions[0].Queued {
+		t.Fatalf("stable capture live state = %+v, want the post-change queued execution", snapshot.live.executions)
+	}
+}
+
 func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 	tests := []struct {
 		name             string

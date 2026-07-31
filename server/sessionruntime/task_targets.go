@@ -41,8 +41,18 @@ func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflo
 // Execution Scope once. Read models use this bounded process-local snapshot as
 // liveness evidence; SQLite never substitutes for it.
 func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	snapshots, _, err := a.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
+	return snapshots, err
+}
+
+// CurrentWorkflowTaskExecutionSnapshotsWithRevision captures every live
+// workflow Exact Execution Scope and the generation of the captured state.
+// The revision advances for every visible workflow execution or prompt-state
+// change, so callers can prove a durable snapshot was anchored while live
+// activity stayed unchanged.
+func (a *Authority) CurrentWorkflowTaskExecutionSnapshotsWithRevision() (map[workflow.TaskID]TaskExecutionSnapshot, uint64, error) {
 	if a == nil {
-		return nil, errors.New("session runtime authority is required")
+		return nil, 0, errors.New("session runtime authority is required")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -55,7 +65,7 @@ func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID
 		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
 	})
 	if snapshotErr != nil {
-		return nil, snapshotErr
+		return nil, 0, snapshotErr
 	}
 	for taskID, snapshot := range snapshots {
 		sort.Slice(snapshot.Executions, func(i, j int) bool {
@@ -63,7 +73,7 @@ func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID
 		})
 		snapshots[taskID] = snapshot
 	}
-	return snapshots, nil
+	return snapshots, a.workflowRevision, nil
 }
 
 func (a *Authority) CurrentProjectTaskExecutionSnapshots(projectID string) (map[workflow.TaskID]TaskExecutionSnapshot, error) {

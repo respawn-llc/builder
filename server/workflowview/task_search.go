@@ -20,6 +20,8 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
+const taskSearchStableCaptureAttempts = 3
+
 type TaskSearch struct {
 	metadata  *metadata.Store
 	queries   *sqlitegen.Queries
@@ -28,10 +30,16 @@ type TaskSearch struct {
 	permit    *workflowexecution.MutationPermit
 }
 
+type taskSearchLiveSnapshot struct {
+	executions map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	revision   uint64
+}
+
 type taskSearchReadSnapshot struct {
-	queries       *sqlitegen.Queries
-	liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	close         func() error
+	queries *sqlitegen.Queries
+	live    taskSearchLiveSnapshot
+	anchor  func(context.Context) error
+	close   func() error
 }
 
 func NewTaskSearch(
@@ -91,7 +99,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveSnapshots, req, offset)
+	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.live.executions, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -121,33 +129,14 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {
 	var snapshot *taskSearchReadSnapshot
 	err := s.permit.Run(ctx, func(ctx context.Context) error {
-		tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		captured, err := s.captureStableReadSnapshot(ctx)
 		if err != nil {
-			return fmt.Errorf("begin task search read transaction: %w", err)
+			return err
 		}
-		closeTransaction := func() error {
-			rollbackErr := tx.Rollback()
-			if errors.Is(rollbackErr, sql.ErrTxDone) {
-				return nil
-			}
-			return rollbackErr
+		if err := s.validateSchemaAndScope(ctx, captured.queries, req); err != nil {
+			return closeFailedTaskSearchReadSnapshot(captured, err)
 		}
-		queries := s.queries.WithTx(tx)
-		if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
-			return errors.Join(err, closeTransaction())
-		}
-		if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
-			return errors.Join(err, closeTransaction())
-		}
-		liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
-		if err != nil {
-			return errors.Join(err, closeTransaction())
-		}
-		snapshot = &taskSearchReadSnapshot{
-			queries:       queries,
-			liveSnapshots: liveSnapshots,
-			close:         closeTransaction,
-		}
+		snapshot = captured
 		return nil
 	})
 	if err != nil {
@@ -159,6 +148,89 @@ func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.Task
 	return snapshot, nil
 }
 
+func (s *TaskSearch) captureStableReadSnapshot(ctx context.Context) (*taskSearchReadSnapshot, error) {
+	return taskSearchStableReadCapture(
+		ctx,
+		func() (taskSearchLiveSnapshot, error) {
+			executions, revision, err := s.authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
+			if err != nil {
+				return taskSearchLiveSnapshot{}, err
+			}
+			return taskSearchLiveSnapshot{executions: executions, revision: revision}, nil
+		},
+		func(ctx context.Context) (*taskSearchReadSnapshot, error) {
+			tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			if err != nil {
+				return nil, fmt.Errorf("begin task search read transaction: %w", err)
+			}
+			queries := s.queries.WithTx(tx)
+			snapshot := &taskSearchReadSnapshot{
+				queries: queries,
+				close: func() error {
+					rollbackErr := tx.Rollback()
+					if errors.Is(rollbackErr, sql.ErrTxDone) {
+						return nil
+					}
+					return rollbackErr
+				},
+			}
+			snapshot.anchor = func(ctx context.Context) error {
+				_, err := queries.AnchorTaskSearchReadSnapshot(ctx)
+				return err
+			}
+			return snapshot, nil
+		},
+	)
+}
+
+func taskSearchStableReadCapture(
+	ctx context.Context,
+	captureLive func() (taskSearchLiveSnapshot, error),
+	openRead func(context.Context) (*taskSearchReadSnapshot, error),
+) (*taskSearchReadSnapshot, error) {
+	for attempt := 0; attempt < taskSearchStableCaptureAttempts; attempt++ {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		snapshot, err := openRead(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if snapshot == nil {
+			return nil, errors.New("task search read snapshot capture returned no snapshot")
+		}
+		before, err := captureLive()
+		if err != nil {
+			return nil, closeFailedTaskSearchReadSnapshot(snapshot, err)
+		}
+		if snapshot.anchor == nil {
+			return nil, closeFailedTaskSearchReadSnapshot(snapshot, errors.New("task search durable snapshot anchor is required"))
+		}
+		if err := snapshot.anchor(ctx); err != nil {
+			return nil, closeFailedTaskSearchReadSnapshot(snapshot, err)
+		}
+		after, err := captureLive()
+		if err != nil {
+			return nil, closeFailedTaskSearchReadSnapshot(snapshot, err)
+		}
+		if before.revision == after.revision {
+			snapshot.live = before
+			return snapshot, nil
+		}
+		if err := snapshot.Close(); err != nil {
+			return nil, fmt.Errorf("discard unstable task search read snapshot: %w", err)
+		}
+	}
+	return nil, errors.New("task search live activity did not stabilize during capture")
+}
+
+func closeFailedTaskSearchReadSnapshot(snapshot *taskSearchReadSnapshot, cause error) error {
+	if closeErr := snapshot.Close(); closeErr != nil {
+		return errors.Join(cause, fmt.Errorf("close task search read snapshot: %w", closeErr))
+	}
+	return cause
+}
+
 func (s *taskSearchReadSnapshot) Close() error {
 	if s == nil || s.close == nil {
 		return nil
@@ -166,7 +238,8 @@ func (s *taskSearchReadSnapshot) Close() error {
 	close := s.close
 	s.close = nil
 	s.queries = nil
-	s.liveSnapshots = nil
+	s.live = taskSearchLiveSnapshot{}
+	s.anchor = nil
 	return close()
 }
 

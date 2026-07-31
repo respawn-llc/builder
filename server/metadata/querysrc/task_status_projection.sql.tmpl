@@ -31,16 +31,12 @@
 {{.Indent}}        durable.node_ids_json,
 {{.Indent}}        CASE
 {{.Indent}}            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-{{.Indent}}            ELSE COALESCE((
-{{.Indent}}                SELECT json_group_array(attention_type)
-{{.Indent}}                FROM (
-{{.Indent}}                    SELECT value AS attention_type
-{{.Indent}}                    FROM json_each(durable.attention_types_json)
-{{.Indent}}                    UNION
-{{.Indent}}                    SELECT 'question'
-{{.Indent}}                    ORDER BY attention_type
-{{.Indent}}                )
-{{.Indent}}            ), '["question"]')
+{{.Indent}}            WHEN EXISTS (
+{{.Indent}}                SELECT 1
+{{.Indent}}                FROM json_each(durable.attention_types_json) existing_attention
+{{.Indent}}                WHERE existing_attention.value = 'question'
+{{.Indent}}            ) THEN durable.attention_types_json
+{{.Indent}}            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
 {{.Indent}}        END AS attention_types_json
 {{.Indent}}    FROM workflow_task_status_records durable
 {{.Indent}}    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
