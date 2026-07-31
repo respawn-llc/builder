@@ -9,11 +9,7 @@ import (
 	"core/shared/serverapi"
 )
 
-type WorkflowEventPublisher interface {
-	PublishWorkflowEvent(context.Context, serverapi.WorkflowProjectEvent) error
-}
-
-func (r *RuntimeRegistry) WithWorkflowEventPublisher(publisher WorkflowEventPublisher) *RuntimeRegistry {
+func (r *RuntimeRegistry) WithWorkflowEventPublisher(publisher func(context.Context, serverapi.WorkflowProjectEvent) error) *RuntimeRegistry {
 	if r == nil {
 		return r
 	}
@@ -40,7 +36,7 @@ func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot 
 		RelatedIDs:       []string{strings.TrimSpace(sessionID), strings.TrimSpace(snapshot.Request.ID)},
 		OccurredAtUnixMs: snapshot.CreatedAt.UTC().UnixMilli(),
 	}
-	if err := r.workflowEventPublisher.PublishWorkflowEvent(context.Background(), event); err != nil {
+	if err := r.workflowEventPublisher(context.Background(), event); err != nil {
 		slog.Warn(
 			"publish workflow question waiting event failed",
 			"project_id", projectID,

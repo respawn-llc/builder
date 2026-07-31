@@ -33,7 +33,7 @@ type RuntimeRegistry struct {
 	pendingPrompts            *pendingPromptStore
 	attentionBroker           *attentionnotify.Broker
 	questionBatches           *attentionnotify.QuestionBatchTracker
-	workflowEventPublisher    WorkflowEventPublisher
+	workflowEventPublisher    func(context.Context, serverapi.WorkflowProjectEvent) error
 	workflowAttentionSnapshot WorkflowAttentionNotificationSnapshotSource
 	executionTargetResolver   func(context.Context, string) (clientui.SessionExecutionTarget, error)
 }

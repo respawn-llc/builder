@@ -127,7 +127,7 @@ func TestRuntimeRegistryPublishesQuestionWaitingEventWithoutRedeliveringBatchAtt
 	events := &recordingWorkflowEventPublisher{}
 	registry := NewRuntimeRegistry().
 		WithAttentionNotifications(broker).
-		WithWorkflowEventPublisher(events)
+		WithWorkflowEventPublisher(events.PublishWorkflowEvent)
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
