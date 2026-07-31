@@ -545,7 +545,7 @@ func validateRetainedWorkflowSessionAgentRole(
 	policy currentNodeSessionPolicy,
 ) error {
 	if input.CurrentNode.SessionID == nil ||
-		policy.assignee != currentNodeSessionAssigneeRequireTargetMatch {
+		policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		return nil
 	}
 	roleOverride, err := workflowPromptOverrides(input.Node.SubagentRole).AgentRoleOverride()

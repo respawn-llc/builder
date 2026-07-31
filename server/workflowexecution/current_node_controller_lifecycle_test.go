@@ -115,6 +115,17 @@ func TestCurrentNodeControllerDoesNotStartApprovalTargetWhenSteeringFails(t *tes
 	if starts := runner.starts(); starts != 0 {
 		t.Fatalf("runner starts = %d, want none after steering failure", starts)
 	}
+	interruption, interrupted := store.interruption(target)
+	if !interrupted {
+		t.Fatal("approval target was not made resumable after steering failure")
+	}
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("approval target interruption = %+v, want runtime start failure", interruption)
+	}
+	if _, hasCause := interruption.detail.Fields["error"]; !hasCause {
+		t.Fatalf("approval target interruption = %+v, want failure diagnostics", interruption)
+	}
 }
 
 func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetires(t *testing.T) {

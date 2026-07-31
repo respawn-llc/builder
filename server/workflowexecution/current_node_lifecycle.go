@@ -56,14 +56,11 @@ func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
 			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
 		}
-		starts, err := c.steerStartsAssignments(ctx, []currentNodeQueuedStart{{
+		starts, err := c.steerAndWaitExplicitStarts(ctx, []currentNodeQueuedStart{{
 			reference:          started.Mutation.Created[0].Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 		}})
 		if err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
-		if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		c.mu.Lock()
@@ -173,11 +170,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
-			starts, err = c.steerStartsAssignments(ctx, starts)
+			starts, err = c.steerAndWaitExplicitStarts(ctx, starts)
 			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
 			c.mu.Lock()
@@ -242,11 +236,8 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
-		starts, err = c.steerStartsAssignments(ctx, starts)
+		starts, err = c.steerAndWaitExplicitStarts(ctx, starts)
 		if err != nil {
-			return workflowstore.ManualMoveResult{}, err
-		}
-		if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Lock()

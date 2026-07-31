@@ -2,7 +2,6 @@ package workflowexecution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -13,7 +12,10 @@ import (
 	"core/shared/runtimeids"
 )
 
-const explicitAdmissionConcurrency = 8
+const (
+	explicitAdmissionConcurrency                                               = 8
+	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
+)
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
@@ -284,6 +286,20 @@ func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, star
 			return nil, err
 		}
 		steered[index].assignmentSteer = assignment
+	}
+	return steered, nil
+}
+
+func (c *CurrentNodeController) steerAndWaitExplicitStarts(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+) ([]currentNodeQueuedStart, error) {
+	steered, err := c.steerStartsAssignments(ctx, starts)
+	if err != nil {
+		return nil, errors.Join(err, c.interruptCurrentNodeStartFailures(ctx, starts, false, err))
+	}
+	if err := waitCurrentNodeAssignmentSteers(ctx, steered); err != nil {
+		return nil, errors.Join(err, c.interruptCurrentNodeStartFailures(ctx, steered, false, err))
 	}
 	return steered, nil
 }
@@ -606,25 +622,44 @@ func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.Curren
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
 	err := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		interrupt := c.store.InterruptCurrentNode
-		if admitted {
-			interrupt = c.store.InterruptAdmittedCurrentNode
-		}
-		return interrupt(ctx, reference, "workflow_runtime_start_failed", workflow.CurrentNodeInterruptionDetail{
-			Code:   "workflow_runtime_start_failed",
-			Fields: map[string]string{"error": cause.Error()},
-		})
+		return c.interruptCurrentNodeStartFailures(ctx, []currentNodeQueuedStart{{reference: reference}}, admitted, cause)
 	})
 	if err == nil {
-		c.publishPendingInterruptedCurrentNode(cleanupCtx, reference, "workflow_runtime_start_failed")
-		return
-	}
-	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
 	c.mu.Lock()
 	c.workerErr = errors.Join(c.workerErr, cause, err)
 	c.mu.Unlock()
+}
+
+func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) error {
+	references := make([]workflow.CurrentNodeReference, 0, len(starts))
+	for _, start := range starts {
+		references = append(references, start.reference)
+	}
+	interrupt := c.store.InterruptCurrentNode
+	if admitted {
+		interrupt = c.store.InterruptAdmittedCurrentNode
+	}
+	interrupted, err := interruptCurrentNodeReferences(
+		ctx,
+		interrupt,
+		references,
+		reasonCurrentNodeRuntimeStartFailed,
+		workflow.CurrentNodeInterruptionDetail{
+			Code:   string(reasonCurrentNodeRuntimeStartFailed),
+			Fields: map[string]string{"error": cause.Error()},
+		},
+	)
+	for _, reference := range interrupted {
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
+	}
+	return err
 }
 
 func currentNodeAutomaticIntents(references []workflow.CurrentNodeReference) ([]CurrentNodeAutomaticIntent, error) {

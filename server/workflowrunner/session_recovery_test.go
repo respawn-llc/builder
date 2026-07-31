@@ -311,17 +311,12 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	input.EnteringEdge.ContextSource = workflow.ContextSource{
 		Kind: workflow.ContextSourcePreviousTargetOrNew,
 	}
-	targetOwnedPlan, targetOwnedDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
-	if err != nil {
-		t.Fatalf("plan target-owned continuation: %v", err)
+	_, targetOwnedDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("plan cross-role target-owned continuation error = %v, want %v", err, launch.ErrLockedAgentRoleChange)
 	}
-	if targetOwnedPlan.Descriptor.SessionID() != continuedSessionID || targetOwnedDisposable {
-		t.Fatalf(
-			"target-owned continuation = session %q disposable %t, want retained session %q",
-			targetOwnedPlan.Descriptor.SessionID(),
-			targetOwnedDisposable,
-			continuedSessionID,
-		)
+	if targetOwnedDisposable {
+		t.Fatal("cross-role target-owned continuation unexpectedly marked retained Session disposable")
 	}
 	targetOwnedRecord, err := metadataStore.ResolvePersistedSession(ctx, continuedSessionID.String())
 	if err != nil {
