@@ -1537,6 +1537,7 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release predecessor runtime: %v", err)
 	}
+	successor := openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
@@ -1549,20 +1550,13 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 		authority.routeBackgroundEvent(event)
 	}
 	route(event, predecessor.Resource().Generation())
-	route(event, predecessor.Resource().Generation())
-	successor := openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
 	select {
 	case update := <-updates:
 		if update.Type != runtime.BackgroundShellEventCompleted || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("replayed predecessor terminal event update = %+v", update)
+			t.Fatalf("predecessor terminal event update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("predecessor terminal event did not replay to successor runtime")
-	}
-	select {
-	case update := <-updates:
-		t.Fatalf("duplicate predecessor terminal event replayed: %+v", update)
-	default:
+		t.Fatal("predecessor terminal event did not route to current runtime")
 	}
 
 	backgrounded := event

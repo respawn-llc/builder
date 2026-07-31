@@ -14,8 +14,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 type ActiveRuntimeMaintenance struct {
@@ -264,33 +262,11 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
-	pending := a.pendingTerminals[sessionID]
-	if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
-		if resource == nil || pending != nil {
-			a.enqueuePendingTerminalEventLocked(sessionID, event)
-			a.mu.Unlock()
-			return
-		}
-	}
 	a.mu.Unlock()
 	if resource == nil || (event.Type == shelltool.EventBackgrounded && resource.ref.Generation() != correlation.ResourceGeneration()) {
 		return
 	}
-	if routeErr := a.routeBackgroundEventToResource(resource, event); routeErr != nil {
-		if (event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled) && errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) {
-			a.mu.Lock()
-			a.enqueuePendingTerminalEventLocked(sessionID, event)
-			a.mu.Unlock()
-			return
-		}
-		if !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
-			resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
-		}
-	}
-}
-
-func (a *Authority) routeBackgroundEventToResource(resource *agentResource, event shelltool.Event) error {
-	return resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+	routeErr := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 		summary := shelltool.BackgroundNoticeSummary{}
 		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
 			var summaryErr error
@@ -333,54 +309,8 @@ func (a *Authority) routeBackgroundEventToResource(resource *agentResource, even
 		}, !event.NoticeSuppressed)
 		return nil
 	})
-}
-
-func (a *Authority) enqueuePendingTerminalEventLocked(sessionID runtimeids.SessionID, event shelltool.Event) {
-	if a.closed {
-		return
-	}
-	pending := a.pendingTerminals[sessionID]
-	if pending == nil {
-		pending = &pendingTerminalEvents{activity: make(map[uuid.UUID]struct{})}
-		a.pendingTerminals[sessionID] = pending
-	}
-	if _, exists := pending.activity[event.Snapshot.ActivityID]; exists {
-		return
-	}
-	pending.events = append(pending.events, event)
-	pending.activity[event.Snapshot.ActivityID] = struct{}{}
-}
-
-func (a *Authority) replayPendingTerminalEvents(resource *agentResource) {
-	sessionID := resource.ref.SessionID()
-	for {
-		a.mu.Lock()
-		pending := a.pendingTerminals[sessionID]
-		if pending == nil {
-			a.mu.Unlock()
-			return
-		}
-		event := pending.events[0]
-		a.mu.Unlock()
-
-		if err := a.routeBackgroundEventToResource(resource, event); err != nil {
-			return
-		}
-
-		a.mu.Lock()
-		pending = a.pendingTerminals[sessionID]
-		if pending == nil || len(pending.events) == 0 || pending.events[0].Snapshot.ActivityID != event.Snapshot.ActivityID {
-			a.mu.Unlock()
-			panic(fmt.Sprintf("pending terminal event queue changed during replay: session_id=%s activity_id=%s", sessionID, event.Snapshot.ActivityID))
-		}
-		pending.events = pending.events[1:]
-		delete(pending.activity, event.Snapshot.ActivityID)
-		if len(pending.events) == 0 {
-			delete(a.pendingTerminals, sessionID)
-			a.mu.Unlock()
-			return
-		}
-		a.mu.Unlock()
+	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
+		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
 	}
 }
 
