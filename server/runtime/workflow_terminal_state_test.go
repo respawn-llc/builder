@@ -30,7 +30,13 @@ func TestWorkflowSessionStateRequiresValidTaskAndWorkflowIdentity(t *testing.T) 
 				},
 			}}}
 
-			state := engine.WorkflowSessionState()
+			state, err := engine.WorkflowSessionState()
+			if testCase.wantState && err != nil {
+				t.Fatalf("WorkflowSessionState() error = %v", err)
+			}
+			if !testCase.wantState && (testCase.taskID == "" || testCase.workflowID.IsZero()) && err == nil {
+				t.Fatal("WorkflowSessionState() error = nil for invalid active identity")
+			}
 			if (state != nil) != testCase.wantState {
 				t.Fatalf("WorkflowSessionState() = %+v, want state present = %v", state, testCase.wantState)
 			}

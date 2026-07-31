@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,21 +30,24 @@ type WorkflowSessionState struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
-func (e *Engine) WorkflowSessionState() *WorkflowSessionState {
+func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
 	if e == nil {
-		return nil
+		return nil, nil
 	}
 	if e.currentNodeExecutionActive() {
 		instructions := e.cfg.CurrentNodeExecution.Instructions
-		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" || instructions.WorkflowID.IsZero() {
-			return nil
+		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" {
+			return nil, fmt.Errorf("active Workflow execution has no Task ID")
+		}
+		if instructions.WorkflowID.IsZero() {
+			return nil, fmt.Errorf("active Workflow execution has no Workflow ID")
 		}
 		return &WorkflowSessionState{
 			TaskID:     instructions.CurrentNode.TaskID,
 			WorkflowID: instructions.WorkflowID,
-		}
+		}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
