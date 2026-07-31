@@ -119,9 +119,6 @@ describe("VerticalReorder", () => {
       pointerId: 1,
     });
     expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
-    });
 
     fireEvent.pointerUp(destination, {
       clientX: 20,

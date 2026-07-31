@@ -10,12 +10,13 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type KeyboardCoordinateGetter,
+  type SensorContext,
   type UniqueIdentifier,
   type CollisionDetection,
 } from "@dnd-kit/core";
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
@@ -63,14 +64,13 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
   const [session, setSession] = useState<VerticalReorderDragSession | null>(null);
-  const destinationIDRef = useRef<UniqueIdentifier | null>(null);
   const rowNodes = useRef(new Map<UniqueIdentifier, HTMLElement>());
   const listRef = useRef<HTMLDivElement | null>(null);
   const edgeScroll = useBoundedVerticalEdgeScroll();
   const itemByID = new Map<UniqueIdentifier, Item>(items.map((item) => [getItemID(item), item]));
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter: verticalReorderKeyboardCoordinates }),
   );
 
   const registerRow = useCallback((id: ID, element: HTMLElement | null) => {
@@ -80,19 +80,8 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     }
     rowNodes.current.set(id, element);
   }, []);
-  const moveKeyboardDestination = useCallback(
-    (activeID: UniqueIdentifier, direction: 1 | -1) => {
-      const ids = items.map(getItemID);
-      const currentID = destinationIDRef.current ?? activeID;
-      const currentIndex = ids.findIndex((id) => id === currentID);
-      destinationIDRef.current = ids[currentIndex + direction] ?? currentID;
-    },
-    [getItemID, items],
-  );
-
   const clearSession = useCallback(() => {
     edgeScroll.stop();
-    destinationIDRef.current = null;
     setSession(null);
   }, [edgeScroll]);
 
@@ -100,7 +89,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     (event: DragStartEvent) => {
       const activeID = event.active.id;
       const source = event.activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer";
-      destinationIDRef.current = activeID;
       setSession({
         activeID,
         source,
@@ -120,10 +108,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       }
       if (session?.source === "keyboard") {
         rowNodes.current.get(overID)?.scrollIntoView({ block: "nearest" });
-        return;
-      }
-      if (overID !== event.active.id) {
-        destinationIDRef.current = overID;
       }
     },
     [session?.source],
@@ -145,8 +129,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeID = event.active.id;
-      const overID = destinationIDRef.current ?? event.over?.id;
-      const orderedIDs = reorderIDs(items.map(getItemID), activeID, overID);
+      const orderedIDs = reorderIDs(items.map(getItemID), activeID, event.over?.id);
       clearSession();
       if (orderedIDs === null) {
         return;
@@ -188,7 +171,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
                 item={item}
                 key={id}
                 onRowNodeChange={registerRow}
-                onKeyboardMove={moveKeyboardDestination}
                 renderActivator={renderActivator}
                 renderItem={renderItem}
                 session={session}
@@ -216,7 +198,6 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
   id,
   item,
   onRowNodeChange,
-  onKeyboardMove,
   renderActivator,
   renderItem,
   session,
@@ -224,7 +205,6 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
   id: ID;
   item: Item;
   onRowNodeChange: (id: ID, element: HTMLElement | null) => void;
-  onKeyboardMove: (activeID: ID, direction: 1 | -1) => void;
   renderActivator: (item: Item) => VerticalReorderActivator;
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
   session: VerticalReorderDragSession | null;
@@ -258,14 +238,6 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
         activator: cloneElement(renderActivator(item), {
           ...attributes,
           ...listeners,
-          onKeyDown: (event) => {
-            if (isDragging && event.code === "ArrowDown") {
-              onKeyboardMove(id, 1);
-            } else if (isDragging && event.code === "ArrowUp") {
-              onKeyboardMove(id, -1);
-            }
-            listeners?.onKeyDown?.(event);
-          },
           ref: setActivatorNodeRef,
         }),
         isDragging,
@@ -283,9 +255,10 @@ function reorderIDs<ID extends UniqueIdentifier>(
   if (overID === undefined || activeID === overID) {
     return null;
   }
-  const activeIndex = ids.findIndex((id) => id === activeID);
-  const overIndex = ids.findIndex((id) => id === overID);
-  if (activeIndex < 0 || overIndex < 0) {
+  const indexes = indexesByID(ids);
+  const activeIndex = indexes.get(activeID);
+  const overIndex = indexes.get(overID);
+  if (activeIndex === undefined || overIndex === undefined) {
     return null;
   }
   const next = [...ids];
@@ -314,6 +287,59 @@ const verticalReorderCollisionDetection: CollisionDetection = ({
   };
   return closestCenter({ collisionRect: pointerRect, pointerCoordinates, ...args });
 };
+
+const verticalReorderKeyboardCoordinates: KeyboardCoordinateGetter = (event, { active, context }) => {
+  const direction = verticalKeyboardDirection(event.code);
+  if (direction === undefined) {
+    return undefined;
+  }
+  event.preventDefault();
+  const ids = context.droppableContainers.getEnabled().map(({ id }) => id);
+  const indexes = indexesByID(ids);
+  const activeIndex = indexes.get(active);
+  if (activeIndex === undefined) {
+    return undefined;
+  }
+  const overIndex = context.over === null ? undefined : indexes.get(context.over.id);
+  const currentIndex = keyboardCurrentIndex(context, activeIndex, overIndex);
+  const targetID = ids[currentIndex + direction];
+  if (targetID === undefined) {
+    return undefined;
+  }
+  const targetRect = context.droppableRects.get(targetID);
+  return targetRect === undefined ? undefined : { x: targetRect.left, y: targetRect.top };
+};
+
+function indexesByID(ids: readonly UniqueIdentifier[]): ReadonlyMap<UniqueIdentifier, number> {
+  return new Map(ids.map((id, index) => [id, index]));
+}
+
+function verticalKeyboardDirection(code: string): 1 | -1 | undefined {
+  if (code === "ArrowDown") {
+    return 1;
+  }
+  if (code === "ArrowUp") {
+    return -1;
+  }
+  return undefined;
+}
+
+function keyboardCurrentIndex(
+  context: SensorContext,
+  activeIndex: number,
+  overIndex: number | undefined,
+): number {
+  const activeRect = context.active?.rect.current;
+  if (activeRect === undefined) {
+    return activeIndex;
+  }
+  const { initial, translated } = activeRect;
+  if (initial === null || translated === null) {
+    return activeIndex;
+  }
+  const hasMoved = initial.top !== translated.top || initial.left !== translated.left;
+  return hasMoved && overIndex !== undefined ? overIndex : activeIndex;
+}
 
 function pointerLocation(event: DragMoveEvent): Readonly<{ x: number; y: number }> | null {
   if (!(event.activatorEvent instanceof PointerEvent)) {
