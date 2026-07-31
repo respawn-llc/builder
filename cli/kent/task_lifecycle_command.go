@@ -43,7 +43,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	var selectedWorkflow *workflowSelector
+	var selectedWorkflow *runtimeids.WorkflowID
 	if flagWasProvided(fs, "workflow") {
 		selector, parseErr := parseWorkflowSelector(*workflowRef)
 		if parseErr != nil {
@@ -60,8 +60,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		var workflowID *runtimeids.WorkflowID
 		if selectedWorkflow != nil {
-			value := selectedWorkflow.value
-			workflowID = &value
+			workflowID = selectedWorkflow
 		}
 		labelIDs := []string(nil)
 		if len(labelSelectors) > 0 {
@@ -98,8 +97,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		if err != nil {
 			var selectedWorkflowID *runtimeids.WorkflowID
 			if selectedWorkflow != nil {
-				value := selectedWorkflow.value
-				selectedWorkflowID = &value
+				selectedWorkflowID = selectedWorkflow
 			}
 			writeTaskCreateError(stderr, err, taskCreateCommandContext{
 				ProjectRef:         *projectRef,

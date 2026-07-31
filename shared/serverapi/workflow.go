@@ -2813,8 +2813,17 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 			return err
 		}
 	}
-	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
+	if err := validateOptionalWorkflowID(r.WorkflowID); err != nil {
 		return err
+	}
+	if r.PageSize < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
+	}
+	if r.PageSize > WorkflowTaskListMaxPageSize {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowTaskListMaxPageSize))
+	}
+	if strings.TrimSpace(r.PageToken) != r.PageToken {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
 	return nil
 }

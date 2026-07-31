@@ -32,7 +32,7 @@ type sessionIdentityPublisher interface {
 }
 
 type sessionStatusPublisher interface {
-	PublishSessionStatus(sessionID string)
+	PublishSessionStatus(sessionID string) error
 }
 
 type PromptHistoryStore interface {
@@ -315,8 +315,7 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 			if err := engine.SetThinkingLevel(req.Level); err != nil {
 				return err
 			}
-			s.publishSessionStatus(req.SessionID)
-			return nil
+			return s.publishSessionStatus(req.SessionID)
 		})
 	})
 	return err
@@ -363,8 +362,7 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 			}
 			changed, enabled := engine.SetAutoCompactionEnabled(req.Enabled)
 			resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
-			s.publishSessionStatus(req.SessionID)
-			return nil
+			return s.publishSessionStatus(req.SessionID)
 		})
 		return resp, err
 	})
@@ -402,8 +400,7 @@ func memoizedCommittedRuntimeMutation[Req any, Resp any](
 			if !receipt.Committed {
 				return mutationErr
 			}
-			result.Err = mutationErr
-			service.publishSessionStatus(sessionID)
+			result.Err = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
 			return nil
 		})
 		return result, err
@@ -414,10 +411,11 @@ func memoizedCommittedRuntimeMutation[Req any, Resp any](
 	return result.Response, result.Err
 }
 
-func (s *Service) publishSessionStatus(sessionID string) {
+func (s *Service) publishSessionStatus(sessionID string) error {
 	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
-		publisher.PublishSessionStatus(sessionID)
+		return publisher.PublishSessionStatus(sessionID)
 	}
+	return nil
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {

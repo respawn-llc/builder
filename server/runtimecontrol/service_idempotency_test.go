@@ -28,14 +28,16 @@ var runtimeControlOpenAICapabilities = llm.ProviderCapabilities{
 
 type sessionStatusCountingResolver struct {
 	publishCount int
+	publishErr   error
 }
 
 func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
 	return runtimeactivity.ResponseSnapshot{}, nil
 }
 
-func (r *sessionStatusCountingResolver) PublishSessionStatus(string) {
+func (r *sessionStatusCountingResolver) PublishSessionStatus(string) error {
 	r.publishCount++
+	return r.publishErr
 }
 
 func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
@@ -50,6 +52,36 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
+	}
+}
+
+func TestServiceCommittedRuntimeMutationReturnsAndCachesSessionStatusPublishError(t *testing.T) {
+	statusErr := errors.New("session status publish failed")
+	store, engine, service := newRuntimeControlTestService(t, &runtimeControlFakeClient{}, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	resolver := &sessionStatusCountingResolver{publishErr: statusErr}
+	service.WithRuntimeActivityResolver(resolver)
+	req := serverapi.RuntimeSetFastModeEnabledRequest{
+		ClientRequestID: "status-publish-error",
+		SessionID:       store.Meta().SessionID,
+		Enabled:         true,
+	}
+
+	first, err := service.SetFastModeEnabled(context.Background(), req)
+	if !errors.Is(err, statusErr) {
+		t.Fatalf("first SetFastModeEnabled error = %v, want status publish error", err)
+	}
+	second, err := service.SetFastModeEnabled(context.Background(), req)
+	if !errors.Is(err, statusErr) {
+		t.Fatalf("replayed SetFastModeEnabled error = %v, want status publish error", err)
+	}
+	if !first.Changed || first != second || !engine.FastModeEnabled() {
+		t.Fatalf("responses = (%+v, %+v), fast mode = %t", first, second, engine.FastModeEnabled())
+	}
+	if resolver.publishCount != 1 {
+		t.Fatalf("session status publish count = %d, want 1", resolver.publishCount)
 	}
 }
 

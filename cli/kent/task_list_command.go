@@ -70,7 +70,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	workflowProvided := flagWasProvided(fs, "workflow")
 	var selectedWorkflowID *runtimeids.WorkflowID
-	var selectedWorkflowSelector *runtimeids.WorkflowID
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)
 		err = parseErr
@@ -78,9 +77,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		selectedWorkflowID = &selector.value
-		selectorValue := selector.value
-		selectedWorkflowSelector = &selectorValue
+		selectedWorkflowID = &selector
 	}
 	var recoveryLabelMatch *serverapi.WorkflowTaskNamedLabelFilterMode
 	if labelMatchExplicit {
@@ -124,7 +121,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			writeTaskListError(stderr, err, taskListCommandContext{
 				ProjectRef:             *projectRef,
 				ResolvedProjectID:      projectID,
-				SelectedWorkflowID:     selectedWorkflowSelector,
+				SelectedWorkflowID:     selectedWorkflowID,
 				ColumnKeys:             columnKeys,
 				StatusKinds:            statusKinds,
 				AttentionKinds:         attentionKinds,
@@ -141,7 +138,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		expectedScope := taskListExpectedScope{
 			ProjectID:  projectID,
-			WorkflowID: selectedWorkflowSelector,
+			WorkflowID: selectedWorkflowID,
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})

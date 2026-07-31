@@ -294,7 +294,7 @@ The CLI manages the same Project catalog with `kent task label create`, `list`, 
 
 ### CLI Workflow And Task Scope
 
-CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.
+CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`.
 
 ```bash
 kent workflow list --project .
@@ -355,8 +355,8 @@ Target selection occurs on the first executable start, manual move, or approval.
 Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
 ```bash
-kent workflow update <workflow> --execution-target ask-on-first-execution
-kent workflow update <workflow> --execution-target none|head|default-branch|ref:<revision>
+kent workflow update <uuid> --execution-target ask-on-first-execution
+kent workflow update <uuid> --execution-target none|head|default-branch|ref:<revision>
 
 kent task start <task> --execution-target none|head|default-branch|ref:<revision>
 kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>

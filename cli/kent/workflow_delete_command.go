@@ -25,7 +25,7 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		workflowID := selector.value
+		workflowID := selector
 		workflowDisplayID := selector.String()
 		preview, err := remote.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 		if err != nil {

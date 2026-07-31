@@ -111,7 +111,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
 		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event)
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+				panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+			}
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
@@ -122,10 +124,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}),
 	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
-		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
+		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
 			Error: err.Error(),
-		})
+		}); publishErr != nil {
+			panic(fmt.Sprintf("publish sleep-guard runtime event: %v", publishErr))
+		}
 	})
 	if sleepErr != nil {
 		fmt.Fprintf(os.Stderr, "sleepguard: always-mode acquire failed at startup: %v\n", sleepErr)

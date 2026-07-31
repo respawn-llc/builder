@@ -153,6 +153,19 @@ func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
+	projectID := "project-1"
+	workflowID := runtimeids.WorkflowID{}
+	request := WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if !hasWorkflowRequestError(request.Validate(), "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("Validate error = %v, want workflow_id required", request.Validate())
+	}
+}
+
 func TestWorkflowTaskNamedLabelFilterExclusionsValidateAndMarshalAdditively(t *testing.T) {
 	mixed := WorkflowTaskLabelFilter{
 		Kind: WorkflowTaskLabelFilterKindNamed,
