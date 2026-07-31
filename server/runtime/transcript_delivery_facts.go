@@ -71,6 +71,7 @@ type TranscriptNoticeRowFact struct {
 	DiagnosticCode       string
 	DiagnosticDetail     string
 	CacheWarning         *TranscriptCacheWarningFact
+	Compaction           *TranscriptCompactionNoticeFact
 }
 
 type TranscriptCacheWarningFact struct {
@@ -78,6 +79,11 @@ type TranscriptCacheWarningFact struct {
 	Reason          string
 	LostInputTokens *int
 	Visibility      transcript.EntryVisibility
+}
+
+type TranscriptCompactionNoticeFact struct {
+	Count  *int
+	Detail *string
 }
 
 func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFact {
@@ -179,7 +185,13 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	case llm.RoleUser:
 		if msg.MessageType != nil &&
 			*msg.MessageType == llm.MessageTypeCompactionSummary {
-			return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, transcript.NoticeSeverityInfo)}
+			detail, _ := textutil.OptionalExact(msg.Content)
+			return []TranscriptCommittedRowFact{transcriptCompactionNoticeFact(
+				"",
+				messageTypeTranscriptVisibility(msg.MessageType),
+				nil,
+				detail,
+			)}
 		}
 		if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 			return nil
@@ -204,6 +216,16 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	case llm.RoleTool:
 		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(resolvedToolResultForMessage(msg, completions))}
 	case llm.RoleDeveloper:
+		if msg.MessageType != nil &&
+			*msg.MessageType == llm.MessageTypeCompactionSummary {
+			detail, _ := textutil.OptionalExact(msg.Content)
+			return []TranscriptCommittedRowFact{transcriptCompactionNoticeFact(
+				"",
+				messageTypeTranscriptVisibility(msg.MessageType),
+				nil,
+				detail,
+			)}
+		}
 		if msg.MessageType != nil &&
 			*msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
@@ -304,6 +326,14 @@ func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedR
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
 	}
+	if entry.MessageType == llm.MessageTypeCompactionSummary {
+		return transcriptCompactionNoticeFact(
+			entry.StepID,
+			visibility,
+			entry.CompactionNumber,
+			entry.Text,
+		), true
+	}
 	integrity := transcriptNoticeEntryIntegrity(entry)
 	fact := localEntryNoticeFact(entry)
 	fact.StepID = entry.StepID
@@ -313,6 +343,33 @@ func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedR
 	)
 	fact.Integrity = integrity
 	return fact, true
+}
+
+func transcriptCompactionNoticeFact(
+	stepID string,
+	visibility transcript.EntryVisibility,
+	count *int,
+	detail string,
+) TranscriptCommittedRowFact {
+	var detailPointer *string
+	if strings.TrimSpace(detail) != "" {
+		detailPointer = &detail
+	}
+	return TranscriptCommittedRowFact{
+		StepID:     stepID,
+		Kind:       TranscriptCommittedRowFactNotice,
+		Visibility: resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing),
+		Integrity:  transcript.RowIntegrityValid,
+		Notice: &TranscriptNoticeRowFact{
+			Reason:      transcript.NoticeReasonCompaction,
+			Severity:    transcript.NoticeSeverityInfo,
+			MessageType: llm.MessageTypeCompactionSummary,
+			Compaction: &TranscriptCompactionNoticeFact{
+				Count:  textutil.Pointer(count),
+				Detail: detailPointer,
+			},
+		},
+	}
 }
 
 func transcriptTextEntryIntegrity(primary string, alternatives ...string) transcript.RowIntegrity {

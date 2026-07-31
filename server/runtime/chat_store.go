@@ -26,6 +26,7 @@ type ChatEntry struct {
 	CondensedText        string
 	Phase                llm.MessagePhase
 	MessageType          llm.MessageType
+	CompactionNumber     *int
 	SourcePath           string
 	WorktreeContext      *session.WorktreeContext
 	CompactLabel         string

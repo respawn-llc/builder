@@ -145,9 +145,13 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	const (
+		firstPreservedPrompt  = "  first preserved prompt\n"
+		secondPreservedPrompt = "\tsecond preserved prompt  "
+	)
 	items := llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, Content: textutil.Value("first preserved prompt")},
-		{Role: llm.RoleUser, Content: textutil.Value("second preserved prompt")},
+		{Role: llm.RoleUser, Content: textutil.Value(firstPreservedPrompt)},
+		{Role: llm.RoleUser, Content: textutil.Value(secondPreservedPrompt)},
 		{
 			Role:        llm.RoleDeveloper,
 			MessageType: textutil.Value(llm.MessageTypeEnvironment),
@@ -197,8 +201,8 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	}
 	wantDetails := []string{
 		"",
-		"first preserved prompt",
-		"second preserved prompt",
+		firstPreservedPrompt,
+		secondPreservedPrompt,
 		"current environment",
 	}
 	for index, fact := range live {
@@ -221,26 +225,19 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	if !reflect.DeepEqual(hydrated, live) {
 		t.Fatalf("persisted active segment facts = %+v, live facts = %+v", hydrated, live)
 	}
-	workingSet := engine.transcriptRuntimeState().SnapshotItems()
-	if len(workingSet) < 2 {
-		t.Fatalf("provider working set = %+v, want preserved user items", workingSet)
-	}
-	wantProviderContent := []string{"first preserved prompt", "second preserved prompt"}
-	for index, wantContent := range wantProviderContent {
-		item := workingSet[index]
-		if item.Role == nil || *item.Role != llm.RoleUser ||
-			item.MessageType != nil ||
-			item.Content == nil || *item.Content != wantContent {
-			t.Fatalf("provider item %d changed while projecting transcript provenance: %+v", index, item)
-		}
-	}
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close live engine: %v", err)
 	}
+	providerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("done"),
+		},
+	}}}
 	reopened := mustNewTestEngine(
 		t,
 		mustOpenTestSession(t, store.Dir()),
-		&fakeClient{},
+		providerClient,
 		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
 	)
@@ -248,5 +245,20 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot)
 	if !reflect.DeepEqual(reopenedFacts, live) {
 		t.Fatalf("reopened active segment facts = %+v, live facts = %+v", reopenedFacts, live)
+	}
+	if _, err := reopened.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit post-compaction message: %v", err)
+	}
+	if len(providerClient.calls) != 1 || len(providerClient.calls[0].Items) < 2 {
+		t.Fatalf("post-compaction provider calls = %+v, want one request with preserved items", providerClient.calls)
+	}
+	wantProviderContent := []string{firstPreservedPrompt, secondPreservedPrompt}
+	for index, wantContent := range wantProviderContent {
+		item := providerClient.calls[0].Items[index]
+		if item.Role == nil || *item.Role != llm.RoleUser ||
+			item.MessageType != nil ||
+			item.Content == nil || *item.Content != wantContent {
+			t.Fatalf("provider item %d changed across compaction: %+v", index, item)
+		}
 	}
 }

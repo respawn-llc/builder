@@ -652,10 +652,6 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	result.items = withCompactionSummaryLabel(
-		result.items,
-		compactionSummaryLabel(compactionNumber),
-	)
 	postReplacementMeta, err := e.compactionReinjectedMetaMessages(ctx)
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
@@ -802,23 +798,6 @@ func (e *Engine) applyPendingHandoffIfNeeded(ctx context.Context, stepID string)
 	}
 	e.handoffRuntimeState().ClearRequest()
 	return true, nil
-}
-
-func withCompactionSummaryLabel(items []llm.ResponseItem, label string) []llm.ResponseItem {
-	label = strings.TrimSpace(label)
-	if label == "" || len(items) == 0 {
-		return llm.CloneResponseItems(items)
-	}
-	out := llm.CloneResponseItems(items)
-	for idx := range out {
-		if out[idx].MessageType == nil ||
-			*out[idx].MessageType != llm.MessageTypeCompactionSummary {
-			continue
-		}
-		out[idx].CompactContent = textutil.Value(label)
-		return out
-	}
-	return out
 }
 
 func (e *Engine) compactionPlannerState() *compactionPlanner {

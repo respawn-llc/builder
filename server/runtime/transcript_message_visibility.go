@@ -130,7 +130,7 @@ func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
 }
 
 func compactionSummaryChatEntry(msg llm.Message) ChatEntry {
-	label := compactLabelForMessage(msg)
+	label, _ := textutil.OptionalTrimmed(msg.CompactContent)
 	text := ""
 	if msg.Content != nil {
 		text = *msg.Content
@@ -232,7 +232,7 @@ func compactLabelForMessage(msg llm.Message) string {
 	case llm.MessageTypeWorktreeModeExit:
 		return ""
 	case llm.MessageTypeCompactionSummary:
-		return "Context compacted"
+		return ""
 	case llm.MessageTypeInterruption:
 		return "You interrupted"
 	case llm.MessageTypeErrorFeedback:

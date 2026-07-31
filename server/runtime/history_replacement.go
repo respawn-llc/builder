@@ -1,11 +1,11 @@
 package runtime
 
 import (
-	"fmt"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -48,6 +48,7 @@ func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem, compactio
 		for _, entry := range VisibleChatEntriesFromMessage(msg) {
 			if entry.MessageType == llm.MessageTypeCompactionSummary {
 				hasCompactionSummary = true
+				entry.CompactionNumber = textutil.Pointer(compactionNumber)
 			}
 			entries = append(entries, clonePersistedChatEntry(entry))
 		}
@@ -86,22 +87,10 @@ func preservedUserMessageEntry(msg llm.Message) (ChatEntry, bool) {
 }
 
 func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
-	messageType := llm.MessageTypeCompactionSummary
-	label := compactLabelForMessage(llm.Message{MessageType: &messageType})
-	if compactionNumber != nil {
-		label = compactionSummaryLabel(*compactionNumber)
+	return ChatEntry{
+		Visibility:       transcript.EntryVisibilityOngoing,
+		Role:             string(transcript.EntryRoleCompactionSummary),
+		MessageType:      llm.MessageTypeCompactionSummary,
+		CompactionNumber: textutil.Pointer(compactionNumber),
 	}
-	return compactionSummaryChatEntry(llm.Message{
-		Role:           llm.RoleUser,
-		MessageType:    &messageType,
-		Content:        &label,
-		CompactContent: &label,
-	})
-}
-
-func compactionSummaryLabel(compactionNumber int) string {
-	return fmt.Sprintf(
-		"Context compacted for the %s time.",
-		ordinal(compactionNumber),
-	)
 }

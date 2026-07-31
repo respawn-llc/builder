@@ -25,13 +25,19 @@ func TestExpandedCompactionNoticesUseNormalTextRole(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			notice := &clientui.TranscriptNoticeRow{
+				MessageType: &test.messageType,
+			}
+			if test.messageType == clientui.TranscriptMessageCompactionSummary {
+				notice.Reason = clientui.TranscriptNoticeCompaction
+				notice.Severity = clientui.TranscriptNoticeInfo
+				notice.Compaction = &clientui.TranscriptCompactionNotice{}
+			}
 			row := clientui.TranscriptCommittedRow{
 				Visibility: transcript.EntryVisibilityDetail,
 				Integrity:  transcript.RowIntegrityValid,
 				Kind:       clientui.TranscriptRowNotice,
-				Notice: &clientui.TranscriptNoticeRow{
-					MessageType: &test.messageType,
-				},
+				Notice:     notice,
 			}
 
 			if got, _ := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailCollapsed); got != test.compactRole {

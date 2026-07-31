@@ -663,6 +663,13 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
+	if row.Reason == clientui.TranscriptNoticeCompaction && row.Compaction != nil {
+		text := compactionNoticeText(row.Compaction.Count)
+		if mode == ModeDetailExpanded && row.Compaction.Detail != nil {
+			text = *row.Compaction.Detail
+		}
+		return noticeStyleRoleForMode(row, mode), text
+	}
 	if text, ok := worktreeNoticeText(row); ok {
 		return noticeStyleRole(row), text
 	}
@@ -683,6 +690,29 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		text = stripReasoningBoldDelimiters(text)
 	}
 	return noticeStyleRoleForMode(row, mode), text
+}
+
+func compactionNoticeText(count *int) string {
+	if count == nil {
+		return "Context compacted"
+	}
+	return fmt.Sprintf("Context compacted for the %s time.", ordinal(*count))
+}
+
+func ordinal(value int) string {
+	if value%100 >= 11 && value%100 <= 13 {
+		return fmt.Sprintf("%dth", value)
+	}
+	switch value % 10 {
+	case 1:
+		return fmt.Sprintf("%dst", value)
+	case 2:
+		return fmt.Sprintf("%dnd", value)
+	case 3:
+		return fmt.Sprintf("%drd", value)
+	default:
+		return fmt.Sprintf("%dth", value)
+	}
 }
 
 func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {

@@ -57,6 +57,7 @@ type TranscriptNoticeReason string
 
 const (
 	TranscriptNoticeCacheWarning        TranscriptNoticeReason = transcript.NoticeReasonCacheWarning
+	TranscriptNoticeCompaction          TranscriptNoticeReason = transcript.NoticeReasonCompaction
 	TranscriptNoticeLegacyUntypedNotice TranscriptNoticeReason = transcript.NoticeReasonLegacyUntypedNotice
 	TranscriptNoticeRuntimeDiagnostic   TranscriptNoticeReason = transcript.NoticeReasonRuntimeDiagnostic
 )
@@ -108,6 +109,7 @@ type TranscriptNoticeRow struct {
 	SourcePath    *string
 	Worktree      *TranscriptWorktreeContext
 	CacheWarning  *TranscriptCacheWarning
+	Compaction    *TranscriptCompactionNotice
 	Diagnostic    *TranscriptDiagnostic
 	Background    *TranscriptBackgroundNoticeIdentity
 	CondensedText *string
@@ -126,6 +128,18 @@ type TranscriptCacheWarning struct {
 	Reason          string
 	LostInputTokens *int
 	Visibility      transcript.EntryVisibility
+}
+
+type TranscriptCompactionNotice struct {
+	Count  *int
+	Detail *string
+}
+
+func (n TranscriptCompactionNotice) Validate() error {
+	if n.Count != nil && *n.Count <= 0 {
+		return fmt.Errorf("transcript compaction count must be positive when present")
+	}
+	return validateOptionalNonEmptyString("transcript compaction detail", n.Detail)
 }
 
 type TranscriptBackgroundNoticeIdentity struct {
@@ -250,6 +264,7 @@ func (r TranscriptNoticeRow) Validate() error {
 	}
 	switch r.Reason {
 	case TranscriptNoticeCacheWarning,
+		TranscriptNoticeCompaction,
 		TranscriptNoticeLegacyUntypedNotice,
 		TranscriptNoticeRuntimeDiagnostic:
 	default:
@@ -290,6 +305,11 @@ func (r TranscriptNoticeRow) Validate() error {
 			return err
 		}
 	}
+	if r.Compaction != nil {
+		if err := r.Compaction.Validate(); err != nil {
+			return err
+		}
+	}
 	if r.Diagnostic != nil {
 		if err := r.Diagnostic.Validate(); err != nil {
 			return err
@@ -305,21 +325,31 @@ func (r TranscriptNoticeRow) Validate() error {
 		if r.CacheWarning == nil {
 			return fmt.Errorf("cache-warning notice requires cache-warning facts")
 		}
-		if r.LegacyText != nil || r.Diagnostic != nil || r.Background != nil {
+		if r.LegacyText != nil || r.Compaction != nil || r.Diagnostic != nil || r.Background != nil {
 			return fmt.Errorf("cache-warning notice cannot carry another notice reason payload")
+		}
+	case TranscriptNoticeCompaction:
+		if r.Compaction == nil {
+			return fmt.Errorf("compaction notice requires compaction facts")
+		}
+		if r.MessageType == nil || *r.MessageType != TranscriptMessageCompactionSummary {
+			return fmt.Errorf("compaction notice requires compaction-summary message type")
+		}
+		if r.LegacyText != nil || r.CacheWarning != nil || r.Diagnostic != nil || r.Background != nil {
+			return fmt.Errorf("compaction notice cannot carry another notice reason payload")
 		}
 	case TranscriptNoticeRuntimeDiagnostic:
 		if r.Diagnostic == nil {
 			return fmt.Errorf("runtime-diagnostic notice requires diagnostic facts")
 		}
-		if r.LegacyText != nil || r.CacheWarning != nil {
+		if r.LegacyText != nil || r.CacheWarning != nil || r.Compaction != nil {
 			return fmt.Errorf("runtime-diagnostic notice cannot carry another notice reason payload")
 		}
 	case TranscriptNoticeLegacyUntypedNotice:
 		if r.LegacyText == nil && r.MessageType == nil {
 			return fmt.Errorf("legacy notice requires text or typed message metadata")
 		}
-		if r.CacheWarning != nil || r.Diagnostic != nil || r.Background != nil {
+		if r.CacheWarning != nil || r.Compaction != nil || r.Diagnostic != nil || r.Background != nil {
 			return fmt.Errorf("legacy notice cannot carry a typed notice reason payload")
 		}
 	}

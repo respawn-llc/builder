@@ -114,7 +114,7 @@
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
-- Compaction-Preserved User Message: `D`. Its persisted message-type value `manual_compaction_carryover` is legacy.
+- Compaction-Preserved User Message: `D`.
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
 - `workflow_mode`: `OC`

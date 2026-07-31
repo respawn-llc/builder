@@ -252,7 +252,7 @@ The TUI mode for inspecting a bounded transcript page with selection, expansion,
 
 ### Compaction-Preserved User Message
 
-A user message retained in the model working set across a compaction boundary. Kent projects each preserved message into the transcript in provider order with detail-only visibility. The persisted message-type value `manual_compaction_carryover` is its legacy identifier.
+A user message retained in the model working set across a compaction boundary. Kent projects each preserved message into the transcript in provider order with detail-only visibility.
 
 ### Transcript Mode
 
