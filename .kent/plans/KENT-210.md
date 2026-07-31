@@ -405,3 +405,4 @@
 - [x] Human-authorized scope recorded in KENT-210 comment `comment-6ded210e-8fdb-455e-ae37-fb8ce544e128`: browser visual QA and the separate end-to-end CLI/GUI acceptance pass belong to the separate QA agent, not this implementation task.
 - [x] Integrate the applicable main test-runner update (`dce2720fc13`) raising the server test cap to 300 seconds; full `./scripts/test.sh server` passes under the current worktree contract.
 - [x] Full apps lint, typecheck, policy checks, and frontend tests pass; Desktop reports 44 files and 213 tests.
+- [x] QA-agent handoff recorded: browser/end-to-end flows were attempted but blocked by missing registered project/workflow surface and Firefox host-permission/loading issues; no implementation-side workaround is authorized.
