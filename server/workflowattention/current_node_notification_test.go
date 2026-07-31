@@ -8,6 +8,7 @@ import (
 	"core/server/attentionnotify"
 	"core/server/workflow"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -24,7 +25,7 @@ func TestFinalizerPublishesCurrentNodeApprovalNotification(t *testing.T) {
 		ApprovalID:       approvalID,
 		Source:           source,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		OccurredAtUnixMs: 1,
 	}
 	broker := attentionnotify.NewBroker()
@@ -95,7 +96,7 @@ func TestFinalizerOrdersPendingBeforeConcurrentResolution(t *testing.T) {
 		ApprovalID:       approvalID,
 		Source:           source,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		OccurredAtUnixMs: 1,
 	}
 	publisher := &blockingPendingPublisher{
@@ -140,7 +141,7 @@ func TestFinalizerPublishesAndResolvesInterruptedCurrentNode(t *testing.T) {
 	projection := InterruptedCurrentNodeProjection{
 		CurrentNode:      currentNode,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		TaskShortID:      "WOR-1",
 		TaskTitle:        "Interrupted task",
 		SessionID:        "session-1",

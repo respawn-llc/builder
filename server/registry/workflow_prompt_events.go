@@ -26,10 +26,9 @@ func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot 
 		return
 	}
 	projectID := strings.TrimSpace(target.ProjectID)
-	workflowID := strings.TrimSpace(target.WorkflowID)
 	event := serverapi.WorkflowProjectEvent{
 		ProjectID:        &projectID,
-		WorkflowID:       &workflowID,
+		WorkflowID:       target.WorkflowID,
 		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           serverapi.WorkflowProjectEventActionQuestionWaiting,
 		PrimaryEntityID:  strings.TrimSpace(target.TaskID),
@@ -40,7 +39,7 @@ func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot 
 		slog.Warn(
 			"publish workflow question waiting event failed",
 			"project_id", projectID,
-			"workflow_id", workflowID,
+			"workflow_id", target.WorkflowID,
 			"task_id", target.TaskID,
 			"session_id", sessionID,
 			"ask_id", snapshot.Request.ID,

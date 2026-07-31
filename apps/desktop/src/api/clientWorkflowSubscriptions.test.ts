@@ -12,7 +12,7 @@ const workflowProjectWireEvent = {
     project_id: "project-1",
     related_ids: ["session-1", "ask-1"],
     resource: "task",
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 } as const;
 
@@ -23,7 +23,7 @@ const workflowProjectEvent: WorkflowProjectEvent = {
   projectID: "project-1",
   relatedIDs: ["session-1", "ask-1"],
   resource: "task",
-  workflowID: "workflow-1",
+  workflowID: "11111111-1111-4111-8111-111111111111",
 };
 
 describe("ApiClient workflow subscriptions", () => {
@@ -43,7 +43,7 @@ describe("ApiClient workflow subscriptions", () => {
     const client: ApiService = new ApiClient(transport);
     const events: WorkflowProjectEvent[] = [];
 
-    client.subscribeWorkflow("workflow-1", eventCollector(events));
+    client.subscribeWorkflow("11111111-1111-4111-8111-111111111111", eventCollector(events));
     transport.emit("workflow.event", workflowProjectWireEvent);
 
     expect(events).toEqual([workflowProjectEvent]);
@@ -71,7 +71,7 @@ describe("ApiClient workflow subscriptions", () => {
         primary_entity_id: "task-1",
         project_id: "project-1",
         resource: "task",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
       },
     });
 
@@ -92,7 +92,7 @@ describe("ApiClient workflow subscriptions", () => {
         projectID: "project-1",
         relatedIDs: [],
         resource: "task",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
       },
     ]);
   });
@@ -117,14 +117,14 @@ describe("ApiClient workflow subscriptions", () => {
     const events: WorkflowProjectEvent[] = [];
     const errors: Error[] = [];
 
-    client.subscribeWorkflow("workflow-1", eventCollector(events, errors));
+    client.subscribeWorkflow("11111111-1111-4111-8111-111111111111", eventCollector(events, errors));
     transport.emit("workflow.event", {
       event: {
         action: "linked",
         primary_entity_id: "task-1",
         project_id: "project-1",
         resource: "task",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
       },
     });
 
@@ -147,7 +147,7 @@ describe("ApiClient workflow subscriptions", () => {
         primary_entity_id: "task-1",
         project_id: "project-1",
         resource: "task",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
       },
     });
 

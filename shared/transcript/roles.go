@@ -16,9 +16,9 @@ const EntryRoleCacheWarning EntryRole = "cache_warning"
 // EntryRoleCompactionSummary marks a persisted compaction or handoff summary.
 const EntryRoleCompactionSummary EntryRole = "compaction_summary"
 
-// EntryRoleManualCompactionCarryover marks the synthetic message that preserves
-// the last user prompt across a manual compaction boundary.
-const EntryRoleManualCompactionCarryover EntryRole = "manual_compaction_carryover"
+// EntryRoleCompactionPreservedUserMessage marks a user message retained in the
+// model working set across compaction. Its value is a legacy persisted identifier.
+const EntryRoleCompactionPreservedUserMessage EntryRole = "manual_compaction_carryover"
 
 // EntryRoleDeveloperContext marks developer/meta context that should only
 // appear in verbose transcript views (AGENTS, skills, environment, headless prompts).

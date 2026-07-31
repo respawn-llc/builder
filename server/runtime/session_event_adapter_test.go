@@ -766,9 +766,10 @@ func TestSessionHistoryReplacementUsesItemOrderInsteadOfProviderParserOutputInde
 		},
 	})
 	record, err := sessionHistoryReplacementRecordFromRuntime(historyReplacementPayload{
-		Engine: "local",
-		Mode:   string(compactionModeAuto),
-		Items:  items,
+		Engine:           "local",
+		Mode:             string(compactionModeAuto),
+		CompactionNumber: textutil.Value(1),
+		Items:            items,
 	})
 	if err != nil {
 		t.Fatalf("adapt history replacement: %v", err)
@@ -789,8 +790,8 @@ func TestSessionHistoryReplacementUsesItemOrderInsteadOfProviderParserOutputInde
 		}
 	}
 	if !reflect.DeepEqual(
-		transcriptEntriesFromHistoryReplacement(restored.Items),
-		transcriptEntriesFromHistoryReplacement(items),
+		transcriptEntriesFromHistoryReplacement(restored.Items, restored.CompactionNumber),
+		transcriptEntriesFromHistoryReplacement(items, textutil.Value(1)),
 	) {
 		t.Fatal("transcript projection changed when parser output indexes were omitted")
 	}

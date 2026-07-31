@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -24,7 +25,7 @@ const (
 type RoutingScope struct {
 	Kind       RoutingKind
 	ProjectID  string
-	WorkflowID string
+	WorkflowID *runtimeids.WorkflowID
 	TaskID     string
 	SessionID  string
 }

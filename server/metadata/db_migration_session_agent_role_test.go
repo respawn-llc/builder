@@ -23,12 +23,13 @@ INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, 
 VALUES ('project-session-role-migration', 'Project', ?, ?, '{}')`, now, now)
 	seedLegacyWorkflowSession(t, db, "project-session-role-migration", "workspace-session-role-migration", "session-latest-role", now)
 	seedWorkflowGraph(t, db, "project-session-role-migration", now)
+	workflowID := workflowSeedID(t, db, "1")
 	execSeed(t, db, "review node", `
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role)
-VALUES ('node-review', 'workflow-1', 'review', 'agent', 'Review', ' Reviewer ')`)
+VALUES ('node-review', ?, 'review', 'agent', 'Review', ' Reviewer ')`, workflowID)
 	execSeed(t, db, "default node", `
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role)
-VALUES ('node-default', 'workflow-1', 'default_agent', 'agent', 'Default Agent', 'default')`)
+VALUES ('node-default', ?, 'default_agent', 'agent', 'Default Agent', 'default')`, workflowID)
 	execSeed(t, db, "agent roles", `
 UPDATE workflow_nodes SET subagent_role = 'coder_low' WHERE id = 'node-agent'`)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-session-role-migration", "link-1", 1, "ROLE-1", now, now)

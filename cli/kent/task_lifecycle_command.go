@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -23,7 +24,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	title := fs.String("title", "", "task title")
 	body := fs.String("body", "", "task body")
 	bodyFile := fs.String("body-file", "", "read the task body from this file")
-	workflowRef := fs.String("workflow", "", "workflow UUID; defaults to the project's default workflow")
+	workflowRef := fs.String("workflow", "", "workflow selector `<uuid>`; defaults to the project's default workflow")
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
 	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
 	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")
@@ -42,7 +43,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	var selectedWorkflow *workflowSelector
+	var selectedWorkflow *runtimeids.WorkflowID
 	if flagWasProvided(fs, "workflow") {
 		selector, parseErr := parseWorkflowSelector(*workflowRef)
 		if parseErr != nil {
@@ -57,10 +58,9 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		var workflowID *string
+		var workflowID *runtimeids.WorkflowID
 		if selectedWorkflow != nil {
-			value := selectedWorkflow.PersistedID()
-			workflowID = &value
+			workflowID = selectedWorkflow
 		}
 		labelIDs := []string(nil)
 		if len(labelSelectors) > 0 {
@@ -95,10 +95,9 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			LabelIDs:          labelIDs,
 		})
 		if err != nil {
-			var selectedWorkflowID *string
+			var selectedWorkflowID *runtimeids.WorkflowID
 			if selectedWorkflow != nil {
-				value := selectedWorkflow.String()
-				selectedWorkflowID = &value
+				selectedWorkflowID = selectedWorkflow
 			}
 			writeTaskCreateError(stderr, err, taskCreateCommandContext{
 				ProjectRef:         *projectRef,

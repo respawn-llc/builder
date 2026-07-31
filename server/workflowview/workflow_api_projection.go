@@ -2,13 +2,14 @@ package workflowview
 
 import (
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
 	derived := workflow.DeriveWiring(def)
 	resp := serverapi.WorkflowDerivedWiring{
-		Diagnostics: ValidationErrors(string(def.ID), derived.Diagnostics),
+		Diagnostics: ValidationErrors(workflow.WorkflowIDPointer(def.ID), derived.Diagnostics),
 	}
 	for _, node := range def.Nodes {
 		nodeID := workflow.NodeIDOf(node)
@@ -35,16 +36,13 @@ func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
 	return resp
 }
 
-func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serverapi.WorkflowValidationError {
+func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflow.ValidationError) []serverapi.WorkflowValidationError {
 	out := make([]serverapi.WorkflowValidationError, 0, len(errs))
 	for _, err := range errs {
-		errorWorkflowID := string(err.WorkflowID)
-		if errorWorkflowID == "" {
-			errorWorkflowID = workflowID
-		}
 		projected := serverapi.WorkflowValidationError{
 			Code:              string(err.Code),
 			Message:           err.Message,
+			WorkflowID:        err.WorkflowID,
 			NodeID:            string(err.NodeID),
 			TransitionGroupID: string(err.TransitionGroupID),
 			EdgeID:            string(err.EdgeID),
@@ -52,8 +50,8 @@ func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serv
 			RelatedIDs:        err.RelatedIDs,
 			BlocksContext:     err.BlocksContext,
 		}
-		if errorWorkflowID != "" {
-			projected.WorkflowID = &errorWorkflowID
+		if projected.WorkflowID == nil {
+			projected.WorkflowID = inheritedWorkflowID
 		}
 		out = append(out, projected)
 	}

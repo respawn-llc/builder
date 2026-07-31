@@ -755,7 +755,7 @@ func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (str
 	if err != nil {
 		return "", err
 	}
-	return workflowCompletionInstructionsFragment(mode, execution.Instructions.WorkflowShortID, execution.Contract)
+	return workflowCompletionInstructionsFragment(mode, execution.Instructions.WorkflowID, execution.Contract)
 }
 
 func customToolCallIDs(calls []llm.ToolCall) map[string]bool {

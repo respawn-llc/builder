@@ -191,6 +191,9 @@ func validateWorkflowTaskAttentionTarget(target clientui.AttentionNotificationTa
 	if target.TaskID == "" {
 		return errors.New("workflow-task attention notification target task_id is required")
 	}
+	if target.WorkflowID == nil || target.WorkflowID.IsZero() {
+		return errors.New("workflow-task attention notification target workflow_id is required")
+	}
 	if target.Focus == nil {
 		return errors.New("workflow-task attention notification target focus is required")
 	}

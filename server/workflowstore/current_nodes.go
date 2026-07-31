@@ -321,7 +321,7 @@ func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID wo
 	if err != nil {
 		return nil, err
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return nil, err
 	}

@@ -37,7 +37,7 @@ describe("BoardGenerationRequestAdapter", () => {
       queryClient,
       queryRegistry: createBoardGenerationQueryRegistry(queryClient),
     });
-    const queryKey = ["board", "project-1", "workflow-1", "none"] as const;
+    const queryKey = ["board", "project-1", "11111111-1111-4111-8111-111111111111", "none"] as const;
     const previous = testBoard("previous");
     queryClient.setQueryData(queryKey, previous);
     let transportCalls = 0;
@@ -80,7 +80,7 @@ describe("BoardGenerationRequestAdapter", () => {
         },
       },
     });
-    const queryKey = ["board", "project-1", "workflow-1", "none"] as const;
+    const queryKey = ["board", "project-1", "11111111-1111-4111-8111-111111111111", "none"] as const;
     const controller = createBoardFilterGenerationController(
       { kind: "none" },
       {
@@ -148,7 +148,7 @@ describe("BoardGenerationRequestAdapter", () => {
       queryClient,
       queryRegistry,
     });
-    const queryKey = ["board-node-cards", "project-1", "workflow-1", "none", "node-1"] as const;
+    const queryKey = ["board-node-cards", "project-1", "11111111-1111-4111-8111-111111111111", "none", "node-1"] as const;
     const pageCalls: (string | null)[] = [];
     let settleFirstPage: ((page: BoardNodeCardsPage) => void) | undefined;
 
@@ -227,7 +227,7 @@ function testCardsPage(nodeID: string): BoardNodeCardsPage {
     nodeID,
     previousPageToken: null,
     projectID: "project-1",
-    workflowID: "workflow-1",
+    workflowID: "11111111-1111-4111-8111-111111111111",
   };
 }
 

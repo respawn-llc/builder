@@ -12,6 +12,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -47,7 +48,7 @@ type workflowTaskListQueryRequest struct {
 }
 
 type workflowTaskListNarrowedQueryFacts struct {
-	workflowID string
+	workflowID runtimeids.WorkflowID
 	columns    []serverapi.WorkflowBoardColumn
 	columnKeys []string
 }
@@ -69,12 +70,12 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if l == nil {
 		return workflowTaskListPageResult{}, errors.New("task list is required")
 	}
-	workflowFilter := sql.NullString{}
+	var workflowFilter *runtimeids.WorkflowID
 	visibleColumnsJSON := sql.NullString{}
 	columnKeysJSON := sql.NullString{}
 	columnFilterSet := false
 	if req.narrowed != nil {
-		workflowFilter = sql.NullString{String: req.narrowed.workflowID, Valid: true}
+		workflowFilter = &req.narrowed.workflowID
 		encodedColumns, err := workflowTaskListVisibleColumnsJSON(req.narrowed.columns)
 		if err != nil {
 			return workflowTaskListPageResult{}, err
@@ -193,7 +194,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 			item: serverapi.WorkflowTaskListItem{
 				TaskID:          row.ID.String,
 				ShortID:         row.ShortID.String,
-				WorkflowID:      row.WorkflowID.String,
+				WorkflowID:      *row.WorkflowID,
 				WorkflowName:    workflowName,
 				Title:           row.Title.String,
 				CreatedAtUnixMs: row.CreatedAtUnixMs.Int64,

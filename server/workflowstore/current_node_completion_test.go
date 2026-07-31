@@ -221,7 +221,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		source := nodeByKey(t, def, "plan")
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		groupID := workflow.TransitionGroupID("group-alternate-" + string(workflowID))
+		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -230,7 +230,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -747,7 +747,7 @@ type reworkContextCompletionFixture struct {
 	store      *Store
 	binding    metadata.Binding
 	cfg        config.App
-	workflowID workflow.WorkflowID
+	workflowID runtimeids.WorkflowID
 	review     workflow.CurrentNode
 	audit      workflow.CurrentNode
 }
@@ -762,7 +762,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	}
 	audit := nodeByKey(t, definition, "audit")
 	review := nodeByKey(t, definition, "review")
-	reworkGroupID := workflow.TransitionGroupID("group-rework-" + string(workflowID))
+	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		auditRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(audit))
 		auditRecord.OutputFields = append(auditRecord.OutputFields, workflow.OutputField{Name: "summary", Description: "Rework summary."})
@@ -774,7 +774,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",

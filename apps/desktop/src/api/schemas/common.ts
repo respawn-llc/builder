@@ -29,9 +29,13 @@ import type {
   QuestionAttentionItem,
 } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
+import { workflowIDSchema } from "./workflowID";
+
+export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
+export const nullableWorkflowIDSchema = workflowIDSchema.nullish().transform((value) => value ?? null);
 export const numberValue = z.number().default(0);
 export const nullableString = z
   .string()
@@ -163,7 +167,7 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
   .object({
     code: z.string(),
     message: z.string(),
-    workflow_id: emptyString,
+    workflow_id: nullableWorkflowIDSchema,
     node_id: emptyString,
     transition_group_id: emptyString,
     edge_id: emptyString,
@@ -199,10 +203,7 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
-    workflow_id: z
-      .string()
-      .min(1)
-      .refine((value) => value.trim() === value),
+    workflow_id: workflowIDSchema,
     display_name: z.string(),
     description: emptyString,
     version: z.number(),
@@ -328,7 +329,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
         truncated: z.boolean(),
       })
       .strict(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     active_node_ids: stringList,
     source_workspace: workspaceSummarySchema,
     status: taskStatusSchema,
@@ -354,7 +355,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
 const attentionItemBaseWireSchema = z.object({
   id: nonBlankString,
   project_id: nonBlankString,
-  workflow_id: nonBlankString,
+  workflow_id: workflowIDSchema,
   task_id: nonBlankString,
   task_short_id: nonBlankString,
   task_title: nonBlankString,

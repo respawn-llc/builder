@@ -9,7 +9,7 @@ import type {
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "../models";
-import { projectBindingSchema, workspaceSummarySchema } from "./common";
+import { projectBindingSchema, workflowIDSchema, workspaceSummarySchema } from "./common";
 
 export const projectSummarySchema = z
   .object({
@@ -17,7 +17,7 @@ export const projectSummarySchema = z
     project_key: z.string(),
     display_name: z.string(),
     primary_workspace: workspaceSummarySchema,
-    default_workflow_id: z.string().optional().default(""),
+    default_workflow_id: workflowIDSchema.nullable(),
     default_workflow_name: z.string().optional().default(""),
     default_workflow_valid: z.boolean(),
     updated_at_unix_ms: z.number(),

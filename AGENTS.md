@@ -48,10 +48,9 @@ This repository contains a coding agent focused on output quality, built for pro
 ## Tooling
 Prefer using scripts provided in `./scripts/` over raw commands like `cargo build`, `go test`, unless you need something specific.
 
-- build.sh - Prefer to build executables. Pass 0 or more args: `tui`, `server`, `desktop` to pick what to build. 0 args builds all. e.g. `./scripts/build.sh tui desktop`. Before handing off to the user after code changes, rebuild relevant targets so they can test/use them right away.
-- test.sh - runs test suites. pass 0 or more of: `tui`, `server`, `desktop` to specify the target to run tests for; any other argument is forwarded to `go test` (packages, `-run`, ...) and implies the server target. If the script fails with time-outs, speeding up / fixing the hangs in the test suite execution becomes in the scope of the current task, bypasses are not allowed. Don't ask for confirmation to run/write tests and run checks, just do it proactively.
+- build.sh - Prefer to build executables. Pass 0 or more args: `tui`, `server`, `desktop` to pick what to build. 0 args builds all. e.g. `./scripts/build.sh tui desktop`. Before handing off the task, build relevant targets **once** to verify correctness.
+- test.sh - runs test suites. pass 0 or more of: `tui`, `server`, `desktop` to specify the target to run tests for; any other argument is forwarded to `go test` (packages, `-run`, ...) and implies the server target. If the script fails with time-outs, speeding up / fixing the hangs in the test suite execution becomes in the scope of the current task, bypasses are not allowed. Don't ask for confirmation to run/write tests and run checks, do it proactively **ONCE before final handoff** to not block the development pipeline for hours by rerunning the same test suite after every change.
 - dump-metadata-schema.sh - prints executable DDL for the latest effective metadata schema from an isolated migrated SQLite database.
-
 - ci-check.sh - run CI-like extensive check setup needed to open PRs.
 - install.sh/install.ps1 - production, user-facing installer scripts of the product. Not for development.
 

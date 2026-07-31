@@ -221,7 +221,7 @@ func TestEngineTranscriptNewestSegmentPageProjectsHistoryReplacementRows(t *test
 				Content: textutil.Value("condensed summary"),
 			},
 			{
-				Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover),
+				Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionPreservedUserMessage),
 				Content: textutil.Value("carry this forward"),
 			},
 		}),

@@ -6,6 +6,7 @@ import (
 
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
@@ -207,8 +208,8 @@ func TestWorkflowValidationRejectsBuiltInRoleDisablingAskQuestion(t *testing.T) 
 }
 
 func coreWorkflowValidationDefinition(role string) workflow.Definition {
+	workflowID := coreWorkflowValidationWorkflowID()
 	const (
-		workflowID        workflow.WorkflowID        = "0190f1aa-0000-7000-8000-000000000001"
 		startNodeID       workflow.NodeID            = "0190f1aa-0000-7000-8000-000000000002"
 		agentNodeID       workflow.NodeID            = "0190f1aa-0000-7000-8000-000000000003"
 		doneNodeID        workflow.NodeID            = "0190f1aa-0000-7000-8000-000000000004"
@@ -251,7 +252,15 @@ func coreWorkflowValidationDefinition(role string) workflow.Definition {
 	}
 }
 
-func coreWorkflowNode(workflowID workflow.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
+func coreWorkflowValidationWorkflowID() runtimeids.WorkflowID {
+	workflowID, err := runtimeids.ParseWorkflowID("0190f1aa-0000-4000-8000-000000000001")
+	if err != nil {
+		panic(err)
+	}
+	return workflowID
+}
+
+func coreWorkflowNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key workflow.ModelKey, displayName string, kind workflow.NodeKind, fields workflow.NodeFields) workflow.Node {
 	node, err := workflow.NewNode(workflow.NodeIdentity{
 		WorkflowID:  workflowID,
 		ID:          id,

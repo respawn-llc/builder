@@ -876,7 +876,7 @@ func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.T
 	if shortID == "" {
 		shortID = string(input.Task.ID)
 	}
-	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: string(input.Task.WorkflowID), WorkflowShortID: string(input.Workflow.ID), WorkflowName: strings.TrimSpace(input.Workflow.Name), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
+	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: input.Task.WorkflowID, WorkflowName: strings.TrimSpace(input.Workflow.Name), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
 }
 
 func workflowTransitions(options []workflowstore.TransitionOption, ids []string) []prompts.WorkflowTransition {

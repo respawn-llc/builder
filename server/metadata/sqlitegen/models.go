@@ -6,6 +6,8 @@ package sqlitegen
 
 import (
 	"database/sql"
+
+	"core/shared/runtimeids"
 )
 
 type MigrationCurrentNodeValueEnvironment struct {
@@ -111,8 +113,14 @@ type Project struct {
 	MetadataJson                 string
 	ProjectKey                   string
 	NextTaskSeq                  int64
-	DefaultProjectWorkflowLinkID string
+	DefaultProjectWorkflowLinkID sql.NullString
 	PrimaryWorkspaceID           string
+}
+
+type ProjectDefaultWorkflowIdentity struct {
+	ProjectID    string
+	WorkflowID   *runtimeids.WorkflowID
+	WorkflowName sql.NullString
 }
 
 type ProjectLabel struct {
@@ -126,7 +134,7 @@ type ProjectLabel struct {
 type ProjectWorkflowLink struct {
 	ID              string
 	ProjectID       string
-	WorkflowID      string
+	WorkflowID      runtimeids.WorkflowID
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
 }
@@ -134,7 +142,7 @@ type ProjectWorkflowLink struct {
 type ProjectWorkflowLinkRecord struct {
 	ID              string
 	ProjectID       string
-	WorkflowID      string
+	WorkflowID      runtimeids.WorkflowID
 	IsDefault       int64
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
@@ -271,7 +279,7 @@ type TaskRecord struct {
 	ID                          string
 	ProjectID                   string
 	ProjectWorkflowLinkID       string
-	WorkflowID                  string
+	WorkflowID                  runtimeids.WorkflowID
 	WorkflowRevisionSeen        int64
 	TaskSeq                     int64
 	ShortID                     string
@@ -291,7 +299,7 @@ type TaskRecord struct {
 }
 
 type Workflow struct {
-	ID                       string
+	ID                       runtimeids.WorkflowID
 	Name                     string
 	Description              string
 	Version                  int64
@@ -319,7 +327,7 @@ type WorkflowEdge struct {
 
 type WorkflowNode struct {
 	ID                     string
-	WorkflowID             string
+	WorkflowID             runtimeids.WorkflowID
 	NodeKey                string
 	Kind                   string
 	DisplayName            string
@@ -336,7 +344,7 @@ type WorkflowNode struct {
 
 type WorkflowNodeGroup struct {
 	ID          string
-	WorkflowID  string
+	WorkflowID  runtimeids.WorkflowID
 	GroupKey    string
 	DisplayName string
 	SortOrder   int64

@@ -168,6 +168,7 @@ func gatewayPromptResource(sessionID string) runtimeids.SessionResourceRef {
 
 func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
 	currentNodeID := "node-" + taskID
+	workflowID := runtimeids.NewWorkflowID()
 	return askquestion.AskQuestionRequest{
 		ID:       askID,
 		StepID:   gatewayAttentionStepID,
@@ -185,6 +186,7 @@ func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, s
 		AttentionTarget: &clientui.AttentionNotificationTarget{
 			Kind:          clientui.AttentionNotificationTargetWorkflowTask,
 			ProjectID:     projectID,
+			WorkflowID:    &workflowID,
 			TaskID:        taskID,
 			SessionID:     sessionID,
 			CurrentNodeID: &currentNodeID,

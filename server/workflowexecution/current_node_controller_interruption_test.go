@@ -391,7 +391,7 @@ func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t 
 	})
 	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
 		ProjectID:   "project-test",
-		WorkflowID:  "workflow-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
 		CurrentNode: reference,
 	})
 	if err != nil {

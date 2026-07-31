@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type taskListOutput struct {
 	ProjectID                   string                                                `json:"project_id"`
-	WorkflowID                  *string                                               `json:"workflow_id,omitempty"`
+	WorkflowID                  *runtimeids.WorkflowID                                `json:"workflow_id,omitempty"`
 	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
 	NextOffset                  *int                                                  `json:"next_offset,omitempty"`
 	Tasks                       []taskListItem                                        `json:"tasks"`
@@ -19,7 +20,7 @@ type taskListOutput struct {
 type taskListItem struct {
 	ShortID         string                       `json:"short_id"`
 	TaskID          string                       `json:"task_id"`
-	WorkflowID      string                       `json:"workflow_id"`
+	WorkflowID      runtimeids.WorkflowID        `json:"workflow_id"`
 	Status          serverapi.WorkflowTaskStatus `json:"status"`
 	ColumnKeys      *[]string                    `json:"column_keys,omitempty"`
 	Title           string                       `json:"title"`
@@ -42,9 +43,17 @@ type taskListRenderItem struct {
 }
 
 type taskListExpectedScope struct {
-	ProjectID  string
-	WorkflowID *string
+	ProjectID     string
+	WorkflowID    *runtimeids.WorkflowID
+	WorkflowOwner taskListExpectedWorkflowOwner
 }
+
+type taskListExpectedWorkflowOwner uint8
+
+const (
+	taskListExpectedWorkflowFromRequest taskListExpectedWorkflowOwner = iota
+	taskListExpectedWorkflowFromToken
+)
 
 func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope) (taskListProjection, error) {
 	if strings.TrimSpace(expectedScope.ProjectID) == "" || strings.TrimSpace(expectedScope.ProjectID) != expectedScope.ProjectID {
@@ -56,11 +65,20 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	if resp.Scope.ProjectID != expectedScope.ProjectID {
 		return taskListProjection{}, fmt.Errorf("task list response project %q does not match requested project %q", resp.Scope.ProjectID, expectedScope.ProjectID)
 	}
-	if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
-		return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
-	}
-	if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
-		return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
+	switch expectedScope.WorkflowOwner {
+	case taskListExpectedWorkflowFromRequest:
+		if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
+			return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
+		}
+		if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
+			return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
+		}
+	case taskListExpectedWorkflowFromToken:
+		if expectedScope.WorkflowID != nil {
+			return taskListProjection{}, errors.New("task list token-owned workflow scope cannot include an explicit workflow_id")
+		}
+	default:
+		return taskListProjection{}, errors.New("task list request has invalid workflow scope ownership")
 	}
 	switch resp.MatchingWorkflowCardinality {
 	case serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
@@ -72,11 +90,11 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone && len(resp.Tasks) != 0 {
 		return taskListProjection{}, errors.New("task list response with no matching workflows cannot contain tasks")
 	}
-	var selectedWorkflowID *string
+	var selectedWorkflowID *runtimeids.WorkflowID
 	if resp.Scope.WorkflowID != nil {
-		workflowID, err := workflowIDForCLI(*resp.Scope.WorkflowID)
-		if err != nil {
-			return taskListProjection{}, err
+		workflowID := *resp.Scope.WorkflowID
+		if workflowID.IsZero() {
+			return taskListProjection{}, errors.New("workflow_id is required")
 		}
 		selectedWorkflowID = &workflowID
 		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
@@ -87,11 +105,11 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	showColumns := selectedWorkflowID != nil
 	items := make([]taskListItem, 0, len(resp.Tasks))
 	rows := make([]taskListRenderItem, 0, len(resp.Tasks))
-	var soleWorkflowID *string
+	var soleWorkflowID *runtimeids.WorkflowID
 	for _, task := range resp.Tasks {
-		workflowID, err := workflowIDForCLI(task.WorkflowID)
-		if err != nil {
-			return taskListProjection{}, err
+		workflowID := task.WorkflowID
+		if workflowID.IsZero() {
+			return taskListProjection{}, errors.New("workflow_id is required")
 		}
 		if selectedWorkflowID != nil && workflowID != *selectedWorkflowID {
 			return taskListProjection{}, fmt.Errorf("task list response task %q workflow %q does not match selected workflow %q", task.TaskID, workflowID, *selectedWorkflowID)
