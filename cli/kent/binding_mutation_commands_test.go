@@ -136,12 +136,23 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 	t.Run("path identity failure adds workspace fallback only", func(t *testing.T) {
 		err := serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("unavailable")}
 		projection := projectWorkspaceMutationErrorProjection(err, "project-1", false)
-		if projection.Code != "request_failed" || projection.Remediation == nil || projection.Remediation.Kind != "use_workspace_id" {
-			t.Fatalf("projection = %+v, want use_workspace_id remediation", projection)
+		encoded, marshalErr := json.Marshal(projection)
+		if marshalErr != nil {
+			t.Fatalf("marshal projection: %v", marshalErr)
+		}
+		if projection.Code != "request_failed" || strings.Contains(string(encoded), "remediation") {
+			t.Fatalf("projection = %+v, want request_failed without remediation field", projection)
+		}
+		if !strings.Contains(projection.Message, "--workspace <workspace-id>") {
+			t.Fatalf("projection message = %q, want workspace-ID fallback guidance", projection.Message)
 		}
 		generic := projectWorkspaceMutationErrorProjection(errors.New("remote failed"), "project-1", false)
-		if generic.Remediation != nil {
-			t.Fatalf("generic projection = %+v, want no remediation", generic)
+		genericEncoded, marshalErr := json.Marshal(generic)
+		if marshalErr != nil {
+			t.Fatalf("marshal generic projection: %v", marshalErr)
+		}
+		if strings.Contains(string(genericEncoded), "remediation") {
+			t.Fatalf("generic projection = %+v, want no remediation field", generic)
 		}
 	})
 

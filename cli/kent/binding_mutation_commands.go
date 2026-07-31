@@ -185,18 +185,13 @@ type bindingMutationBlocker struct {
 	Count    *int   `json:"count,omitempty"`
 }
 
-type bindingMutationRemediation struct {
-	Kind string `json:"kind"`
-}
-
 type bindingMutationJSONError struct {
-	Code        string                      `json:"code"`
-	Message     string                      `json:"message"`
-	ProjectID   *string                     `json:"project_id,omitempty"`
-	WorkspaceID *string                     `json:"workspace_id,omitempty"`
-	Retryable   *bool                       `json:"retryable,omitempty"`
-	Blockers    []bindingMutationBlocker    `json:"blockers,omitempty"`
-	Remediation *bindingMutationRemediation `json:"remediation,omitempty"`
+	Code        string                   `json:"code"`
+	Message     string                   `json:"message"`
+	ProjectID   *string                  `json:"project_id,omitempty"`
+	WorkspaceID *string                  `json:"workspace_id,omitempty"`
+	Retryable   *bool                    `json:"retryable,omitempty"`
+	Blockers    []bindingMutationBlocker `json:"blockers,omitempty"`
 }
 
 type bindingMutationEnvelope struct {
@@ -348,9 +343,6 @@ func (e bindingMutationJSONError) validate() error {
 			return errors.New("binding mutation blocker count must be positive when present")
 		}
 	}
-	if e.Remediation != nil && strings.TrimSpace(e.Remediation.Kind) == "" {
-		return errors.New("binding mutation remediation kind must not be blank")
-	}
 	return nil
 }
 
@@ -439,9 +431,6 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 		projection.Code = "project_not_found"
 	} else if mutationErr == nil && conflictErr == nil && errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		projection.Code = "workspace_not_attached"
-	}
-	if errors.Is(err, serverapi.ErrWorkspacePathIdentity) {
-		projection.Remediation = &bindingMutationRemediation{Kind: "use_workspace_id"}
 	}
 	return projection
 }
