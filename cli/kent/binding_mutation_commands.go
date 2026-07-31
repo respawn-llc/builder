@@ -92,27 +92,34 @@ func detachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			return bindingMutationResult{}, err
 		}
-		if len(response.Blockers) > 0 {
-			blocked, err := newBindingMutationBlockedError(response.ProjectID, response.WorkspaceID, response.Blockers)
-			if err != nil {
-				return bindingMutationResult{}, err
-			}
-			return bindingMutationResult{}, blocked
-		}
-		if !response.Unlinked {
-			return bindingMutationResult{}, &serverapi.WorkspaceMutationError{
-				ProjectID:   strings.TrimSpace(response.ProjectID),
-				WorkspaceID: strings.TrimSpace(response.WorkspaceID),
-				Cause:       errors.New("workspace detach did not complete"),
-			}
-		}
-		projectID := strings.TrimSpace(response.ProjectID)
-		workspaceID := strings.TrimSpace(response.WorkspaceID)
-		if projectID == "" || workspaceID == "" {
-			return bindingMutationResult{}, errors.New("workspace detach returned incomplete identity")
-		}
-		return bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID}, nil
+		return bindingMutationResultFromDetachResponse(response)
 	}, false)
+}
+
+func bindingMutationResultFromDetachResponse(response serverapi.ProjectWorkspaceUnlinkResponse) (bindingMutationResult, error) {
+	if len(response.Blockers) > 0 {
+		blocked, err := newBindingMutationBlockedError(response.ProjectID, response.WorkspaceID, response.Blockers)
+		if err != nil {
+			return bindingMutationResult{}, err
+		}
+		return bindingMutationResult{}, blocked
+	}
+	projectID := strings.TrimSpace(response.ProjectID)
+	workspaceID := strings.TrimSpace(response.WorkspaceID)
+	if !response.Unlinked {
+		if projectID == "" || workspaceID == "" {
+			return bindingMutationResult{}, errors.New("workspace detach did not complete and response omitted resolved identity")
+		}
+		return bindingMutationResult{}, &serverapi.WorkspaceMutationError{
+			ProjectID:   projectID,
+			WorkspaceID: workspaceID,
+			Cause:       errors.New("workspace detach did not complete"),
+		}
+	}
+	if projectID == "" || workspaceID == "" {
+		return bindingMutationResult{}, errors.New("workspace detach returned incomplete identity")
+	}
+	return bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID}, nil
 }
 
 func runBindingMutationCommand(
@@ -126,16 +133,14 @@ func runBindingMutationCommand(
 	if err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}
-	defer func() { _ = remote.Close() }()
-
 	selector, err := bindingMutationSelector(cfg, arguments)
 	if err != nil {
-		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
+		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, closeBindingMutationRemote(remote, err), arguments.ProjectID, defaultMutation)
 	}
 	rpcCtx, cancel := context.WithTimeout(context.Background(), bindingCommandRPCTimeout)
 	defer cancel()
 	result, err := mutate(rpcCtx, remote, selector)
-	if err != nil {
+	if err = closeBindingMutationRemote(remote, err); err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}
 	if arguments.JSON {
@@ -147,10 +152,27 @@ func runBindingMutationCommand(
 	if err := result.validate(); err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}
-	if defaultMutation {
-		_, _ = fmt.Fprintln(stdout, "done")
-	} else {
-		_, _ = fmt.Fprintln(stdout, *result.WorkspaceID)
+	return writeBindingMutationPlainResult(stdout, stderr, result, defaultMutation)
+}
+
+func closeBindingMutationRemote(remote *client.Remote, cause error) error {
+	closeErr := remote.Close()
+	if closeErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("close binding mutation remote: %w", closeErr))
+}
+
+func writeBindingMutationPlainResult(stdout io.Writer, stderr io.Writer, result bindingMutationResult, defaultMutation bool) int {
+	output := "done"
+	if !defaultMutation {
+		output = *result.WorkspaceID
+	}
+	if _, err := fmt.Fprintln(stdout, output); err != nil {
+		if _, stderrErr := fmt.Fprintf(stderr, "write binding mutation result: %v\n", err); stderrErr != nil {
+			return 1
+		}
+		return 1
 	}
 	return 0
 }
@@ -221,9 +243,6 @@ func newBindingMutationBlockedError(projectID string, workspaceID string, blocke
 }
 
 func (e *bindingMutationBlockedError) Error() string {
-	if e == nil {
-		return "workspace detach is blocked"
-	}
 	return "workspace detach is blocked"
 }
 
@@ -260,7 +279,7 @@ type blockerGuidance struct {
 	Command *commandTokens
 }
 
-func blockerGuidanceFor(code string, projectID string) blockerGuidance {
+func blockerGuidanceFor(code string, projectID string) (blockerGuidance, error) {
 	kind := blockerGuidanceActionKind(strings.TrimSpace(code))
 	switch kind {
 	case blockerGuidanceDefaultWorkspace,
@@ -276,11 +295,11 @@ func blockerGuidanceFor(code string, projectID string) blockerGuidance {
 	if kind == blockerGuidanceDefaultWorkspace {
 		command, err := newCommandTokens(config.Command, "project", "default", "--project", strings.TrimSpace(projectID), "<replacement-path>")
 		if err != nil {
-			panic(err)
+			return blockerGuidance{}, fmt.Errorf("build default-workspace guidance: %w", err)
 		}
 		guidance.Command = command
 	}
-	return guidance
+	return guidance, nil
 }
 
 func renderBlockerGuidance(guidance blockerGuidance) string {
@@ -373,19 +392,41 @@ func writeBindingMutationEnvelope(stdout io.Writer, stderr io.Writer, envelope b
 
 func writeBindingMutationFailure(stdout io.Writer, stderr io.Writer, jsonOut bool, err error, requestedProjectID string, defaultMutation bool) int {
 	if jsonOut {
-		projection := projectWorkspaceMutationErrorProjection(err, requestedProjectID, defaultMutation)
+		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, requestedProjectID, defaultMutation)
+		if projectionErr != nil {
+			fallback := bindingMutationJSONError{
+				Code:    "request_failed",
+				Message: projectionErr.Error(),
+			}
+			if code := writeBindingMutationEnvelope(stdout, stderr, bindingMutationEnvelope{Status: "error", Error: &fallback}); code != 0 {
+				return code
+			}
+			return 1
+		}
 		if code := writeBindingMutationEnvelope(stdout, stderr, bindingMutationEnvelope{Status: "error", Error: &projection}); code != 0 {
 			return code
 		}
 		return 1
 	}
-	fmt.Fprintln(stderr, projectWorkspaceMutationErrorMessage(err, requestedProjectID, defaultMutation))
+	message, messageErr := projectWorkspaceMutationErrorMessage(err, requestedProjectID, defaultMutation)
+	if messageErr != nil {
+		if _, stderrErr := fmt.Fprintln(stderr, messageErr); stderrErr != nil {
+			return 1
+		}
+		return 1
+	}
+	if _, writeErr := fmt.Fprintln(stderr, message); writeErr != nil {
+		return 1
+	}
 	return 1
 }
 
-func projectWorkspaceMutationErrorProjection(err error, requestedProjectID string, defaultMutation bool) bindingMutationJSONError {
+func projectWorkspaceMutationErrorProjection(err error, requestedProjectID string, defaultMutation bool) (bindingMutationJSONError, error) {
 	code := "request_failed"
-	message := projectWorkspaceMutationErrorMessage(err, requestedProjectID, defaultMutation)
+	message, messageErr := projectWorkspaceMutationErrorMessage(err, requestedProjectID, defaultMutation)
+	if messageErr != nil {
+		return bindingMutationJSONError{}, messageErr
+	}
 	projection := bindingMutationJSONError{Code: code, Message: message}
 	var blockedErr *bindingMutationBlockedError
 	if errors.As(err, &blockedErr) {
@@ -396,11 +437,14 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 		projection.WorkspaceID = &workspaceID
 		projection.Blockers = make([]bindingMutationBlocker, 0, len(blockedErr.Blockers))
 		for _, blocker := range blockedErr.Blockers {
-			guidance := renderBlockerGuidance(blockerGuidanceFor(blocker.Code, projectID))
+			guidanceAction, guidanceErr := blockerGuidanceFor(blocker.Code, projectID)
+			if guidanceErr != nil {
+				return bindingMutationJSONError{}, guidanceErr
+			}
 			projected := bindingMutationBlocker{
 				Code:     strings.TrimSpace(blocker.Code),
 				Message:  strings.TrimSpace(blocker.Message),
-				Guidance: guidance,
+				Guidance: renderBlockerGuidance(guidanceAction),
 			}
 			if blocker.Count > 0 {
 				count := blocker.Count
@@ -408,7 +452,7 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 			}
 			projection.Blockers = append(projection.Blockers, projected)
 		}
-		return projection
+		return projection, nil
 	}
 	var mutationErr *serverapi.WorkspaceMutationError
 	if errors.As(err, &mutationErr) {
@@ -432,28 +476,32 @@ func projectWorkspaceMutationErrorProjection(err error, requestedProjectID strin
 	} else if mutationErr == nil && conflictErr == nil && errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		projection.Code = "workspace_not_attached"
 	}
-	return projection
+	return projection, nil
 }
 
-func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMutation bool) string {
+func projectWorkspaceMutationErrorMessage(err error, projectID string, defaultMutation bool) (string, error) {
 	var blockedErr *bindingMutationBlockedError
 	if errors.As(err, &blockedErr) && len(blockedErr.Blockers) > 0 {
+		guidanceAction, guidanceErr := blockerGuidanceFor(blockedErr.Blockers[0].Code, blockedErr.ProjectID)
+		if guidanceErr != nil {
+			return "", guidanceErr
+		}
 		blocker := blockedErr.Blockers[0]
 		message := fmt.Sprintf("[%s]", strings.TrimSpace(blocker.Code))
 		if blocker.Count > 0 {
 			message += fmt.Sprintf(" (%d)", blocker.Count)
 		}
 		message += " " + strings.TrimSpace(blocker.Message)
-		message += ": " + renderBlockerGuidance(blockerGuidanceFor(blocker.Code, blockedErr.ProjectID))
-		return message
+		message += ": " + renderBlockerGuidance(guidanceAction)
+		return message, nil
 	}
 	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) && defaultMutation {
-		return fmt.Sprintf("workspace is not attached to project %q; run `kent attach --project %s <path>` before retrying", strings.TrimSpace(projectID), strings.TrimSpace(projectID))
+		return fmt.Sprintf("workspace is not attached to project %q; run `kent attach --project %s <path>` before retrying default selection", strings.TrimSpace(projectID), strings.TrimSpace(projectID)), nil
 	}
 	if errors.Is(err, serverapi.ErrWorkspacePathIdentity) {
-		return fmt.Sprintf("%s; retry with --workspace <workspace-id>", err)
+		return fmt.Sprintf("%s; retry with --workspace <workspace-id>", err), nil
 	}
-	return err.Error()
+	return err.Error(), nil
 }
 
 var _ apicontract.ProjectViewService = (*client.Remote)(nil)

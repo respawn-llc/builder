@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -114,6 +116,78 @@ func TestDetachUsageValidationDoesNotOpenRemote(t *testing.T) {
 	}
 }
 
+func TestDetachUnexpectedIncompleteResponseEmitsJSONFailure(t *testing.T) {
+	originalOpener := bindingCommandRemoteOpener
+	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
+		return config.App{}, nil, nil
+	}
+	t.Cleanup(func() {
+		bindingCommandRemoteOpener = originalOpener
+	})
+
+	workspaceID := "workspace-1"
+	arguments := bindingMutationArguments{
+		ProjectID:   "project-1",
+		WorkspaceID: &workspaceID,
+		JSON:        true,
+	}
+	var stdout, stderr bytes.Buffer
+	code := runBindingMutationCommand(
+		arguments,
+		&stdout,
+		&stderr,
+		func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
+			return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{})
+		},
+		false,
+	)
+	if code != 1 {
+		t.Fatalf("command exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var envelope struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code        string `json:"code"`
+			Message     string `json:"message"`
+			ProjectID   string `json:"project_id"`
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode failure envelope: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if envelope.Status != "error" || envelope.Error.Code != "request_failed" {
+		t.Fatalf("envelope = %+v, want request_failed error", envelope)
+	}
+	if envelope.Error.ProjectID != "" || envelope.Error.WorkspaceID != "" {
+		t.Fatalf("envelope = %+v, want no resolved identity", envelope)
+	}
+}
+
+type bindingMutationFailingWriter struct{}
+
+func (bindingMutationFailingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("output write failed")
+}
+
+func TestBindingMutationPlainOutputFailureReturnsNonZero(t *testing.T) {
+	projectID := "project-1"
+	workspaceID := "workspace-1"
+	var stderr bytes.Buffer
+	code := writeBindingMutationPlainResult(
+		bindingMutationFailingWriter{},
+		&stderr,
+		bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID},
+		false,
+	)
+	if code != 1 {
+		t.Fatalf("plain output exit code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "output write failed") {
+		t.Fatalf("stderr = %q, want output write failure", stderr.String())
+	}
+}
+
 func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 	t.Run("project and workspace lookup failures omit requested identity", func(t *testing.T) {
 		for _, test := range []struct {
@@ -125,7 +199,10 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 			{name: "workspace", err: serverapi.ErrWorkspaceNotRegistered, code: "workspace_not_attached"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
-				projection := projectWorkspaceMutationErrorProjection(test.err, "requested-project", false)
+				projection, err := projectWorkspaceMutationErrorProjection(test.err, "requested-project", false)
+				if err != nil {
+					t.Fatalf("project projection: %v", err)
+				}
 				if projection.Code != test.code || projection.ProjectID != nil || projection.WorkspaceID != nil {
 					t.Fatalf("projection = %+v, want %s without identity", projection, test.code)
 				}
@@ -135,7 +212,10 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 
 	t.Run("path identity failure adds workspace fallback only", func(t *testing.T) {
 		err := serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("unavailable")}
-		projection := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+		if projectionErr != nil {
+			t.Fatalf("project path identity projection: %v", projectionErr)
+		}
 		encoded, marshalErr := json.Marshal(projection)
 		if marshalErr != nil {
 			t.Fatalf("marshal projection: %v", marshalErr)
@@ -146,7 +226,10 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 		if !strings.Contains(projection.Message, "--workspace <workspace-id>") {
 			t.Fatalf("projection message = %q, want workspace-ID fallback guidance", projection.Message)
 		}
-		generic := projectWorkspaceMutationErrorProjection(errors.New("remote failed"), "project-1", false)
+		generic, projectionErr := projectWorkspaceMutationErrorProjection(errors.New("remote failed"), "project-1", false)
+		if projectionErr != nil {
+			t.Fatalf("project generic projection: %v", projectionErr)
+		}
 		genericEncoded, marshalErr := json.Marshal(generic)
 		if marshalErr != nil {
 			t.Fatalf("marshal generic projection: %v", marshalErr)
@@ -162,7 +245,10 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 			WorkspaceID: "resolved-workspace",
 			Cause:       errors.New("write failed"),
 		}
-		projection := projectWorkspaceMutationErrorProjection(err, "requested-project", false)
+		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "requested-project", false)
+		if projectionErr != nil {
+			t.Fatalf("project mutation projection: %v", projectionErr)
+		}
 		if projection.ProjectID == nil || projection.WorkspaceID == nil ||
 			*projection.ProjectID != "resolved-project" || *projection.WorkspaceID != "resolved-workspace" {
 			t.Fatalf("projection = %+v, want carried identity", projection)
@@ -174,7 +260,10 @@ func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
 			ProjectID:   "project-1",
 			WorkspaceID: "workspace-1",
 		}
-		projection := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+		if projectionErr != nil {
+			t.Fatalf("project conflict projection: %v", projectionErr)
+		}
 		if projection.Code != "workspace_detach_conflict" || projection.Retryable == nil || !*projection.Retryable {
 			t.Fatalf("projection = %+v, want retryable detach conflict", projection)
 		}
@@ -189,7 +278,10 @@ func TestDetachBlockerProjectionIncludesAllBlockersAndPositiveCounts(t *testing.
 	if constructionErr != nil {
 		t.Fatalf("construct blocked error: %v", constructionErr)
 	}
-	projection := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+	projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
+	if projectionErr != nil {
+		t.Fatalf("project blocker projection: %v", projectionErr)
+	}
 	if projection.Code != "workspace_detach_blocked" || len(projection.Blockers) != 2 {
 		t.Fatalf("projection = %+v, want two blockers", projection)
 	}
@@ -205,13 +297,22 @@ func TestDetachBlockerProjectionIncludesAllBlockersAndPositiveCounts(t *testing.
 }
 
 func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
-	defaultGuidance := blockerGuidanceFor("default_workspace", "project-1")
+	defaultGuidance, err := blockerGuidanceFor("default_workspace", "project-1")
+	if err != nil {
+		t.Fatalf("default guidance: %v", err)
+	}
 	if defaultGuidance.Kind != blockerGuidanceDefaultWorkspace || defaultGuidance.Command == nil {
 		t.Fatalf("default guidance = %+v, want command action", defaultGuidance)
 	}
-	unknownGuidance := blockerGuidanceFor("future_code", "project-1")
+	unknownGuidance, err := blockerGuidanceFor("future_code", "project-1")
+	if err != nil {
+		t.Fatalf("unknown guidance: %v", err)
+	}
 	if unknownGuidance.Kind != blockerGuidanceUnknown || unknownGuidance.Command != nil {
 		t.Fatalf("unknown guidance = %+v, want commandless unknown action", unknownGuidance)
+	}
+	if _, err := blockerGuidanceFor("default_workspace", " "); err == nil {
+		t.Fatal("blank project ID accepted for default-workspace guidance")
 	}
 }
 

@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/testsetup"
 )
 
 func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *testing.T) {
-	repoRoot := repositoryRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	buildEnv := os.Environ()
 	serverCWD := t.TempDir()
 	t.Chdir(serverCWD)
@@ -129,22 +131,4 @@ func filteredCLIEnvironment(environment []string) []string {
 		}
 	}
 	return filtered
-}
-
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get current working directory: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(cwd, "go.mod")); err == nil {
-			return cwd
-		}
-		parent := filepath.Dir(cwd)
-		if parent == cwd {
-			t.Fatal("repository root with go.mod not found")
-		}
-		cwd = parent
-	}
 }
