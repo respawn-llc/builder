@@ -78,8 +78,6 @@ func helpSectionsForGOOS(goos string) []uiHelpSection {
 				{Bindings: []string{"Esc Esc"}, Description: "open rollback selection from an idle empty prompt", Active: uiHelpCanArmRollback},
 				{Bindings: []string{"↑ / ↓"}, Description: "move the rollback selection and load older/newer pages at the edges", Active: func(*uiModel) bool { return true }},
 				{Bindings: []string{"PgUp / PgDn"}, Description: "scroll the transcript while selecting a rollback point", Active: func(*uiModel) bool { return true }},
-				{Bindings: []string{"Enter"}, Description: "fork at the selected message and restore it to the composer", Active: func(*uiModel) bool { return true }},
-				{Bindings: []string{"Esc"}, Description: "close rollback selection", Active: func(*uiModel) bool { return true }},
 			},
 		},
 	}

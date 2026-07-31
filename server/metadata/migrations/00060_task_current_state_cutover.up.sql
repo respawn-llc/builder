@@ -25,7 +25,7 @@ CREATE TABLE task_current_nodes (
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
     current_input_values_json TEXT NOT NULL DEFAULT '{}'
         CHECK (json_valid(current_input_values_json) AND json_type(current_input_values_json) = 'object'),
-    prior_node_values_json TEXT NOT NULL DEFAULT '{"node_outputs":{},"transition_parameters":{}}'
+    prior_node_values_json TEXT NOT NULL DEFAULT '{"transition_parameters":{}}'
         CHECK (json_valid(prior_node_values_json) AND json_type(prior_node_values_json) = 'object'),
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     scheduling_state TEXT
@@ -591,7 +591,7 @@ SELECT
         task.body,
         task.source_url
     ),
-    kent_migration_prior_node_values_v1(
+    kent_migration_prior_transition_parameters_v1(
         placement.task_id,
         placement.node_id,
         branch_edge.edge_key,
@@ -628,7 +628,6 @@ SELECT
                 ORDER BY edge_id
             ) graph
         ),
-        COALESCE(json_extract(value_run.metadata_json, '$.node_output_values'), '{}'),
         COALESCE(json_extract(value_run.metadata_json, '$.prior_parameter_values'), '{}'),
         (
             SELECT COALESCE(json_group_array(json_object(
@@ -760,7 +759,7 @@ SELECT
     placement.node_id,
     NULL,
     '{}',
-    '{"node_outputs":{},"transition_parameters":{}}',
+    '{"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1461,7 +1460,7 @@ SELECT
         task.body,
         task.source_url
     ),
-    kent_migration_prior_node_values_v1(
+    kent_migration_prior_transition_parameters_v1(
         transition.task_id,
         edge.target_node_id,
         CASE
@@ -1525,7 +1524,6 @@ SELECT
                     edge_id
             ) graph
         ),
-        COALESCE(json_extract(edge.metadata_json, '$.node_output_values'), '{}'),
         COALESCE(json_extract(edge.metadata_json, '$.prior_parameter_values'), '{}'),
         (
             SELECT COALESCE(json_group_array(json_object(
@@ -1902,7 +1900,7 @@ SELECT
     node.id,
     NULL,
     '{}',
-    '{"node_outputs":{},"transition_parameters":{}}',
+    '{"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1932,7 +1930,7 @@ SELECT
     candidate.node_id,
     NULL,
     '{}',
-    '{"node_outputs":{},"transition_parameters":{}}',
+    '{"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,
@@ -1978,7 +1976,7 @@ SELECT
     terminal.id,
     NULL,
     '{}',
-    '{"node_outputs":{},"transition_parameters":{}}',
+    '{"transition_parameters":{}}',
     NULL,
     NULL,
     NULL,

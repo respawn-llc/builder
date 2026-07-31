@@ -774,9 +774,6 @@ func (s *validationState) validatePromptPlaceholders() {
 		for _, input := range refs.Inputs {
 			s.validateInputReference(target, targetExists, input, ref)
 		}
-		for _, priorNode := range refs.PriorNodes {
-			s.validatePriorNodeReference(target, targetExists, priorNode, ref)
-		}
 	}
 }
 
@@ -787,31 +784,6 @@ func (s *validationState) validateInputReference(target Node, targetExists bool,
 	ref.Placeholder = input.Placeholder
 	if !targetExists || name == "" || !workflowkey.Valid(name) || !inputFieldNameSet(NodeInputFields(target))[name] {
 		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown node input", ref)
-	}
-}
-
-func (s *validationState) validatePriorNodeReference(target Node, targetExists bool, priorNode PromptPriorNodeReference, baseRef ValidationError) {
-	nodeKey := strings.TrimSpace(string(priorNode.NodeKey))
-	outputName := strings.TrimSpace(priorNode.OutputName)
-	ref := baseRef
-	ref.FieldName = outputName
-	ref.Placeholder = priorNode.Placeholder
-	if nodeKey == "" || !workflowkey.Valid(nodeKey) || outputName == "" || !workflowkey.Valid(outputName) {
-		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template has an invalid prior-node reference", ref)
-		return
-	}
-	sourceID, sourceExists := s.nodeKeys[ModelKey(nodeKey)]
-	if !sourceExists {
-		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown prior node", ref)
-		return
-	}
-	if !targetExists || sourceID == NodeIDOf(target) || !s.nodeDominates(sourceID, NodeIDOf(target)) {
-		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references a node that is not guaranteed before its consumer", ref)
-		return
-	}
-	source, sourceExists := s.nodesByID[sourceID]
-	if !sourceExists || !outputFieldNameSet(NodeOutputFields(source))[outputName] {
-		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown prior-node output", ref)
 	}
 }
 

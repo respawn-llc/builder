@@ -351,7 +351,7 @@ WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
 	if targetBranchKey != "split_a" ||
 		targetEnteredByEdgeID != "edge-branch-a-done" ||
 		targetInputs != `{"summary":"approved branch"}` ||
-		targetPriorValues != `{"node_outputs":{"agent":{"summary":"parallel source"}},"transition_parameters":{}}` {
+		targetPriorValues != `{"transition_parameters":{}}` {
 		t.Fatalf(
 			"migrated parallel approval target = branch=%q entered_by=%q inputs=%q prior=%q",
 			targetBranchKey,
@@ -522,7 +522,7 @@ INSERT INTO workflow_edges (
     'split_a',
     'node-branch-a',
     'new_session',
-    'Use {{.Inputs.summary}} and {{.Nodes.agent.summary}}.',
+    'Use {{.Params.summary}}.',
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]'
 ), (
@@ -531,7 +531,7 @@ INSERT INTO workflow_edges (
     'split_b',
     'node-branch-b',
     'new_session',
-    'Use {{.Inputs.summary}} and {{.Nodes.agent.summary}}.',
+    'Use {{.Params.summary}}.',
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]'
 )`)

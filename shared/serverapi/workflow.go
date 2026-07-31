@@ -2340,7 +2340,7 @@ func (r WorkflowAttentionItem) Validate() error {
 		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
 			return err
 		}
-		if err := validateOptionalAttentionJSONObject("detail_json", r.DetailJSON); err != nil {
+		if err := validateOptionalAttentionInterruptionDetailJSON("detail_json", r.DetailJSON); err != nil {
 			return err
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
@@ -2426,13 +2426,26 @@ func validateOptionalAttentionString(field string, value *string) error {
 	return nil
 }
 
-func validateOptionalAttentionJSONObject(field string, value *string) error {
+type workflowAttentionInterruptionDetailSchema struct {
+	Code   string            `json:"code"`
+	Fields map[string]string `json:"fields"`
+}
+
+func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
 	if err := validateOptionalAttentionString(field, value); err != nil || value == nil {
 		return err
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(*value), &object); err != nil || object == nil {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be a JSON object")
+	var detail workflowAttentionInterruptionDetailSchema
+	if err := protocol.DecodeStrictJSON([]byte(*value), &detail); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must match the current Node interruption detail schema")
+	}
+	if strings.TrimSpace(detail.Code) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" code must be non-blank")
+	}
+	for name := range detail.Fields {
+		if strings.TrimSpace(name) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" field names must be non-blank")
+		}
 	}
 	return nil
 }

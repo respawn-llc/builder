@@ -515,8 +515,8 @@ func pendingApprovalBranchFromRow(taskID workflow.TaskID, row sqlitegen.TaskPend
 	if err := workflow.UnmarshalString(row.TargetSnapshotJson, &targetSnapshot); err != nil {
 		return workflow.PendingApprovalBranch{}, fmt.Errorf("decode pending approval target snapshot: %w", err)
 	}
-	if targetSnapshot.PriorValues.NodeOutputs == nil || targetSnapshot.PriorValues.TransitionParameters == nil {
-		return workflow.PendingApprovalBranch{}, errors.New("pending approval target prior values are invalid")
+	if targetSnapshot.PriorValues.TransitionParameters == nil {
+		return workflow.PendingApprovalBranch{}, errors.New("pending approval target prior Transition parameters are invalid")
 	}
 	target, err := pendingApprovalTargetFromSnapshot(taskID, targetSnapshot)
 	if err != nil {

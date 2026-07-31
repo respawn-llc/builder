@@ -7,7 +7,7 @@ import (
 	"core/server/workflow"
 )
 
-func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testing.T) {
+func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorTransitionParameters(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -32,9 +32,6 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	if review.CurrentInputValues["summary"] != "approved plan" {
 		t.Fatalf("review current inputs = %+v, want materialized summary", review.CurrentInputValues)
 	}
-	if review.PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" {
-		t.Fatalf("review prior Node outputs = %+v, want plan summary retained for downstream audit", review.PriorValues)
-	}
 	if review.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
 		t.Fatalf("review prior Transition parameters = %+v, want review transition summary retained for downstream audit", review.PriorValues)
 	}
@@ -50,9 +47,6 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 		t.Fatalf("review completion mutation = %+v, want audit current node", auditResult.Mutation)
 	}
 	audit := auditResult.Mutation.Created[0]
-	if audit.PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" {
-		t.Fatalf("audit prior Node outputs = %+v, want plan summary carried from review current node", audit.PriorValues)
-	}
 	if audit.PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
 		t.Fatalf("audit prior Transition parameters = %+v, want review transition summary carried from review current node", audit.PriorValues)
 	}
@@ -69,107 +63,8 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorNodeValues(t *testi
 	}
 	if len(currentNodes) != 1 ||
 		!currentNodes[0].Reference.Equal(audit.Reference) ||
-		currentNodes[0].PriorValues.NodeOutputs["plan"]["summary"] != "approved plan" ||
 		currentNodes[0].PriorValues.TransitionParameters["review"]["summary"] != "approved plan" {
 		t.Fatalf("current nodes = %+v, want audit-owned materialized values", currentNodes)
-	}
-}
-
-func TestCompleteCurrentNodeKeepsSameNamedNodeAndTransitionValuesSeparate(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		plan := nodeByKey(t, def, "plan")
-		workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(plan)).Key = "shared"
-		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		consumerID := workflow.NodeID("node-consumer-" + string(workflowID))
-		consumerDoneGroupID := workflow.TransitionGroupID("group-consumer-done-" + string(workflowID))
-		req.Nodes = append(req.Nodes, NodeRecord{
-			ID:           consumerID,
-			WorkflowID:   workflowID,
-			Key:          "consumer",
-			Kind:         workflow.NodeKindAgent,
-			DisplayName:  "Consumer",
-			SubagentRole: "coder",
-		})
-		sharedTransitionEdge := workflowGraphSaveEdgeRecord(
-			t,
-			req.Edges,
-			workflow.EdgeID("edge-audit-"+string(workflowID)),
-		)
-		sharedTransitionEdge.PromptTemplate = "Audit {{.Params.summary}}."
-		sharedTransitionEdge.Parameters = []workflow.Parameter{{
-			Key:         "summary",
-			Description: "Review summary.",
-		}}
-		for index := range req.TransitionGroups {
-			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(nodeByKey(t, def, "review")) {
-				req.TransitionGroups[index].TransitionID = "shared"
-				req.TransitionGroups[index].DisplayName = "Shared"
-			}
-		}
-		workflowGraphSaveEdgeRecord(
-			t,
-			req.Edges,
-			workflow.EdgeID("edge-done-"+string(workflowID)),
-		).TargetNodeID = consumerID
-		workflowGraphSaveEdgeRecord(
-			t,
-			req.Edges,
-			workflow.EdgeID("edge-done-"+string(workflowID)),
-		).PromptTemplate = "Consume {{.Nodes.shared.summary}} and {{.Params.shared.summary}}."
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
-			ID:           consumerDoneGroupID,
-			WorkflowID:   workflowID,
-			SourceNodeID: consumerID,
-			TransitionID: "done",
-			DisplayName:  "Done",
-		})
-		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-consumer-done-" + string(workflowID)),
-			WorkflowID:        workflowID,
-			TransitionGroupID: consumerDoneGroupID,
-			Key:               "done",
-			TargetNodeID:      workflow.NodeIDOf(done),
-			ContextMode:       workflow.ContextModeNewSession,
-		})
-	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-
-	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       plan.Reference,
-		TransitionID: "review",
-		OutputValues: map[string]string{"summary": "node output"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode shared Node: %v", err)
-	}
-	audit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       review.Mutation.Created[0].Reference,
-		TransitionID: "shared",
-		OutputValues: map[string]string{"summary": "transition parameter"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode shared Transition: %v", err)
-	}
-	consumer, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       audit.Mutation.Created[0].Reference,
-		TransitionID: "done",
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode audit: %v", err)
-	}
-	if len(consumer.Mutation.Created) != 1 {
-		t.Fatalf("audit mutation = %+v, want consumer Current Node", consumer.Mutation)
-	}
-	priorValues := consumer.Mutation.Created[0].PriorValues
-	if priorValues.NodeOutputs["shared"]["summary"] != "node output" {
-		t.Fatalf("Node outputs = %+v, want independently materialized Node value", priorValues.NodeOutputs)
-	}
-	if priorValues.TransitionParameters["shared"]["summary"] != "transition parameter" {
-		t.Fatalf("Transition parameters = %+v, want independently materialized Transition value", priorValues.TransitionParameters)
 	}
 }
 
@@ -193,7 +88,7 @@ func TestCompleteCurrentNodeRecoversEnteringTransitionParameterFromCurrentInput(
 		t.Fatalf("review current inputs = %+v, want entering Transition Parameter", review.CurrentInputValues)
 	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
-SET prior_node_values_json = '{"node_outputs":{"plan":{"summary":"approved plan"}},"transition_parameters":{}}'
+SET prior_node_values_json = '{"transition_parameters":{}}'
 WHERE task_id = ?
   AND node_id = ?
   AND transition_branch_key IS NULL`,
@@ -585,7 +480,7 @@ func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, st
 				Kind:           workflow.NodeKindAgent,
 				DisplayName:    "Audit",
 				SubagentRole:   "coder",
-				PromptTemplate: "Audit {{.Nodes.plan.summary}} and {{.Params.review.summary}}.",
+				PromptTemplate: "Audit {{.Params.review.summary}}.",
 			},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
@@ -597,7 +492,7 @@ func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, st
 		req.Edges = append(req.Edges,
 			EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the work."},
 			EdgeRecord{ID: workflow.EdgeID("edge-review-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: reviewGroupID, Key: "review", TargetNodeID: reviewID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Inputs.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Plan summary."}}},
-			EdgeRecord{ID: workflow.EdgeID("edge-audit-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: auditGroupID, Key: "audit", TargetNodeID: auditID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Audit {{.Nodes.plan.summary}} and {{.Params.review.summary}}."},
+			EdgeRecord{ID: workflow.EdgeID("edge-audit-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: auditGroupID, Key: "audit", TargetNodeID: auditID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Audit {{.Params.review.summary}}."},
 			EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 		)
 	})

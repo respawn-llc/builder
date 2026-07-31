@@ -175,15 +175,15 @@ func priorValuesFromJSON(raw string) (workflow.MaterializedPriorValues, error) {
 	if err := json.Unmarshal([]byte(raw), &object); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
 	}
-	if len(object) != 2 || object["node_outputs"] == nil || object["transition_parameters"] == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected exactly node_outputs and transition_parameters objects")
+	if len(object) != 1 || object["transition_parameters"] == nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected exactly one transition_parameters object")
 	}
 	values := workflow.MaterializedPriorValues{}
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
 	}
-	if values.NodeOutputs == nil || values.TransitionParameters == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected node_outputs and transition_parameters objects")
+	if values.TransitionParameters == nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected transition_parameters object")
 	}
 	return values, nil
 }

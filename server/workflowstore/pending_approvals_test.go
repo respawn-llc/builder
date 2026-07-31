@@ -189,7 +189,7 @@ INSERT INTO task_current_nodes (
     interruption_reason,
     interruption_detail_json,
     interrupted_at_unix_ms
-) VALUES (?, ?, ?, '{}', '{"node_outputs":{},"transition_parameters":{}}', NULL, 'ready', NULL, NULL, NULL)`,
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', NULL, 'ready', NULL, NULL, NULL)`,
 			string(branch.Reference.TaskID),
 			string(branch.Reference.NodeID),
 			string(branchKey),

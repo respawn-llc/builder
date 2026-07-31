@@ -79,11 +79,15 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 	}
 }
 
-func TestWorkflowAttentionItemValidateRejectsMalformedInterruptedDetailJSON(t *testing.T) {
+func TestWorkflowAttentionItemValidateRequiresStrictInterruptedDetailSchema(t *testing.T) {
 	for name, detail := range map[string]string{
-		"malformed": "{",
-		"array":     "[]",
-		"null":      "null",
+		"malformed":        "{",
+		"array":            "[]",
+		"null":             "null",
+		"missing code":     `{"fields":{}}`,
+		"blank code":       `{"code":"","fields":{}}`,
+		"unknown field":    `{"code":"restart","fields":{},"message":"restarted"}`,
+		"non-string field": `{"code":"restart","fields":{"attempt":1}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			item := validWorkflowAttentionInterrupted()
@@ -236,7 +240,7 @@ func validWorkflowAttentionInterrupted() WorkflowAttentionItem {
 		TaskShortID: "KENT-1",
 		TaskTitle:   "Task",
 		WorkflowID:  "workflow-1",
-		DetailJSON:  textutil.Value("{}"),
+		DetailJSON:  textutil.Value(`{"code":"restart","fields":{}}`),
 		CurrentNode: &WorkflowTaskCurrentNode{NodeID: "node-1"},
 	}
 }

@@ -292,12 +292,9 @@
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
-- Prompt templates may reference guaranteed-prior agent node outputs through `.Nodes.<node_key>.<output_name>`.
-- `.Nodes` references use stable node keys and declared source-node output fields. The referenced source node must dominate the consuming node in the workflow graph, the source node must not be the consuming node, and unsupported dynamic template access to `.Inputs` or `.Nodes` is invalid.
 - Applying a Transition gives each target Current Node every value that it needs. Prompt rendering uses those values and never searches discarded execution history.
 - A Workflow edit that makes an executable current Node require input that was never materialized blocks Start or Resume with a typed validation error; Kent does not reconstruct discarded workflow history.
 - The first executable node reached from `start` cannot declare upstream inputs and should use task fields such as `.TaskTitle` and `.TaskBody`.
-- Source-Node output fields declare values that the Workflow graph can propagate into later current-Node inputs through `.Nodes.<node_key>.<output_name>`.
 - Kent derives Parameter flow and completion requirements from required inputs, prompt references, Workflow structure, and Join sources.
 
 ## Parallelism And Joins

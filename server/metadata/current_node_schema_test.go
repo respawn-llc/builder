@@ -235,7 +235,7 @@ const insertTaskCurrentNodeSQL = `INSERT INTO task_current_nodes (
     transition_branch_key,
     current_input_values_json,
     prior_node_values_json
-) VALUES (?, ?, ?, '{}', '{"node_outputs":{},"transition_parameters":{}}')`
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}')`
 
 const insertTaskPendingApprovalSQL = `INSERT INTO task_pending_approvals (
     id,

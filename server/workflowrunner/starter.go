@@ -614,7 +614,6 @@ func workflowCompletionTransitions(options []workflowstore.TransitionOption, ids
 type nodePromptTemplateData struct {
 	TaskId, TaskShortId, TaskTitle, TaskBody, NodeId, NodeKey, NodeDisplayName string
 	Params                                                                     map[string]promptParameterNamespace
-	Nodes                                                                      map[string]map[string]string
 }
 
 const currentParameterValueKey = "\x00current"
@@ -641,7 +640,6 @@ func renderWorkflowPrompt(text string, input workflowPromptInput) (string, error
 		NodeKey:         string(input.Node.Key),
 		NodeDisplayName: input.Node.DisplayName,
 		Params:          promptParameterData(input.ParameterValues, input.PriorValues.TransitionParameters),
-		Nodes:           promptNodeOutputData(input.PriorValues.NodeOutputs),
 	})
 	return out.String(), err
 }
@@ -665,14 +663,6 @@ func promptParameterData(current map[string]string, prior map[workflow.ModelKey]
 		}
 		namespace[currentParameterValueKey] = value
 		out[key] = namespace
-	}
-	return out
-}
-
-func promptNodeOutputData(values map[workflow.ModelKey]map[string]string) map[string]map[string]string {
-	out := make(map[string]map[string]string, len(values))
-	for nodeKey, outputs := range values {
-		out[string(nodeKey)] = maps.Clone(outputs)
 	}
 	return out
 }

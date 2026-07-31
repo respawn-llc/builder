@@ -110,7 +110,7 @@ WHERE task_id = 'task-current-node-migration'`).Scan(
 		schedulingState.Valid ||
 		sessionID.Valid ||
 		currentInputs != "{}" ||
-		priorNodeValues != `{"node_outputs":{},"transition_parameters":{}}` {
+		priorNodeValues != `{"transition_parameters":{}}` {
 		t.Fatalf(
 			"projected backlog current node = node=%q branch=%+v scheduling=%+v session=%+v inputs=%q prior=%q, want serial unbound backlog state",
 			nodeID,
@@ -328,7 +328,7 @@ WHERE task_id = 'task-active-agent-migration'`).Scan(
 	}
 	if nodeID != "node-agent" ||
 		currentInputs != `{"note":"entry note","summary":"from transition","task_title":"Task"}` ||
-		priorNodeValues != `{"node_outputs":{},"transition_parameters":{}}` ||
+		priorNodeValues != `{"transition_parameters":{}}` ||
 		schedulingState != "interrupted" ||
 		interruptionReason != "server_restart" ||
 		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||

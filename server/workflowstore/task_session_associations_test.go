@@ -136,7 +136,7 @@ INSERT INTO task_active_fanout_branches (
 INSERT INTO task_current_nodes (
     task_id, node_id, transition_branch_key, current_input_values_json,
     prior_node_values_json, session_id, scheduling_state, entered_by_edge_id
-) VALUES (?, ?, ?, '{}', '{"node_outputs":{},"transition_parameters":{}}', ?, 'ready', ?)`,
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?)`,
 		string(task.ID),
 		string(started.Reference.NodeID),
 		string(branchKey),

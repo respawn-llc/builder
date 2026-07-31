@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -16,36 +17,8 @@ type DerivedWiring struct {
 	joinOutputFieldsByNode           map[NodeID][]OutputField
 	currentNodeInputBindingsByEdge   map[EdgeID][]InputBinding
 	currentNodeOutputFieldsByGroup   map[TransitionGroupID][]OutputField
-	priorValueRequirementsByNode     map[NodeID][]PriorValueRequirement
+	priorParameterRequirementsByNode map[NodeID][]PriorTransitionParameterRequirement
 }
-
-type PriorValueRequirement interface {
-	isPriorValueRequirement()
-	Origin() PriorValueOrigin
-	Namespace() ModelKey
-	ProviderNodeKey() ModelKey
-	ValueName() string
-}
-
-type PriorValueOrigin string
-
-const (
-	PriorValueOriginNodeOutput          PriorValueOrigin = "node_output"
-	PriorValueOriginTransitionParameter PriorValueOrigin = "transition_parameter"
-)
-
-type PriorNodeOutputRequirement struct {
-	ProviderNode ModelKey
-	OutputName   string
-}
-
-func (PriorNodeOutputRequirement) isPriorValueRequirement() {}
-func (PriorNodeOutputRequirement) Origin() PriorValueOrigin {
-	return PriorValueOriginNodeOutput
-}
-func (r PriorNodeOutputRequirement) Namespace() ModelKey       { return r.ProviderNode }
-func (r PriorNodeOutputRequirement) ProviderNodeKey() ModelKey { return r.ProviderNode }
-func (r PriorNodeOutputRequirement) ValueName() string         { return r.OutputName }
 
 type PriorTransitionParameterRequirement struct {
 	ProviderNode  ModelKey
@@ -53,23 +26,14 @@ type PriorTransitionParameterRequirement struct {
 	ParameterName string
 }
 
-func (PriorTransitionParameterRequirement) isPriorValueRequirement() {}
-func (PriorTransitionParameterRequirement) Origin() PriorValueOrigin {
-	return PriorValueOriginTransitionParameter
-}
-func (r PriorTransitionParameterRequirement) Namespace() ModelKey       { return r.TransitionKey }
-func (r PriorTransitionParameterRequirement) ProviderNodeKey() ModelKey { return r.ProviderNode }
-func (r PriorTransitionParameterRequirement) ValueName() string         { return r.ParameterName }
-
 type priorParameterTransitionResolution struct {
 	matched    int
 	guaranteed []TransitionGroup
 }
 
-type derivedPriorValueRequirement struct {
-	value                     PriorValueRequirement
-	providerNodeID            NodeID
-	providerTransitionGroupID *TransitionGroupID
+type derivedPriorParameterRequirement struct {
+	value                     PriorTransitionParameterRequirement
+	providerTransitionGroupID TransitionGroupID
 }
 
 func DeriveWiring(def Definition) DerivedWiring {
@@ -82,7 +46,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 		joinOutputFieldsByNode:           map[NodeID][]OutputField{},
 		currentNodeInputBindingsByEdge:   map[EdgeID][]InputBinding{},
 		currentNodeOutputFieldsByGroup:   map[TransitionGroupID][]OutputField{},
-		priorValueRequirementsByNode:     map[NodeID][]PriorValueRequirement{},
+		priorParameterRequirementsByNode: map[NodeID][]PriorTransitionParameterRequirement{},
 	}
 	nodesByID := make(map[NodeID]Node, len(def.Nodes))
 	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
@@ -162,8 +126,8 @@ func (w DerivedWiring) CurrentNodeOutputFieldsForTransitionGroup(groupID Transit
 	return append([]OutputField(nil), w.currentNodeOutputFieldsByGroup[groupID]...)
 }
 
-func (w DerivedWiring) PriorValueRequirementsForNode(nodeID NodeID) []PriorValueRequirement {
-	return append([]PriorValueRequirement(nil), w.priorValueRequirementsByNode[nodeID]...)
+func (w DerivedWiring) PriorParameterRequirementsForNode(nodeID NodeID) []PriorTransitionParameterRequirement {
+	return append([]PriorTransitionParameterRequirement(nil), w.priorParameterRequirementsByNode[nodeID]...)
 }
 
 func (w DerivedWiring) TransitionOutputFieldsForEdge(edge Edge, source Node) []OutputField {
@@ -268,11 +232,7 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 	outgoingByNode map[NodeID][]Edge,
 ) {
 	startNodeID, hasSingleStart := singleStartNodeID(def.Nodes)
-	nodeIDsByKey := make(map[ModelKey]NodeID, len(nodesByID))
-	for nodeID, node := range nodesByID {
-		nodeIDsByKey[NodeKey(node)] = nodeID
-	}
-	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorValueRequirement, len(nodesByID))
+	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorParameterRequirement, len(nodesByID))
 	for _, edge := range def.Edges {
 		_, targetExists := nodesByID[edge.TargetNodeID]
 		if !targetExists {
@@ -295,27 +255,6 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 					w.addCurrentNodeOutputField(consumerGroup.ID, field)
 				}
 			}
-		}
-		for _, priorNode := range refs.PriorNodes {
-			nodeKey := ModelKey(strings.TrimSpace(string(priorNode.NodeKey)))
-			outputName := strings.TrimSpace(priorNode.OutputName)
-			if nodeKey == "" || outputName == "" {
-				continue
-			}
-			providerNodeID, providerExists := nodeIDsByKey[nodeKey]
-			if !providerExists {
-				continue
-			}
-			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniqueDerivedPriorValueRequirements(
-				priorRequirementsByPromptNode[edge.TargetNodeID],
-				[]derivedPriorValueRequirement{{
-					value: PriorNodeOutputRequirement{
-						ProviderNode: nodeKey,
-						OutputName:   outputName,
-					},
-					providerNodeID: providerNodeID,
-				}},
-			)
 		}
 		if !consumerGroupExists {
 			continue
@@ -347,68 +286,31 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 			if providerNodeKey == "" {
 				continue
 			}
-			providerTransitionGroupID := resolution.guaranteed[0].ID
-			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniqueDerivedPriorValueRequirements(
+			priorRequirementsByPromptNode[edge.TargetNodeID] = appendUniqueDerivedPriorParameterRequirements(
 				priorRequirementsByPromptNode[edge.TargetNodeID],
-				[]derivedPriorValueRequirement{{
+				[]derivedPriorParameterRequirement{{
 					value: PriorTransitionParameterRequirement{
 						ProviderNode:  providerNodeKey,
 						TransitionKey: transitionKey,
 						ParameterName: outputName,
 					},
-					providerNodeID:            resolution.guaranteed[0].SourceNodeID,
-					providerTransitionGroupID: &providerTransitionGroupID,
+					providerTransitionGroupID: resolution.guaranteed[0].ID,
 				}},
 			)
 		}
 	}
 	for nodeID := range nodesByID {
-		requirements := []PriorValueRequirement{}
+		requirements := []PriorTransitionParameterRequirement{}
 		for reachableNodeID := range reachableNodeIDs(nodeID, outgoingByNode) {
 			for _, requirement := range priorRequirementsByPromptNode[reachableNodeID] {
-				if !priorValueAvailableAtNode(requirement, nodeID, startNodeID, outgoingByNode) {
+				if !transitionGroupDominates(startNodeID, requirement.providerTransitionGroupID, nodeID, outgoingByNode) {
 					continue
 				}
-				requirements = appendUniquePriorValueRequirements(requirements, []PriorValueRequirement{requirement.value})
+				requirements = appendUniquePriorParameterRequirements(requirements, []PriorTransitionParameterRequirement{requirement.value})
 			}
 		}
-		w.priorValueRequirementsByNode[nodeID] = requirements
+		w.priorParameterRequirementsByNode[nodeID] = requirements
 	}
-	for _, group := range def.TransitionGroups {
-		source, sourceExists := nodesByID[group.SourceNodeID]
-		if !sourceExists || !IsExecutableNode(source) {
-			continue
-		}
-		sourceKey := NodeKey(source)
-		for _, edge := range outgoingByNode[group.SourceNodeID] {
-			if edge.TransitionGroupID != group.ID {
-				continue
-			}
-			for _, requirement := range w.priorValueRequirementsByNode[edge.TargetNodeID] {
-				if requirement.ProviderNodeKey() != sourceKey {
-					continue
-				}
-				field, exists := outputFieldByName(NodeOutputFields(source), requirement.ValueName())
-				if !exists {
-					continue
-				}
-				w.addCurrentNodeOutputField(group.ID, field)
-			}
-		}
-	}
-}
-
-func priorValueAvailableAtNode(
-	requirement derivedPriorValueRequirement,
-	nodeID NodeID,
-	startNodeID NodeID,
-	outgoingByNode map[NodeID][]Edge,
-) bool {
-	if requirement.providerTransitionGroupID != nil {
-		return transitionGroupDominates(startNodeID, *requirement.providerTransitionGroupID, nodeID, outgoingByNode)
-	}
-	return nodeID != requirement.providerNodeID &&
-		nodeDominatesFromStart(startNodeID, requirement.providerNodeID, nodeID, outgoingByNode)
 }
 
 func singleStartNodeID(nodes []Node) (NodeID, bool) {
@@ -568,55 +470,24 @@ func appendUniqueInputBindings(existing []InputBinding, additions []InputBinding
 	return out
 }
 
-func appendUniquePriorValueRequirements(existing []PriorValueRequirement, additions []PriorValueRequirement) []PriorValueRequirement {
-	out := append([]PriorValueRequirement(nil), existing...)
+func appendUniquePriorParameterRequirements(existing []PriorTransitionParameterRequirement, additions []PriorTransitionParameterRequirement) []PriorTransitionParameterRequirement {
+	out := append([]PriorTransitionParameterRequirement(nil), existing...)
 	for _, requirement := range additions {
-		duplicate := false
-		for _, current := range out {
-			if priorValueRequirementsEqual(current, requirement) {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
+		if !slices.Contains(out, requirement) {
 			out = append(out, requirement)
 		}
 	}
 	return out
 }
 
-func appendUniqueDerivedPriorValueRequirements(existing []derivedPriorValueRequirement, additions []derivedPriorValueRequirement) []derivedPriorValueRequirement {
-	out := append([]derivedPriorValueRequirement(nil), existing...)
+func appendUniqueDerivedPriorParameterRequirements(existing []derivedPriorParameterRequirement, additions []derivedPriorParameterRequirement) []derivedPriorParameterRequirement {
+	out := append([]derivedPriorParameterRequirement(nil), existing...)
 	for _, addition := range additions {
-		duplicate := false
-		for _, current := range out {
-			if !priorValueRequirementsEqual(current.value, addition.value) ||
-				current.providerNodeID != addition.providerNodeID ||
-				!optionalTransitionGroupIDsEqual(current.providerTransitionGroupID, addition.providerTransitionGroupID) {
-				continue
-			}
-			duplicate = true
-			break
-		}
-		if !duplicate {
+		if !slices.Contains(out, addition) {
 			out = append(out, addition)
 		}
 	}
 	return out
-}
-
-func priorValueRequirementsEqual(left, right PriorValueRequirement) bool {
-	return left.Origin() == right.Origin() &&
-		left.Namespace() == right.Namespace() &&
-		left.ProviderNodeKey() == right.ProviderNodeKey() &&
-		left.ValueName() == right.ValueName()
-}
-
-func optionalTransitionGroupIDsEqual(left *TransitionGroupID, right *TransitionGroupID) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }
 
 func (w *DerivedWiring) addDiagnostic(code ValidationErrorCode, message string, ref ValidationError) {

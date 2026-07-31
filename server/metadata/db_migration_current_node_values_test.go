@@ -63,7 +63,7 @@ INSERT INTO workflow_edges (
      '[{"name":"summary","source":"transition_output","field":"summary"}]',
      '[]'),
     ('edge-review-audit', 'group-review-audit', 'audit', 'node-audit', 'new_session',
-     'Audit {{.Nodes.plan.summary}} and {{.Params.review.summary}}.', '[]', '[]', '[]'),
+     'Audit {{.Params.review.summary}}.', '[]', '[]', '[]'),
     ('edge-audit-done', 'group-audit-done', 'done', 'node-done', 'new_session',
      '', '[]', '[]', '[]')`)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-value-environment-migration", "link-1", 1, "VAL-1", now, now)
@@ -176,7 +176,7 @@ WHERE task_id = 'task-value-environment-migration'`).Scan(
 		t.Fatalf("query migrated value environment: %v", err)
 	}
 	if currentInputs != `{"summary":"approved plan"}` ||
-		priorNodeValues != `{"node_outputs":{"plan":{"summary":"approved plan"}},"transition_parameters":{"review":{"summary":"approved plan"}}}` ||
+		priorNodeValues != `{"transition_parameters":{"review":{"summary":"approved plan"}}}` ||
 		enteredByEdgeID != "edge-plan-review" {
 		t.Fatalf(
 			"migrated value environment = inputs=%q prior=%q entered_by=%q",
@@ -367,12 +367,12 @@ JOIN task_pending_approvals approval ON approval.id = branch.approval_id
 WHERE approval.source_task_id = 'task-frozen-prior-parameter-migration'`).Scan(&targetPriorValues); err != nil {
 		t.Fatalf("query migrated pending approval target values: %v", err)
 	}
-	if targetPriorValues != `{"node_outputs":{},"transition_parameters":{"audit":{"result":"approved review"},"review":{"summary":"approved plan"}}}` {
+	if targetPriorValues != `{"transition_parameters":{"audit":{"result":"approved review"},"review":{"summary":"approved plan"}}}` {
 		t.Fatalf("migrated pending approval target prior values = %q, want frozen review and pending audit transition values", targetPriorValues)
 	}
 }
 
-func TestOpenMigratesVersion60FlatPriorValuesIntoTypedOrigins(t *testing.T) {
+func TestOpenDropsVersion60FlatLegacyNodeValues(t *testing.T) {
 	t.Parallel()
 	root, db := openVersion60PriorValueFixture(t)
 	execSeed(t, db, "restore deployed flat Current Node values", `
@@ -433,98 +433,9 @@ FROM task_pending_approval_branches
 WHERE approval_id = '47d1d167-891d-477e-931c-a139a0c99593'`).Scan(&targetPriorValues); err != nil {
 		t.Fatalf("query migrated version 60 pending Approval values: %v", err)
 	}
-	want := `{"node_outputs":{"plan":{"summary":"approved plan"}},"transition_parameters":{}}`
+	want := `{"transition_parameters":{}}`
 	if currentPriorValues != want || targetPriorValues != want {
 		t.Fatalf("version 60 migrated values = current=%q target=%q, want %q", currentPriorValues, targetPriorValues, want)
-	}
-}
-
-func TestOpenRejectsVersion60FlatPriorValueOriginCollision(t *testing.T) {
-	t.Parallel()
-	root, db := openVersion60PriorValueFixture(t)
-	execSeed(t, db, "same-key Node and Transition consumer", `
-INSERT INTO workflow_nodes (
-    id, workflow_id, node_key, kind, display_name, subagent_role,
-    prompt_template, input_fields_json, output_fields_json
-) VALUES (
-    'node-origin-consumer',
-    'workflow-1',
-    'origin_consumer',
-    'agent',
-    'Origin Consumer',
-    'coder',
-    'Consume.',
-    '[]',
-    '[]'
-);
-UPDATE workflow_edges
-SET target_node_id = 'node-origin-consumer',
-    prompt_template = 'Consume {{.Nodes.review.summary}} and {{.Params.review.summary}}.'
-WHERE id = 'edge-review-done-invalid-values';
-INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
-VALUES ('group-origin-consumer-done', 'node-origin-consumer', 'done', 'Done');
-INSERT INTO workflow_edges (
-    id, transition_group_id, edge_key, target_node_id, context_mode,
-    prompt_template, parameters_json, input_bindings_json, output_requirements_json
-) VALUES (
-    'edge-origin-consumer-done',
-    'group-origin-consumer-done',
-    'done',
-    'node-done',
-    'new_session',
-    '',
-    '[]',
-    '[]',
-    '[]'
-)`)
-	execSeed(t, db, "deployed colliding pending Approval target", `
-INSERT INTO task_pending_approvals (
-    id,
-    source_task_id,
-    source_node_id,
-    workflow_version,
-    transition_snapshot_json,
-    materialized_values_json,
-    created_at_unix_ms
-) VALUES (
-    '2e96d770-fe49-4a55-9018-b22ff37f9aba',
-    'task-invalid-values',
-    'node-agent',
-    1,
-    '{}',
-    '{}',
-    1
-);
-INSERT INTO task_pending_approval_branches (
-    approval_id,
-    transition_branch_key,
-    target_snapshot_json,
-    effective_edge_configuration_json,
-    context_source_resolution_json
-) VALUES (
-    '2e96d770-fe49-4a55-9018-b22ff37f9aba',
-    'done',
-    '{"node_id":"node-origin-consumer","display_name":"Origin Consumer","current_input_values":{},"prior_node_values":{"review":{"summary":"ambiguous"}}}',
-    '{}',
-    '{}'
-)`)
-	if err := db.Close(); err != nil {
-		t.Fatalf("close colliding version 60 db: %v", err)
-	}
-
-	_, err := Open(root)
-	if err == nil {
-		t.Fatal("Open unexpectedly accepted a version 60 flat prior-value origin collision")
-	}
-	for _, expected := range []string{
-		"task_id=task-invalid-values",
-		"node_id=node-origin-consumer",
-		"value_key=review.summary",
-		"collides between Node output and Transition parameter origins",
-	} {
-		if !strings.Contains(err.Error(), expected) {
-			t.Fatalf("Open error = %v, want context %q", err, expected)
-		}
 	}
 }
 
@@ -566,39 +477,39 @@ WHERE id = 'entry-edge-placement-invalid-values'`)
 			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=required_input"},
 		},
 		{
-			name: "missing prior node value",
+			name: "missing prior Transition parameter",
 			mutate: func(t *testing.T, db *sql.DB, _ int64) {
-				execSeed(t, db, "missing prior node value", `
+				execSeed(t, db, "missing prior Transition parameter", `
 UPDATE task_transitions
 SET output_values_json = '{}'
 WHERE id = 'entry-transition-placement-invalid-values'`)
 			},
-			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Nodes.plan.summary", "required value is missing"},
+			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Params.review.summary", "required value is missing"},
 		},
 		{
-			name: "malformed frozen prior node values",
+			name: "malformed frozen prior Transition parameters",
 			mutate: func(t *testing.T, db *sql.DB, _ int64) {
-				execSeed(t, db, "malformed frozen prior node values", `
+				execSeed(t, db, "malformed frozen prior Transition parameters", `
 UPDATE task_runs
-SET metadata_json = '{"node_output_values":[]}'
+SET metadata_json = '{"prior_parameter_values":[]}'
 WHERE id = 'run-invalid-values'`)
 			},
 			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "decode frozen values"},
 		},
 		{
-			name: "conflicting frozen prior node value",
+			name: "conflicting frozen prior Transition parameter",
 			mutate: func(t *testing.T, db *sql.DB, _ int64) {
-				execSeed(t, db, "conflicting frozen prior node value", `
+				execSeed(t, db, "conflicting frozen prior Transition parameter", `
 UPDATE task_runs
-SET metadata_json = '{"node_output_values":{"plan":{"summary":"frozen conflict"}}}'
+SET metadata_json = '{"prior_parameter_values":{"review":{"summary":"frozen conflict"}}}'
 WHERE id = 'run-invalid-values'`)
 			},
-			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Nodes.plan.summary", "frozen value conflicts"},
+			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Params.review.summary", "frozen value conflicts"},
 		},
 		{
-			name: "prior node ordering tie",
+			name: "prior Transition parameter ordering tie",
 			mutate: func(t *testing.T, db *sql.DB, now int64) {
-				execSeed(t, db, "tied prior node transition", `
+				execSeed(t, db, "tied prior Transition parameter", `
 INSERT INTO task_transitions (
     id, task_id, source_node_key, source_node_display_name,
     transition_id, transition_display_name, workflow_revision_seen, actor, state,
@@ -619,7 +530,7 @@ INSERT INTO task_transitions (
     ?
 )`, now, now)
 			},
-			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Nodes.plan.summary", "ordering tie"},
+			want: []string{"task-invalid-values", "node-agent", "transition_branch_key=serial", "value_key=.Params.review.summary", "ordering tie"},
 		},
 	}
 
@@ -657,7 +568,7 @@ func seedLegacyInvalidValueEnvironmentFixture(t *testing.T, db *sql.DB, now int6
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('project-invalid-values', 'Project', ?, ?, '{}')`, now, now)
 	seedWorkflowGraph(t, db, "project-invalid-values", now)
-	execSeed(t, db, "prior-node requirement graph", `
+	execSeed(t, db, "prior-Transition-parameter requirement graph", `
 UPDATE workflow_nodes
 SET node_key = 'review',
     display_name = 'Review',
@@ -709,7 +620,7 @@ INSERT INTO workflow_edges (
     'done',
     'node-done',
     'new_session',
-    'Continue with {{.Nodes.plan.summary}}.',
+    'Continue with {{.Params.review.summary}}.',
     '[]',
     '[]',
     '[]'
@@ -726,7 +637,7 @@ INSERT INTO task_runs (
     1,
     ?,
     ?,
-    '{"node_output_values":{}}'
+    '{"prior_parameter_values":{}}'
 )`, now, now+1)
 	execSeed(t, db, "legacy plan placement", `
 INSERT INTO task_node_placements (

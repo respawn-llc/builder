@@ -502,13 +502,23 @@ func materializeCompletionTargetCurrentNode(
 	}
 	priorValues := currentSource.PriorValues.Clone()
 	sourceKey := workflow.NodeKey(source)
-	for _, requirement := range wiring.PriorValueRequirementsForNode(workflow.NodeIDOf(target)) {
+	var sourceTransitionKey workflow.ModelKey
+	for _, group := range definition.TransitionGroups {
+		if group.ID == edge.TransitionGroupID {
+			sourceTransitionKey = workflow.ModelKey(group.TransitionID)
+			break
+		}
+	}
+	if sourceTransitionKey == "" {
+		return workflow.CurrentNode{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
+	}
+	for _, requirement := range wiring.PriorParameterRequirementsForNode(workflow.NodeIDOf(target)) {
 		var value string
 		var exists bool
-		if requirement.ProviderNodeKey() == sourceKey {
-			value, exists = outputValues[requirement.ValueName()]
+		if requirement.ProviderNode == sourceKey && requirement.TransitionKey == sourceTransitionKey {
+			value, exists = outputValues[requirement.ParameterName]
 		} else {
-			value, exists = currentSource.PriorValues.Value(requirement)
+			value, exists = currentSource.PriorValues.TransitionParameter(requirement.TransitionKey, requirement.ParameterName)
 			if !exists {
 				recoveredValue, recovered, recoveryErr := currentNodeEnteringTransitionParameterValue(
 					definition,
@@ -525,11 +535,11 @@ func materializeCompletionTargetCurrentNode(
 		if !exists {
 			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
 				Code:    CompletionCodeRequiredOutputMissing,
-				Field:   strings.TrimSpace(requirement.ValueName()),
-				Message: "required prior-node output is missing",
+				Field:   strings.TrimSpace(requirement.ParameterName),
+				Message: "required prior Transition parameter is missing",
 			}}}
 		}
-		priorValues.Set(requirement, value)
+		priorValues.SetTransitionParameter(requirement.TransitionKey, requirement.ParameterName, value)
 	}
 	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource)
 	if err != nil {
@@ -550,9 +560,9 @@ func currentNodeEnteringTransitionParameterValue(
 	definition workflow.Definition,
 	wiring workflow.DerivedWiring,
 	currentNode workflow.CurrentNode,
-	requirement workflow.PriorValueRequirement,
+	requirement workflow.PriorTransitionParameterRequirement,
 ) (string, bool, error) {
-	if requirement.Origin() != workflow.PriorValueOriginTransitionParameter || currentNode.EnteredByEdgeID == nil {
+	if currentNode.EnteredByEdgeID == nil {
 		return "", false, nil
 	}
 	enteringEdge, err := currentNodeDefinitionEnteringEdge(definition, currentNode)
@@ -574,7 +584,7 @@ func currentNodeEnteringTransitionParameterValue(
 			enteringEdge.TransitionGroupID,
 		)
 	}
-	if workflow.ModelKey(enteringGroup.TransitionID) != requirement.Namespace() {
+	if workflow.ModelKey(enteringGroup.TransitionID) != requirement.TransitionKey {
 		return "", false, nil
 	}
 	provider, err := currentNodeDefinitionNode(definition, enteringGroup.SourceNodeID)
@@ -585,11 +595,11 @@ func currentNodeEnteringTransitionParameterValue(
 			err,
 		)
 	}
-	if workflow.NodeKey(provider) != requirement.ProviderNodeKey() {
+	if workflow.NodeKey(provider) != requirement.ProviderNode {
 		return "", false, nil
 	}
 	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(enteringEdge.ID) {
-		if binding.Field != requirement.ValueName() {
+		if binding.Field != requirement.ParameterName {
 			continue
 		}
 		value, exists := currentNode.CurrentInputValues[binding.Name]
