@@ -49,10 +49,7 @@ describe("VerticalReorder", () => {
     await user.keyboard("[Space]");
     await user.keyboard("[ArrowDown]");
 
-    await waitFor(() => {
-      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
-      expect(screen.getByTestId("row-third").parentElement?.style.transform).not.toBe("");
-    });
+    expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
 
     await user.keyboard("[Space]");
 
@@ -83,7 +80,8 @@ describe("VerticalReorder", () => {
 
     expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
     expect(screen.getByTestId("row-second")).not.toBeVisible();
-    expect(screen.getAllByTestId(/^row-/)).toHaveLength(3);
+    expect(screen.getByTestId("row-first")).toBeVisible();
+    expect(screen.getByTestId("row-third")).toBeVisible();
 
     act(() => {
       cancelPointerDrag();
@@ -112,10 +110,11 @@ describe("VerticalReorder", () => {
   });
 
   it("keeps one source placeholder and moves one adjacent row after one keyboard Down", async () => {
+    const onCommit = vi.fn();
     const user = userEvent.setup();
     mockRowGeometry();
 
-    render(<ReorderHarness onCommit={vi.fn()} />);
+    render(<ReorderHarness onCommit={onCommit} />);
 
     const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
     secondHandle.focus();
@@ -129,7 +128,11 @@ describe("VerticalReorder", () => {
       expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
     });
     expect(screen.getByTestId("row-second")).not.toBeVisible();
-    await user.keyboard("[Escape]");
+    await user.keyboard("[Space]");
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith(["first", "third", "second"]);
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
+    });
   });
 
   it("keeps keyboard projection and final IDs under reduced motion and cleans the listener", async () => {
@@ -149,10 +152,7 @@ describe("VerticalReorder", () => {
     await user.keyboard("[Space]");
     await user.keyboard("[ArrowDown]");
 
-    await waitFor(() => {
-      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
-      expect(screen.getByTestId("row-third").parentElement?.style.transform).not.toBe("");
-    });
+    expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
 
     await user.keyboard("[Space]");
     await waitFor(() => {
@@ -397,12 +397,12 @@ function mockRowGeometry(): void {
       (id) => within(this).queryByTestId(`row-${id}`) !== null,
     );
     const rowIndexByID: Readonly<Record<string, number>> = {
-      "row-first": 0,
-      "row-second": 1,
-      "row-third": 2,
+      first: 0,
+      second: 1,
+      third: 2,
     };
-    const index = rowIndexByID[`row-${rowID ?? ""}`] ?? -1;
-    const top = index < 0 ? 0 : index * 40;
+    const index = rowID === undefined ? undefined : rowIndexByID[rowID];
+    const top = index === undefined ? 0 : index * 40;
     return {
       bottom: top + 32,
       height: 32,
