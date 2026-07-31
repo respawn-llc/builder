@@ -796,6 +796,26 @@ func TestMetadataServiceWorkspaceSelectorRejectsStaleLexicalBindingAfterSymlinkR
 	}
 }
 
+func TestMetadataServiceWorkspaceSelectorRejectsStaleLexicalBindingAfterDanglingSymlinkReplacement(t *testing.T) {
+	originalRoot := t.TempDir()
+	store, _, binding := newProjectViewMetadataStoreForWorkspace(t, originalRoot)
+	if err := os.Remove(originalRoot); err != nil {
+		t.Fatalf("remove original workspace root: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), originalRoot); err != nil {
+		t.Fatalf("replace workspace root with dangling symlink: %v", err)
+	}
+
+	selector, err := serverapi.NewProjectWorkspaceSelectorForRoot(originalRoot)
+	if err != nil {
+		t.Fatalf("workspace selector: %v", err)
+	}
+	_, err = store.ResolveProjectWorkspaceSelector(context.Background(), binding.ProjectID, selector)
+	if !errors.Is(err, serverapi.ErrWorkspacePathIdentity) {
+		t.Fatalf("stale lexical dangling symlink error = %v, want ErrWorkspacePathIdentity", err)
+	}
+}
+
 func TestMetadataServiceWorkspaceSelectorUsesExactRootFallbackWhenCanonicalizationIsInaccessible(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	loopRoot := filepath.Join(t.TempDir(), "loop")

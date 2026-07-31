@@ -381,6 +381,18 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 		if absErr != nil {
 			return Binding{}, fmt.Errorf("%w: %q: %v", serverapi.ErrWorkspacePathIdentity, workspaceRoot, absErr)
 		}
+		_, statErr := os.Stat(absoluteRoot)
+		if errors.Is(statErr, os.ErrNotExist) {
+			info, lstatErr := os.Lstat(absoluteRoot)
+			if lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+				return Binding{}, serverapi.WorkspacePathIdentityError{WorkspaceRoot: workspaceRoot, Cause: canonicalErr}
+			}
+			if lstatErr != nil && !errors.Is(lstatErr, os.ErrNotExist) {
+				return Binding{}, serverapi.WorkspacePathIdentityError{WorkspaceRoot: workspaceRoot, Cause: lstatErr}
+			}
+		} else if statErr == nil {
+			return Binding{}, serverapi.WorkspacePathIdentityError{WorkspaceRoot: workspaceRoot, Cause: canonicalErr}
+		}
 		if binding, err := lookupByRoot(filepath.Clean(absoluteRoot)); err == nil {
 			return binding, nil
 		} else if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
