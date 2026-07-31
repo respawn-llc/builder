@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/charmbracelet/lipgloss"
@@ -696,23 +697,7 @@ func compactionNoticeText(count *int) string {
 	if count == nil {
 		return "Context compacted"
 	}
-	return fmt.Sprintf("Context compacted for the %s time.", ordinal(*count))
-}
-
-func ordinal(value int) string {
-	if value%100 >= 11 && value%100 <= 13 {
-		return fmt.Sprintf("%dth", value)
-	}
-	switch value % 10 {
-	case 1:
-		return fmt.Sprintf("%dst", value)
-	case 2:
-		return fmt.Sprintf("%dnd", value)
-	case 3:
-		return fmt.Sprintf("%drd", value)
-	default:
-		return fmt.Sprintf("%dth", value)
-	}
+	return fmt.Sprintf("Context compacted for the %s time.", textutil.Ordinal(*count))
 }
 
 func worktreeNoticeText(row *clientui.TranscriptNoticeRow) (string, bool) {
