@@ -400,3 +400,6 @@
 
 - [x] Reconcile dependency-list projection with the authoritative workflow orchestration contract: omit empty directions for both unfiltered and filtered requests, and return `directions: []` when no relationships exist.
 - [x] Add regression coverage for empty unfiltered and filtered dependency-list responses.
+- [x] Re-run the previously reported transcript replacement test directly; it passes in isolation.
+- [x] Confirm no new implementation or compliance findings remain in re-review.
+- [ ] Browser visual QA and the separate end-to-end CLI/GUI acceptance pass remain external workflow review work; this implementation task does not perform manual QA.
