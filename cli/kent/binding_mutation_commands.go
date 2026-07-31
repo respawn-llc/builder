@@ -130,13 +130,17 @@ func runBindingMutationCommand(
 	rpcCtx, cancel := context.WithTimeout(context.Background(), bindingCommandRPCTimeout)
 	defer cancel()
 	result, mutationErr := mutate(rpcCtx, remote, selector)
-	cleanupErr := closeBindingMutationRemote(remote, nil)
 	if mutationErr != nil {
-		if cleanupErr != nil {
-			mutationErr = errors.Join(mutationErr, cleanupErr)
-		}
-		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, mutationErr, arguments.ProjectID, defaultMutation)
+		return writeBindingMutationFailure(
+			stdout,
+			stderr,
+			arguments.JSON,
+			closeBindingMutationRemote(remote, mutationErr),
+			arguments.ProjectID,
+			defaultMutation,
+		)
 	}
+	cleanupErr := closeBindingMutationRemote(remote, nil)
 	if cleanupErr != nil {
 		// The mutation has already committed. Preserve its authoritative result
 		// and surface connection cleanup as a non-fatal diagnostic.

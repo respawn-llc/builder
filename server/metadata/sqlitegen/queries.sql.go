@@ -425,7 +425,6 @@ SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = ?1
   AND managed <> 0
-  AND created_branch <> 0
 `
 
 func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {

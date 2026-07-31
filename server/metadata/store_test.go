@@ -307,38 +307,46 @@ VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameter
 		})
 	})
 
-	t.Run("managed owned worktree", func(t *testing.T) {
-		ctx := context.Background()
-		store, _, binding := newMetadataTestStore(t)
-		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
-		if err != nil {
-			t.Fatalf("AttachWorkspaceToProject: %v", err)
-		}
-		if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
-			ID:              "managed-owned-worktree",
-			WorkspaceID:     attached.WorkspaceID,
-			CanonicalRoot:   t.TempDir(),
-			Managed:         true,
-			CreatedBranch:   true,
-			GitMetadataJSON: "{}",
-		}); err != nil {
-			t.Fatalf("UpsertWorktreeRecord: %v", err)
-		}
+	for _, test := range []struct {
+		name          string
+		createdBranch bool
+	}{
+		{name: "created branch", createdBranch: true},
+		{name: "existing ref", createdBranch: false},
+	} {
+		t.Run("managed owned worktree/"+test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, _, binding := newMetadataTestStore(t)
+			attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+			if err != nil {
+				t.Fatalf("AttachWorkspaceToProject: %v", err)
+			}
+			if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
+				ID:              "managed-owned-worktree",
+				WorkspaceID:     attached.WorkspaceID,
+				CanonicalRoot:   t.TempDir(),
+				Managed:         true,
+				CreatedBranch:   test.createdBranch,
+				GitMetadataJSON: "{}",
+			}); err != nil {
+				t.Fatalf("UpsertWorktreeRecord: %v", err)
+			}
 
-		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
-		if err != nil {
-			t.Fatalf("UnlinkProjectWorkspace: %v", err)
-		}
-		assertWorkspaceUnlinkBlocker(t, blockers, "managed_owned_worktrees")
-		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{})
-		var worktreeCount int
-		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worktrees WHERE id = 'managed-owned-worktree'`).Scan(&worktreeCount); err != nil {
-			t.Fatalf("count managed worktree: %v", err)
-		}
-		if worktreeCount != 1 {
-			t.Fatalf("managed worktree count = %d, want 1", worktreeCount)
-		}
-	})
+			blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+			if err != nil {
+				t.Fatalf("UnlinkProjectWorkspace: %v", err)
+			}
+			assertWorkspaceUnlinkBlocker(t, blockers, "managed_owned_worktrees")
+			assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{})
+			var worktreeCount int
+			if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worktrees WHERE id = 'managed-owned-worktree'`).Scan(&worktreeCount); err != nil {
+				t.Fatalf("count managed worktree: %v", err)
+			}
+			if worktreeCount != 1 {
+				t.Fatalf("managed worktree count = %d, want 1", worktreeCount)
+			}
+		})
+	}
 
 	t.Run("missing history snapshot", func(t *testing.T) {
 		ctx := context.Background()
