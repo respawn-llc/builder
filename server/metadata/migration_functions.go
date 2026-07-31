@@ -21,6 +21,9 @@ const migrationPriorParametersFunction = "kent_migration_prior_transition_parame
 const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
 const migrationWorkflowIDBlobFunction = "kent_migration_workflow_id_blob_v1"
 const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
+const migrationWorkflowRunHistoryCutoverIrreversibleFunction = "kent_workflow_run_history_cutover_is_irreversible"
+const migrationCurrentNodePriorValuesIrreversibleFunction = "kent_current_node_prior_transition_parameters_are_irreversible"
+const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_session_agent_role_backfill_is_irreversible"
 
 var registerMetadataSQLiteFunctionsOnce sync.Once
 var registerMetadataSQLiteFunctionsErr error
@@ -56,11 +59,39 @@ func registerMetadataSQLiteFunctions() error {
 			2,
 			migrationWorkflowIDText,
 		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		for _, functionName := range [...]string{
+			migrationWorkflowRunHistoryCutoverIrreversibleFunction,
+			migrationCurrentNodePriorValuesIrreversibleFunction,
+			migrationWorkflowSessionAgentRoleIrreversibleFunction,
+		} {
+			registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+				functionName,
+				0,
+				migrationIrreversibleMarker(functionName),
+			)
+			if registerMetadataSQLiteFunctionsErr != nil {
+				return
+			}
+		}
 	})
 	if registerMetadataSQLiteFunctionsErr != nil {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationIrreversibleMarker(
+	functionName string,
+) func(*sqlitedriver.FunctionContext, []driver.Value) (driver.Value, error) {
+	return func(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+		if len(args) != 0 {
+			return nil, fmt.Errorf("%s requires no arguments", functionName)
+		}
+		return nil, fmt.Errorf("metadata migration guarded by %s is irreversible", functionName)
+	}
 }
 
 func migrationWorkflowIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {

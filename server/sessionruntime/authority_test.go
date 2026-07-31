@@ -20,6 +20,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -1519,6 +1520,86 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime: %v", err)
+	}
+}
+
+func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
+	tests := []struct {
+		name             string
+		resourceMismatch bool
+	}{
+		{name: "missing resource"},
+		{name: "resource mismatch", resourceMismatch: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+			if err != nil {
+				t.Fatalf("parse session id: %v", err)
+			}
+			workflowRef := workflowExecutionRefForTest(t, "task-cleanup-binding", "node-cleanup-binding", nil)
+			executionConfig := &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID: runtimeids.NewExecutionScopeID(),
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+				},
+			}
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			plan.options.CurrentNodeExecution = executionConfig
+			attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+				SessionID: sessionID,
+				OwnerID:   "workflow-cleanup-test",
+				Runtime:   &plan,
+			})
+			if err != nil {
+				t.Fatalf("open workflow runtime: %v", err)
+			}
+			t.Cleanup(func() {
+				if _, releaseErr := attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
+					t.Errorf("release workflow runtime: %v", releaseErr)
+				}
+			})
+
+			var engine *runtime.Engine
+			if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+				engine = current
+				return nil
+			}); err != nil {
+				t.Fatalf("resolve workflow runtime engine: %v", err)
+			}
+			binding, err := engine.BindCurrentNodeExecution(executionConfig)
+			if err != nil {
+				t.Fatalf("bind workflow execution: %v", err)
+			}
+			finalizing := &execution{
+				scope: newAgentExecutionScope(
+					executionConfig.ScopeID,
+					ExecutionGeneration(1),
+					attachment.Resource(),
+					nil,
+				),
+				workflow: binding,
+			}
+			if test.resourceMismatch {
+				finalizing.resource = &agentResource{
+					ref:     attachment.Resource(),
+					current: &execution{},
+				}
+			}
+			cleanupErr := finalizing.cleanup()
+			if test.resourceMismatch != (cleanupErr != nil) {
+				t.Fatalf("cleanup error = %v, resource mismatch = %t", cleanupErr, test.resourceMismatch)
+			}
+
+			rebound, err := engine.BindCurrentNodeExecution(executionConfig)
+			if err != nil {
+				t.Fatalf("workflow execution binding remained owned after cleanup: %v", err)
+			}
+			if err := rebound.Close(); err != nil {
+				t.Fatalf("close rebound workflow execution: %v", err)
+			}
+		})
 	}
 }
 

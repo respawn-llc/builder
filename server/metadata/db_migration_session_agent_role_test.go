@@ -30,6 +30,9 @@ VALUES ('node-review', ?, 'review', 'agent', 'Review', ' Reviewer ')`, workflowI
 	execSeed(t, db, "default node", `
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role)
 VALUES ('node-default', ?, 'default_agent', 'agent', 'Default Agent', 'default')`, workflowID)
+	execSeed(t, db, "blank role node", `
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role)
+VALUES ('node-blank-role', ?, 'blank_role_agent', 'agent', 'Blank Role Agent', '')`, workflowID)
 	execSeed(t, db, "agent roles", `
 UPDATE workflow_nodes SET subagent_role = 'coder_low' WHERE id = 'node-agent'`)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-session-role-migration", "link-1", 1, "ROLE-1", now, now)
@@ -44,8 +47,9 @@ UPDATE workflow_nodes SET subagent_role = 'coder_low' WHERE id = 'node-agent'`)
 	}{
 		{id: "session-existing-role", continuation: `{"agent_role":"coder_low","keep":"existing"}`, locked: `{"model":"locked-existing"}`, metadata: `{"prompt_cache_lineage_generation":4,"keep":"existing"}`, nodeID: "node-review", associatedAt: now + 2},
 		{id: "session-default-role", continuation: `{"openai_base_url":"https://default.example/v1"}`, locked: `{"model":"locked-default"}`, metadata: `{"keep":"default"}`, nodeID: "node-default", associatedAt: now + 3},
+		{id: "session-blank-role", continuation: `{"keep":"blank"}`, locked: `{"model":"locked-blank"}`, metadata: `{"prompt_cache_lineage_generation":9,"keep":"blank"}`, nodeID: "node-blank-role", associatedAt: now + 4},
 		{id: "session-unassociated", continuation: `{"keep":"unassociated"}`, locked: `{"model":"locked-unassociated"}`, metadata: `{"prompt_cache_lineage_generation":7}`, nodeID: "", associatedAt: 0},
-		{id: "session-non-agent", continuation: `{"keep":"non-agent"}`, locked: `{"model":"locked-non-agent"}`, metadata: `{"prompt_cache_lineage_generation":8}`, nodeID: "node-start", associatedAt: now + 4},
+		{id: "session-non-agent", continuation: `{"keep":"non-agent"}`, locked: `{"model":"locked-non-agent"}`, metadata: `{"prompt_cache_lineage_generation":8}`, nodeID: "node-start", associatedAt: now + 5},
 	} {
 		seedLegacyWorkflowSession(
 			t,
@@ -104,6 +108,11 @@ INSERT INTO session_workflow_node_associations (
 		"locked":       map[string]any{},
 		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(1), "keep": "default"},
 	})
+	assertMigratedSessionJSON(t, store.db, "session-blank-role", map[string]any{
+		"continuation": map[string]any{"keep": "blank"},
+		"locked":       map[string]any{},
+		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(10), "keep": "blank"},
+	})
 	assertMigratedSessionJSON(t, store.db, "session-existing-role", map[string]any{
 		"continuation": map[string]any{"agent_role": "coder_low", "keep": "existing"},
 		"locked":       map[string]any{"model": "locked-existing"},
@@ -118,6 +127,41 @@ INSERT INTO session_workflow_node_associations (
 		"continuation": map[string]any{"keep": "non-agent"},
 		"locked":       map[string]any{"model": "locked-non-agent"},
 		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(8)},
+	})
+}
+
+func TestOpenRepairsBlankWorkflowSessionAgentRoleFromAppliedMigration(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 63)
+	if err != nil {
+		t.Fatalf("open version 63 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-blank-role-repair', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(t, db, "project-blank-role-repair", "workspace-blank-role-repair", "session-blank-role-repair", now)
+	execSeed(t, db, "blank role session", `
+UPDATE sessions
+SET continuation_json = '{"agent_role":"","keep":"blank"}',
+    locked_json = '{"model":"locked-blank"}',
+    metadata_json = '{"prompt_cache_lineage_generation":4,"keep":"blank"}'
+WHERE id = 'session-blank-role-repair'`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 63 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open repaired store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertMigratedSessionJSON(t, store.db, "session-blank-role-repair", map[string]any{
+		"continuation": map[string]any{"keep": "blank"},
+		"locked":       map[string]any{},
+		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(5), "keep": "blank"},
 	})
 }
 

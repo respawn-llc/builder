@@ -277,6 +277,11 @@ func New(
 			cfg.ContextWindowTokens = meta.ContextWindowTokens
 		}
 	}
+	if cfg.CurrentNodeExecution != nil {
+		if err := validateCurrentNodeExecutionConfig(cfg.CurrentNodeExecution); err != nil {
+			return nil, fmt.Errorf("runtime current node execution: %w", err)
+		}
+	}
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
