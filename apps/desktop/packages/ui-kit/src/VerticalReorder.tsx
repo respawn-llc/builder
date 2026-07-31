@@ -63,6 +63,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
   const [session, setSession] = useState<VerticalReorderDragSession | null>(null);
+  const sessionRef = useRef<VerticalReorderDragSession | null>(null);
   const rowNodes = useRef(new Map<UniqueIdentifier, HTMLElement>());
   const listRef = useRef<HTMLDivElement | null>(null);
   const edgeScroll = useBoundedVerticalEdgeScroll();
@@ -82,6 +83,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
 
   const clearSession = useCallback(() => {
     edgeScroll.stop();
+    sessionRef.current = null;
     setSession(null);
   }, [edgeScroll]);
 
@@ -89,11 +91,13 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     (event: DragStartEvent) => {
       const activeID = event.active.id;
       const source = event.activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer";
-      setSession({
+      const nextSession = {
         activeID,
         overID: activeID,
         source,
-      });
+      } satisfies VerticalReorderDragSession;
+      sessionRef.current = nextSession;
+      setSession(nextSession);
       if (source === "pointer") {
         edgeScroll.start(listRef.current);
       }
@@ -105,17 +109,14 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     (event: DragOverEvent) => {
       const overID = event.over?.id ?? null;
       setSession((current) => {
-        if (current === null || current.overID === overID) {
+        if (current?.source !== "keyboard" || overID === null) {
           return current;
         }
-        if (current.source === "keyboard" && overID !== null) {
-          const destination = rowNodes.current.get(overID);
-          if (destination !== undefined) {
-            destination.scrollIntoView({ block: "nearest" });
-          }
-          return current;
+        const destination = rowNodes.current.get(overID);
+        if (destination !== undefined) {
+          destination.scrollIntoView({ block: "nearest" });
         }
-        return { ...current, overID };
+        return current;
       });
     },
     [],
@@ -129,7 +130,9 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
             return current;
           }
           const nextID = nextKeyboardTargetID(items, getItemID, current, event.delta.y);
-          return nextID === null ? current : { ...current, overID: nextID };
+          const next = nextID === null ? current : { ...current, overID: nextID };
+          sessionRef.current = next;
+          return next;
         });
       }
       if (session?.source !== "pointer") {
@@ -137,6 +140,21 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       }
       const pointer = pointerLocation(event);
       if (pointer !== null) {
+        setSession((current) => {
+          if (current === null) {
+            return current;
+          }
+          const nextID = pointerTargetID({
+            activeID: current.activeID,
+            getItemID,
+            items,
+            pointerY: pointer.y,
+            rowNodes: rowNodes.current,
+          });
+          const next = nextID === null ? current : { ...current, overID: nextID };
+          sessionRef.current = next;
+          return next;
+        });
         edgeScroll.move(pointer);
       }
     },
@@ -146,8 +164,9 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeID = event.active.id;
-      const overID = session?.source === "keyboard" ? session.overID ?? event.over?.id : event.over?.id;
-      const source = session?.source;
+      const currentSession = sessionRef.current;
+      const overID = currentSession?.overID ?? event.over?.id;
+      const source = currentSession?.source;
       const orderedIDs = reorderIDs(items.map(getItemID), activeID, overID);
       clearSession();
       if (orderedIDs === null || source === undefined) {
@@ -155,7 +174,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       }
       onCommit(orderedIDs);
     },
-    [clearSession, getItemID, items, onCommit, session],
+    [clearSession, getItemID, items, onCommit],
   );
 
   const onDragCancel = useCallback(
@@ -165,6 +184,9 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     [clearSession],
   );
 
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
   useEffect(() => clearSession, [clearSession]);
 
   const activeItem = session === null ? undefined : itemByID.get(session.activeID);
@@ -297,11 +319,40 @@ function nextKeyboardTargetID<Item>(
   const ids = items.map(getItemID);
   const currentID = session.overID ?? session.activeID;
   const currentIndex = ids.findIndex((id) => id === currentID);
-  if (currentIndex < 0) {
+  if (ids[currentIndex] === undefined) {
     return null;
   }
   const nextIndex = currentIndex + (deltaY > 0 ? 1 : -1);
   return ids[nextIndex] ?? null;
+}
+
+function pointerTargetID<Item>({
+  activeID,
+  getItemID,
+  items,
+  pointerY,
+  rowNodes,
+}: Readonly<{
+  activeID: UniqueIdentifier;
+  getItemID: (item: Item) => UniqueIdentifier;
+  items: readonly Item[];
+  pointerY: number;
+  rowNodes: ReadonlyMap<UniqueIdentifier, HTMLElement>;
+}>): UniqueIdentifier | null {
+  let closest: Readonly<{ id: UniqueIdentifier; distance: number }> | undefined;
+  for (const item of items) {
+    const id = getItemID(item);
+    const row = rowNodes.get(id);
+    if (row === undefined) {
+      continue;
+    }
+    const rect = row.getBoundingClientRect();
+    const distance = Math.abs(rect.top + rect.height / 2 - pointerY);
+    if (id !== activeID && (closest === undefined || distance < closest.distance)) {
+      closest = { id, distance };
+    }
+  }
+  return closest?.id ?? null;
 }
 
 function pointerLocation(event: DragMoveEvent): Readonly<{ x: number; y: number }> | null {

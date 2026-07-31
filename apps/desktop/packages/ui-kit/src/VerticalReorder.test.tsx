@@ -70,7 +70,7 @@ describe("VerticalReorder", () => {
       isPrimary: true,
       pointerId: 1,
     });
-    fireEvent.pointerMove(document, {
+    fireEvent.pointerMove(screen.getByTestId("row-third"), {
       buttons: 1,
       clientX: 20,
       clientY: 57,
@@ -85,6 +85,54 @@ describe("VerticalReorder", () => {
 
     act(() => {
       cancelPointerDrag();
+    });
+    view.unmount();
+  });
+
+  it("commits a pointer drag to the adjacent row and clears the drag projection", async () => {
+    const onCommit = vi.fn();
+    mockRowGeometry();
+
+    const view = render(<ReorderHarness onCommit={onCommit} />);
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+    const destination = screen.getByTestId("row-third");
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      clientX: 20,
+      clientY: 50,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(destination, {
+      buttons: 1,
+      clientX: 20,
+      clientY: 60,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(destination, {
+      buttons: 1,
+      clientX: 20,
+      clientY: 95,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
+    });
+
+    fireEvent.pointerUp(destination, {
+      clientX: 20,
+      clientY: 95,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith(["first", "third", "second"]);
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
     });
     view.unmount();
   });
