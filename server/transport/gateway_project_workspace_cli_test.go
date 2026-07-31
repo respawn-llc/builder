@@ -110,7 +110,8 @@ func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *t
 		t.Fatalf("ambiguous project lookup exit=%d, want 1", exitCode)
 	}
 
-	rpcURL := "ws" + server.URL[len("http"):]
+	parsedServerURL.Scheme = "ws"
+	rpcURL := parsedServerURL.String()
 	remote, err := remoteclient.DialRemoteURL(context.Background(), rpcURL)
 	if err != nil {
 		t.Fatalf("dial gateway for workspace identity: %v", err)
