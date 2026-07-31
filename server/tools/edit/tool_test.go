@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"core/internal/testharness/filemode"
+	testsetup "core/internal/testharness/testsetup"
 	"core/server/tools"
+	patchtool "core/server/tools/patch"
 	"core/shared/toolspec"
 )
 
@@ -423,19 +425,11 @@ func requireEditSuccess(t *testing.T, result tools.Result) {
 
 func newNonTemporaryOutsideDir(t *testing.T) string {
 	t.Helper()
-	outside, err := os.MkdirTemp(".", "edit-outside-approval-")
-	if err != nil {
-		t.Fatalf("create outside dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(outside) })
-	outside, err = filepath.Abs(outside)
-	if err != nil {
-		t.Fatalf("resolve outside dir: %v", err)
-	}
-	if filepath.IsAbs(outside) && strings.Contains(outside, string(filepath.Separator)+"tmp"+string(filepath.Separator)) {
-		t.Skip("test outside dir is under temporary editable root")
-	}
-	return outside
+	return testsetup.NonTemporaryDirectory(
+		t,
+		"kent-edit-outside-",
+		patchtool.IsPathInTemporaryDir,
+	)
 }
 
 func newTestTool(t *testing.T, dir string, opts ...Option) *Tool {

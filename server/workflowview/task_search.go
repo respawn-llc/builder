@@ -2,12 +2,16 @@ package workflowview
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 
@@ -23,7 +27,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const taskSearchPageTokenVersion = 1
+const taskSearchPageTokenVersion = 2
 
 type TaskSearch struct {
 	metadata  *metadata.Store
@@ -31,12 +35,17 @@ type TaskSearch struct {
 	projector *TaskProjector
 	authority *sessionruntime.Authority
 	permit    *workflowexecution.MutationPermit
+	tokens    *taskSearchPageTokenCodec
 }
 
 type taskSearchReadSnapshot struct {
 	queries       *sqlitegen.Queries
 	liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
 	close         func() error
+}
+
+type taskSearchPageTokenCodec struct {
+	aead cipher.AEAD
 }
 
 type taskSearchPageToken struct {
@@ -62,19 +71,23 @@ func NewTaskSearch(
 		return nil, errors.New("session runtime authority is required")
 	case permit == nil:
 		return nil, errors.New("workflow mutation permit is required")
-	default:
-		return &TaskSearch{
-			metadata:  metadataStore,
-			queries:   metadataStore.Queries(),
-			projector: projector,
-			authority: authority,
-			permit:    permit,
-		}, nil
 	}
+	tokens, err := newTaskSearchPageTokenCodec()
+	if err != nil {
+		return nil, fmt.Errorf("create task search page-token codec: %w", err)
+	}
+	return &TaskSearch{
+		metadata:  metadataStore,
+		queries:   metadataStore.Queries(),
+		projector: projector,
+		authority: authority,
+		permit:    permit,
+		tokens:    tokens,
+	}, nil
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil || s.permit == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil || s.permit == nil || s.tokens == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -87,7 +100,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
-	cursor, hasCursor, err := parseTaskSearchPageToken(req.PageToken, fingerprint)
+	cursor, hasCursor, err := s.tokens.parse(req.PageToken, fingerprint)
 	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
@@ -127,7 +140,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	var next *string
 	if hasNext && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		encoded, encodeErr := encodeTaskSearchPageToken(taskSearchPageToken{
+		encoded, encodeErr := s.tokens.encode(taskSearchPageToken{
 			Version:     taskSearchPageTokenVersion,
 			Fingerprint: fingerprint,
 			Ordinal:     last.Ordinal,
@@ -466,11 +479,38 @@ func taskSearchStatusKinds(req serverapi.TaskSearchRequest) []string {
 	return statuses
 }
 
-func parseTaskSearchPageToken(raw *string, fingerprint string) (taskSearchPageToken, bool, error) {
+func newTaskSearchPageTokenCodec() (*taskSearchPageTokenCodec, error) {
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("generate cursor encryption key: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("initialize cursor cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("initialize cursor authenticated encryption: %w", err)
+	}
+	return &taskSearchPageTokenCodec{aead: aead}, nil
+}
+
+func (c *taskSearchPageTokenCodec) parse(raw *string, fingerprint string) (taskSearchPageToken, bool, error) {
 	if raw == nil {
 		return taskSearchPageToken{}, false, nil
 	}
-	decoded, err := base64.RawURLEncoding.DecodeString(*raw)
+	if c == nil || c.aead == nil {
+		return taskSearchPageToken{}, false, errors.New("task search page-token codec is required")
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(*raw)
+	if err != nil {
+		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
+	}
+	nonceSize := c.aead.NonceSize()
+	if len(sealed) < nonceSize {
+		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
+	}
+	decoded, err := c.aead.Open(nil, sealed[:nonceSize], sealed[nonceSize:], nil)
 	if err != nil {
 		return taskSearchPageToken{}, false, &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonInvalidCursor}
 	}
@@ -491,10 +531,17 @@ func parseTaskSearchPageToken(raw *string, fingerprint string) (taskSearchPageTo
 	return token, true, nil
 }
 
-func encodeTaskSearchPageToken(token taskSearchPageToken) (string, error) {
+func (c *taskSearchPageTokenCodec) encode(token taskSearchPageToken) (string, error) {
+	if c == nil || c.aead == nil {
+		return "", errors.New("task search page-token codec is required")
+	}
 	raw, err := json.Marshal(token)
 	if err != nil {
 		return "", fmt.Errorf("marshal task search cursor: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
+	nonce := make([]byte, c.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("generate task search cursor nonce: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(c.aead.Seal(nonce, nonce, raw, nil)), nil
 }

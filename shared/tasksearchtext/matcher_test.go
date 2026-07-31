@@ -16,6 +16,12 @@ func TestLiteralMatcherUsesPinnedInsensitiveNormalization(t *testing.T) {
 			count:  1,
 		},
 		{
+			name:   "internal identifier substring",
+			source: "Fix BUG in KENT-342",
+			query:  "342",
+			count:  1,
+		},
+		{
 			name:   "russian case",
 			source: "Привет, МИР",
 			query:  "мир",
