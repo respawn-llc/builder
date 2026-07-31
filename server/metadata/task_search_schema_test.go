@@ -59,7 +59,7 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 }
 
 func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) {
-	for _, checkpoint := range []int64{59, 60, 61, 62, 63} {
+	for _, checkpoint := range []int64{59, 60, 61, 62, 63, 64, 65} {
 		t.Run(fmt.Sprintf("version_%d", checkpoint), func(t *testing.T) {
 			legacy, root := openVersion59TaskSearchFixture(t)
 			if checkpoint > 59 {
@@ -92,6 +92,44 @@ func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) 
 			assertTaskSearchLegacySourcesSearchable(t, store.db)
 		})
 	}
+}
+
+func TestTaskSearchMigrationInstallsAfterMainWorkflowIdentityHistory(t *testing.T) {
+	legacy, root := openVersion59TaskSearchFixture(t)
+	provider, err := newMetadataMigrationProvider(legacy)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 62); err != nil {
+		t.Fatalf("advance through main workflow identity migration: %v", err)
+	}
+	version, err := provider.GetDBVersion(t.Context())
+	if err != nil {
+		t.Fatalf("read main workflow identity migration version: %v", err)
+	}
+	if version != 62 {
+		t.Fatalf("version after main workflow identity migration = %d, want 62", version)
+	}
+	assertNoTaskSearchSchemaObjects(t, legacy)
+	var workflowStorageClass string
+	if err := legacy.QueryRow(`SELECT typeof(id) FROM workflows WHERE name = 'Workflow'`).Scan(&workflowStorageClass); err != nil {
+		t.Fatalf("read workflow identity after main migration: %v", err)
+	}
+	if workflowStorageClass != "blob" {
+		t.Fatalf("workflow identity storage after main migration = %q, want blob", workflowStorageClass)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close main workflow identity checkpoint: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open after main workflow identity checkpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertTaskSearchSchemaObjects(t, store.db)
+	assertTaskSearchInvariants(t, store.db)
+	assertTaskSearchLegacySourcesSearchable(t, store.db)
 }
 
 func TestTaskSearchMigrationInstallsPinnedFTSBehavior(t *testing.T) {
@@ -132,7 +170,7 @@ func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestTaskSearchMigration62IsAtomic(t *testing.T) {
+func TestTaskSearchMigration63IsAtomic(t *testing.T) {
 	legacy, _ := openVersion59TaskSearchFixture(t)
 	t.Cleanup(func() { _ = legacy.Close() })
 	provider, err := goose.NewProvider(
@@ -145,15 +183,15 @@ func TestTaskSearchMigration62IsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failing task-search migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(context.Background(), 62); err == nil {
+	if _, err := provider.UpTo(context.Background(), 63); err == nil {
 		t.Fatal("task-search migration unexpectedly succeeded despite forced trailing failure")
 	}
 	version, err := provider.GetDBVersion(t.Context())
 	if err != nil {
 		t.Fatalf("read version after failed task-search migration: %v", err)
 	}
-	if version != 61 {
-		t.Fatalf("version after failed task-search migration = %d, want 61", version)
+	if version != 62 {
+		t.Fatalf("version after failed task-search migration = %d, want 62", version)
 	}
 	assertNoTaskSearchSchemaObjects(t, legacy)
 	assertTaskSearchLegacySourcesRemain(t, legacy)
@@ -221,7 +259,7 @@ func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
 		if err != nil {
 			t.Fatalf("read metadata migration %s: %v", entry.Name(), err)
 		}
-		if entry.Name() == "00062_task_search_index.up.sql" {
+		if entry.Name() == "00063_task_search_index.up.sql" {
 			data = append(data, []byte("\nSELECT * FROM task_search_forced_migration_failure;\n")...)
 		}
 		migrations[path] = &fstest.MapFile{Data: data}

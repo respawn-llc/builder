@@ -365,7 +365,7 @@ func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Q
 				ProjectKey:    row.ProjectKey,
 				TaskID:        row.TaskID,
 				ShortID:       row.ShortID,
-				WorkflowID:    row.WorkflowID,
+				WorkflowID:    row.WorkflowID.String(),
 				Title:         row.TaskTitle,
 				Status:        status.Status,
 				TotalHitCount: int(row.TotalHitCount),

@@ -721,9 +721,10 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	if startID == "" || terminalID == "" {
 		t.Fatalf("workflow definition lacks start/terminal Nodes: %+v", definition.Definition.Nodes)
 	}
-	agentID := "node-agent-" + created.Workflow.ID
-	startGroupID := "group-start-" + created.Workflow.ID
-	doneGroupID := "group-done-" + created.Workflow.ID
+	workflowID := created.Workflow.ID.String()
+	agentID := "node-agent-" + workflowID
+	startGroupID := "group-start-" + workflowID
+	doneGroupID := "group-done-" + workflowID
 	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
 		WorkflowID:   created.Workflow.ID,
 		NodeID:       agentID,
@@ -745,7 +746,7 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	}
 	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
 		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-start-" + created.Workflow.ID,
+		EdgeID:            "edge-start-" + workflowID,
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentID,
@@ -765,7 +766,7 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	}
 	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
 		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-done-" + created.Workflow.ID,
+		EdgeID:            "edge-done-" + workflowID,
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      terminalID,

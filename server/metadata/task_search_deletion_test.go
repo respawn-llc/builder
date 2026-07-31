@@ -26,35 +26,36 @@ VALUES ('comment-workflow-deleted', 'task-workflow-deleted', 'workflow delete co
 		t.Fatalf("begin workflow deletion transaction: %v", err)
 	}
 	q := store.Queries().WithTx(tx)
+	workflowID := workflowTestID(t, "1")
 	for _, operation := range []struct {
 		name string
 		run  func() error
 	}{
 		{name: "pending approvals", run: func() error {
-			_, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(t.Context(), "workflow-1")
+			_, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(t.Context(), workflowID)
 			return err
 		}},
 		{name: "current nodes", run: func() error {
-			_, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(t.Context(), "workflow-1")
+			_, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(t.Context(), workflowID)
 			return err
 		}},
 		{name: "task comments", run: func() error {
-			_, err := q.DeleteWorkflowTaskCommentsByWorkflowID(t.Context(), "workflow-1")
+			_, err := q.DeleteWorkflowTaskCommentsByWorkflowID(t.Context(), workflowID)
 			return err
 		}},
 		{name: "tasks", run: func() error {
-			_, err := q.DeleteWorkflowTasksByWorkflowID(t.Context(), "workflow-1")
+			_, err := q.DeleteWorkflowTasksByWorkflowID(t.Context(), workflowID)
 			return err
 		}},
 		{name: "default project links", run: func() error {
 			_, err := q.ClearDeletedWorkflowDefaultProjectLinks(t.Context(), sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{
 				UpdatedAtUnixMs: now,
-				WorkflowID:      "workflow-1",
+				WorkflowID:      workflowID,
 			})
 			return err
 		}},
 		{name: "project workflow links", run: func() error {
-			_, err := q.DeleteProjectWorkflowLinksByWorkflowID(t.Context(), "workflow-1")
+			_, err := q.DeleteProjectWorkflowLinksByWorkflowID(t.Context(), workflowID)
 			return err
 		}},
 	} {
@@ -63,7 +64,7 @@ VALUES ('comment-workflow-deleted', 'task-workflow-deleted', 'workflow delete co
 			t.Fatalf("delete workflow %s: %v", operation.name, err)
 		}
 	}
-	deleted, err := q.DeleteWorkflowByID(t.Context(), "workflow-1")
+	deleted, err := q.DeleteWorkflowByID(t.Context(), workflowID)
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("delete workflow: %v", err)

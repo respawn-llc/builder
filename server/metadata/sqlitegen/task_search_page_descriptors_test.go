@@ -431,7 +431,7 @@ CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     short_id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
+    workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
 );
 CREATE TABLE workflow_task_status_records (
@@ -468,7 +468,7 @@ CREATE VIRTUAL TABLE task_search_fts USING fts5(
 
 INSERT INTO projects (id, project_key) VALUES ('project-1', 'TAS');
 INSERT INTO task_records (id, project_id, short_id, workflow_id, title)
-VALUES ('task-1', 'project-1', 'TAS-1', 'workflow-1', 'needle title');
+VALUES ('task-1', 'project-1', 'TAS-1', X'550E8400E29B41D4A716446655440001', 'needle title');
 INSERT INTO workflow_task_status_records (
     task_id,
     is_done,
@@ -506,7 +506,7 @@ CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     short_id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
+    workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
 );
 CREATE TABLE workflow_task_status_records (
@@ -546,12 +546,12 @@ INSERT INTO projects (id, project_key) VALUES
     ('project-b', 'BBB'),
     ('project-c', 'CCC');
 INSERT INTO task_records (id, project_id, short_id, workflow_id, title) VALUES
-    ('task-a', 'project-a', 'AAA-1', 'workflow-1', 'Task A'),
-    ('task-b', 'project-a', 'AAA-2', 'workflow-1', 'Task B'),
-    ('task-c', 'project-b', 'BBB-1', 'workflow-1', 'Task C'),
-    ('task-strong', 'project-c', 'CCC-1', 'workflow-1', 'Strong Task'),
-    ('task-body', 'project-c', 'CCC-2', 'workflow-1', 'Body Task'),
-    ('task-false-positive', 'project-c', 'CCC-3', 'workflow-1', 'False Positive Task');
+    ('task-a', 'project-a', 'AAA-1', X'550E8400E29B41D4A716446655440001', 'Task A'),
+    ('task-b', 'project-a', 'AAA-2', X'550E8400E29B41D4A716446655440001', 'Task B'),
+    ('task-c', 'project-b', 'BBB-1', X'550E8400E29B41D4A716446655440001', 'Task C'),
+    ('task-strong', 'project-c', 'CCC-1', X'550E8400E29B41D4A716446655440001', 'Strong Task'),
+    ('task-body', 'project-c', 'CCC-2', X'550E8400E29B41D4A716446655440001', 'Body Task'),
+    ('task-false-positive', 'project-c', 'CCC-3', X'550E8400E29B41D4A716446655440001', 'False Positive Task');
 INSERT INTO workflow_task_status_records (
     task_id,
     is_done,
@@ -617,7 +617,7 @@ CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     short_id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
+    workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
 );
 CREATE TABLE workflow_task_status_records (
@@ -661,7 +661,7 @@ INSERT INTO projects (id, project_key) VALUES ('project-1', 'HIG');`); err != ni
 	t.Cleanup(func() { _ = tx.Rollback() })
 	insertTask, err := tx.PrepareContext(t.Context(), `
 INSERT INTO task_records (id, project_id, short_id, workflow_id, title)
-VALUES (?, 'project-1', ?, 'workflow-1', ?)`)
+VALUES (?, 'project-1', ?, X'550E8400E29B41D4A716446655440001', ?)`)
 	if err != nil {
 		t.Fatalf("prepare high-cardinality Task insertion: %v", err)
 	}

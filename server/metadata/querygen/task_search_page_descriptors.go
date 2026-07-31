@@ -101,6 +101,8 @@ package sqlitegen
 import (
 	"context"
 	"database/sql"
+
+	"core/shared/runtimeids"
 )
 
 const listTaskSearchPageDescriptors = ` + strconv.Quote(string(query)) + `
@@ -124,7 +126,7 @@ type ListTaskSearchPageDescriptorsRow struct {
 	ProjectID          string
 	ProjectKey         string
 	ShortID            string
-	WorkflowID         string
+	WorkflowID         runtimeids.WorkflowID
 	TaskTitle          string
 	IsDone             int64
 	StatusKind         interface{}
