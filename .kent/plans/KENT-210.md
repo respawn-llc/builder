@@ -406,3 +406,4 @@
 - [x] Integrate the applicable main test-runner update (`dce2720fc13`) raising the server test cap to 300 seconds; full `./scripts/test.sh server` passes under the current worktree contract.
 - [x] Full apps lint, typecheck, policy checks, and frontend tests pass; Desktop reports 44 files and 213 tests.
 - [x] QA-agent handoff recorded: browser/end-to-end flows were attempted but blocked by missing registered project/workflow surface and Firefox host-permission/loading issues; no implementation-side workaround is authorized.
+- [x] QA-agent final verification passed: surrounding browser dependency UI/error paths were covered, and Desktop integration tests cover dependency confirmation behavior without invoking the human-only CLI Start command directly.
