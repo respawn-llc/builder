@@ -36,7 +36,7 @@ type exclusiveStepLifecycle interface {
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
 	QueueDeveloperNotice(msg llm.Message)
-	DrainPendingNotices() []steeringIntent
+	flushPendingNotices(stepID string) (int, error)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()

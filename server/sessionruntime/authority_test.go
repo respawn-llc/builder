@@ -1522,7 +1522,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
+func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
@@ -1541,7 +1541,7 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
-	route := func(generation runtimeids.ResourceGeneration) {
+	route := func(event shelltool.Event, generation runtimeids.ResourceGeneration) {
 		correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), generation)
 		if err != nil {
 			t.Fatalf("new execution correlation: %v", err)
@@ -1549,21 +1549,33 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 		event.Snapshot.ExecutionCorrelation = &correlation
 		authority.routeBackgroundEvent(event)
 	}
-	route(predecessor.Resource().Generation())
+	route(event, predecessor.Resource().Generation())
 	select {
 	case update := <-updates:
-		t.Fatalf("stale predecessor generation routed background update: %+v", update)
+		if update.Type != runtime.BackgroundShellEventCompleted || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("predecessor terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("predecessor terminal event did not route to current runtime")
+	}
+
+	backgrounded := event
+	backgrounded.Type = shelltool.EventBackgrounded
+	route(backgrounded, predecessor.Resource().Generation())
+	select {
+	case update := <-updates:
+		t.Fatalf("stale predecessor registration routed background update: %+v", update)
 	default:
 	}
 
-	route(successor.Resource().Generation())
+	route(backgrounded, successor.Resource().Generation())
 	select {
 	case update := <-updates:
-		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("current generation background update = %+v", update)
+		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("current generation registration update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("current resource generation did not receive background update")
+		t.Fatal("current resource generation did not receive background registration")
 	}
 }
 

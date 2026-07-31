@@ -321,15 +321,12 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 	if err != nil || !result.continueCombinedFlush {
 		return result, err
 	}
-	pendingNotices := []steeringIntent(nil)
 	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
-	}
-	for _, notice := range pendingNotices {
-		if err := m.engine.steer(stepID, notice); err != nil {
-			return result, err
+		flushed, flushErr := m.background.flushPendingNotices(stepID)
+		result.flushed += flushed
+		if flushErr != nil {
+			return result, flushErr
 		}
-		result.flushed++
 	}
 	return result, nil
 }
