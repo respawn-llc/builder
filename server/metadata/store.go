@@ -775,62 +775,77 @@ func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, dis
 }
 
 func (s *Store) SetProjectDefaultWorkspace(ctx context.Context, projectID string, workspaceID string) error {
+	_, err := s.SetProjectDefaultWorkspaceAndGetSummary(ctx, projectID, workspaceID)
+	return err
+}
+
+func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, projectID string, workspaceID string) (serverapi.ProjectHomeSummary, error) {
 	if s == nil || s.queries == nil {
-		return errors.New("metadata store is required")
+		return serverapi.ProjectHomeSummary{}, errors.New("metadata store is required")
 	}
 	trimmedProjectID := strings.TrimSpace(projectID)
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if trimmedProjectID == "" {
-		return errors.New("project id is required")
+		return serverapi.ProjectHomeSummary{}, errors.New("project id is required")
 	}
 	if trimmedWorkspaceID == "" {
-		return errors.New("workspace id is required")
-	}
-	workspace, err := s.GetWorkspaceByID(ctx, trimmedWorkspaceID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-		}
-		return err
-	}
-	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
-		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+		return serverapi.ProjectHomeSummary{}, errors.New("workspace id is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin default workspace tx: %w", err)
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("begin default workspace tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	workspace, err := q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+		}
+		return serverapi.ProjectHomeSummary{}, err
+	}
+	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
 	currentWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, trimmedProjectID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
 		}
-		return fmt.Errorf("get current project primary workspace: %w", err)
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("get current project primary workspace: %w", err)
 	}
 	if strings.TrimSpace(currentWorkspaceID) == trimmedWorkspaceID {
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit unchanged default workspace tx: %w", err)
+		// Keep the read and the no-op mutation in the same transaction so the
+		// authoritative response cannot fail after a committed change.
+	} else {
+		now := time.Now().UTC().UnixMilli()
+		updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
+			WorkspaceID:     trimmedWorkspaceID,
+			UpdatedAtUnixMs: now,
+			ProjectID:       trimmedProjectID,
+		})
+		if err != nil {
+			return serverapi.ProjectHomeSummary{}, fmt.Errorf("set project primary workspace: %w", err)
 		}
-		return nil
+		if updatedProject == 0 {
+			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+		}
 	}
-	now := time.Now().UTC().UnixMilli()
-	updatedProject, err := q.SetProjectPrimaryWorkspace(ctx, sqlitegen.SetProjectPrimaryWorkspaceParams{
-		WorkspaceID:     trimmedWorkspaceID,
-		UpdatedAtUnixMs: now,
-		ProjectID:       trimmedProjectID,
+	rows, err := q.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
+		ProjectID:  trimmedProjectID,
+		LimitRows:  1,
+		OffsetRows: 0,
 	})
 	if err != nil {
-		return fmt.Errorf("set project primary workspace: %w", err)
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("read updated project home summary: %w", err)
 	}
-	if updatedProject == 0 {
-		return fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+	if len(rows) == 0 {
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit default workspace tx: %w", err)
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("commit default workspace tx: %w", err)
 	}
-	return nil
+	return projectHomeSummaryFromRow(rows[0]), nil
 }
 
 func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, workspaceID string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {

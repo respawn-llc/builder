@@ -381,20 +381,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	}
 
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil || len(blockers) > 0 {
-			return blockers, nil, err
-		}
-		release, err := s.blockSessionStarts(ctx, sessionIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		blockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil {
-			release()
-			return nil, nil, err
-		}
-		return blockers, release, nil
+		return withRuntimeBlockers(ctx, sessionIDs, s.projectActiveSessionBlockers, s.blockSessionStarts)
 	}
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
 		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
@@ -438,6 +425,28 @@ func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (
 		return func() {}, nil
 	}
 	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
+}
+
+func withRuntimeBlockers[T any](
+	ctx context.Context,
+	sessionIDs []string,
+	check func(context.Context, []string) ([]T, error),
+	block func(context.Context, []string) (func(), error),
+) ([]T, func(), error) {
+	blockers, err := check(ctx, sessionIDs)
+	if err != nil || len(blockers) > 0 {
+		return blockers, nil, err
+	}
+	release, err := block(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	blockers, err = check(ctx, sessionIDs)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return blockers, release, nil
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {

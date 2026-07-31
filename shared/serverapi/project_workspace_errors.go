@@ -121,7 +121,10 @@ func DecodeWorkspacePathIdentityError(data json.RawMessage, message string) erro
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_path_identity_error" || strings.TrimSpace(envelope.WorkspaceRoot) == "" {
 		return fallbackProjectWorkspaceRPCError(message, ErrWorkspacePathIdentity)
 	}
-	return WorkspacePathIdentityError{WorkspaceRoot: envelope.WorkspaceRoot, Cause: causeFromRPCMessage(message)}
+	return WorkspacePathIdentityError{
+		WorkspaceRoot: envelope.WorkspaceRoot,
+		remoteMessage: trimmedRPCMessage(message),
+	}
 }
 
 func DecodeWorkspaceDetachConflictError(data json.RawMessage, message string) error {
@@ -153,11 +156,19 @@ func DecodeWorkspaceMutationError(data json.RawMessage, message string) error {
 }
 
 func causeFromRPCMessage(message string) error {
+	trimmed := trimmedRPCMessage(message)
+	if trimmed == nil {
+		return nil
+	}
+	return errors.New(*trimmed)
+}
+
+func trimmedRPCMessage(message string) *string {
 	trimmed := strings.TrimSpace(message)
 	if trimmed == "" {
 		return nil
 	}
-	return errors.New(trimmed)
+	return &trimmed
 }
 
 func fallbackProjectWorkspaceRPCError(message string, sentinel error) error {

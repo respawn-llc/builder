@@ -73,9 +73,13 @@ func AsProjectUnavailable(err error) (ProjectUnavailableError, bool) {
 type WorkspacePathIdentityError struct {
 	WorkspaceRoot string
 	Cause         error
+	remoteMessage *string
 }
 
 func (e WorkspacePathIdentityError) Error() string {
+	if e.remoteMessage != nil && strings.TrimSpace(*e.remoteMessage) != "" {
+		return *e.remoteMessage
+	}
 	root := strings.TrimSpace(e.WorkspaceRoot)
 	if e.Cause == nil {
 		return fmt.Sprintf("%s: %q", ErrWorkspacePathIdentity, root)

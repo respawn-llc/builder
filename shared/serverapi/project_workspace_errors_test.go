@@ -96,3 +96,14 @@ func TestProjectWorkspaceTypedErrorsTreatBlankRPCMessagesAsAbsentCauses(t *testi
 		t.Fatalf("blank mutation error = %v, want mutation sentinel", mutationErr)
 	}
 }
+
+func TestWorkspacePathIdentityDecoderPreservesRenderedRemoteMessage(t *testing.T) {
+	message := `workspace path identity could not be recovered: "/missing": permission denied`
+	err := DecodeWorkspacePathIdentityError(
+		json.RawMessage(`{"type":"workspace_path_identity_error","workspace_root":"/missing"}`),
+		message,
+	)
+	if err.Error() != message {
+		t.Fatalf("decoded path identity error = %q, want %q", err.Error(), message)
+	}
+}
