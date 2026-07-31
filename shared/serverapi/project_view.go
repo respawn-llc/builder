@@ -173,7 +173,6 @@ type ProjectWorkspaceUnlinkRequest struct {
 type ProjectWorkspaceUnlinkResponse struct {
 	ProjectID   string                          `json:"project_id"`
 	WorkspaceID string                          `json:"workspace_id"`
-	Unlinked    bool                            `json:"unlinked"`
 	Blockers    []ProjectWorkspaceUnlinkBlocker `json:"blockers,omitempty"`
 	Project     *ProjectHomeSummary             `json:"project,omitempty"`
 }
@@ -228,9 +227,6 @@ func (r ProjectWorkspaceUnlinkResponse) Validate() error {
 	}
 	if strings.TrimSpace(r.WorkspaceID) == "" {
 		return errors.New("workspace_id must not be blank")
-	}
-	if r.Unlinked == (len(r.Blockers) > 0) {
-		return errors.New("unlinked must be true exactly when blockers are absent")
 	}
 	for _, blocker := range r.Blockers {
 		if strings.TrimSpace(blocker.Code) == "" {

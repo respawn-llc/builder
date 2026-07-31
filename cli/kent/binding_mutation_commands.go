@@ -106,16 +106,6 @@ func bindingMutationResultFromDetachResponse(response serverapi.ProjectWorkspace
 	}
 	projectID := strings.TrimSpace(response.ProjectID)
 	workspaceID := strings.TrimSpace(response.WorkspaceID)
-	if !response.Unlinked {
-		if projectID == "" || workspaceID == "" {
-			return bindingMutationResult{}, errors.New("workspace detach did not complete and response omitted resolved identity")
-		}
-		return bindingMutationResult{}, &serverapi.WorkspaceMutationError{
-			ProjectID:   projectID,
-			WorkspaceID: workspaceID,
-			Cause:       errors.New("workspace detach did not complete"),
-		}
-	}
 	if projectID == "" || workspaceID == "" {
 		return bindingMutationResult{}, errors.New("workspace detach returned incomplete identity")
 	}

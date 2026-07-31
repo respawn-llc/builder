@@ -64,10 +64,6 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 		ProjectID:   strings.TrimSpace(req.ProjectID),
 		WorkspaceID: binding.WorkspaceID,
 		Blockers:    blockers,
-		Unlinked:    len(blockers) == 0,
-	}
-	if !resp.Unlinked {
-		return resp, nil
 	}
 	return resp, nil
 }

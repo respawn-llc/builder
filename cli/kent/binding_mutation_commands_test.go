@@ -215,7 +215,6 @@ func TestLegacyEmptyProjectKeyMutationSuccessOutputs(t *testing.T) {
 				return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
 					ProjectID:   project.ProjectID,
 					WorkspaceID: workspaceID,
-					Unlinked:    true,
 					Project:     &project,
 				})
 			},

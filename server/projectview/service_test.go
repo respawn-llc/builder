@@ -748,6 +748,30 @@ func TestMetadataServiceWorkspaceSelectorRejectsDanglingSymlinkAncestor(t *testi
 	}
 }
 
+func TestMetadataServiceWorkspaceSelectorRejectsDanglingSelectedSymlink(t *testing.T) {
+	targetRoot := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(targetRoot, 0o755); err != nil {
+		t.Fatalf("create workspace root: %v", err)
+	}
+	selectedRoot := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Symlink(targetRoot, selectedRoot); err != nil {
+		t.Fatalf("create selected workspace symlink: %v", err)
+	}
+
+	store, _, binding := newProjectViewMetadataStoreForWorkspace(t, selectedRoot)
+	if err := os.Remove(targetRoot); err != nil {
+		t.Fatalf("remove symlink target: %v", err)
+	}
+	selector, err := serverapi.NewProjectWorkspaceSelectorForRoot(selectedRoot)
+	if err != nil {
+		t.Fatalf("workspace selector: %v", err)
+	}
+	_, err = store.ResolveProjectWorkspaceSelector(context.Background(), binding.ProjectID, selector)
+	if !errors.Is(err, serverapi.ErrWorkspacePathIdentity) {
+		t.Fatalf("dangling selected symlink error = %v, want ErrWorkspacePathIdentity", err)
+	}
+}
+
 func TestMetadataServiceWorkspaceSelectorRejectsStaleLexicalBindingAfterSymlinkReplacement(t *testing.T) {
 	originalRoot := t.TempDir()
 	store, _, binding := newProjectViewMetadataStoreForWorkspace(t, originalRoot)
@@ -834,7 +858,7 @@ func TestMetadataServiceUnlinksOnlySelectedProjectBindingByPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
 	}
-	if !unlinked.Unlinked || unlinked.WorkspaceID != shared.WorkspaceID {
+	if len(unlinked.Blockers) != 0 || unlinked.WorkspaceID != shared.WorkspaceID {
 		t.Fatalf("unlink result = %+v, want selected workspace %q unlinked", unlinked, shared.WorkspaceID)
 	}
 	remainingRoot, remainingBinding, err := store.ResolveWorkspacePath(context.Background(), binding.CanonicalRoot)
@@ -914,7 +938,7 @@ func TestMetadataServiceUnlinksWorkspaceForEditPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject blocked: %v", err)
 	}
-	if blocked.Unlinked || !hasWorkspaceUnlinkBlocker(blocked.Blockers, "default_workspace") {
+	if !hasWorkspaceUnlinkBlocker(blocked.Blockers, "default_workspace") {
 		t.Fatalf("blocked unlink = %+v, want default workspace blocker", blocked)
 	}
 
@@ -929,7 +953,7 @@ func TestMetadataServiceUnlinksWorkspaceForEditPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
 	}
-	if !unlinked.Unlinked || len(unlinked.Blockers) != 0 {
+	if len(unlinked.Blockers) != 0 {
 		t.Fatalf("unlink result = %+v, want success", unlinked)
 	}
 	list, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID})
@@ -959,7 +983,7 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
 	}
-	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+	if len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("unlink response = %+v, want active_sessions blocker", unlinked)
 	}
 }
@@ -982,7 +1006,7 @@ func TestMetadataServiceUnlinkWorkspaceRuntimeGuardChecksBeforeAndAfterBlockingS
 	if err != nil {
 		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
 	}
-	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+	if len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("unlink response = %+v, want post-block active_sessions blocker", unlinked)
 	}
 	guard.assertCalls(t, created.Meta().SessionID)

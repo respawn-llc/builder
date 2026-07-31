@@ -2684,6 +2684,11 @@ func canonicalFilesystemPath(path string) (string, error) {
 	parent := absolute
 	suffix := make([]string, 0, 4)
 	for {
+		if info, lstatErr := os.Lstat(parent); lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("resolve missing symlink %q: %w", parent, os.ErrNotExist)
+		} else if lstatErr != nil && !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
 		next := filepath.Dir(parent)
 		if next == parent {
 			return absolute, nil
@@ -2697,11 +2702,6 @@ func canonicalFilesystemPath(path string) (string, error) {
 		}
 		if !errors.Is(parentErr, os.ErrNotExist) {
 			return "", parentErr
-		}
-		if info, lstatErr := os.Lstat(parent); lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("resolve missing symlink ancestor %q: %w", parent, os.ErrNotExist)
-		} else if lstatErr != nil && !errors.Is(lstatErr, os.ErrNotExist) {
-			return "", lstatErr
 		}
 	}
 }
