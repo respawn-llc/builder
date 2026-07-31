@@ -97,8 +97,8 @@ type ProjectHomeSummary struct {
 	ProjectKey           string                  `json:"project_key"`
 	DisplayName          string                  `json:"display_name"`
 	PrimaryWorkspace     ProjectWorkspaceSummary `json:"primary_workspace"`
-	DefaultWorkflowID    *runtimeids.WorkflowID  `json:"default_workflow_id"`
-	DefaultWorkflowName  string                  `json:"default_workflow_name"`
+	DefaultWorkflowID    *runtimeids.WorkflowID  `json:"default_workflow_id,omitempty"`
+	DefaultWorkflowName  string                  `json:"default_workflow_name,omitempty"`
 	DefaultWorkflowValid bool                    `json:"default_workflow_valid"`
 	UpdatedAtUnixMs      int64                   `json:"updated_at_unix_ms"`
 	TaskCount            int                     `json:"task_count"`
@@ -197,19 +197,19 @@ func (s ProjectHomeSummary) Validate() error {
 			return errors.New(field + " must not be blank")
 		}
 	}
-	if (s.DefaultWorkflowID == nil) != (s.DefaultWorkflowName == nil) {
-		return errors.New("default workflow ID and name must be present together")
-	}
 	if s.DefaultWorkflowID == nil {
+		if strings.TrimSpace(s.DefaultWorkflowName) != "" {
+			return errors.New("default workflow name must be absent when no workflow is present")
+		}
 		if s.DefaultWorkflowValid {
 			return errors.New("default workflow validity must be false when no workflow is present")
 		}
 		return nil
 	}
-	if strings.TrimSpace(*s.DefaultWorkflowID) == "" {
-		return errors.New("default_workflow_id must not be blank when present")
+	if s.DefaultWorkflowID.IsZero() {
+		return errors.New("default_workflow_id must not be zero when present")
 	}
-	if strings.TrimSpace(*s.DefaultWorkflowName) == "" {
+	if strings.TrimSpace(s.DefaultWorkflowName) == "" {
 		return errors.New("default_workflow_name must not be blank when present")
 	}
 	if !s.DefaultWorkflowValid {

@@ -1,6 +1,10 @@
 package serverapi
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/runtimeids"
+)
 
 func validProjectHomeSummaryForResponseTest() ProjectHomeSummary {
 	return ProjectHomeSummary{
@@ -50,10 +54,10 @@ func TestProjectHomeSummaryValidateAllowsLegacyEmptyProjectKey(t *testing.T) {
 func TestProjectHomeSummaryValidateRejectsMalformedOptionalWorkflowValues(t *testing.T) {
 	t.Run("blank workflow ID", func(t *testing.T) {
 		summary := validProjectHomeSummaryForResponseTest()
-		blank := ""
+		var blank runtimeids.WorkflowID
 		name := "Workflow"
 		summary.DefaultWorkflowID = &blank
-		summary.DefaultWorkflowName = &name
+		summary.DefaultWorkflowName = name
 		summary.DefaultWorkflowValid = true
 		if err := summary.Validate(); err == nil {
 			t.Fatal("blank workflow ID accepted")
@@ -61,19 +65,17 @@ func TestProjectHomeSummaryValidateRejectsMalformedOptionalWorkflowValues(t *tes
 	})
 	t.Run("blank workflow name", func(t *testing.T) {
 		summary := validProjectHomeSummaryForResponseTest()
-		id := "workflow-1"
-		blank := ""
+		id := runtimeids.NewWorkflowID()
 		summary.DefaultWorkflowID = &id
-		summary.DefaultWorkflowName = &blank
+		summary.DefaultWorkflowName = ""
 		summary.DefaultWorkflowValid = true
 		if err := summary.Validate(); err == nil {
 			t.Fatal("blank workflow name accepted")
 		}
 	})
-	t.Run("workflow fields must be paired", func(t *testing.T) {
+	t.Run("workflow name requires workflow ID", func(t *testing.T) {
 		summary := validProjectHomeSummaryForResponseTest()
-		id := "workflow-1"
-		summary.DefaultWorkflowID = &id
+		summary.DefaultWorkflowName = "Workflow"
 		if err := summary.Validate(); err == nil {
 			t.Fatal("asymmetric workflow fields accepted")
 		}

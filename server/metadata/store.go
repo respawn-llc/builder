@@ -2538,14 +2538,6 @@ func projectWorkspaceSummaryFromRow(workspaceID string, rootPath string, isPrima
 }
 
 func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) serverapi.ProjectHomeSummary {
-	var defaultWorkflowID *string
-	if row.DefaultWorkflowID.Valid {
-		defaultWorkflowID = &row.DefaultWorkflowID.String
-	}
-	var defaultWorkflowName *string
-	if row.DefaultWorkflowName.Valid {
-		defaultWorkflowName = &row.DefaultWorkflowName.String
-	}
 	return serverapi.ProjectHomeSummary{
 		ProjectID:   row.ProjectID,
 		ProjectKey:  row.ProjectKey,
@@ -2558,8 +2550,8 @@ func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) server
 			IsPrimary:       true,
 			UpdatedAtUnixMs: row.PrimaryWorkspaceUpdatedAtUnixMs,
 		},
-		DefaultWorkflowID:    defaultWorkflowID,
-		DefaultWorkflowName:  defaultWorkflowName,
+		DefaultWorkflowID:    row.DefaultWorkflowID,
+		DefaultWorkflowName:  row.DefaultWorkflowName,
 		DefaultWorkflowValid: row.DefaultWorkflowValid != 0,
 		UpdatedAtUnixMs:      row.LatestActivityUnixMs,
 		TaskCount:            int(row.TaskCount),
