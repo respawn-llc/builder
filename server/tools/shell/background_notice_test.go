@@ -146,20 +146,6 @@ func TestBackgroundNoticeWhitespaceLogRendersNoOutputCompletion(t *testing.T) {
 	}
 }
 
-func TestBackgroundNoticeNoOutputIncludesLogLocation(t *testing.T) {
-	logPath := writeBackgroundNoticeLog(t, nil)
-	exitCode := 17
-	event := newFinalizedBackgroundEvent(EventCompleted, completedBackgroundSnapshot(logPath, &exitCode), "", nil, false)
-
-	summary, err := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputDefault})
-	if err != nil {
-		t.Fatalf("SummarizeBackgroundEvent: %v", err)
-	}
-	if !strings.Contains(summary.DetailText, logPath) {
-		t.Fatalf("terminal no-output notice omitted its log location: %q", summary.DetailText)
-	}
-}
-
 func TestBackgroundPreviewOmitsTruncationForWhitespaceOnlyOutput(t *testing.T) {
 	builder := newBackgroundPreviewBuilder(80, BackgroundOutputDefault, false)
 	builder.WriteRaw([]byte(strings.Repeat(" ", 200)))
@@ -213,14 +199,13 @@ func TestBackgroundNoticeConciseFallbackRetainsVisibleCompletion(t *testing.T) {
 
 func TestInvariantFailureBackgroundNoticeUsesDistinctTypedProjection(t *testing.T) {
 	exitCode := 17
-	logPath := writeBackgroundNoticeLog(t, nil)
 	summary := InvariantFailureBackgroundNotice(Event{
 		Type: EventCompleted,
 		Snapshot: Snapshot{
 			ID:       "1000",
 			State:    "completed",
 			ExitCode: &exitCode,
-			LogPath:  logPath,
+			LogPath:  "/tmp/1000.log",
 		},
 	}, errors.New("missing completion output"))
 
@@ -232,8 +217,5 @@ func TestInvariantFailureBackgroundNoticeUsesDistinctTypedProjection(t *testing.
 	}
 	if summary.DetailText == "" || summary.CondensedText == "" {
 		t.Fatal("invariant failure notice must remain visible through the ordinary notice envelope")
-	}
-	if !strings.Contains(summary.DetailText, logPath) {
-		t.Fatalf("invariant failure notice omitted its log location: %q", summary.DetailText)
 	}
 }

@@ -8,7 +8,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -322,38 +321,15 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 	if err != nil || !result.continueCombinedFlush {
 		return result, err
 	}
-	pendingNotices := []queuedBackgroundNotice(nil)
+	pendingNotices := []steeringIntent(nil)
 	if m.background != nil {
 		pendingNotices = m.background.DrainPendingNotices()
 	}
-	for index, notice := range pendingNotices {
-		if err := m.background.ReserveAutomaticDisposition(notice); err != nil {
-			m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index:])
+	for _, notice := range pendingNotices {
+		if err := m.engine.steer(stepID, notice); err != nil {
 			return result, err
 		}
-		receipt, err := m.engine.steerWithCommitReceipt(stepID, notice.intent)
-		if !receipt.Committed {
-			m.background.RestoreAutomaticDisposition(notice)
-		}
-		settlement := m.background.FinalizeCommittedBackgroundNotice(notice, receipt)
-		if err != nil {
-			if m.background != nil {
-				if receipt.Committed {
-					m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index+1:])
-				} else {
-					m.background.RestoreUncommittedBackgroundNotices(pendingNotices[index:])
-				}
-			}
-			return result, err
-		}
-		switch settlement {
-		case shelltool.TerminalAutomaticallyFinalized:
-			result.flushed++
-		case shelltool.TerminalAlreadyFinalizedByOwnerPoll:
-		case shelltool.TerminalAutomaticFinalizationRejected:
-		default:
-			panic(fmt.Sprintf("unknown automatic terminal settlement %d", settlement))
-		}
+		result.flushed++
 	}
 	return result, nil
 }

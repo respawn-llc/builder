@@ -6,9 +6,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	shelltool "core/server/tools/shell"
-
-	"github.com/google/uuid"
 )
 
 type exclusiveStepOptions struct {
@@ -38,21 +35,11 @@ type exclusiveStepLifecycle interface {
 
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
-	AdmitBackgroundShellUpdate(evt BackgroundShellEvent)
 	QueueDeveloperNotice(msg llm.Message)
-	DrainPendingNotices() []queuedBackgroundNotice
-	ReserveAutomaticDisposition(queuedBackgroundNotice) error
-	RestoreAutomaticDisposition(queuedBackgroundNotice)
-	FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) shelltool.TerminalAutomaticFinalization
-	RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice)
+	DrainPendingNotices() []steeringIntent
 	HasPendingNotices() bool
-	ConsumePendingBackgroundNotice(sessionID string) backgroundNoticeConsumption
-	FinalizeOwnerPoll(sessionID string, diagnostic *PendingBackgroundDeliveryDiagnostic) backgroundNoticeConsumption
+	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()
-	PermitRetry() bool
-	AttachDiagnostic(PendingBackgroundDeliveryDiagnostic) bool
-	RetirementSnapshot() BackgroundDeliveryRetirementSnapshot
-	Withdraw(context.Context, string, uuid.UUID) (BackgroundDeliveryWithdrawal, bool, error)
 }
 
 type contextCompactor interface {

@@ -114,119 +114,6 @@ func (m *Manager) SetMinimumExecToBgTime(value time.Duration) {
 	m.minimumExecToBgTime = value
 }
 
-// AcknowledgeTerminalHandoff transfers one in-flight terminal completion to
-// its runtime queue. It is intentionally narrow: queue admission, not durable
-// transcript acceptance, is the only fact it records.
-func (m *Manager) AcknowledgeTerminalHandoff(processID string, activityID uuid.UUID) TerminalHandoffAcknowledgement {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return TerminalHandoffRejected
-	}
-	return entry.acknowledgeTerminalHandoff(activityID)
-}
-
-// FinalizeTerminalOwnerPoll records a durable owner-session write_stdin
-// completion. A remote session is an independent reader and cannot alter the
-// owner's terminal disposition.
-func (m *Manager) FinalizeTerminalOwnerPoll(callerSessionID string, processID string) TerminalOwnerPollFinalization {
-	callerSessionID = strings.TrimSpace(callerSessionID)
-	if callerSessionID == "" {
-		return TerminalOwnerPollFinalization{}
-	}
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return TerminalOwnerPollFinalization{}
-	}
-	return entry.finalizeOwnerPoll(callerSessionID)
-}
-
-// FinalizeAutomaticTerminal records the automatic path's durable acceptance.
-// It can only settle a completion that was previously acknowledged by the
-// runtime queue.
-func (m *Manager) FinalizeAutomaticTerminal(processID string, activityID uuid.UUID) TerminalAutomaticFinalization {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return TerminalAutomaticFinalizationRejected
-	}
-	return entry.finalizeAutomatic(activityID)
-}
-
-// ReserveAutomaticTerminal excludes owner-poll finalization before the
-// automatic notice's steering record durably commits. An uncommitted receipt
-// must call RestoreAutomaticTerminal before the scheduler retries.
-func (m *Manager) ReserveAutomaticTerminal(processID string, activityID uuid.UUID) bool {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return false
-	}
-	return entry.reserveAutomaticTerminal(activityID)
-}
-
-func (m *Manager) RestoreAutomaticTerminal(processID string, activityID uuid.UUID) bool {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return false
-	}
-	return entry.restoreAutomaticTerminal(activityID)
-}
-
-// ReplayPendingTerminal retries delivery after an Authority resource boundary.
-// Terminal output is re-materialized from the existing command log only after
-// the pending state wins the attempt transition.
-func (m *Manager) ReplayPendingTerminal(processID string) bool {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return false
-	}
-	entry.interactMu.Lock()
-	_, pending := entry.terminal.(pendingTerminalDisposition)
-	entry.interactMu.Unlock()
-	if !pending {
-		return false
-	}
-	go m.deliverPendingTerminal(entry)
-	return true
-}
-
-// WithdrawTerminalHandoff returns an uncommitted Workflow handoff to Manager
-// ownership before its Exact Execution Scope retires.
-func (m *Manager) WithdrawTerminalHandoff(processID string, activityID uuid.UUID) bool {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return false
-	}
-	return entry.withdrawTerminalHandoff(activityID)
-}
-
-// RecordTerminalDeliveryFailure retains a bounded diagnostic until a runtime
-// queue accepts it. It is intentionally separate from terminal facts so the
-// Manager never retains an error interface or command output.
-func (m *Manager) RecordTerminalDeliveryFailure(processID string, activityID uuid.UUID, cause error) bool {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return false
-	}
-	return entry.recordTerminalDeliveryFailure(activityID, cause)
-}
-
-// TakeTerminalDeliveryDiagnostic transfers one Manager-owned diagnostic after
-// runtime queue admission. The caller must restore it if admission fails.
-func (m *Manager) TakeTerminalDeliveryDiagnostic(processID string, activityID uuid.UUID) (TerminalDeliveryDiagnostic, bool) {
-	entry, err := m.entry(strings.TrimSpace(processID))
-	if err != nil {
-		return TerminalDeliveryDiagnostic{}, false
-	}
-	return entry.takeTerminalDeliveryDiagnostic(activityID)
-}
-
-func (m *Manager) RestoreTerminalDeliveryDiagnostic(diagnostic TerminalDeliveryDiagnostic) bool {
-	entry, err := m.entry(strings.TrimSpace(diagnostic.ProcessID))
-	if err != nil {
-		return false
-	}
-	return entry.restoreTerminalDeliveryDiagnostic(diagnostic)
-}
-
 func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	if len(req.Command) == 0 {
 		return ExecResult{}, errors.New("command is required")
@@ -294,8 +181,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		stdinOpen:            req.KeepStdinOpen,
 		notify:               make(chan struct{}, 1),
 		done:                 make(chan struct{}),
-		backgroundedReady:    make(chan struct{}),
-		terminalChanged:      make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {
@@ -375,8 +260,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		RawOutputRequested: req.Raw,
 	}
 	entry.interactMu.Lock()
+	defer entry.interactMu.Unlock()
 	snapshot, backgrounded := entry.transitionToBackground()
-	entry.interactMu.Unlock()
 	if !backgrounded {
 		if pending := entry.drainPending(); len(pending) > 0 {
 			output = append(output, pending...)
@@ -395,13 +280,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return result, nil
 	}
 	_ = deprioritizeManagedProcess(cmd.Process)
-	// Registration is the causal boundary for a terminal handoff. The waiter
-	// may already have recorded terminal facts, but cannot deliver them until
-	// the Authority has synchronously recorded ownership from this event.
-	// Release it even when presentation post-processing subsequently fails:
-	// the terminal process is still a real lifecycle obligation.
-	m.emitEvent(newBackgroundedEvent(snapshot))
-	close(entry.backgroundedReady)
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
 		return ExecResult{}, err
@@ -414,6 +292,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
+	m.emitEvent(newBackgroundedEvent(snapshot))
 	return result, nil
 }
 
@@ -426,31 +305,29 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	if err != nil {
 		return ExecResult{}, err
 	}
+	entry.interactMu.Lock()
+	defer entry.interactMu.Unlock()
+
 	yieldTime := normalizeWriteYieldTime(req.YieldTime, defaultWriteYieldTime)
 	maxOutputChars := req.MaxOutputChars
 	if maxOutputChars <= 0 {
 		maxOutputChars = defaultOutputTokenCap * 4
 	}
 	if req.Input != "" {
-		entry.interactMu.Lock()
 		entry.mu.Lock()
 		stdin := entry.stdin
 		running := entry.running
 		stdinOpen := entry.stdinOpen
 		entry.mu.Unlock()
 		if !running {
-			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("unknown session_id %s", id)
 		}
 		if stdin == nil || !stdinOpen {
-			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("stdin is closed for session %s", id)
 		}
 		if _, err := io.WriteString(stdin, req.Input); err != nil {
-			entry.interactMu.Unlock()
 			return ExecResult{}, fmt.Errorf("write stdin: %w", err)
 		}
-		entry.interactMu.Unlock()
 	}
 
 	start := time.Now()
@@ -462,16 +339,8 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		return ExecResult{}, err
 	}
 	snapshot := entry.snapshot()
-	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil
-	if harvestingCompletion {
-		if err := entry.waitForTerminalHandoff(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
-				return ExecResult{}, &PollingCanceledError{SessionID: id, Active: entry.snapshot().Running}
-			}
-			return ExecResult{}, err
-		}
-		snapshot = entry.snapshot()
-	}
+	consumedCompletion := false
+	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
@@ -483,11 +352,13 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 			if err != nil {
 				return ExecResult{}, err
 			}
+			consumedCompletion = true
 		} else {
 			var previewTruncated bool
 			preview, _, previewTruncated, previewErr := readBackgroundSummaryFromFile(snapshot.LogPath, maxOutputChars, BackgroundOutputDefault, !snapshot.RawOutput)
 			if previewErr == nil {
 				processed = postprocess.Result{Output: preview}
+				consumedCompletion = true
 				sourceTruncated = previewTruncated
 				warning, warningErr = mergeOperationalWarning(warning, fmt.Sprintf("full output log skipped: %v", readErr))
 				if warningErr != nil {
@@ -501,7 +372,10 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 			}
 		}
 	}
-	if !harvestingCompletion {
+	if consumedCompletion {
+		entry.markCompletionNoticeConsumed()
+	}
+	if !consumedCompletion {
 		processed, err = m.applyPostprocessing(ctx, entry, string(output), snapshot.ExitCode, snapshot.Backgrounded, maxOutputChars)
 		if err != nil {
 			return ExecResult{}, err

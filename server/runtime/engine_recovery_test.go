@@ -12,11 +12,8 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
-	shelltool "core/server/tools/shell"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
@@ -507,34 +504,10 @@ type recoverySchedulingObserver struct {
 }
 
 func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *recoverySchedulingObserver) AdmitBackgroundShellUpdate(BackgroundShellEvent)        {}
 func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
-func (s *recoverySchedulingObserver) DrainPendingNotices() []queuedBackgroundNotice          { return nil }
-func (s *recoverySchedulingObserver) ReserveAutomaticDisposition(queuedBackgroundNotice) error {
-	return nil
-}
-func (s *recoverySchedulingObserver) RestoreAutomaticDisposition(queuedBackgroundNotice) {}
-func (s *recoverySchedulingObserver) FinalizeCommittedBackgroundNotice(queuedBackgroundNotice, session.CommitReceipt) shelltool.TerminalAutomaticFinalization {
-	return shelltool.TerminalAutomaticFinalizationRejected
-}
-func (s *recoverySchedulingObserver) RestoreUncommittedBackgroundNotices([]queuedBackgroundNotice) {}
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                                      { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) backgroundNoticeConsumption {
-	return backgroundNoticeConsumption{}
-}
-func (s *recoverySchedulingObserver) FinalizeOwnerPoll(string, *PendingBackgroundDeliveryDiagnostic) backgroundNoticeConsumption {
-	return backgroundNoticeConsumption{}
-}
-func (s *recoverySchedulingObserver) PermitRetry() bool { return false }
-func (s *recoverySchedulingObserver) AttachDiagnostic(PendingBackgroundDeliveryDiagnostic) bool {
-	return false
-}
-func (s *recoverySchedulingObserver) RetirementSnapshot() BackgroundDeliveryRetirementSnapshot {
-	return BackgroundDeliveryRetirementSnapshot{}
-}
-func (s *recoverySchedulingObserver) Withdraw(context.Context, string, uuid.UUID) (BackgroundDeliveryWithdrawal, bool, error) {
-	return BackgroundDeliveryWithdrawal{}, false, nil
-}
+func (s *recoverySchedulingObserver) DrainPendingNotices() []steeringIntent                  { return nil }
+func (s *recoverySchedulingObserver) HasPendingNotices() bool                                { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool             { return false }
 
 func (s *recoverySchedulingObserver) ScheduleIfIdle() {
 	if s != nil && s.onSchedule != nil {

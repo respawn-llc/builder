@@ -25,9 +25,6 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/background.go:runQueuedNotices": {
 			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
 		},
-		"server/runtime/background.go:runPendingDeliveryDiagnostics": {
-			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
-		},
 		"server/runtime/engine.go:submitUserMessage": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},

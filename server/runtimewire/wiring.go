@@ -19,8 +19,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type RuntimeWiring struct {
@@ -57,7 +55,6 @@ type RuntimeWiringOptions struct {
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
 	LifecycleTaskFinished               func() error
-	BackgroundCompletionSettled         func(processID string)
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -259,42 +256,6 @@ func NewRuntimeWiringWithBackground(
 		},
 		StepLifecycle:         opts.StepLifecycle,
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
-		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) runtime.BackgroundOwnerPollFinalization {
-			if background == nil {
-				return runtime.BackgroundOwnerPollFinalization{}
-			}
-			finalization := background.FinalizeTerminalOwnerPoll(callerSessionID, processID)
-			result := runtime.BackgroundOwnerPollFinalization{Finalized: finalization.Finalized}
-			if finalization.Diagnostic != nil {
-				diagnostic := runtime.NewBackgroundRoutingDiagnosticDetail(
-					finalization.Diagnostic.ProcessID,
-					finalization.Diagnostic.Activity,
-					finalization.Diagnostic.Attempt,
-					finalization.Diagnostic.Detail,
-				)
-				result.Diagnostic = &diagnostic
-			}
-			return result
-		},
-		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization {
-			if background == nil {
-				return shelltool.TerminalAutomaticFinalizationRejected
-			}
-			return background.FinalizeAutomaticTerminal(processID, activityID)
-		},
-		BackgroundAutomaticReservation: func(processID string, activityID uuid.UUID) bool {
-			if background == nil {
-				return false
-			}
-			return background.ReserveAutomaticTerminal(processID, activityID)
-		},
-		BackgroundAutomaticRollback: func(processID string, activityID uuid.UUID) bool {
-			if background == nil {
-				return false
-			}
-			return background.RestoreAutomaticTerminal(processID, activityID)
-		},
-		BackgroundCompletionSettled: opts.BackgroundCompletionSettled,
 	})
 	if err != nil {
 		return nil, err

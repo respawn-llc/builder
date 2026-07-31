@@ -260,108 +260,12 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	if err != nil {
 		panic(fmt.Sprintf("route background event with invalid owner session: process_id=%q session_id=%q error=%v", event.Snapshot.ID, event.Snapshot.OwnerSessionID, err))
 	}
-	switch event.Type {
-	case shelltool.EventBackgrounded:
-		a.routeBackgroundedEvent(event, sessionID, correlation)
-	case shelltool.EventCompleted, shelltool.EventKilled:
-		a.routeTerminalBackgroundEvent(event, sessionID)
-	default:
-		panic(fmt.Sprintf("route background event with unsupported type: process_id=%q type=%q", event.Snapshot.ID, event.Type))
-	}
-}
-
-func (a *Authority) routeBackgroundedEvent(event shelltool.Event, sessionID runtimeids.SessionID, correlation *runtimeids.ExecutionCorrelation) {
-	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil || resource.ref.Generation() != correlation.ResourceGeneration() {
 		return
 	}
-	resource.mu.Lock()
-	current := resource.current
-	if current == nil || current.scope.ID() != correlation.ScopeID() {
-		resource.mu.Unlock()
-		return
-	}
-	scope := current.scope
-	resource.mu.Unlock()
-	a.rememberBackgroundOwner(event, sessionID, scope)
-	a.routeBackgroundEventToResource(resource, event, false)
-}
-
-func (a *Authority) routeTerminalBackgroundEvent(event shelltool.Event, sessionID runtimeids.SessionID) {
-	owner := a.backgroundOwner(event.Snapshot.ID, event.Snapshot.ActivityID)
-	if owner == nil {
-		return
-	}
-	if owner.backgroundOwnerSessionID() != sessionID {
-		panic(fmt.Sprintf(
-			"background owner session mismatch: process_id=%q owner=%s event=%s",
-			event.Snapshot.ID,
-			owner.backgroundOwnerSessionID(),
-			sessionID,
-		))
-	}
-	if workflowOwner, workflow := owner.(workflowBackgroundOwner); workflow {
-		gate := a.gateFor(sessionID)
-		gate.mu.Lock()
-		defer gate.mu.Unlock()
-		owner = a.backgroundOwner(event.Snapshot.ID, event.Snapshot.ActivityID)
-		workflowOwner, workflow = owner.(workflowBackgroundOwner)
-		if !workflow {
-			return
-		}
-		deliveryScope, admitted := workflowDeliveryScope(workflowOwner)
-		if !admitted {
-			// A stopped Workflow scope returns its completion to Manager-owned
-			// pending state. Generic Session readiness cannot consume it;
-			// explicit Resume is the only operation that installs a new target.
-			return
-		}
-		a.mu.Lock()
-		execution := a.byScope[deliveryScope]
-		resource := a.resources[sessionID]
-		liveExecution := execution != nil && execution.phase == executionPhaseRunning
-		a.mu.Unlock()
-		if !liveExecution || resource == nil || execution.resource != resource {
-			return
-		}
-		resource.mu.Lock()
-		live := resource.current == execution && resource.state == AgentResourceReady
-		resource.mu.Unlock()
-		if !live {
-			return
-		}
-		a.routeBackgroundEventToResource(resource, event, true)
-		return
-	}
-	a.mu.Lock()
-	resource := a.resources[sessionID]
-	a.mu.Unlock()
-	if resource == nil {
-		if a.options.background != nil {
-			a.options.background.RecordTerminalDeliveryFailure(
-				event.Snapshot.ID,
-				event.Snapshot.ActivityID,
-				fmt.Errorf("ordinary background completion had no current runtime"),
-			)
-		}
-		a.backgroundLogger.Error(
-			"background completion has no current ordinary runtime",
-			"process_id", event.Snapshot.ID,
-			"activity_id", event.Snapshot.ActivityID.String(),
-			"session_id", sessionID.String(),
-			"operation", "route_terminal_background_event",
-		)
-		return
-	}
-	a.routeBackgroundEventToResource(resource, event, true)
-}
-
-func (a *Authority) routeBackgroundEventToResource(resource *agentResource, event shelltool.Event, queueNotice bool) {
 	routeErr := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 		summary := shelltool.BackgroundNoticeSummary{}
 		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
@@ -385,7 +289,7 @@ func (a *Authority) routeBackgroundEventToResource(resource *agentResource, even
 			eventType = runtime.BackgroundShellEventKilled
 		}
 		preview, previewRemoved := summary.RuntimePreview()
-		backgroundEvent := runtime.BackgroundShellEvent{
+		engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
 			Type:              eventType,
 			ID:                event.Snapshot.ID,
 			ActivityID:        event.Snapshot.ActivityID,
@@ -402,48 +306,11 @@ func (a *Authority) routeBackgroundEventToResource(resource *agentResource, even
 			ExitCode:          event.Snapshot.ExitCode,
 			UserRequestedKill: event.Snapshot.KillRequested,
 			NoticeSuppressed:  event.NoticeSuppressed,
-		}
-		if queueNotice && !event.NoticeSuppressed {
-			engine.AdmitBackgroundShellUpdate(backgroundEvent)
-		} else {
-			engine.HandleBackgroundShellUpdate(backgroundEvent, false)
-		}
-		if queueNotice && !event.NoticeSuppressed {
-			if a.options.background == nil {
-				engine.DiscardProvisionalBackgroundNotice(event.Snapshot.ID)
-				return fmt.Errorf("background terminal handoff requires shell manager: process_id=%s", event.Snapshot.ID)
-			}
-			if diagnostic, hasDiagnostic := a.options.background.TakeTerminalDeliveryDiagnostic(event.Snapshot.ID, event.Snapshot.ActivityID); hasDiagnostic {
-				runtimeDiagnostic := runtime.NewBackgroundRoutingDiagnosticDetail(
-					diagnostic.ProcessID,
-					diagnostic.Activity,
-					diagnostic.Attempt,
-					diagnostic.Detail,
-				)
-				if !engine.AttachBackgroundDeliveryDiagnostic(runtimeDiagnostic) {
-					a.options.background.RestoreTerminalDeliveryDiagnostic(diagnostic)
-					engine.DiscardProvisionalBackgroundNotice(event.Snapshot.ID)
-					return fmt.Errorf("background terminal diagnostic attachment failed: process_id=%s", event.Snapshot.ID)
-				}
-			}
-			switch a.options.background.AcknowledgeTerminalHandoff(event.Snapshot.ID, event.Snapshot.ActivityID) {
-			case shelltool.TerminalHandoffAcknowledged:
-				engine.ScheduleBackgroundNoticesIfIdle()
-			case shelltool.TerminalHandoffAlreadyFinalizedByOwnerPoll:
-				engine.DiscardProvisionalBackgroundNotice(event.Snapshot.ID)
-			default:
-				return fmt.Errorf("background terminal handoff was no longer pending: process_id=%s", event.Snapshot.ID)
-			}
-		}
+		}, !event.NoticeSuppressed)
 		return nil
 	})
 	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
 		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
-	}
-	if routeErr != nil {
-		if a.options.background != nil {
-			a.options.background.RecordTerminalDeliveryFailure(event.Snapshot.ID, event.Snapshot.ActivityID, routeErr)
-		}
 	}
 }
 

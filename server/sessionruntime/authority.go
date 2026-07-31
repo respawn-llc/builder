@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"core/server/auth"
@@ -39,7 +38,6 @@ type AuthorityOptions struct {
 	ResourceLifecycle  AgentResourceLifecycle
 	StepLifecycle      AgentResourceStepLifecycle
 	PromptFeed         ExecutionPromptFeed
-	BackgroundLogger   *slog.Logger
 }
 
 type Authority struct {
@@ -51,11 +49,9 @@ type Authority struct {
 	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
-	backgroundOwners   map[string]backgroundOwner
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
-	backgroundLogger   *slog.Logger
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
@@ -64,14 +60,9 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
-		backgroundOwners:   make(map[string]backgroundOwner),
 		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),
-		backgroundLogger:   options.BackgroundLogger,
-	}
-	if authority.backgroundLogger == nil {
-		authority.backgroundLogger = slog.Default()
 	}
 	if authority.options.background != nil {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
@@ -134,29 +125,6 @@ func (a *Authority) validateWorkflowExecutionLeaseLocked(lease *WorkflowExecutio
 		return WorkflowExecutionRef{}, err
 	}
 	return lease.workflow, nil
-}
-
-// workflowExecutionAdmissionLocked validates one future scope and proves that
-// no current execution already owns its Workflow Current Node. The caller
-// must hold Authority.mu.
-func (a *Authority) workflowExecutionAdmissionLocked(
-	lease *WorkflowExecutionLease,
-) (WorkflowExecutionRef, workflow.CurrentNodeReferenceKey, error) {
-	ref, err := a.validateWorkflowExecutionLeaseLocked(lease)
-	if err != nil {
-		return WorkflowExecutionRef{}, nil, err
-	}
-	key, err := workflowExecutionKeyFor(ref)
-	if err != nil {
-		return WorkflowExecutionRef{}, nil, err
-	}
-	if a.workflowExecutionLocked(ref, key) != nil {
-		return WorkflowExecutionRef{}, nil, fmt.Errorf(
-			"workflow current node %v is already live",
-			ref.CurrentNode,
-		)
-	}
-	return ref, key, nil
 }
 
 func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHandle, bool) {

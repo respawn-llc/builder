@@ -162,9 +162,6 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
-	if _, workflow := e.scope.Workflow(); workflow {
-		e.finalizeWorkflowBackground()
-	}
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
 	e.retire()
@@ -231,53 +228,8 @@ func (e *execution) retire() {
 // Its finalizer can still prove Current Node ownership, but no longer
 // authorizes Interrupt or appears in queued/running read models.
 func (e *execution) beginWorkflowFinalization() {
-	if e.resource == nil {
-		e.markWorkflowFinalizing()
-		return
-	}
-	gate := e.authority.gateFor(e.resource.ref.SessionID())
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	e.markWorkflowFinalizing()
-}
-
-// finalizeWorkflowBackground holds the owning Session gate from exact-scope
-// retirement through scheduler withdrawal. A terminal handoff can therefore
-// either win the same gate and be reclaimed before close, or lose and remain
-// Manager-owned for explicit Resume.
-func (e *execution) finalizeWorkflowBackground() {
-	if e.resource == nil {
-		e.markWorkflowFinalizing()
-		return
-	}
-	e.resource.mu.Lock()
-	engine := e.resource.engine
-	draining := e.resource.state != AgentResourceReady
-	e.resource.mu.Unlock()
-	if draining {
-		// Resource close already won admission. It rejects every new route and
-		// StepBegan, so finalization can finish the withdrawal without waiting
-		// for the closer's Session gate while closeResource joins this execution.
-		e.markWorkflowFinalizing()
-		e.authority.withdrawWorkflowBackground(e.scope, engine)
-		return
-	}
-	gate := e.authority.gateFor(e.resource.ref.SessionID())
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	e.markWorkflowFinalizing()
-	e.authority.withdrawWorkflowBackground(e.scope, engine)
-}
-
-// markWorkflowFinalizing updates Workflow liveness. A ready resource requires
-// its Session gate; a draining resource already rejects new terminal routes.
-func (e *execution) markWorkflowFinalizing() {
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
-		e.authority.mu.Unlock()
-		return
-	}
-	if e.phase == executionPhaseFinalizing {
 		e.authority.mu.Unlock()
 		return
 	}

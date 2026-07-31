@@ -219,7 +219,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
 		},
-		BackgroundCompletionSettled: a.settleBackgroundOwner,
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))
 			if transcriptdiag.Enabled(options.Settings.Debug, os.Getenv) {

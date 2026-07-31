@@ -18,8 +18,6 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
@@ -40,9 +38,8 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var (
-		mu        sync.Mutex
-		events    []Event
-		finalized []string
+		mu     sync.Mutex
+		events []Event
 	)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
@@ -50,12 +47,6 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 			mu.Lock()
 			events = append(events, evt)
 			mu.Unlock()
-		},
-		BackgroundAutomaticFinalizer: func(processID string, _ uuid.UUID) shelltool.TerminalAutomaticFinalization {
-			mu.Lock()
-			finalized = append(finalized, processID)
-			mu.Unlock()
-			return shelltool.TerminalAutomaticallyFinalized
 		},
 	})
 
@@ -135,9 +126,6 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(finalized) != 2 || finalized[0] != "1000" || finalized[1] != "1001" {
-		t.Fatalf("combined background finalizers = %#v, want [1000 1001]", finalized)
-	}
 	immediateUpdates := map[string]bool{"1000": false, "1001": false}
 	for _, evt := range events {
 		if evt.Kind != EventBackgroundUpdated || evt.Background == nil {
@@ -200,16 +188,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
-	eng := mustNewTestEngine(t, store, client, registry, Config{
-		Model: "gpt-5",
-		BackgroundOwnerPollFinalizer: func(callerSessionID string, processID string) BackgroundOwnerPollFinalization {
-			finalization := manager.FinalizeTerminalOwnerPoll(callerSessionID, processID)
-			return BackgroundOwnerPollFinalization{Finalized: finalization.Finalized}
-		},
-		BackgroundAutomaticFinalizer: func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization {
-			return manager.FinalizeAutomaticTerminal(processID, activityID)
-		},
-	})
+	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
 		if summaryErr != nil {
@@ -217,7 +196,6 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			return
 		}
 		preview, previewRemoved := summary.RuntimePreview()
-		terminal := evt.Type == shelltool.EventCompleted || evt.Type == shelltool.EventKilled
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
 			Type:           backgroundShellEventTypeForTest(evt.Type),
 			ID:             evt.Snapshot.ID,
@@ -236,15 +214,6 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
 		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
-		if terminal {
-			switch manager.AcknowledgeTerminalHandoff(evt.Snapshot.ID, evt.Snapshot.ActivityID) {
-			case shelltool.TerminalHandoffAcknowledged:
-			case shelltool.TerminalHandoffAlreadyFinalizedByOwnerPoll:
-				eng.DiscardProvisionalBackgroundNotice(evt.Snapshot.ID)
-			default:
-				t.Errorf("acknowledge terminal handoff for process %s", evt.Snapshot.ID)
-			}
-		}
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")

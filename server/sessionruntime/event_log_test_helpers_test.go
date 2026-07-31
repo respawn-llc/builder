@@ -1,20 +1,10 @@
 package sessionruntime
 
 import (
-	"path/filepath"
 	"testing"
 
-	"core/internal/testharness/filemode"
 	"core/server/session"
 )
-
-func mustBlockSessionRuntimeEventLogAppends(t *testing.T, store *session.Store) *filemode.EventLogAppendBlocker {
-	t.Helper()
-	if store == nil {
-		t.Fatal("event-log append blocker requires a session store")
-	}
-	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
-}
 
 func recoveredWarningEntryCount(t *testing.T, store *session.Store, warning string) int {
 	t.Helper()

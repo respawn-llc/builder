@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"core/server/tools/shell/postprocess"
 	"core/shared/runtimeids"
@@ -30,7 +29,6 @@ const (
 	maxFullLogPostprocessBytes = 2 << 20
 	backgroundLogDirPrefix     = "kent-bg-shells-"
 	initialProcessID           = 1000
-	maxTerminalDiagnosticBytes = 4 << 10
 )
 
 type EventType string
@@ -220,55 +218,6 @@ func (e *PollingCanceledError) Unwrap() error {
 	return context.Canceled
 }
 
-// TerminalDeliveryDiagnostic is a bounded, payload-free recovery descriptor
-// retained by Manager before ownership transfers to the runtime scheduler.
-type TerminalDeliveryDiagnostic struct {
-	ProcessID string
-	Activity  uuid.UUID
-	Attempt   uint64
-	Detail    string
-}
-
-func newTerminalDeliveryDiagnostic(
-	processID string,
-	activity uuid.UUID,
-	attempt uint64,
-	cause error,
-) TerminalDeliveryDiagnostic {
-	processID = strings.TrimSpace(processID)
-	if processID == "" {
-		panic("terminal delivery diagnostic requires process id")
-	}
-	if activity.Version() != 4 {
-		panic(fmt.Sprintf("terminal delivery diagnostic requires UUIDv4 activity id: %q", activity))
-	}
-	if attempt == 0 {
-		panic("terminal delivery diagnostic requires attempt")
-	}
-	detail := "background delivery failed"
-	if cause != nil {
-		detail = cause.Error()
-	}
-	return TerminalDeliveryDiagnostic{
-		ProcessID: processID,
-		Activity:  activity,
-		Attempt:   attempt,
-		Detail:    boundedTerminalDiagnosticDetail(detail),
-	}
-}
-
-func boundedTerminalDiagnosticDetail(value string) string {
-	value = strings.ToValidUTF8(value, "\uFFFD")
-	if len(value) <= maxTerminalDiagnosticBytes {
-		return value
-	}
-	value = value[:maxTerminalDiagnosticBytes]
-	for !utf8.ValidString(value) {
-		value = value[:len(value)-1]
-	}
-	return value
-}
-
 type processEntry struct {
 	id                   string
 	activityID           uuid.UUID
@@ -299,101 +248,10 @@ type processEntry struct {
 	outputBytes          int64
 	notify               chan struct{}
 	done                 chan struct{}
-	backgroundedReady    chan struct{}
-	terminalChanged      chan struct{}
 	killRequested        bool
-	terminal             terminalDisposition
-	deliveryDiagnostic   *TerminalDeliveryDiagnostic
+	noticeConsumed       bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
-}
-
-type terminalFacts struct {
-	eventType EventType
-	snapshot  Snapshot
-}
-
-type TerminalHandoffAcknowledgement uint8
-
-const (
-	TerminalHandoffRejected TerminalHandoffAcknowledgement = iota
-	TerminalHandoffAcknowledged
-	TerminalHandoffAlreadyFinalizedByOwnerPoll
-)
-
-// TerminalOwnerPollFinalization is the Manager-owned result of one durably
-// committed owner poll. Diagnostic ownership moves by value with this result
-// so final acceptance never silently discards a prior delivery failure.
-type TerminalOwnerPollFinalization struct {
-	Finalized  bool
-	Diagnostic *TerminalDeliveryDiagnostic
-}
-
-// TerminalAutomaticFinalization is the Manager-owned outcome of settling one
-// durable automatic notice. It distinguishes an accepted automatic notice from
-// a reservation already claimed by the owner poll.
-type TerminalAutomaticFinalization uint8
-
-const (
-	TerminalAutomaticFinalizationRejected TerminalAutomaticFinalization = iota
-	TerminalAutomaticallyFinalized
-	TerminalAlreadyFinalizedByOwnerPoll
-)
-
-func (f TerminalAutomaticFinalization) AutomaticallyFinalized() bool {
-	return f == TerminalAutomaticallyFinalized
-}
-
-type terminalDisposition interface {
-	terminalFacts() terminalFacts
-	terminalDisposition()
-}
-
-type pendingTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d pendingTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (pendingTerminalDisposition) terminalDisposition()           {}
-
-type inFlightTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d inFlightTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (inFlightTerminalDisposition) terminalDisposition()           {}
-
-type queuedTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d queuedTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (queuedTerminalDisposition) terminalDisposition()           {}
-
-type automaticReservedTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d automaticReservedTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (automaticReservedTerminalDisposition) terminalDisposition()           {}
-
-type finalizedByOwnerPollTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d finalizedByOwnerPollTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (finalizedByOwnerPollTerminalDisposition) terminalDisposition()           {}
-
-type finalizedAutomaticallyTerminalDisposition struct {
-	facts terminalFacts
-}
-
-func (d finalizedAutomaticallyTerminalDisposition) terminalFacts() terminalFacts { return d.facts }
-func (finalizedAutomaticallyTerminalDisposition) terminalDisposition()           {}
-
-func (p *processEntry) signalTerminalChangedLocked() {
-	close(p.terminalChanged)
-	p.terminalChanged = make(chan struct{})
 }
 
 func (p *processEntry) signal() {
@@ -537,6 +395,21 @@ func (p *processEntry) finalizeClosedExit() {
 	p.signal()
 }
 
+func (p *processEntry) markCompletionNoticeConsumed() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.backgrounded || p.exitCode == nil {
+		return
+	}
+	p.noticeConsumed = true
+}
+
+func (p *processEntry) completionNoticeConsumed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.noticeConsumed
+}
+
 func (p *processEntry) snapshot() Snapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -569,240 +442,6 @@ func (p *processEntry) transitionToBackground() (Snapshot, bool) {
 	p.backgrounded = true
 	p.state = "running"
 	return p.snapshotLocked(), true
-}
-
-func (p *processEntry) recordTerminal(facts terminalFacts) {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	if p.terminal != nil {
-		panic(fmt.Sprintf("shell process %s recorded terminal facts more than once", p.id))
-	}
-	p.terminal = pendingTerminalDisposition{facts: facts}
-	p.signalTerminalChangedLocked()
-}
-
-func (p *processEntry) beginTerminalHandoff() (terminalFacts, bool) {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	pending, ok := p.terminal.(pendingTerminalDisposition)
-	if !ok {
-		return terminalFacts{}, false
-	}
-	p.terminal = inFlightTerminalDisposition{facts: pending.facts}
-	p.signalTerminalChangedLocked()
-	return pending.facts, true
-}
-
-func (p *processEntry) finishTerminalHandoff() {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	inFlight, ok := p.terminal.(inFlightTerminalDisposition)
-	if !ok {
-		return
-	}
-	p.terminal = pendingTerminalDisposition{facts: inFlight.facts}
-	p.signalTerminalChangedLocked()
-}
-
-func (p *processEntry) acknowledgeTerminalHandoff(activityID uuid.UUID) TerminalHandoffAcknowledgement {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	switch current := p.terminal.(type) {
-	case inFlightTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return TerminalHandoffRejected
-		}
-		p.terminal = queuedTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-		return TerminalHandoffAcknowledged
-	case finalizedByOwnerPollTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return TerminalHandoffRejected
-		}
-		return TerminalHandoffAlreadyFinalizedByOwnerPoll
-	default:
-		return TerminalHandoffRejected
-	}
-}
-
-func (p *processEntry) finalizeOwnerPoll(callerSessionID string) TerminalOwnerPollFinalization {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	if p.ownerSessionID != callerSessionID {
-		return TerminalOwnerPollFinalization{}
-	}
-	switch current := p.terminal.(type) {
-	case pendingTerminalDisposition:
-		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-	case inFlightTerminalDisposition:
-		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
-	case queuedTerminalDisposition:
-		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
-	case automaticReservedTerminalDisposition:
-		// write_stdin has already committed before it reaches this Manager
-		// finalizer. Its durable owner claim wins the reservation, so an
-		// uncommitted automatic receipt must not restore the completion to the
-		// automatic queue.
-		p.terminal = finalizedByOwnerPollTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-	default:
-		return TerminalOwnerPollFinalization{}
-	}
-	result := TerminalOwnerPollFinalization{Finalized: true}
-	if p.deliveryDiagnostic != nil {
-		diagnostic := *p.deliveryDiagnostic
-		p.deliveryDiagnostic = nil
-		result.Diagnostic = &diagnostic
-	}
-	return result
-}
-
-func (p *processEntry) finalizeAutomatic(activityID uuid.UUID) TerminalAutomaticFinalization {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	switch current := p.terminal.(type) {
-	case automaticReservedTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return TerminalAutomaticFinalizationRejected
-		}
-		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
-	case queuedTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return TerminalAutomaticFinalizationRejected
-		}
-		p.terminal = finalizedAutomaticallyTerminalDisposition{facts: current.facts}
-	case finalizedByOwnerPollTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return TerminalAutomaticFinalizationRejected
-		}
-		return TerminalAlreadyFinalizedByOwnerPoll
-	default:
-		return TerminalAutomaticFinalizationRejected
-	}
-	p.signalTerminalChangedLocked()
-	return TerminalAutomaticallyFinalized
-}
-
-func (p *processEntry) reserveAutomaticTerminal(activityID uuid.UUID) bool {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	queued, ok := p.terminal.(queuedTerminalDisposition)
-	if !ok || queued.facts.snapshot.ActivityID != activityID {
-		return false
-	}
-	p.terminal = automaticReservedTerminalDisposition{facts: queued.facts}
-	p.signalTerminalChangedLocked()
-	return true
-}
-
-func (p *processEntry) restoreAutomaticTerminal(activityID uuid.UUID) bool {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	reserved, ok := p.terminal.(automaticReservedTerminalDisposition)
-	if ok {
-		if reserved.facts.snapshot.ActivityID != activityID {
-			return false
-		}
-		p.terminal = queuedTerminalDisposition{facts: reserved.facts}
-		p.signalTerminalChangedLocked()
-		return true
-	}
-	ownerPoll, ok := p.terminal.(finalizedByOwnerPollTerminalDisposition)
-	return ok && ownerPoll.facts.snapshot.ActivityID == activityID
-}
-
-func (p *processEntry) withdrawTerminalHandoff(activityID uuid.UUID) bool {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	switch current := p.terminal.(type) {
-	case pendingTerminalDisposition:
-		return current.facts.snapshot.ActivityID == activityID
-	case inFlightTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return false
-		}
-		p.terminal = pendingTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-		return true
-	case queuedTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return false
-		}
-		p.terminal = pendingTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-		return true
-	case automaticReservedTerminalDisposition:
-		if current.facts.snapshot.ActivityID != activityID {
-			return false
-		}
-		p.terminal = pendingTerminalDisposition{facts: current.facts}
-		p.signalTerminalChangedLocked()
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *processEntry) waitForTerminalHandoff(ctx context.Context) error {
-	for {
-		p.interactMu.Lock()
-		_, inFlight := p.terminal.(inFlightTerminalDisposition)
-		changed := p.terminalChanged
-		p.interactMu.Unlock()
-		if !inFlight {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
-}
-
-func (p *processEntry) recordTerminalDeliveryFailure(activityID uuid.UUID, cause error) bool {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	if p.terminal == nil || p.terminal.terminalFacts().snapshot.ActivityID != activityID {
-		return false
-	}
-	switch p.terminal.(type) {
-	case finalizedByOwnerPollTerminalDisposition, finalizedAutomaticallyTerminalDisposition:
-		return false
-	}
-	attempt := uint64(1)
-	if p.deliveryDiagnostic != nil {
-		attempt = p.deliveryDiagnostic.Attempt + 1
-	}
-	diagnostic := newTerminalDeliveryDiagnostic(p.id, activityID, attempt, cause)
-	p.deliveryDiagnostic = &diagnostic
-	return true
-}
-
-func (p *processEntry) takeTerminalDeliveryDiagnostic(activityID uuid.UUID) (TerminalDeliveryDiagnostic, bool) {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	if p.deliveryDiagnostic == nil || p.deliveryDiagnostic.Activity != activityID {
-		return TerminalDeliveryDiagnostic{}, false
-	}
-	diagnostic := *p.deliveryDiagnostic
-	p.deliveryDiagnostic = nil
-	return diagnostic, true
-}
-
-func (p *processEntry) restoreTerminalDeliveryDiagnostic(diagnostic TerminalDeliveryDiagnostic) bool {
-	p.interactMu.Lock()
-	defer p.interactMu.Unlock()
-	if diagnostic.ProcessID != p.id || diagnostic.Activity != p.activityID || diagnostic.Attempt == 0 {
-		return false
-	}
-	if p.deliveryDiagnostic != nil {
-		return false
-	}
-	copy := diagnostic
-	p.deliveryDiagnostic = &copy
-	return true
 }
 
 type outputWriter struct {

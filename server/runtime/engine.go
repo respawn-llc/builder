@@ -12,7 +12,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -134,21 +133,6 @@ type Config struct {
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
-	// BackgroundOwnerPollFinalizer runs only after a terminal write_stdin
-	// completion has a durable receipt. It transfers an owner-relative
-	// finalization and any Manager-owned diagnostic to this Engine.
-	BackgroundOwnerPollFinalizer func(callerSessionID string, processID string) BackgroundOwnerPollFinalization
-	// BackgroundAutomaticFinalizer records durable automatic acceptance for one
-	// admitted terminal notice after that notice's steering receipt commits.
-	BackgroundAutomaticFinalizer func(processID string, activityID uuid.UUID) shelltool.TerminalAutomaticFinalization
-	// BackgroundAutomaticReservation reserves the Manager's automatic
-	// disposition before steering persists the notice. A failed persistence
-	// receipt must release that reservation through BackgroundAutomaticRollback.
-	BackgroundAutomaticReservation func(processID string, activityID uuid.UUID) bool
-	BackgroundAutomaticRollback    func(processID string, activityID uuid.UUID) bool
-	// BackgroundCompletionSettled releases Authority-owned lifecycle retention
-	// only after this Engine has removed its provisional automatic notice.
-	BackgroundCompletionSettled func(processID string)
 }
 
 type ReviewerConfig struct {

@@ -534,18 +534,6 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
-	engine := resource.engine
-	background := runtime.BackgroundDeliveryRetirementSnapshot{}
-	if engine != nil {
-		background = engine.BackgroundDeliveryRetirementSnapshot()
-	}
-	if a.hasOrdinaryBackgroundOwner(sessionID) || background.Active {
-		if request.DropOwner {
-			resource.ownerlessDisposition = agentResourceRetireWhenIdle
-		}
-		resource.mu.Unlock()
-		return RuntimeReleaseResult{Active: true}, nil
-	}
 	if request.Policy == RuntimeReleaseCloseIfIdle {
 		if request.DropOwner && len(resource.owners) != 0 {
 			resource.mu.Unlock()
@@ -581,13 +569,6 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	sessionID := resource.ref.SessionID()
-	resource.mu.Lock()
-	engine := resource.engine
-	resource.mu.Unlock()
-	if a.hasOrdinaryBackgroundOwner(sessionID) ||
-		(engine != nil && engine.BackgroundDeliveryRetirementSnapshot().Active) {
-		return nil
-	}
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
@@ -604,10 +585,6 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
-		resource.mu.Unlock()
-		return nil
-	}
-	if resource.engine != nil && resource.engine.BackgroundDeliveryRetirementSnapshot().Active {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -674,41 +651,28 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, ErrAuthorityClosed
 	}
-	var pendingWorkflow *WorkflowExecutionRef
-	if request.Workflow != nil {
-		ref, _, admissionErr := a.workflowExecutionAdmissionLocked(request.Workflow)
-		if admissionErr != nil {
-			a.mu.Unlock()
-			return nil, admissionErr
-		}
-		pendingWorkflow = &ref
-	}
-	a.mu.Unlock()
-	if pendingWorkflow != nil {
-		if err := a.commitWorkflowResumeDiagnostics(ctx, resource, *pendingWorkflow); err != nil {
-			return nil, err
-		}
-	}
-
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return nil, ErrAuthorityClosed
-	}
 	var workflowKey workflow.CurrentNodeReferenceKey
 	var workflowRef *WorkflowExecutionRef
 	var scopeID runtimeids.ExecutionScopeID
 	var executionGeneration ExecutionGeneration
 	if request.Workflow != nil {
-		ref, key, admissionErr := a.workflowExecutionAdmissionLocked(request.Workflow)
-		if admissionErr != nil {
+		ref, leaseErr := a.validateWorkflowExecutionLeaseLocked(request.Workflow)
+		if leaseErr != nil {
 			a.mu.Unlock()
-			return nil, admissionErr
+			return nil, leaseErr
 		}
 		workflowRef = &ref
 		scopeID = request.Workflow.scopeID
 		executionGeneration = request.Workflow.executionGeneration
-		workflowKey = key
+		workflowKey, err = workflowExecutionKeyFor(ref)
+		if err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		if a.workflowExecutionLocked(ref, workflowKey) != nil {
+			a.mu.Unlock()
+			return nil, fmt.Errorf("workflow current node %v is already live", ref.CurrentNode)
+		}
 	}
 	resource.mu.Lock()
 	if resource.current != nil {
@@ -779,6 +743,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
+
 	go func() {
 		if request.Workflow != nil {
 			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
@@ -786,7 +751,6 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 				return
 			}
 			a.beginWorkflowExecution(execution)
-			a.replayWorkflowBackground(execution.scope)
 		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,
@@ -1004,15 +968,6 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	if resource.state != AgentResourceReady {
 		resource.mu.Unlock()
 		return nil, fmt.Errorf("session %s runtime is not ready", sessionID)
-	}
-	resource.mu.Unlock()
-	if err := a.replayOrdinaryBackground(ctx, sessionID); err != nil {
-		return nil, err
-	}
-	resource.mu.Lock()
-	if resource.state != AgentResourceReady {
-		resource.mu.Unlock()
-		return nil, fmt.Errorf("session %s runtime became unavailable during background replay", sessionID)
 	}
 	if ownerID != nil {
 		resource.owners[*ownerID] = struct{}{}
