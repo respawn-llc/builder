@@ -154,6 +154,38 @@ describe("ApiClient workflow labels", () => {
     ]);
   });
 
+  it("sends the complete Project label permutation and returns server order", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.project.label.reorder",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [
+              { id: urgentID, name: "Urgent" },
+              { id: priorityID, name: "Priority" },
+            ],
+          },
+        },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(client.reorderProjectLabels("project-1", [urgentID, priorityID])).resolves.toEqual({
+      projectID: "project-1",
+      labels: [
+        { id: urgentID, name: "Urgent" },
+        { id: priorityID, name: "Priority" },
+      ],
+    });
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.project.label.reorder",
+        params: { project_id: "project-1", label_ids: [urgentID, priorityID] },
+      },
+    ]);
+  });
+
   it("reads and updates the authoritative task label assignment", async () => {
     const transport = new FakeRpcTransport([
       {

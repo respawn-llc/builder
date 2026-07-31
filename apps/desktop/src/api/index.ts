@@ -30,6 +30,7 @@ export type {
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
 export {
+  defaultBoardNodeCardsSort,
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
@@ -73,6 +74,8 @@ export type {
   BoardColumn,
   BoardGroup,
   BoardNodeCardsPage,
+  BoardNodeCardsSort,
+  BoardNodeCardsSortField,
   MarkdownPreview,
   PendingAsk,
   ProjectBinding,

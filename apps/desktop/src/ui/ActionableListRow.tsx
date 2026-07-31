@@ -18,6 +18,7 @@ export type ActionableListRowProps = Readonly<{
   actions?: ReactNode;
   className?: string | undefined;
   contextualActions?: ReactNode;
+  leadingActions?: ReactNode;
   selected?: boolean;
 }> &
   ActionableListRowSelection &
@@ -28,6 +29,7 @@ export function ActionableListRow({
   children,
   className,
   contextualActions,
+  leadingActions,
   selected = false,
   selectionControl,
   selectButtonProps,
@@ -42,6 +44,9 @@ export function ActionableListRow({
       data-selected={selected}
       {...props}
     >
+      {leadingActions === undefined ? null : (
+        <div className="flex shrink-0 items-center gap-[var(--space-1)]">{leadingActions}</div>
+      )}
       {selectionControl === undefined ? (
         <button
           aria-pressed={selected}

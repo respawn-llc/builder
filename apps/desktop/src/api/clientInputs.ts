@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  BoardNodeCardsSort,
   WorkflowExecutionTargetSelection,
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
@@ -47,6 +48,7 @@ export type BoardNodeCardsInput = Readonly<{
   workflowID: string;
   nodeID: string;
   labelFilter: TaskLabelFilter;
+  sort?: BoardNodeCardsSort | undefined;
   pageToken?: string | null | undefined;
 }>;
 

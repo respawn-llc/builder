@@ -106,6 +106,7 @@ describe("ApiClient", () => {
         workflowID: "11111111-1111-4111-8111-111111111111",
         nodeID: "node-1",
         labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] },
+        sort: { field: "labels", direction: "asc" },
         pageToken: null,
       }),
     ).resolves.toMatchObject({
@@ -123,6 +124,7 @@ describe("ApiClient", () => {
         workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } },
+        sort: { field: "labels", direction: "asc" },
         page_size: 25,
         page_token: null,
       },

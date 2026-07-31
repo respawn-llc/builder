@@ -42,6 +42,7 @@ export async function listBoardNodeCards(
         workflow_id: workflowIDSchema.parse(input.workflowID),
         node_id: input.nodeID,
         label_filter: taskLabelFilterPayload(input.labelFilter),
+        sort: input.sort,
         page_size: 25,
         page_token: input.pageToken ?? null,
       }),

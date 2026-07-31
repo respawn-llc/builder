@@ -7,7 +7,7 @@
 - Tasks can move through agent work, scripts, review loops, parallel branches, Joins, and terminal states.
 - Every Kent client presents the same authoritative Workflow and Task behavior.
 - Every incompatible Workflow contract cutover increments the client/server protocol version. Incompatible clients fail with a clear compatibility error, and Kent does not emulate an older Workflow contract.
-- The CLI provides complete Workflow and Task control for operators and agents.
+- The CLI provides the Workflow and Task operations defined in the CLI Surface section.
 
 ## Domain Model
 
@@ -31,15 +31,28 @@
 - A Project can have at most 100 Labels. Clients load the complete catalog without pagination.
 - A task may use any subset of its Project's catalog; there is no separate per-task label limit.
 - Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected Tasks are Backlog, active, running, interrupted, or done.
-- Label changes do not change a Task's update time, reorder Tasks, or move pagination anchors.
+- Label changes do not change a Task's update time. When a board sorts by Labels, assignment or catalog-order changes can reposition Tasks.
 - Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
 - Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count. Desktop deletion uses explicit confirmation; invoking the explicit CLI delete command is sufficient confirmation and does not prompt or require a separate confirmation flag.
-- Labels have no color or manual ordering. Label catalogs and assigned chips use case-insensitive alphabetical order. Kent does not sort Tasks by Label.
+- Labels have no color.
+- Each Project has one authoritative manual Label order shared by every client and every linked Workflow board.
+- Label catalogs, assigned Label sequences, and Label search results preserve the Project order.
+- Desktop can reorder the Project Label catalog. CLI Label listing follows the Project order, and the CLI does not mutate that order.
+- A catalog reorder applies atomically to one Project. Concurrent reorder requests have no merge or conflict-detection guarantee.
+- A submitted catalog order must contain every current Project Label exactly once.
+- Submitting the current order succeeds without changing the catalog. This includes Projects with zero or one Label.
+- When a board sorts by Labels, each Task's sort value is its complete assigned Label sequence arranged in Project order.
+- Ascending Label sorting compares those sequences from left to right. The next differing Label decides the order, and a shorter otherwise-identical sequence comes first.
+- Descending Label sorting reverses the complete comparison among labeled Tasks.
+- Tasks with no Labels follow every labeled Task in both directions.
+- Task Short ID is the final tie-breaker in the selected direction when another field is primary.
 - Kent applies Label filters before pagination for Workflow boards and Task lists.
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.
 - `No labels` matches Tasks with zero Label assignments and is mutually exclusive with named Label conditions. No named Label conditions means no Label restriction.
-- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and pagination behavior. A client never loads the complete board or Task list to apply filters.
+- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves the selected sorting. A client never loads the complete board or Task list to apply filters.
+- Board pagination is scoped to the selected filter and sort. Changing either starts a new paginated view.
+- Concurrent Task or Label changes can leave already rendered cards temporarily stale. A successful refresh replaces them with the current authoritative server order without loading the complete board.
 
 ## Task Dependencies
 
@@ -499,7 +512,7 @@
 
 ## CLI Surface
 
-- The Workflow and Task CLI provides complete control for operators and agents.
+- The Workflow and Task CLI exposes the operator and agent operations defined in this section.
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.

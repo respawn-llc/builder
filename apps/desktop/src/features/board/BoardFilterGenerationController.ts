@@ -2,6 +2,8 @@ import {
   canonicalTaskLabelFilter,
   taskLabelFiltersEqual,
   type BoardNodeCardsPage,
+  defaultBoardNodeCardsSort,
+  type BoardNodeCardsSort,
   type CanonicalTaskLabelFilter,
   type TaskLabelFilter,
   type WorkflowBoard,
@@ -11,11 +13,13 @@ export type BoardFilterGeneration = Readonly<{
   generation: number;
   filter: CanonicalTaskLabelFilter;
   retiring: boolean;
+  sort: BoardNodeCardsSort;
 }>;
 
 export type BoardFilterGenerationSnapshot = Readonly<{
   active: BoardFilterGeneration;
   desiredFilter: CanonicalTaskLabelFilter | null;
+  desiredSort: BoardNodeCardsSort | null;
 }>;
 
 export type BoardFilterGenerationController = Readonly<{
@@ -33,6 +37,7 @@ export type BoardFilterGenerationController = Readonly<{
   registerOrchestration(generation: number, identity: string, orchestration: Promise<unknown>): boolean;
   registerCancellationBarrier(generation: number, barrier: Promise<unknown>): void;
   setDesiredFilter(filter: TaskLabelFilter): void;
+  setDesiredSort(sort: BoardNodeCardsSort): void;
   subscribe(listener: () => void): () => void;
 }>;
 
@@ -42,6 +47,7 @@ export type BoardTransportAdmission<T> =
 export function createBoardFilterGenerationController(
   initialFilter: TaskLabelFilter,
   options: Readonly<{
+    initialSort?: BoardNodeCardsSort | undefined;
     onPromoted?: ((generation: BoardFilterGeneration) => void) | undefined;
     onRetiring?: ((generation: BoardFilterGeneration) => Promise<void> | void) | undefined;
     onBackgroundError?: ((error: unknown) => void) | undefined;
@@ -64,6 +70,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
   constructor(
     initialFilter: TaskLabelFilter,
     options: Readonly<{
+      initialSort?: BoardNodeCardsSort | undefined;
       onPromoted?: ((generation: BoardFilterGeneration) => void) | undefined;
       onRetiring?: ((generation: BoardFilterGeneration) => Promise<void> | void) | undefined;
       onBackgroundError?: ((error: unknown) => void) | undefined;
@@ -77,8 +84,10 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
         generation: 1,
         filter: canonicalTaskLabelFilter(initialFilter),
         retiring: false,
+        sort: options.initialSort ?? defaultBoardNodeCardsSort,
       },
       desiredFilter: null,
+      desiredSort: null,
     };
   }
 
@@ -129,24 +138,11 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
   }
 
   setDesiredFilter(filter: TaskLabelFilter): void {
-    const desiredFilter = canonicalTaskLabelFilter(filter);
-    const { active } = this.#snapshot;
-    if (!active.retiring && taskLabelFiltersEqual(active.filter, desiredFilter)) {
-      return;
-    }
-    if (!this.#hasUnsettledWork() && !active.retiring) {
-      this.#promote(desiredFilter);
-      return;
-    }
-    this.#snapshot = {
-      active: active.retiring ? active : { ...active, retiring: true },
-      desiredFilter,
-    };
-    this.#emit();
-    if (!active.retiring) {
-      this.#beginRetirement();
-    }
-    this.#promoteWhenSettled();
+    this.#setDesiredView(canonicalTaskLabelFilter(filter), this.#latestDesiredSort());
+  }
+
+  setDesiredSort(sort: BoardNodeCardsSort): void {
+    this.#setDesiredView(this.#latestDesiredFilter(), sort);
   }
 
   admitBoardTransport(
@@ -234,22 +230,56 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
   }
 
   #promoteWhenSettled(): void {
-    const desiredFilter = this.#snapshot.desiredFilter;
-    if (!this.#snapshot.active.retiring || desiredFilter === null || this.#hasUnsettledWork()) {
+    if (!this.#snapshot.active.retiring || this.#hasUnsettledWork()) {
       return;
     }
-    this.#promote(desiredFilter);
+    const desiredFilter = this.#snapshot.desiredFilter ?? this.#snapshot.active.filter;
+    const desiredSort = this.#snapshot.desiredSort ?? this.#snapshot.active.sort;
+    this.#promote(desiredFilter, desiredSort);
   }
 
-  #promote(filter: CanonicalTaskLabelFilter): void {
+  #setDesiredView(filter: CanonicalTaskLabelFilter, sort: BoardNodeCardsSort): void {
+    const { active } = this.#snapshot;
+    const filterChanged = !taskLabelFiltersEqual(active.filter, filter);
+    const sortChanged = !boardNodeCardsSortEqual(active.sort, sort);
+    if (!active.retiring && !this.#hasUnsettledWork() && !filterChanged && !sortChanged) {
+      return;
+    }
+    if (!active.retiring && !this.#hasUnsettledWork()) {
+      this.#promote(filter, sort);
+      return;
+    }
+    this.#snapshot = {
+      active: active.retiring ? active : { ...active, retiring: true },
+      desiredFilter: filterChanged ? filter : null,
+      desiredSort: sortChanged ? sort : null,
+    };
+    this.#emit();
+    if (!active.retiring) {
+      this.#beginRetirement();
+    }
+    this.#promoteWhenSettled();
+  }
+
+  #latestDesiredFilter(): CanonicalTaskLabelFilter {
+    return this.#snapshot.desiredFilter ?? this.#snapshot.active.filter;
+  }
+
+  #latestDesiredSort(): BoardNodeCardsSort {
+    return this.#snapshot.desiredSort ?? this.#snapshot.active.sort;
+  }
+
+  #promote(filter: CanonicalTaskLabelFilter, sort: BoardNodeCardsSort): void {
     const active: BoardFilterGeneration = {
       generation: this.#snapshot.active.generation + 1,
       filter,
       retiring: false,
+      sort,
     };
     this.#snapshot = {
       active,
       desiredFilter: null,
+      desiredSort: null,
     };
     this.#emit();
     this.#onPromoted?.(active);
@@ -260,6 +290,10 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
       listener();
     }
   }
+}
+
+function boardNodeCardsSortEqual(left: BoardNodeCardsSort, right: BoardNodeCardsSort): boolean {
+  return left.field === right.field && left.direction === right.direction;
 }
 
 class OperationLeaseRegistry<T> {

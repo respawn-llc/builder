@@ -49,6 +49,7 @@ export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
 export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
+export { selectOrderedProjectLabels } from "./orderedProjectLabels";
 export {
   createProjectLabelEffects,
   type LabelMembershipRefreshEffect,

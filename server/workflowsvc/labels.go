@@ -85,6 +85,45 @@ func (s *Service) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.
 	return response, nil
 }
 
+func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelReorderResponse, error) {
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectLabelReorderResponse{}, err
+	}
+	orderedIDs := make([]label.ID, 0, len(req.LabelIDs))
+	for _, rawID := range req.LabelIDs {
+		id, err := label.ParseID(rawID)
+		if err != nil {
+			return serverapi.WorkflowProjectLabelReorderResponse{}, err
+		}
+		orderedIDs = append(orderedIDs, id)
+	}
+	result, err := s.store.ReorderProjectLabels(ctx, req.ProjectID, orderedIDs)
+	if err != nil {
+		return serverapi.WorkflowProjectLabelReorderResponse{}, workflowLabelError(err, workflowLabelErrorScope{
+			projectID: &req.ProjectID,
+		})
+	}
+	labels := make([]serverapi.WorkflowProjectLabel, 0, len(result.Labels))
+	for _, record := range result.Labels {
+		labels = append(labels, workflowProjectLabel(record))
+	}
+	response := serverapi.WorkflowProjectLabelReorderResponse{
+		Catalog: serverapi.WorkflowProjectLabelCatalog{
+			ProjectID: req.ProjectID,
+			Labels:    labels,
+		},
+	}
+	if result.Outcome == workflowstore.ProjectLabelReorderApplied {
+		s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
+			ProjectID:       &req.ProjectID,
+			Resource:        serverapi.WorkflowProjectEventResourceLabelCatalog,
+			Action:          serverapi.WorkflowProjectEventActionReordered,
+			PrimaryEntityID: req.ProjectID,
+		})
+	}
+	return response, nil
+}
+
 func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsGetRequest) (serverapi.WorkflowTaskLabelsGetResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskLabelsGetResponse{}, err
@@ -181,6 +220,17 @@ func workflowLabelError(err error, scope workflowLabelErrorScope) error {
 			Reason:    serverapi.WorkflowLabelErrorReasonLabelNotFound,
 			ProjectID: &projectID,
 			LabelID:   &labelID,
+		}
+	}
+	var orderErr workflowstore.ProjectLabelOrderError
+	if errors.As(err, &orderErr) {
+		projectID := orderErr.ProjectID
+		field := "label_ids"
+		return &serverapi.WorkflowLabelError{
+			Reason:    serverapi.WorkflowLabelErrorReasonInvalidMutation,
+			ProjectID: &projectID,
+			LabelID:   orderErr.LabelID,
+			Field:     &field,
 		}
 	}
 	var taskNotFound workflowstore.TaskLabelTaskNotFoundError

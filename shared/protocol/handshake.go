@@ -67,6 +67,7 @@ const (
 	MethodWorkflowProjectLabelList                      = "workflow.project.label.list"
 	MethodWorkflowProjectLabelRename                    = "workflow.project.label.rename"
 	MethodWorkflowProjectLabelDelete                    = "workflow.project.label.delete"
+	MethodWorkflowProjectLabelReorder                   = "workflow.project.label.reorder"
 	MethodWorkflowTaskLabelsGet                         = "workflow.task.labels.get"
 	MethodWorkflowTaskLabelsUpdate                      = "workflow.task.labels.update"
 	MethodWorkflowTaskCreate                            = "workflow.task.create"
@@ -843,6 +844,7 @@ const (
 	WorkflowProjectEventResourceWorkflowLink WorkflowProjectEventResource = "workflow_link"
 	WorkflowProjectEventResourceTask         WorkflowProjectEventResource = "task"
 	WorkflowProjectEventResourceLabel        WorkflowProjectEventResource = "label"
+	WorkflowProjectEventResourceLabelCatalog WorkflowProjectEventResource = "label_catalog"
 )
 
 type WorkflowProjectEventAction string
@@ -880,6 +882,7 @@ const (
 	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
 	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
+	WorkflowProjectEventActionReordered              WorkflowProjectEventAction = "reordered"
 )
 
 type WorkflowProjectEvent struct {

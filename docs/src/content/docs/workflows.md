@@ -286,9 +286,13 @@ Task Activity is an infinite-scroll stream of durable comments and retained Sess
 
 A project owns a shared catalog of up to 100 reusable labels across its linked workflows. You can create and rename labels from the label chooser; deleting a label removes it from every task in the project.
 
+Desktop owns the manual Project Label order. Every assigned Label sequence, including board cards and task detail, follows that order, and `kent task label list` prints it. CLI catalog commands create, rename, delete, and list Labels but do not reorder the catalog.
+
 Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
 
 On the board, a named Label row cycles neutral → included → excluded. An included condition requires the Label; an excluded condition requires its absence. `--label-match any` matches when any included or excluded condition is true, while `all` requires every condition. `No labels` remains a binary filter for tasks without assignments and is mutually exclusive with named conditions. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
+
+Board sorting supports Updated, Created, Labels, Title, and Short ID in ascending or descending order, with Updated Desc as the default. Labels compares each task's complete assigned sequence in Project Label order; unlabeled tasks follow labeled tasks in both directions. Label filtering is applied before sorting and does not change the selected sort. Sorting remains server-paginated through infinite scroll.
 
 The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 

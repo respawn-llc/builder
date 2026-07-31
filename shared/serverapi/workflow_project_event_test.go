@@ -61,6 +61,49 @@ func TestWorkflowProjectEventValidatesTypedResourceActionAndScope(t *testing.T) 
 			valid: true,
 		},
 		{
+			name: "project label catalog reordered event",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				Resource:         WorkflowProjectEventResourceLabelCatalog,
+				Action:           WorkflowProjectEventActionReordered,
+				PrimaryEntityID:  "project-1",
+				OccurredAtUnixMs: 1,
+			},
+			valid: true,
+		},
+		{
+			name: "singular label rejects catalog reorder action",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				Resource:         WorkflowProjectEventResourceLabel,
+				Action:           WorkflowProjectEventActionReordered,
+				PrimaryEntityID:  "project-1",
+				OccurredAtUnixMs: 1,
+			},
+		},
+		{
+			name: "catalog reorder primary identity must be project",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				Resource:         WorkflowProjectEventResourceLabelCatalog,
+				Action:           WorkflowProjectEventActionReordered,
+				PrimaryEntityID:  "other-project",
+				OccurredAtUnixMs: 1,
+			},
+		},
+		{
+			name: "catalog reorder forbids workflow and related identities",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				WorkflowID:       eventID("workflow-1"),
+				Resource:         WorkflowProjectEventResourceLabelCatalog,
+				Action:           WorkflowProjectEventActionReordered,
+				PrimaryEntityID:  "project-1",
+				RelatedIDs:       []string{"label-1"},
+				OccurredAtUnixMs: 1,
+			},
+		},
+		{
 			name: "action forbidden for resource",
 			event: WorkflowProjectEvent{
 				ProjectID:        eventID("project-1"),

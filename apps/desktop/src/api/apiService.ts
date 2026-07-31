@@ -98,6 +98,7 @@ export interface ApiService {
   createProjectLabel(projectID: string, name: string): Promise<ProjectLabel>;
   renameProjectLabel(projectID: string, labelID: string, name: string): Promise<ProjectLabel>;
   deleteProjectLabel(projectID: string, labelID: string): Promise<string>;
+  reorderProjectLabels(projectID: string, labelIDs: readonly string[]): Promise<ProjectLabelCatalog>;
   getTaskLabels(taskID: string): Promise<TaskLabelAssignment>;
   updateTaskLabels(
     taskID: string,

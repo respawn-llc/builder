@@ -84,6 +84,15 @@ describe("ApiClient workflow subscriptions", () => {
     client.subscribeProject("project-1", eventCollector(events));
     transport.emit("workflow.project", {
       event: {
+        action: "reordered",
+        occurred_at_unix_ms: 1,
+        primary_entity_id: "project-1",
+        project_id: "project-1",
+        resource: "label_catalog",
+      },
+    });
+    transport.emit("workflow.project", {
+      event: {
         action: "renamed",
         occurred_at_unix_ms: 2,
         primary_entity_id: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
@@ -103,6 +112,15 @@ describe("ApiClient workflow subscriptions", () => {
     });
 
     expect(events).toEqual([
+      {
+        action: "reordered",
+        occurredAtUnixMs: 1,
+        primaryEntityID: "project-1",
+        projectID: "project-1",
+        relatedIDs: [],
+        resource: "label_catalog",
+        workflowID: null,
+      },
       {
         action: "renamed",
         occurredAtUnixMs: 2,

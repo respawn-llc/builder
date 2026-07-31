@@ -22,7 +22,7 @@ export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
   const { queriesEnabled, requestAdapter, snapshot } = useBoardFilterGeneration();
   const { active } = snapshot;
-  const queryKey = queryKeys.board(projectID, workflowID, active.filter);
+  const queryKey = queryKeys.board(projectID, workflowID, active.filter, active.sort);
   const query = useQuery({
     queryKey,
     queryFn: async ({ signal }) =>
@@ -60,7 +60,10 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
   const { api } = useAppServices();
   const { queriesEnabled, requestAdapter, snapshot } = useBoardFilterGeneration();
   const { active } = snapshot;
-  const queryKey = queryKeys.boardNodeCards(projectID, workflowID, nodeID, active.filter);
+  const queryKey = queryKeys.boardNodeCards(projectID, workflowID, nodeID, {
+    labelFilter: active.filter,
+    sort: active.sort,
+  });
   const query = useInfiniteQuery<
     BoardNodeCardsPage,
     Error,
@@ -81,6 +84,7 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
             workflowID,
             nodeID,
             labelFilter: active.filter,
+            sort: active.sort,
             pageToken: pageParam,
           }),
       }),

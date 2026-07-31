@@ -63,7 +63,8 @@
   them from loaded relationship rows.
 - Selecting the dependency-progress chip opens Task Detail focused on
   Dependencies.
-- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's newest page without changing its expanded state.
+- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's first page for the selected sort without changing its expanded state.
+- Board sorting applies independently within each column and never moves a Task between columns.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
@@ -96,9 +97,21 @@
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
 
-## Labels
+## Labels And Board Sorting
 
-- Boards have one transparent label-filter row. It provides no status, attention, column, or sort filter.
+- Boards have one transparent filter-and-sort row. It provides `Labels` and `Sort` chips and no status, attention, or column filter.
+- `Sort` uses an icon followed by text and a popover styled like the Label chooser.
+- The Sort popover keeps one selected field from `Updated`, `Created`, `Labels`, `Title`, and `Short ID`. An `Asc`/`Desc` segmented selector controls its direction.
+- Sort changes apply immediately while the popover remains open. Escape, the trigger, and outside interaction close it.
+- The default is `Updated Desc`. The chip is neutral and says `Sort` at that default.
+- Any other field or direction makes the chip primary and changes its animated text to `Sort · Field · Asc` or `Sort · Field · Desc`.
+- Changing the field retains the selected direction.
+- Board sort is not persisted. Opening another Workflow board resets it to `Updated Desc`.
+- `Updated` and `Created` use chronological order. `Title` uses case-insensitive alphabetical order. `Short ID` uses its Project-local numeric sequence. `Labels` uses the shared Label-sort semantics in the Workflow orchestration specification.
+- Task Short ID is the final tie-breaker in the selected direction when another field is primary.
+- Label filtering and board sorting are independent and never change each other's state.
+- Sort refresh never clears the rendered board. Existing cards remain visible until a background refresh replaces them with the authoritative order.
+- If a replacement refresh fails, the selected sort and stale cards remain visible and the board surfaces an error. A failed pagination request surfaces its error at the affected infinite-scroll boundary.
 - The trigger says `Labels` with no filter, `Labels · N` with named Label conditions, and `No labels` for the unlabeled filter. N counts included and excluded Label conditions. A clear action appears only for an active filter.
 - One Label filter and its OR/AND mode apply to every board in a Project and persist for that Project in the desktop installation. They are not shared with other clients. OR is the default.
 - Board Label filtering uses the shared Label-expression semantics in the Workflow orchestration specification.
@@ -106,16 +119,29 @@
 - Filter changes apply immediately through server filtering while the chooser remains open. There is no Apply step. Existing cards remain visible without a replacement loading state until new content arrives. Active filters change each column count to the matching Task count.
 - Deleting a participating Label removes its included or excluded condition from the saved filter. Removing the last named Label condition clears the named restriction; deleting another Label does not change an active `No labels` filter.
 - One chooser manages filtering, Task Label assignment, and Label creation, renaming, and deletion. There is no separate Project Label page.
-- Search is case-insensitive substring matching with case-insensitive alphabetical results. When no exact case-insensitive name exists, offer `Create “…”`; creation immediately selects the Label for the invoking use.
+- Search is case-insensitive substring matching and preserves the Project Label order among matches. When no exact case-insensitive name exists, offer `Create “…”`; creation immediately selects the Label for the invoking use.
 - A Project permits at most 100 Labels. At the limit, search and selection remain available and creation explains its unavailability; deletion restores creation.
 - The chooser shows at most 10 scrolling result rows, keeps search and context controls visible, remains open through selection and management actions, and discards an uncommitted rename on close.
+- In the board-filter chooser, every real Label row shows a muted six-dot reorder handle before the Label chip while search is empty. `No labels` has no reorder handle.
+- The reorder handle is always visible when available. Only the handle starts reordering, and it supports pointer and keyboard interaction.
+- While search contains text, the chooser hides the reorder handles without an additional hint.
+- Dragging lifts the complete row, opens an insertion gap, moves neighboring rows, and auto-scrolls near the result-list edges. Reduced motion preserves the same positions without movement animation.
+- Pointer auto-scroll runs only while a drag is active inside a top or bottom edge zone of the Label result list. Its speed is bounded, it does not scroll past the list bounds, and it stops when the pointer leaves the edge zone or list.
+- Drop, drag cancellation, chooser closure, and unmount stop auto-scroll immediately. Cancellation restores the unchanged order.
+- Keyboard reordering keeps the projected destination visible without starting a pointer auto-scroll loop.
+- With reduced motion enabled, the lifted row and insertion gap remain visible and the final order is identical, but row movement and drop transitions occur without animation.
+- Reordering updates the chooser immediately and saves one atomic Project order. The desktop sends reorder saves one at a time while preserving the latest pending order.
+- A Label rename or authoritative refresh with unchanged catalog membership updates the Label data without abandoning the latest pending order. The pending reorder remains scheduled.
+- Label creation, Label deletion, or an authoritative refresh with changed membership supersedes an unsent pending order because it is no longer a complete catalog permutation.
+- A failed reorder save shows a transient error toast without a Retry action. It restores the prior ID order with current Label data only while that request still owns the optimistic state.
+- A stale reorder success or failure never replaces newer Label data, restores an older snapshot, or abandons a still-valid pending order. The desktop refreshes the authoritative catalog after the serialized reorder work drains.
 - In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser enters the included state.
 - Rename edits in place and can be committed or cancelled; validation failures remain inline. Deleting a Label requires confirmation and removes it from all Tasks.
-- Assignment omits OR/AND and `No labels` and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. Labels are neutral chips, ordered case-insensitively in the chooser, Task Detail, and board cards. Renaming can reposition them.
+- Assignment omits OR/AND, `No labels`, and Label reordering and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. Labels are neutral chips ordered by the Project Label order in the chooser, Task Detail, and board cards.
 - Board cards show fitting complete Labels in their footer and replace the last fitting position with `+N` when needed. Task Detail places Labels directly after Task ID; the entire Label value opens the chooser.
 - A board card lays out its dependency-progress chip before Label chips. Labels
   use only the remaining width and retain their existing `+N` behavior.
-- Labels can change in every Task state. The interface updates immediately, then adopts the server result; failures restore the prior state and show a persistent Retry error.
+- Labels can change in every Task state. Creation, rename, deletion, and assignment update immediately, then adopt the server result; failures restore the prior state and show a persistent Retry error. Catalog reorder uses its dedicated transient failure behavior.
 
 ## Tasks
 

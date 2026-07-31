@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { TaskLabelFilter } from "@/api";
+import { defaultBoardNodeCardsSort, type BoardNodeCardsSort, type TaskLabelFilter } from "@/api";
 import { useStableCallback } from "@/ui";
 import { createBoardFilterGenerationController } from "./BoardFilterGenerationController";
 import { createBoardGenerationRequestAdapter } from "./BoardGenerationRequestAdapter";
@@ -11,13 +11,17 @@ import { BoardFilterGenerationContext } from "./BoardFilterGenerationRuntime";
 export function BoardFilterGenerationProvider({
   children,
   initialFilter,
+  initialSort = defaultBoardNodeCardsSort,
   onBackgroundError,
   desiredFilter = initialFilter,
+  desiredSort = initialSort,
   queriesEnabled = true,
 }: Readonly<{
   children: ReactNode;
   desiredFilter?: TaskLabelFilter;
+  desiredSort?: BoardNodeCardsSort;
   initialFilter: TaskLabelFilter;
+  initialSort?: BoardNodeCardsSort;
   onBackgroundError?: ((error: unknown) => void) | undefined;
   queriesEnabled?: boolean;
 }>) {
@@ -28,6 +32,7 @@ export function BoardFilterGenerationProvider({
   const [queryRegistry] = useState(() => createBoardGenerationQueryRegistry(queryClient));
   const [controller] = useState(() =>
     createBoardFilterGenerationController(initialFilter, {
+      initialSort,
       onBackgroundError: reportBackgroundError,
       onPromoted: (generation) => {
         queryRegistry.releaseGeneration(generation.generation - 1);
@@ -47,6 +52,9 @@ export function BoardFilterGenerationProvider({
   useLayoutEffect(() => {
     controller.setDesiredFilter(desiredFilter);
   }, [controller, desiredFilter]);
+  useLayoutEffect(() => {
+    controller.setDesiredSort(desiredSort);
+  }, [controller, desiredSort]);
   const value = useMemo(
     () => ({
       controller,

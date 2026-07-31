@@ -4,7 +4,13 @@ import { ContractError } from "./errors";
 import { workflowIDSchema } from "./schemas/common";
 import type { RpcEventHandler } from "./transport";
 
-export const workflowProjectEventResources = ["workflow", "workflow_link", "task", "label"] as const;
+export const workflowProjectEventResources = [
+  "workflow",
+  "workflow_link",
+  "task",
+  "label",
+  "label_catalog",
+] as const;
 export type WorkflowProjectEventResource = (typeof workflowProjectEventResources)[number];
 
 export const workflowProjectEventActions = [
@@ -39,6 +45,7 @@ export const workflowProjectEventActions = [
   "question_answered",
   "labels_changed",
   "dependencies_changed",
+  "reordered",
 ] as const;
 export type WorkflowProjectEventAction = (typeof workflowProjectEventActions)[number];
 
@@ -68,6 +75,7 @@ const allowedActions: Readonly<
   Record<WorkflowProjectEventResource, ReadonlySet<WorkflowProjectEventAction>>
 > = {
   label: new Set(["created", "renamed", "deleted"]),
+  label_catalog: new Set(["reordered"]),
   task: new Set([
     "created",
     "updated",
@@ -104,6 +112,16 @@ const allowedActions: Readonly<
   workflow_link: new Set(["linked", "default_changed", "unlinked"]),
 };
 
+type WorkflowProjectEventWire = Readonly<{
+  action: WorkflowProjectEventAction;
+  occurred_at_unix_ms: number;
+  primary_entity_id: string;
+  project_id?: string | undefined;
+  related_ids: readonly string[];
+  resource: WorkflowProjectEventResource;
+  workflow_id?: string | undefined;
+}>;
+
 const workflowProjectEventWireSchema = z
   .object({
     action: workflowProjectEventActionSchema,
@@ -118,41 +136,76 @@ const workflowProjectEventWireSchema = z
     if (!allowedActions[event.resource].has(event.action)) {
       ctx.addIssue({ code: "custom", message: "action is not valid for resource", path: ["action"] });
     }
-    if (event.resource === "workflow") {
-      if (event.workflow_id === undefined) {
-        ctx.addIssue({ code: "custom", message: "workflow_id is required", path: ["workflow_id"] });
-      }
-    } else if (event.resource === "label") {
-      if (event.project_id === undefined) {
-        ctx.addIssue({ code: "custom", message: "project_id is required", path: ["project_id"] });
-      }
-      if (event.workflow_id !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "workflow_id must be absent for label events",
-          path: ["workflow_id"],
-        });
-      }
-    } else {
-      if (event.project_id === undefined) {
-        ctx.addIssue({ code: "custom", message: "project_id is required", path: ["project_id"] });
-      }
-      if (event.workflow_id === undefined) {
-        ctx.addIssue({ code: "custom", message: "workflow_id is required", path: ["workflow_id"] });
-      }
-    }
-    const ids = new Set([event.primary_entity_id]);
-    for (const [index, relatedID] of event.related_ids.entries()) {
-      if (ids.has(relatedID)) {
-        ctx.addIssue({
-          code: "custom",
-          message: "related_ids must be unique and must not repeat primary_entity_id",
-          path: ["related_ids", index],
-        });
-      }
-      ids.add(relatedID);
-    }
+    validateWorkflowProjectEventScope(event, ctx);
+    validateWorkflowProjectEventRelatedIDs(event, ctx);
   });
+
+function validateWorkflowProjectEventScope(event: WorkflowProjectEventWire, ctx: z.RefinementCtx): void {
+  if (event.resource === "workflow") {
+    requireWorkflowID(event, ctx);
+    return;
+  }
+  if (event.resource === "label" || event.resource === "label_catalog") {
+    validateProjectLabelEventScope(event, ctx);
+    return;
+  }
+  requireProjectAndWorkflowID(event, ctx);
+}
+
+function validateProjectLabelEventScope(event: WorkflowProjectEventWire, ctx: z.RefinementCtx): void {
+  requireProjectID(event, ctx);
+  if (event.workflow_id !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      message: "workflow_id must be absent for label events",
+      path: ["workflow_id"],
+    });
+  }
+  if (
+    event.resource === "label_catalog" &&
+    (event.primary_entity_id !== event.project_id || event.related_ids.length !== 0)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "label catalog events identify only their Project",
+      path: ["primary_entity_id"],
+    });
+  }
+}
+
+function requireProjectAndWorkflowID(event: WorkflowProjectEventWire, ctx: z.RefinementCtx): void {
+  requireProjectID(event, ctx);
+  requireWorkflowID(event, ctx);
+}
+
+function requireProjectID(event: WorkflowProjectEventWire, ctx: z.RefinementCtx): void {
+  if (event.project_id === undefined) {
+    ctx.addIssue({ code: "custom", message: "project_id is required", path: ["project_id"] });
+  }
+}
+
+function requireWorkflowID(event: WorkflowProjectEventWire, ctx: z.RefinementCtx): void {
+  if (event.workflow_id === undefined) {
+    ctx.addIssue({ code: "custom", message: "workflow_id is required", path: ["workflow_id"] });
+  }
+}
+
+function validateWorkflowProjectEventRelatedIDs(
+  event: WorkflowProjectEventWire,
+  ctx: z.RefinementCtx,
+): void {
+  const ids = new Set([event.primary_entity_id]);
+  for (const [index, relatedID] of event.related_ids.entries()) {
+    if (ids.has(relatedID)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "related_ids must be unique and must not repeat primary_entity_id",
+        path: ["related_ids", index],
+      });
+    }
+    ids.add(relatedID);
+  }
+}
 
 const workflowProjectEventParamsSchema = z
   .object({

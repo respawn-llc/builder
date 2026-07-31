@@ -20,6 +20,9 @@ importers:
       '@app/native-bridge':
         specifier: workspace:*
         version: link:packages/native-bridge
+      '@app/ui-kit':
+        specifier: workspace:*
+        version: link:packages/ui-kit
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -217,6 +220,43 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      typescript7:
+        specifier: npm:typescript@7.0.2
+        version: typescript@7.0.2
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.1.1)(jsdom@29.1.1(@noble/hashes@1.8.0))(msw@2.14.6(@types/node@26.1.1)(typescript@6.0.3))(vite@8.1.4(@types/node@26.1.1)(jiti@2.7.0))
+
+  desktop/packages/ui-kit:
+    dependencies:
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@dnd-kit/sortable':
+        specifier: ^10.0.0
+        version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+    devDependencies:
+      '@testing-library/jest-dom':
+        specifier: ^6.9.1
+        version: 6.9.1
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/user-event':
+        specifier: ^14.6.1
+        version: 14.6.1(@testing-library/dom@10.4.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      jsdom:
+        specifier: ^29.1.1
+        version: 29.1.1(@noble/hashes@1.8.0)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

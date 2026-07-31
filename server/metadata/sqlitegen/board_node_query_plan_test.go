@@ -1,18 +1,22 @@
 package sqlitegen
 
 import (
+	"database/sql"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
-func TestListBoardNodeTasksUsesIndexedOrderingInBothDirections(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+func TestUpdatedBoardQueriesUseTaskSequenceUpdatedIndexWithoutTemporarySort(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE tasks (
 	id TEXT PRIMARY KEY,
-	project_id TEXT NOT NULL,
 	project_workflow_link_id TEXT NOT NULL,
-	workflow_id TEXT NOT NULL,
 	workflow_revision_seen INTEGER NOT NULL,
 	task_seq INTEGER NOT NULL,
 	short_id TEXT NOT NULL,
@@ -30,23 +34,16 @@ CREATE TABLE tasks (
 	updated_at_unix_ms INTEGER NOT NULL,
 	metadata_json TEXT NOT NULL
 );
-CREATE INDEX tasks_project_workflow_updated_idx
-	ON tasks(project_id, workflow_id, updated_at_unix_ms DESC, id DESC);
-CREATE VIEW task_records AS SELECT * FROM tasks;
+CREATE INDEX tasks_project_workflow_link_updated_idx
+	ON tasks(project_workflow_link_id, updated_at_unix_ms DESC, task_seq DESC);
+CREATE TABLE project_workflow_links (
+	id TEXT PRIMARY KEY,
+	project_id TEXT NOT NULL,
+	workflow_id TEXT NOT NULL
+);
 CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
 	node_id TEXT NOT NULL
-);
-CREATE TABLE task_dependencies (
-	blocker_task_id TEXT NOT NULL,
-	blocked_task_id TEXT NOT NULL,
-	PRIMARY KEY (blocker_task_id, blocked_task_id)
-);
-CREATE INDEX task_dependencies_reverse_idx
-	ON task_dependencies(blocked_task_id, blocker_task_id);
-CREATE TABLE workflow_task_status_records (
-	task_id TEXT PRIMARY KEY,
-	is_done INTEGER NOT NULL
 );
 CREATE TABLE task_label_assignments (
 	task_id TEXT NOT NULL,
@@ -54,64 +51,94 @@ CREATE TABLE task_label_assignments (
 	PRIMARY KEY (task_id, label_id)
 );
 CREATE INDEX task_label_assignments_label_task_idx
-	ON task_label_assignments(label_id, task_id);`); err != nil {
+	ON task_label_assignments(label_id, task_id);
+CREATE TABLE project_labels (
+	id TEXT PRIMARY KEY,
+	project_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	ordinal INTEGER NOT NULL
+);`); err != nil {
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
-	for _, direction := range []string{"older", "newer"} {
-		t.Run(direction, func(t *testing.T) {
-			requireQueryUsesIndexWithoutSorter(
+	tests := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{
+			name:  "updated desc first",
+			query: listBoardNodeTasksUpdatedDesc,
+			args:  updatedBoardQueryArgs(nil, "older", nil),
+		},
+		{
+			name:  "updated desc next",
+			query: listBoardNodeTasksUpdatedDesc,
+			args:  updatedBoardQueryArgs(int64(2), "older", int64(100)),
+		},
+		{
+			name:  "updated desc previous",
+			query: listBoardNodeTasksUpdatedDescPrevious,
+			args:  updatedPreviousBoardQueryArgs(int64(2), int64(100)),
+		},
+		{
+			name:  "updated asc first",
+			query: listBoardNodeTasksUpdatedAsc,
+			args:  updatedBoardQueryArgs(nil, "older", nil),
+		},
+		{
+			name:  "updated asc next",
+			query: listBoardNodeTasksUpdatedAsc,
+			args:  updatedBoardQueryArgs(int64(2), "older", int64(100)),
+		},
+		{
+			name:  "updated asc previous",
+			query: listBoardNodeTasksUpdatedAscPrevious,
+			args:  updatedPreviousBoardQueryArgs(int64(2), int64(100)),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requireQueryUsesIndexWithoutSort(
 				t,
 				db,
-				listBoardNodeTasks,
-				"tasks_project_workflow_updated_idx",
-				"project-1",
-				"workflow-1",
-				"none",
-				"",
-				"[]",
-				"[]",
-				"node-1",
-				"node-done",
-				direction,
-				int64(100),
-				"task-anchor",
-				int64(26),
+				test.query,
+				"tasks_project_workflow_link_updated_idx",
+				test.args...,
 			)
 		})
 	}
-	for _, query := range []struct {
-		name string
-		sql  string
-		args []any
-	}{
-		{
-			name: "column counts",
-			sql:  listBoardColumnTaskCounts,
-			args: []any{"none", "", "[]", "[]", "project-1", "workflow-1", "node-done"},
-		},
-		{
-			name: "node cards",
-			sql:  listBoardNodeTasks,
-			args: []any{
-				"project-1",
-				"workflow-1",
-				"none",
-				"",
-				"[]",
-				"[]",
-				"node-1",
-				"node-done",
-				"older",
-				int64(100),
-				"task-anchor",
-				int64(26),
-			},
-		},
-	} {
-		t.Run(query.name+" label indexes", func(t *testing.T) {
-			requireQueryUsesIndex(t, db, query.sql, "sqlite_autoindex_task_label_assignments_1", query.args...)
-			requireQueryUsesIndex(t, db, query.sql, "task_label_assignments_label_task_idx", query.args...)
-		})
+}
+
+func updatedBoardQueryArgs(cursorTaskSeq any, direction string, cursorUpdatedAt any) []any {
+	return []any{
+		"project-1",
+		"workflow-1",
+		"project-workflow-link-1",
+		"none",
+		"",
+		"[]",
+		"[]",
+		"node-1",
+		cursorTaskSeq,
+		direction,
+		cursorUpdatedAt,
+		int64(26),
+	}
+}
+
+func updatedPreviousBoardQueryArgs(cursorTaskSeq any, cursorUpdatedAt any) []any {
+	return []any{
+		"project-1",
+		"workflow-1",
+		"project-workflow-link-1",
+		"none",
+		"",
+		"[]",
+		"[]",
+		"node-1",
+		cursorTaskSeq,
+		cursorUpdatedAt,
+		int64(26),
 	}
 }

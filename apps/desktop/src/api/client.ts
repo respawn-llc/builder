@@ -261,6 +261,10 @@ export class ApiClient implements ApiService {
     return workflowLabels.deleteProjectLabel(this.#transport, projectID, labelID);
   }
 
+  async reorderProjectLabels(projectID: string, labelIDs: readonly string[]): Promise<ProjectLabelCatalog> {
+    return workflowLabels.reorderProjectLabels(this.#transport, projectID, labelIDs);
+  }
+
   async getTaskLabels(taskID: string): Promise<TaskLabelAssignment> {
     return workflowLabels.getTaskLabels(this.#transport, taskID);
   }

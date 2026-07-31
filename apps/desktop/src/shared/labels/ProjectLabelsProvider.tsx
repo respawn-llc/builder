@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
-import { useStableCallback } from "@/ui";
+import { showStatusToast, useStableCallback } from "@/ui";
 import { createProjectLabelEffects, type LabelMembershipRefreshEffect } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
 import { projectCatalogAuthorityRegistryFor } from "./projectCatalogAuthorityRegistry";
@@ -22,15 +23,25 @@ export function ProjectLabelsProvider({
   subscribeToProject?: boolean | undefined;
   projectID: string;
 }>) {
+  const { t } = useTranslation();
   const { api, logger } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
   const authorityLease = useMemo(
     () =>
-      projectCatalogAuthorityRegistryFor(queryClient).prepare(projectID, async () =>
-        api.listProjectLabels(projectID),
+      projectCatalogAuthorityRegistryFor(queryClient).prepare(
+        projectID,
+        async () => api.listProjectLabels(projectID),
+        async (labelIDs) => api.reorderProjectLabels(projectID, labelIDs),
+        () => {
+          showStatusToast({
+            id: `project-label-reorder-failure-${projectID}`,
+            tone: "danger",
+            title: t("labels.reorderFailed"),
+          });
+        },
       ),
-    [api, projectID, queryClient],
+    [api, projectID, queryClient, t],
   );
   const authority = authorityLease.authority;
   const catalog = useQuery({

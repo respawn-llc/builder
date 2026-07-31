@@ -9,7 +9,12 @@ import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
+import {
+  LabelChooser,
+  ProjectLabelsProvider,
+  selectOrderedProjectLabels,
+  useProjectLabelCatalog,
+} from "@/shared/labels";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
 import { Badge, Button, Dialog, FieldShell, SelectField, TextArea, TextInput } from "@/ui";
@@ -307,8 +312,7 @@ function NewTaskLabels({
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const inputID = useId();
-  const selected = new Set(selectedLabelIDs);
-  const labels = catalog.data?.labels.filter((label) => selected.has(label.id)) ?? [];
+  const labels = selectOrderedProjectLabels(catalog.data?.labels, selectedLabelIDs);
   return (
     <FieldShell
       errorId={`${inputID}-error`}

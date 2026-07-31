@@ -5,6 +5,7 @@ import {
   projectLabelCatalogSchema,
   projectLabelDeleteSchema,
   projectLabelMutationSchema,
+  projectLabelReorderSchema,
   taskLabelAssignmentSchema,
 } from "./schemas/workflowLabels";
 import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflowBoard";
@@ -89,6 +90,21 @@ export async function deleteProjectLabel(
     await transport.call("workflow.project.label.delete", {
       project_id: projectID,
       label_id: labelID,
+    }),
+  );
+}
+
+export async function reorderProjectLabels(
+  transport: RpcTransport,
+  projectID: string,
+  labelIDs: readonly string[],
+): Promise<ProjectLabelCatalog> {
+  return parse(
+    "workflow.project.label.reorder",
+    projectLabelReorderSchema,
+    await transport.call("workflow.project.label.reorder", {
+      project_id: projectID,
+      label_ids: labelIDs,
     }),
   );
 }

@@ -40,6 +40,12 @@ func TestWorkflowLabelRoutesUseExistingWorkflowBoundary(t *testing.T) {
 			auth:         AuthServer,
 		},
 		{
+			method:       protocol.MethodWorkflowProjectLabelReorder,
+			requestType:  reflect.TypeOf(serverapi.WorkflowProjectLabelReorderRequest{}),
+			responseType: reflect.TypeOf(serverapi.WorkflowProjectLabelReorderResponse{}),
+			auth:         AuthServer,
+		},
+		{
 			method:       protocol.MethodWorkflowTaskLabelsGet,
 			requestType:  reflect.TypeOf(serverapi.WorkflowTaskLabelsGetRequest{}),
 			responseType: reflect.TypeOf(serverapi.WorkflowTaskLabelsGetResponse{}),

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"core/shared/apicontract"
@@ -98,5 +99,39 @@ func TestTaskLabelListNameUsesUnicodeFoldWithoutUUIDSelectorAmbiguity(t *testing
 				t.Fatalf("labels = %+v, want %+v", output.Catalog.Labels, test.label)
 			}
 		})
+	}
+}
+
+func TestTaskLabelListPreservesAuthoritativeCatalogOrder(t *testing.T) {
+	labels := []serverapi.WorkflowProjectLabel{
+		{ID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Name: "Zulu"},
+		{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Name: "alpha"},
+	}
+	remote := &taskLabelCommandRemote{
+		catalogResponse: serverapi.WorkflowProjectLabelCatalogResponse{
+			Catalog: serverapi.WorkflowProjectLabelCatalog{
+				ProjectID: taskLabelCommandTestProjectID,
+				Labels:    labels,
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"label", "list", "--project", taskLabelCommandTestProjectID, "--json"},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", exitCode, stderr.String())
+	}
+	var output serverapi.WorkflowProjectLabelCatalogResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode output: %v; output=%q", err, stdout.String())
+	}
+	if !reflect.DeepEqual(output.Catalog.Labels, labels) {
+		t.Fatalf("labels = %+v, want authoritative order %+v", output.Catalog.Labels, labels)
 	}
 }

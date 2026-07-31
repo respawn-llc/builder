@@ -1,0 +1,262 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { act, useState } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { VerticalReorder } from "./VerticalReorder";
+
+type ReorderItem = Readonly<{ id: string; label: string }>;
+
+const items: readonly ReorderItem[] = [
+  { id: "first", label: "First" },
+  { id: "second", label: "Second" },
+  { id: "third", label: "Third" },
+];
+
+const originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "scrollIntoView",
+);
+
+beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+    writable: true,
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  Object.defineProperty(
+    HTMLElement.prototype,
+    "scrollIntoView",
+    originalScrollIntoViewDescriptor ?? { configurable: true, value: undefined, writable: true },
+  );
+});
+
+describe("VerticalReorder", () => {
+  it("projects a complete row and commits keyboard reordering with stable item IDs", async () => {
+    const onCommit = vi.fn();
+    const user = userEvent.setup();
+    mockRowGeometry();
+
+    render(<ReorderHarness onCommit={onCommit} />);
+
+    const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
+    secondHandle.focus();
+    await user.keyboard("[Space]");
+    await user.keyboard("[ArrowDown]");
+
+    await waitFor(() => expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second"));
+
+    await user.keyboard("[Space]");
+
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith(["first", "third", "second"]);
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
+    });
+  });
+
+  it("cancels an active keyboard drag without committing or leaving drag projection behind", async () => {
+    const onCommit = vi.fn();
+    const user = userEvent.setup();
+    mockRowGeometry();
+
+    render(<ReorderHarness onCommit={onCommit} />);
+
+    const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
+    secondHandle.focus();
+    await user.keyboard("[Space]");
+    await user.keyboard("[ArrowDown]");
+    await waitFor(() => expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second"));
+    await user.keyboard("[Escape]");
+
+    await waitFor(() => {
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps keyboard projection and final IDs under reduced motion and cleans the listener", async () => {
+    const onCommit = vi.fn();
+    const user = userEvent.setup();
+    const media = {
+      addEventListener: vi.fn(),
+      matches: true,
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal("matchMedia", vi.fn(() => media));
+    mockRowGeometry();
+
+    const view = render(<ReorderHarness onCommit={onCommit} />);
+    const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
+    secondHandle.focus();
+    await user.keyboard("[Space]");
+    await user.keyboard("[ArrowDown]");
+
+    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+
+    await user.keyboard("[Space]");
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith(["first", "third", "second"]);
+    });
+
+    view.unmount();
+    expect(media.removeEventListener).toHaveBeenCalledWith("change", expect.anything());
+  });
+
+  it("uses only one shared animation frame for pointer edge scrolling", async () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextFrameID = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const frameID = ++nextFrameID;
+      callbacks.set(frameID, callback);
+      return frameID;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameID) => {
+      callbacks.delete(frameID);
+    });
+    const interval = vi.spyOn(window, "setInterval");
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        addEventListener: vi.fn(),
+        matches: true,
+        removeEventListener: vi.fn(),
+      })),
+    );
+    mockRowGeometry();
+
+    const view = render(<ReorderHarness onCommit={vi.fn()} scrollable />);
+    const scrollport = screen.getByTestId("reorder-scrollport");
+    Object.defineProperties(scrollport, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 800 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+    act(() => {
+      activatePointerDrag(handle);
+    });
+
+    expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
+    expect(interval).not.toHaveBeenCalled();
+    expect(callbacks).toHaveLength(1);
+    expect(scrollport.scrollTop).toBe(0);
+
+    const pending = firstFrame(callbacks);
+    if (pending === undefined) {
+      throw new Error("expected a shared edge-scroll frame");
+    }
+    callbacks.delete(pending[0]);
+    act(() => {
+      pending[1](16);
+    });
+
+    expect(scrollport.scrollTop).toBeGreaterThan(0);
+    expect(scrollport.scrollTop).toBeLessThanOrEqual(43.2);
+    act(() => {
+      cancelPointerDrag();
+    });
+    view.unmount();
+    expect(callbacks).toHaveLength(0);
+  });
+});
+
+function activatePointerDrag(handle: HTMLElement): void {
+  fireEvent.pointerDown(handle, { button: 0, clientX: 20, clientY: 50, isPrimary: true, pointerId: 1 });
+  fireEvent.pointerMove(document, { buttons: 1, clientX: 20, clientY: 60, isPrimary: true, pointerId: 1 });
+  fireEvent.pointerMove(document, { buttons: 1, clientX: 20, clientY: 95, isPrimary: true, pointerId: 1 });
+}
+
+function cancelPointerDrag(): void {
+  fireEvent.pointerCancel(document, { clientX: 20, clientY: 95, pointerId: 1 });
+}
+
+function ReorderHarness({
+  onCommit,
+  scrollable = false,
+}: Readonly<{
+  onCommit: (orderedIDs: readonly string[]) => void;
+  scrollable?: boolean;
+}>) {
+  const [orderedItems, setOrderedItems] = useState(items);
+  const reorder = (
+    <VerticalReorder
+      getItemID={(item) => item.id}
+      items={orderedItems}
+      onCommit={(orderedIDs) => {
+        onCommit(orderedIDs);
+        setOrderedItems((current) => move(current, orderedIDs));
+      }}
+      renderActivator={(item) => (
+        <button aria-label={`Reorder ${item.label}`} type="button">
+          {item.label}
+        </button>
+      )}
+      renderItem={(item, row) => (
+        <div data-testid={row.isOverlay ? "reorder-overlay" : `row-${item.id}`}>
+          {row.activator}
+        </div>
+      )}
+    />
+  );
+  const list = <div role="list">{reorder}</div>;
+  return scrollable ? (
+    <div data-testid="reorder-scrollport" style={{ overflowY: "auto" }}>
+      {list}
+    </div>
+  ) : (
+    list
+  );
+}
+
+function move(rows: readonly ReorderItem[], orderedIDs: readonly string[]): readonly ReorderItem[] {
+  const itemsByID = new Map(rows.map((row) => [row.id, row]));
+  return orderedIDs.flatMap((id) => {
+    const item = itemsByID.get(id);
+    return item === undefined ? [] : [item];
+  });
+}
+
+function firstFrame(
+  callbacks: ReadonlyMap<number, FrameRequestCallback>,
+): readonly [number, FrameRequestCallback] | undefined {
+  for (const entry of callbacks) {
+    return entry;
+  }
+  return undefined;
+}
+
+function mockRowGeometry(): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.dataset.testid === "reorder-scrollport") {
+      return {
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 240,
+        toJSON: () => ({}),
+        top: 0,
+        width: 240,
+        x: 0,
+        y: 0,
+      };
+    }
+    const index = items.findIndex((item) => this.textContent.trim() === item.label);
+    const top = index < 0 ? 0 : index * 40;
+    return {
+      bottom: top + 32,
+      height: 32,
+      left: 0,
+      right: 240,
+      toJSON: () => ({}),
+      top,
+      width: 240,
+      x: 0,
+      y: top,
+    };
+  });
+}

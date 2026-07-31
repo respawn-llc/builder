@@ -7,6 +7,13 @@ import { createProjectCatalogAuthority, createProjectLabelEffects } from "./inde
 
 const alphaID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
 const betaID = "942495c2-5958-4959-8445-94046ad74fbd";
+const noOpReorderCatalog = async (): Promise<ProjectLabelCatalog> => ({
+  projectID: "project-1",
+  labels: [],
+});
+const noOpReorderFailure = (error: unknown): void => {
+  void error;
+};
 
 describe("Project label event effects", () => {
   it("retains an authoritative local create across repeated event echoes and an older catalog read", async () => {
@@ -23,6 +30,8 @@ describe("Project label event effects", () => {
         readCount += 1;
         return readCount === 1 ? staleRead.promise : currentRead.promise;
       },
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
     });
     const effects = createProjectLabelEffects({
       authority,
@@ -69,6 +78,8 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
     });
     const filterActions: unknown[] = [];
     const membershipEffects: unknown[] = [];
@@ -139,6 +150,8 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
     });
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
@@ -190,6 +203,80 @@ describe("Project label event effects", () => {
     expect(membershipEffects).toHaveLength(1);
   });
 
+  it("refreshes board queries after a Project Label catalog reorder event", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const authoritativeCatalog: ProjectLabelCatalog = {
+      projectID: "project-1",
+      labels: [
+        { id: betaID, name: "Beta" },
+        { id: alphaID, name: "Alpha" },
+      ],
+    };
+    let catalogReadCount = 0;
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => {
+        catalogReadCount += 1;
+        return authoritativeCatalog;
+      },
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
+    });
+    const membershipEffects: unknown[] = [];
+    const effects = createProjectLabelEffects({
+      authority,
+      onMembershipRefresh: (effect) => {
+        membershipEffects.push(effect);
+      },
+      projectID: "project-1",
+      queryClient,
+    });
+    const catalogKey = queryKeys.projectLabels("project-1");
+    const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
+    const boardCardsKey = queryKeys.boardNodeCards(
+      "project-1",
+      "workflow-1",
+      "node-1",
+      { labelFilter: { kind: "none" } },
+    );
+    const taskListKey = queryKeys.projectTaskListsRoot("project-1");
+    queryClient.setQueryData(catalogKey, {
+      projectID: "project-1",
+      labels: [
+        { id: alphaID, name: "Alpha" },
+        { id: betaID, name: "Beta" },
+      ],
+    });
+    queryClient.setQueryData(boardKey, { projectID: "project-1" });
+    queryClient.setQueryData(boardCardsKey, { pages: [] });
+    queryClient.setQueryData(taskListKey, { tasks: [] });
+
+    await effects.consumeProjectEvent(catalogReorderedEvent());
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData<ProjectLabelCatalog>(catalogKey)).toEqual(authoritativeCatalog);
+    });
+    expect(catalogReadCount).toBe(1);
+    expect(queryClient.getQueryCache().find({ queryKey: boardKey, exact: true })?.state.isInvalidated).toBe(
+      true,
+    );
+    expect(
+      queryClient.getQueryCache().find({ queryKey: boardCardsKey, exact: true })?.state.isInvalidated,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: taskListKey, exact: true })?.state.isInvalidated,
+    ).toBe(true);
+    expect(membershipEffects).toEqual([
+      {
+        kind: "subscription.refresh",
+        projectID: "project-1",
+      },
+    ]);
+  });
+
   it("lets the host close request admission before broad membership invalidation refetches", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -198,6 +285,8 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
     });
     let admissionClosed = false;
     let admittedTransportCalls = 0;
@@ -237,6 +326,8 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
     });
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
@@ -291,6 +382,18 @@ function taskEvent(action: "deleted" | "labels_changed" | "updated", taskID: str
     relatedIDs: [],
     resource: "task",
     workflowID: "11111111-1111-4111-8111-111111111111",
+  };
+}
+
+function catalogReorderedEvent(): WorkflowProjectEvent {
+  return {
+    action: "reordered",
+    occurredAtUnixMs: 1,
+    primaryEntityID: "project-1",
+    projectID: "project-1",
+    relatedIDs: [],
+    resource: "label_catalog",
+    workflowID: null,
   };
 }
 

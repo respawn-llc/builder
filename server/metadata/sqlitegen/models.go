@@ -129,6 +129,7 @@ type ProjectLabel struct {
 	Name            string
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
+	Ordinal         int64
 }
 
 type ProjectWorkflowLink struct {

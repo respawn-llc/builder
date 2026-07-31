@@ -127,6 +127,34 @@ func TestRemoteWorkflowProjectLabelCreateAndListRoutes(t *testing.T) {
 			handlerErr <- fmt.Errorf("send project label list response: %w", err)
 			return
 		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive project label reorder: %w", err)
+			return
+		}
+		if req.Method != protocol.MethodWorkflowProjectLabelReorder {
+			handlerErr <- fmt.Errorf("project label reorder method = %q", req.Method)
+			return
+		}
+		var reorderRequest serverapi.WorkflowProjectLabelReorderRequest
+		if err := json.Unmarshal(req.Params, &reorderRequest); err != nil {
+			handlerErr <- fmt.Errorf("decode project label reorder: %w", err)
+			return
+		}
+		if reorderRequest.ProjectID != "project-1" ||
+			len(reorderRequest.LabelIDs) != 1 ||
+			reorderRequest.LabelIDs[0] != labelID {
+			handlerErr <- fmt.Errorf("project label reorder request = %+v", reorderRequest)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorkflowProjectLabelReorderResponse{
+			Catalog: serverapi.WorkflowProjectLabelCatalog{
+				ProjectID: "project-1",
+				Labels:    []serverapi.WorkflowProjectLabel{label},
+			},
+		})); err != nil {
+			handlerErr <- fmt.Errorf("send project label reorder response: %w", err)
+			return
+		}
 		handlerErr <- nil
 	}))
 	defer server.Close()
@@ -149,6 +177,16 @@ func TestRemoteWorkflowProjectLabelCreateAndListRoutes(t *testing.T) {
 	}
 	if created.Label.ID != labelID || !reflect.DeepEqual(listed.Catalog.Labels, []serverapi.WorkflowProjectLabel{created.Label}) {
 		t.Fatalf("created/listed = %+v / %+v", created, listed)
+	}
+	reordered, err := remote.ReorderWorkflowProjectLabels(context.Background(), serverapi.WorkflowProjectLabelReorderRequest{
+		ProjectID: "project-1",
+		LabelIDs:  []string{labelID},
+	})
+	if err != nil {
+		t.Fatalf("ReorderWorkflowProjectLabels: %v", err)
+	}
+	if !reflect.DeepEqual(reordered.Catalog.Labels, []serverapi.WorkflowProjectLabel{created.Label}) {
+		t.Fatalf("reordered catalog = %+v", reordered.Catalog)
 	}
 	if err := <-handlerErr; err != nil {
 		t.Fatal(err)

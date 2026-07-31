@@ -10,9 +10,10 @@ import {
   type SetStateAction,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { GripVertical, PlusIcon, SearchIcon } from "lucide-react";
+import { VerticalReorder } from "@app/ui-kit";
 
-import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs } from "@/api";
 import {
   Button,
   IconTooltipButton,
@@ -24,17 +25,21 @@ import {
   fieldInputClassName,
 } from "@/ui";
 import {
-  LabelRenameEditor,
-  LabelResultRow,
-  UnlabeledResultRow,
-  type DeleteState,
-  type LabelFilterCondition,
-  type LabelResultRowSelection,
-  type RenameState,
-} from "./LabelChooserRows";
+  removeDeletedSelection,
+  renderLabelChooserChoiceRow,
+  labelResultRowSelection,
+  selectLabel,
+  selectUnlabeled,
+  type LabelChooserChoice,
+} from "./labelChooserChoiceRows";
+import type { DeleteState, RenameState } from "./LabelChooserRows";
 import { labelNameContains, labelNamesEqual } from "./labelComparison";
 import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
-import { useProjectLabelCatalog, useProjectLabelCatalogMutations } from "./projectLabelHooks";
+import {
+  useProjectCatalogAuthority,
+  useProjectLabelCatalog,
+  useProjectLabelCatalogMutations,
+} from "./projectLabelHooks";
 
 export type LabelChooserInvocation =
   | Readonly<{
@@ -53,11 +58,10 @@ export type LabelChooserProps = Readonly<{
   trigger: ReactElement;
 }>;
 
-type LabelChooserChoice = Readonly<{ kind: "unlabeled" }> | Readonly<{ kind: "label"; label: ProjectLabel }>;
-
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
+  const authority = useProjectCatalogAuthority();
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
   const [keyboardHighlightedIndex, setKeyboardHighlightedIndex] = useState<number | null>(null);
@@ -268,6 +272,10 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           invocation,
           keyboardHighlightedIndex,
           rename,
+          preparedSearch,
+          reorderCatalog(orderedIDs) {
+            authority.reorder(orderedIDs);
+          },
           setDeletion,
           setKeyboardHighlightedIndex,
           setRename,
@@ -419,6 +427,8 @@ function renderLabelChooserResults({
   invocation,
   keyboardHighlightedIndex,
   rename,
+  preparedSearch,
+  reorderCatalog,
   setDeletion,
   setKeyboardHighlightedIndex,
   setRename,
@@ -433,6 +443,8 @@ function renderLabelChooserResults({
   invocation: LabelChooserInvocation;
   keyboardHighlightedIndex: number | null;
   rename: RenameState | null;
+  preparedSearch: string;
+  reorderCatalog(orderedIDs: readonly string[]): void;
   setDeletion: Dispatch<SetStateAction<DeleteState | null>>;
   setKeyboardHighlightedIndex: Dispatch<SetStateAction<number | null>>;
   setRename: Dispatch<SetStateAction<RenameState | null>>;
@@ -470,161 +482,57 @@ function renderLabelChooserResults({
       role="list"
     >
       {choices.map((choice, index) =>
-        renderLabelChooserChoiceRow({
-          choice,
-          confirmDelete,
-          commitRename,
-          deletion,
-          highlighted: index === keyboardHighlightedIndex,
-          invocation,
-          rename,
-          setDeletion,
-          setRename,
-          unlabeledName,
-        }),
+        choice.kind === "unlabeled" || preparedSearch.length > 0 || invocation.kind !== "filter"
+          ? renderLabelChooserChoiceRow({
+              choice,
+              confirmDelete,
+              commitRename,
+              deletion,
+              highlighted: index === keyboardHighlightedIndex,
+              invocation,
+              rename,
+              setDeletion,
+              setRename,
+              unlabeledName,
+            })
+          : null,
       )}
+      {invocation.kind === "filter" && preparedSearch.length === 0 ? (
+        <VerticalReorder
+          getItemID={(label) => label.id}
+          items={choices.flatMap((choice) => (choice.kind === "label" ? [choice.label] : []))}
+          onCommit={(orderedIDs) => {
+            reorderCatalog(orderedIDs);
+          }}
+          renderActivator={(label) => (
+            <button
+              aria-label={t("labels.reorder", { name: label.name })}
+              className="grid size-7 shrink-0 place-items-center rounded-[var(--radius-s)] text-[var(--color-muted)] outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)]"
+              type="button"
+            >
+              <GripVertical aria-hidden="true" size={16} strokeWidth={1.8} />
+            </button>
+          )}
+          renderItem={(label, row) =>
+            renderLabelChooserChoiceRow({
+              choice: { kind: "label", label },
+              confirmDelete,
+              commitRename,
+              deletion,
+              highlighted:
+                choices.findIndex(
+                  (choice) => choice.kind === "label" && choice.label.id === label.id,
+                ) === keyboardHighlightedIndex,
+              invocation,
+              rename,
+              reorderRow: row,
+              setDeletion,
+              setRename,
+              unlabeledName,
+            })
+          }
+        />
+      ) : null}
     </div>
   );
-}
-
-function renderLabelChooserChoiceRow({
-  choice,
-  confirmDelete,
-  commitRename,
-  deletion,
-  highlighted,
-  invocation,
-  rename,
-  setDeletion,
-  setRename,
-  unlabeledName,
-}: Readonly<{
-  choice: LabelChooserChoice;
-  confirmDelete(): Promise<void>;
-  commitRename(): Promise<void>;
-  deletion: DeleteState | null;
-  highlighted: boolean;
-  invocation: LabelChooserInvocation;
-  rename: RenameState | null;
-  setDeletion: Dispatch<SetStateAction<DeleteState | null>>;
-  setRename: Dispatch<SetStateAction<RenameState | null>>;
-  unlabeledName: string;
-}>) {
-  if (choice.kind === "unlabeled") {
-    return (
-      <UnlabeledResultRow
-        highlighted={highlighted}
-        key="unlabeled"
-        name={unlabeledName}
-        onSelect={() => {
-          selectUnlabeled(invocation);
-        }}
-        selected={invocation.kind === "filter" && invocation.state.filter.kind === "unlabeled"}
-      />
-    );
-  }
-  const { label } = choice;
-  if (rename?.labelID === label.id) {
-    return (
-      <LabelRenameEditor
-        key={label.id}
-        onCancel={() => {
-          setRename(null);
-        }}
-        onChange={(draft) => {
-          setRename({ ...rename, draft, error: null });
-        }}
-        onCommit={() => {
-          void commitRename();
-        }}
-        rename={rename}
-      />
-    );
-  }
-  const selection = labelResultRowSelection(invocation, label.id);
-  const labelDeletion = deletion?.labelID === label.id ? deletion : null;
-  return (
-    <LabelResultRow
-      deletion={labelDeletion}
-      highlighted={highlighted}
-      key={label.id}
-      label={label}
-      onDeleteConfirm={() => {
-        void confirmDelete();
-      }}
-      onDeleteOpenChange={(nextOpen) => {
-        if (nextOpen) {
-          setDeletion({
-            labelID: label.id,
-            error: null,
-            pending: false,
-          });
-          return;
-        }
-        setDeletion((current) => (current?.labelID === label.id && current.pending ? current : null));
-      }}
-      onRename={() => {
-        setRename({
-          labelID: label.id,
-          draft: label.name,
-          error: null,
-          pending: false,
-        });
-      }}
-      onSelect={() => {
-        selectLabel(invocation, label.id, selection.kind === "binary" ? !selection.selected : true);
-      }}
-      selection={selection}
-    />
-  );
-}
-
-function labelResultRowSelection(
-  invocation: LabelChooserInvocation,
-  labelID: string,
-): LabelResultRowSelection {
-  if (invocation.kind === "assignment") {
-    return {
-      kind: "binary",
-      selected: invocation.selectedLabelIDs.includes(labelID),
-    };
-  }
-  return {
-    kind: "condition",
-    state: labelFilterCondition(invocation.state, labelID),
-  };
-}
-
-function labelFilterCondition(state: LabelFilterState, labelID: string): LabelFilterCondition {
-  if (state.filter.kind !== "named") {
-    return "neutral";
-  }
-  if (state.filter.labelIDs.includes(labelID)) {
-    return "included";
-  }
-  return state.filter.excludedLabelIDs.includes(labelID) ? "excluded" : "neutral";
-}
-
-function selectLabel(invocation: LabelChooserInvocation, labelID: string, selected: boolean): void {
-  if (invocation.kind === "filter") {
-    invocation.onAction({ type: "named.cycle", labelID });
-    return;
-  }
-  invocation.onSelectionChange(labelID, selected);
-}
-
-function selectUnlabeled(invocation: LabelChooserInvocation): void {
-  if (invocation.kind === "filter") {
-    invocation.onAction({ type: "unlabeled.toggle" });
-  }
-}
-
-function removeDeletedSelection(invocation: LabelChooserInvocation, labelID: string): void {
-  if (invocation.kind === "filter") {
-    invocation.onAction({ type: "label.deleted", labelID });
-    return;
-  }
-  if (invocation.selectedLabelIDs.includes(labelID)) {
-    invocation.onSelectionChange(labelID, false);
-  }
 }

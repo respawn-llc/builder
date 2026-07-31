@@ -1,23 +1,8 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
 import { GripVertical, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { z } from "zod";
 
+import { VerticalReorder, type VerticalReorderRow } from "@app/ui-kit";
 import type { WorkflowDefinition, WorkflowParameter } from "@/api";
 import {
   Button,
@@ -40,8 +25,6 @@ import {
   type PromptTemplatePlaceholder,
 } from "./workflowPromptTemplatePlaceholders";
 import { derivedNodeWiring, joinProviderOptions } from "./workflowInspectorWiring";
-
-const sortableRowIDSchema = z.string();
 
 export function PromptTemplateEditor({
   onPromptChange,
@@ -213,10 +196,6 @@ export function EditableEdgeParameters({
     ...parameter,
     rowID: parameter.rowID ?? [edge.id, "parameter", "fallback", index.toString()].join(":"),
   }));
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
   return (
     <DetailSection title={t("workflowEditor.parameters")} titleHelp={t("workflowEditor.parametersHelp")}>
       <div className="grid gap-[var(--space-3)]">
@@ -231,56 +210,53 @@ export function EditableEdgeParameters({
         {edge.parameters.length === 0 ? (
           <p className="m-0 text-sm text-[var(--color-muted)]">{t("workflowEditor.none")}</p>
         ) : null}
-        <DndContext
-          collisionDetection={closestCenter}
-          onDragEnd={(event) => {
-            reorderEdgeParameter(controller, edge.id, event);
+        <VerticalReorder
+          getItemID={(parameter) => parameter.rowID}
+          items={parameters}
+          onCommit={(orderedIDs) => {
+            reorderEdgeParameters(controller, edge.id, parameters.map((parameter) => parameter.rowID), orderedIDs);
           }}
-          sensors={sensors}
-        >
-          <SortableContext
-            items={parameters.map((parameter) => parameter.rowID)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="grid gap-[var(--space-3)]">
-              {parameters.map((parameter) => (
-                <SortableEdgeParameter
-                  controller={controller}
-                  edgeID={edge.id}
-                  key={parameter.rowID}
-                  parameter={parameter}
-                />
-              ))}
+          renderActivator={() => (
+            <div
+              aria-label={t("workflowEditor.reorderParameter")}
+              className="absolute inset-0 cursor-grab rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)] active:cursor-grabbing"
+            >
+              <GripVertical
+                aria-hidden="true"
+                className="absolute top-[var(--space-3)] left-[var(--space-3)] text-[var(--color-muted)]"
+                size={18}
+                strokeWidth={1.8}
+              />
             </div>
-          </SortableContext>
-        </DndContext>
+          )}
+          renderItem={(parameter, row) => (
+            <EditableEdgeParameter
+              controller={controller}
+              edgeID={edge.id}
+              parameter={parameter}
+              row={row}
+            />
+          )}
+        />
       </div>
     </DetailSection>
   );
 }
 
-function SortableEdgeParameter({
+function EditableEdgeParameter({
   controller,
   edgeID,
   parameter,
+  row,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
   edgeID: string;
   parameter: WorkflowParameter & Readonly<{ rowID: string }>;
+  row: VerticalReorderRow;
 }>) {
   const { t } = useTranslation();
   const keyID = useId();
   const descriptionID = useId();
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
-    id: parameter.rowID,
-  });
-  const style = {
-    transform:
-      transform === null
-        ? undefined
-        : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
-    transition,
-  };
   return (
     <IslandSurface
       as="div"
@@ -288,24 +264,10 @@ function SortableEdgeParameter({
       data-parameter-key={parameter.key}
       data-testid="workflow-parameter"
       level={1}
-      ref={setNodeRef}
-      style={style}
     >
-      <div
-        aria-label={t("workflowEditor.reorderParameter")}
-        className="absolute inset-0 cursor-grab rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)] active:cursor-grabbing"
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-      />
+      {row.activator}
       <div className="pointer-events-none relative grid gap-[var(--space-2)]">
         <div className="flex min-w-0 items-center gap-[var(--space-2)]">
-          <GripVertical
-            aria-hidden="true"
-            className="shrink-0 text-[var(--color-muted)]"
-            size={18}
-            strokeWidth={1.8}
-          />
           <div className="pointer-events-auto min-w-0 flex-1">
             <label className="sr-only" htmlFor={keyID}>
               {t("workflowEditor.parameterKey")}
@@ -363,26 +325,31 @@ function SortableEdgeParameter({
   );
 }
 
-function reorderEdgeParameter(
+function reorderEdgeParameters(
   controller: WorkflowEditorDraftController,
   edgeID: string,
-  event: DragEndEvent,
+  currentIDs: readonly string[],
+  orderedIDs: readonly string[],
 ): void {
-  const overID = event.over?.id;
-  if (overID === undefined || event.active.id === overID) {
-    return;
+  const workingIDs = [...currentIDs];
+  for (const [index, desiredID] of orderedIDs.entries()) {
+    if (workingIDs[index] === desiredID) {
+      continue;
+    }
+    const activeIndex = workingIDs.indexOf(desiredID);
+    const overID = workingIDs[index];
+    if (activeIndex < 0 || overID === undefined) {
+      return;
+    }
+    controller.dispatch({
+      activeRowID: desiredID,
+      edgeID,
+      overRowID: overID,
+      type: "reorderEdgeParameter",
+    });
+    workingIDs.splice(activeIndex, 1);
+    workingIDs.splice(index, 0, desiredID);
   }
-  const activeRowID = sortableRowIDSchema.safeParse(event.active.id);
-  const overRowID = sortableRowIDSchema.safeParse(overID);
-  if (!activeRowID.success || !overRowID.success) {
-    return;
-  }
-  controller.dispatch({
-    activeRowID: activeRowID.data,
-    edgeID,
-    overRowID: overRowID.data,
-    type: "reorderEdgeParameter",
-  });
 }
 
 export function EditableJoinProviders({

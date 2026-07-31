@@ -74,16 +74,12 @@ export function BoardColumnDataOwner({
     }),
     [board.attachedWorkspaceCount, board.defaultWorkspaceID],
   );
-  const labelNamesByID = useMemo(
-    () => new Map(labelCatalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
-    [labelCatalog.data?.labels],
-  );
   const cardVMs = useMemo(
     () =>
       queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext, labelNamesByID))
+        .map((card) => toKanbanCardVM(card, workspaceContext, labelCatalog.data?.labels))
         .filter((card) => cardBelongsToColumn(column, card)),
-    [column, labelNamesByID, queryCards, workspaceContext],
+    [column, labelCatalog.data?.labels, queryCards, workspaceContext],
   );
   const {
     error,
@@ -102,7 +98,9 @@ export function BoardColumnDataOwner({
     refetch,
   } = cardsQuery;
   const requestEnabled =
-    !filterGeneration.snapshot.active.retiring && filterGeneration.snapshot.desiredFilter === null;
+    !filterGeneration.snapshot.active.retiring &&
+    filterGeneration.snapshot.desiredFilter === null &&
+    filterGeneration.snapshot.desiredSort === null;
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
   const retryInitial = useCallback(() => {
     if (requestEnabled) {

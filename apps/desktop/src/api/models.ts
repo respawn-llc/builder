@@ -631,6 +631,18 @@ export type BoardNodeCardsPage = Readonly<{
   generatedAt: number;
 }>;
 
+export type BoardNodeCardsSortField = "updated" | "created" | "labels" | "title" | "short_id";
+
+export type BoardNodeCardsSort = Readonly<{
+  field: BoardNodeCardsSortField;
+  direction: "asc" | "desc";
+}>;
+
+export const defaultBoardNodeCardsSort: BoardNodeCardsSort = {
+  field: "updated",
+  direction: "desc",
+};
+
 export type ApprovalSnapshot = Readonly<{
   sourceNodeName: string;
   targets: readonly Readonly<{ displayName: string }>[];

@@ -8,6 +8,7 @@ export const architectureOwners = Object.freeze({
   I18N: "i18n",
   NATIVE_CONFIG: "native-config",
   NATIVE_PACKAGE: "native-package",
+  UI_KIT: "ui-kit",
   SHARED: "shared",
   SHELL: "shell",
   TEST_SUPPORT: "test-support",
@@ -61,7 +62,12 @@ export const architectureElements = Object.freeze([
   }),
   Object.freeze({
     type: architectureOwners.NATIVE_PACKAGE,
-    pattern: "packages/*",
+    pattern: "packages/native-bridge",
+    partialMatch: false,
+  }),
+  Object.freeze({
+    type: architectureOwners.UI_KIT,
+    pattern: "packages/ui-kit",
     capture: ["name"],
     partialMatch: false,
   }),
@@ -101,6 +107,7 @@ export const architectureEntrypoints = Object.freeze({
   API_COMPOSITION: "composition/index.ts",
   INDEX: "index.ts",
   NATIVE_PACKAGE: "src/index.ts",
+  UI_KIT: "dist/index.d.ts",
   VENDOR_ELK_API: "elkjs-types.ts",
   VENDOR_ELK_BUNDLED: "elkjs-bundled-types.ts",
   VENDOR_XYFLOW: "xyflow-react-types.ts",
@@ -268,6 +275,12 @@ const featureDependencyPolicies = Object.freeze([
     source: "elkjs/lib/elk.bundled.js",
     targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
   }),
+  allowOwnerDependency({
+    from: architectureOwners.FEATURE,
+    to: architectureOwners.UI_KIT,
+    source: "@app/ui-kit",
+    targetFile: architectureEntrypoints.UI_KIT,
+  }),
 ]);
 
 const sharedDependencyPolicies = Object.freeze([
@@ -308,6 +321,12 @@ const sharedDependencyPolicies = Object.freeze([
     to: architectureOwners.VENDOR,
     source: "elkjs/lib/elk.bundled.js",
     targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
+  }),
+  allowOwnerDependency({
+    from: architectureOwners.SHARED,
+    to: architectureOwners.UI_KIT,
+    source: "@app/ui-kit",
+    targetFile: architectureEntrypoints.UI_KIT,
   }),
 ]);
 

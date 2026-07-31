@@ -97,6 +97,7 @@ function BoardRouteWithLabels({
   const filter = useProjectLabelFilter();
   return (
     <BoardFilterGenerationProvider
+      key={`${projectId}:${workflowId ?? ""}`}
       desiredFilter={filter.state.filter}
       initialFilter={filter.state.filter}
       onBackgroundError={onBackgroundError}

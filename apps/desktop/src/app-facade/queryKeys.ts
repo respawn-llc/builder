@@ -1,4 +1,9 @@
-import { canonicalTaskLabelFilter, type TaskLabelFilter } from "@/api";
+import {
+  canonicalTaskLabelFilter,
+  defaultBoardNodeCardsSort,
+  type BoardNodeCardsSort,
+  type TaskLabelFilter,
+} from "@/api";
 
 const attentionKey = ["attention"] as const;
 
@@ -18,6 +23,11 @@ function labelFilterKey(filter: TaskLabelFilter): readonly string[] {
         ...canonical.excludedLabelIDs,
       ];
   }
+}
+
+function boardSortKey(sort: BoardNodeCardsSort | undefined): readonly string[] {
+  const canonical = sort ?? defaultBoardNodeCardsSort;
+  return ["sort", canonical.field, canonical.direction];
 }
 
 export const queryKeys = {
@@ -46,11 +56,17 @@ export const queryKeys = {
   allPendingAsks: ["pending-asks"],
   boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
   projectBoardsRoot: (projectID: string) => ["board", projectID],
-  board: (projectID: string, workflowID: string | undefined, labelFilter: TaskLabelFilter) => [
+  board: (
+    projectID: string,
+    workflowID: string | undefined,
+    labelFilter: TaskLabelFilter,
+    sort?: BoardNodeCardsSort,
+  ) => [
     "board",
     projectID,
     workflowID,
     ...labelFilterKey(labelFilter),
+    ...boardSortKey(sort),
   ],
   workflows: (query: string) => ["workflow", query],
   workflowDefinition: (workflowID: string) => ["workflow-definition", workflowID],
@@ -89,17 +105,29 @@ export const queryKeys = {
     projectID,
     workflowID,
   ],
-  boardNodeCardsRoot: (projectID: string, workflowID: string, labelFilter: TaskLabelFilter) => [
+  boardNodeCardsRoot: (
+    projectID: string,
+    workflowID: string,
+    labelFilter: TaskLabelFilter,
+    sort?: BoardNodeCardsSort,
+  ) => [
     "board-node-cards",
     projectID,
     workflowID,
     ...labelFilterKey(labelFilter),
+    ...boardSortKey(sort),
   ],
-  boardNodeCards: (projectID: string, workflowID: string, nodeID: string, labelFilter: TaskLabelFilter) => [
+  boardNodeCards: (
+    projectID: string,
+    workflowID: string,
+    nodeID: string,
+    options: Readonly<{ labelFilter: TaskLabelFilter; sort?: BoardNodeCardsSort }>,
+  ) => [
     "board-node-cards",
     projectID,
     workflowID,
-    ...labelFilterKey(labelFilter),
+    ...labelFilterKey(options.labelFilter),
+    ...boardSortKey(options.sort),
     nodeID,
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],

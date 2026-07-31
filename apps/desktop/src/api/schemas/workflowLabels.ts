@@ -43,6 +43,8 @@ export const projectLabelCatalogSchema: z.ZodType<ProjectLabelCatalog> = z
     labels: value.catalog.labels,
   }));
 
+export const projectLabelReorderSchema = projectLabelCatalogSchema;
+
 export const projectLabelMutationSchema = z
   .object({ label: projectLabelSchema })
   .strict()

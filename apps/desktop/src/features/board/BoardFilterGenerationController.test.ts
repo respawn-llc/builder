@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { TaskLabelFilter, WorkflowBoard } from "@/api";
+import type { BoardNodeCardsSort, TaskLabelFilter, WorkflowBoard } from "@/api";
 import { createBoardFilterGenerationController } from "./BoardFilterGenerationController";
 
 const priorityID = "11111111-1111-4111-8111-111111111111";
@@ -8,6 +8,101 @@ const urgentID = "22222222-2222-4222-8222-222222222222";
 const smallID = "33333333-3333-4333-8333-333333333333";
 
 describe("BoardFilterGenerationController", () => {
+  it("promotes a desired board sort independently while the active generation is idle", () => {
+    const initialSort: BoardNodeCardsSort = { field: "updated", direction: "desc" };
+    const desiredSort: BoardNodeCardsSort = { field: "title", direction: "asc" };
+    const controller = createBoardFilterGenerationController(
+      { kind: "none" },
+      { initialSort },
+    );
+
+    controller.setDesiredSort(desiredSort);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      active: {
+        generation: 2,
+        filter: { kind: "none" },
+        sort: desiredSort,
+        retiring: false,
+      },
+      desiredFilter: null,
+      desiredSort: null,
+    });
+  });
+
+  it("coalesces interleaved filter and sort edits into one latest desired view", async () => {
+    const controller = createBoardFilterGenerationController({ kind: "none" });
+    let settle: ((board: WorkflowBoard) => void) | undefined;
+    const activeRequest = admittedPromise(
+      controller.admitBoardTransport(1, "board:active", async () => {
+        return new Promise<WorkflowBoard>((resolve) => {
+          settle = resolve;
+        });
+      }),
+    );
+
+    controller.setDesiredSort({ field: "title", direction: "asc" });
+    controller.setDesiredFilter({ kind: "unlabeled" });
+    controller.setDesiredSort({ field: "labels", direction: "desc" });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      active: {
+        generation: 1,
+        filter: { kind: "none" },
+        sort: { field: "updated", direction: "desc" },
+        retiring: true,
+      },
+      desiredFilter: { kind: "unlabeled" },
+      desiredSort: { field: "labels", direction: "desc" },
+    });
+
+    settle?.(testBoard());
+    await activeRequest;
+    await Promise.resolve();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      active: {
+        generation: 2,
+        filter: { kind: "unlabeled" },
+        sort: { field: "labels", direction: "desc" },
+        retiring: false,
+      },
+      desiredFilter: null,
+      desiredSort: null,
+    });
+  });
+
+  it("keeps the promoted sort selected when the replacement transport fails", async () => {
+    const controller = createBoardFilterGenerationController({ kind: "none" });
+    let settle: ((board: WorkflowBoard) => void) | undefined;
+    const activeRequest = admittedPromise(
+      controller.admitBoardTransport(1, "board:active", async () => {
+        return new Promise<WorkflowBoard>((resolve) => {
+          settle = resolve;
+        });
+      }),
+    );
+
+    controller.setDesiredSort({ field: "labels", direction: "asc" });
+    settle?.(testBoard());
+    await activeRequest;
+    await Promise.resolve();
+
+    const replacementFailure = new Error("replacement failed");
+    const replacement = controller.admitCardsTransport(2, "cards:replacement", async () => {
+      throw replacementFailure;
+    });
+    if (replacement.kind === "denied") {
+      throw new Error("Expected replacement cards transport to be admitted.");
+    }
+    await expect(replacement.promise).rejects.toBe(replacementFailure);
+    expect(controller.getSnapshot().active).toMatchObject({
+      filter: { kind: "none" },
+      sort: { field: "labels", direction: "asc" },
+      retiring: false,
+    });
+  });
+
   it("promotes a desired filter immediately while the active generation is idle", () => {
     const controller = createBoardFilterGenerationController({ kind: "none" });
     const priority = namedFilter("any", priorityID);

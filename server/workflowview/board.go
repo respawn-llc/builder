@@ -16,7 +16,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -94,10 +93,9 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 		}, nil
 	}
 	snapshot := definitions[selected.WorkflowID]
-	selectedWorkflowID := selected.WorkflowID
 	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
-	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selectedWorkflowID, labelFilter); err != nil {
+	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selected.WorkflowID, labelFilter); err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
 	return serverapi.WorkflowBoard{
@@ -119,7 +117,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	workflowID := req.WorkflowID
+	workflowID := strings.TrimSpace(req.WorkflowID)
 	nodeID := strings.TrimSpace(req.NodeID)
 	project, err := b.metadata.GetProjectOverview(ctx, projectID)
 	if err != nil {
@@ -145,37 +143,134 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if pageSize == 0 {
 		pageSize = serverapi.WorkflowBoardNodeCardsMaxPageSize
 	}
-	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowID, nodeID, labelFilter)
+	sort := normalizeBoardNodeCardsSort(req.Sort)
+	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowID, nodeID, labelFilter, sort)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
+	cursorSortValue := sql.NullString{}
+	cursorTaskSeq := sql.NullInt64{}
+	cursorUnlabeled := sql.NullInt64{}
 	cursorUpdatedAtUnixMs := sql.NullInt64{}
-	cursorTaskID := sql.NullString{}
 	if cursor.anchor != nil {
-		cursorUpdatedAtUnixMs = sql.NullInt64{Int64: cursor.anchor.updatedAtUnixMs, Valid: true}
-		cursorTaskID = sql.NullString{String: cursor.anchor.taskID, Valid: true}
+		if sort.Field != serverapi.WorkflowBoardNodeCardsSortFieldLabels || cursor.anchor.labelOrdinals != nil {
+			cursorSortValue = sql.NullString{String: cursor.anchor.sortValue(sort), Valid: true}
+		}
+		cursorTaskSeq = sql.NullInt64{Int64: cursor.anchor.taskSeq, Valid: true}
+		if cursor.anchor.updatedAtUnixMs != nil {
+			cursorUpdatedAtUnixMs = sql.NullInt64{Int64: *cursor.anchor.updatedAtUnixMs, Valid: true}
+		}
+		if cursor.anchor.unlabeled != nil {
+			cursorUnlabeled = sql.NullInt64{Int64: boolInt64(*cursor.anchor.unlabeled), Valid: true}
+		}
 	}
-	rows, err := b.queries.ListBoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-		ProjectID:             projectID,
-		WorkflowID:            workflowID,
-		CursorDirection:       string(cursor.direction),
-		CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
-		CursorTaskID:          cursorTaskID,
-		NodeID:                nodeID,
-		LabelFilterKind:       labelFilterArgs.kind,
-		LabelFilterMode:       labelFilterArgs.mode,
-		LabelIdsJson:          labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
-		LimitRows:             int64(pageSize + 1),
-	})
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	var tasks []boardNodeCardsPageTask
+	if sort.Field == serverapi.WorkflowBoardNodeCardsSortFieldUpdated {
+		projectWorkflowLinkID, linkErr := b.projectWorkflowLinkID(ctx, projectID, workflowID)
+		if linkErr != nil {
+			return serverapi.WorkflowBoardNodeCardsListResponse{}, linkErr
+		}
+		if sort.Direction == serverapi.WorkflowTaskListSortDirectionDesc {
+			if cursor.direction == boardNodeCardsPageDirectionNewer {
+				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedDescPrevious(ctx, sqlitegen.ListBoardNodeTasksUpdatedDescPreviousParams{
+					ProjectID:             projectID,
+					WorkflowID:            workflowID,
+					ProjectWorkflowLinkID: projectWorkflowLinkID,
+					NodeID:                nodeID,
+					LabelFilterKind:       labelFilterArgs.kind,
+					LabelFilterMode:       labelFilterArgs.mode,
+					LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+					ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+					CursorTaskSeq:         cursorTaskSeq,
+					CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+					LimitRows:             int64(pageSize + 1),
+				})
+				if queryErr != nil {
+					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
+				}
+				tasks = boardNodeTaskRecordsUpdatedDescPrevious(rows)
+			} else {
+				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedDesc(ctx, sqlitegen.ListBoardNodeTasksUpdatedDescParams{
+					ProjectID:             projectID,
+					WorkflowID:            workflowID,
+					ProjectWorkflowLinkID: projectWorkflowLinkID,
+					NodeID:                nodeID,
+					LabelFilterKind:       labelFilterArgs.kind,
+					LabelFilterMode:       labelFilterArgs.mode,
+					LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+					ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+					CursorDirection:       string(cursor.direction),
+					CursorTaskSeq:         cursorTaskSeq,
+					CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+					LimitRows:             int64(pageSize + 1),
+				})
+				if queryErr != nil {
+					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
+				}
+				tasks = boardNodeTaskRecordsUpdatedDesc(rows)
+			}
+		} else {
+			if cursor.direction == boardNodeCardsPageDirectionNewer {
+				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedAscPrevious(ctx, sqlitegen.ListBoardNodeTasksUpdatedAscPreviousParams{
+					ProjectID:             projectID,
+					WorkflowID:            workflowID,
+					ProjectWorkflowLinkID: projectWorkflowLinkID,
+					NodeID:                nodeID,
+					LabelFilterKind:       labelFilterArgs.kind,
+					LabelFilterMode:       labelFilterArgs.mode,
+					LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+					ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+					CursorTaskSeq:         cursorTaskSeq,
+					CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+					LimitRows:             int64(pageSize + 1),
+				})
+				if queryErr != nil {
+					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
+				}
+				tasks = boardNodeTaskRecordsUpdatedAscPrevious(rows)
+			} else {
+				rows, queryErr := b.queries.ListBoardNodeTasksUpdatedAsc(ctx, sqlitegen.ListBoardNodeTasksUpdatedAscParams{
+					ProjectID:             projectID,
+					WorkflowID:            workflowID,
+					ProjectWorkflowLinkID: projectWorkflowLinkID,
+					NodeID:                nodeID,
+					LabelFilterKind:       labelFilterArgs.kind,
+					LabelFilterMode:       labelFilterArgs.mode,
+					LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+					ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+					CursorDirection:       string(cursor.direction),
+					CursorTaskSeq:         cursorTaskSeq,
+					CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+					LimitRows:             int64(pageSize + 1),
+				})
+				if queryErr != nil {
+					return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
+				}
+				tasks = boardNodeTaskRecordsUpdatedAsc(rows)
+			}
+		}
+	} else {
+		rows, queryErr := b.queries.ListBoardNodeTasksGeneralized(ctx, sqlitegen.ListBoardNodeTasksGeneralizedParams{
+			ProjectID:            projectID,
+			WorkflowID:           workflowID,
+			NodeID:               nodeID,
+			LabelFilterKind:      labelFilterArgs.kind,
+			LabelFilterMode:      labelFilterArgs.mode,
+			LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+			ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+			SortField:            string(sort.Field),
+			SortDescending:       boolInt64(sort.Direction == serverapi.WorkflowTaskListSortDirectionDesc),
+			CursorDirection:      string(cursor.direction),
+			CursorSortValue:      cursorSortValue,
+			CursorTaskSeq:        cursorTaskSeq,
+			CursorUnlabeled:      cursorUnlabeled,
+			LimitRows:            int64(pageSize + 1),
+		})
+		if queryErr != nil {
+			return serverapi.WorkflowBoardNodeCardsListResponse{}, queryErr
+		}
+		tasks = boardNodeTaskRecordsGeneralized(rows)
 	}
-	dependencyProgressByTaskID, err := boardDependencyProgressByTaskID(rows)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	tasks := boardNodeTaskRecords(rows)
 	hasExtra := len(tasks) > pageSize
 	if hasExtra {
 		tasks = tasks[:pageSize]
@@ -184,11 +279,12 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		slices.Reverse(tasks)
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	currentNodesByTaskID, err := b.currentNodesByTask(ctx, tasks)
+	taskRecords := boardNodeCardTaskRecords(tasks)
+	currentNodesByTaskID, err := b.currentNodesByTask(ctx, taskRecords)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	taskIDs := taskIDs(tasks)
+	taskIDs := taskIDs(taskRecords)
 	statusesByTaskID, err := loadWorkflowTaskStatusFacts(ctx, b.queries, b.projector, taskIDs)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
@@ -207,25 +303,24 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
 	for _, task := range tasks {
-		canDelete, exists := quiescenceByTaskID[workflow.TaskID(task.ID)]
+		canDelete, exists := quiescenceByTaskID[workflow.TaskID(task.task.ID)]
 		if !exists {
-			return serverapi.WorkflowBoardNodeCardsListResponse{}, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", task.ID)
+			return serverapi.WorkflowBoardNodeCardsListResponse{}, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", task.task.ID)
 		}
-		status := taskDetailStatusFact(statusesByTaskID[task.ID], liveExecutionsByTaskID[task.ID])
+		status := taskDetailStatusFact(statusesByTaskID[task.task.ID], liveExecutionsByTaskID[task.task.ID])
 		card, _ := b.card(
-			task,
+			task.task,
 			status,
-			currentNodesByTaskID[task.ID],
-			liveExecutionsByTaskID[task.ID],
+			currentNodesByTaskID[task.task.ID],
+			liveExecutionsByTaskID[task.task.ID],
 			canDelete,
-			labelIDsByTask[task.ID],
+			labelIDsByTask[task.task.ID],
 			snapshot,
-			sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary),
-			dependencyProgressByTaskID[task.ID],
+			sourceWorkspaceForTask(task.task, workspaceContext.byID, workspaceContext.primary),
 		)
 		cards = append(cards, card)
 	}
-	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowID, nodeID, labelFilter, cursor, tasks, hasExtra)
+	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowID, nodeID, labelFilter, sort, cursor, tasks, hasExtra)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -240,12 +335,12 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
+func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID string, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
 	if len(taskIDs) == 0 {
 		return map[string][]sessionruntime.TaskExecution{}, nil
 	}
 	snapshots, err := b.authority.CurrentScopedTaskExecutionSnapshots(
-		projectID, workflowID, workflowTaskIDs(taskIDs),
+		projectID, workflow.WorkflowID(workflowID), workflowTaskIDs(taskIDs),
 	)
 	if err != nil {
 		return nil, err
@@ -273,7 +368,7 @@ func (b *Board) currentNodesByTask(ctx context.Context, tasks []sqlitegen.TaskRe
 	return byTaskID, nil
 }
 
-func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary, dependencyProgress *serverapi.WorkflowTaskDependencyProgress) (serverapi.WorkflowBoardTaskCard, bool) {
+func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
 	facts := b.projector.ProjectTaskFacts(TaskFactsInput{
 		Task:           task,
 		Status:         status,
@@ -283,39 +378,18 @@ func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, c
 		CanDelete:      canDelete,
 	})
 	return serverapi.WorkflowBoardTaskCard{
-		TaskID:             task.ID,
-		ShortID:            task.ShortID,
-		Title:              task.Title,
-		Preview:            markdownPreview(task.Body),
-		WorkflowID:         task.WorkflowID,
-		ActiveNodeIDs:      append([]string(nil), facts.Status.NodeIDs...),
-		SourceWorkspace:    sourceWorkspace,
-		Status:             facts.Status,
-		Actions:            facts.Actions,
-		LabelIDs:           labelIDs,
-		DependencyProgress: dependencyProgress,
-		UpdatedAtUnixMs:    task.UpdatedAtUnixMs,
+		TaskID:          task.ID,
+		ShortID:         task.ShortID,
+		Title:           task.Title,
+		Preview:         markdownPreview(task.Body),
+		WorkflowID:      task.WorkflowID,
+		ActiveNodeIDs:   append([]string(nil), facts.Status.NodeIDs...),
+		SourceWorkspace: sourceWorkspace,
+		Status:          facts.Status,
+		Actions:         facts.Actions,
+		LabelIDs:        labelIDs,
+		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
 	}, facts.Done
-}
-
-func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {
-	progress := make(map[string]*serverapi.WorkflowTaskDependencyProgress)
-	for _, row := range rows {
-		if row.DependencySatisfiedCount.Valid != row.DependencyTotalCount.Valid {
-			return nil, fmt.Errorf("board task %q dependency aggregate has inconsistent absence", row.ID)
-		}
-		if !row.DependencyTotalCount.Valid {
-			continue
-		}
-		if row.DependencyTotalCount.Int64 < 1 || row.DependencySatisfiedCount.Int64 < 0 || row.DependencySatisfiedCount.Int64 > row.DependencyTotalCount.Int64 {
-			return nil, fmt.Errorf("board task %q dependency aggregate is invalid: satisfied=%d total=%d", row.ID, row.DependencySatisfiedCount.Int64, row.DependencyTotalCount.Int64)
-		}
-		progress[row.ID] = &serverapi.WorkflowTaskDependencyProgress{
-			SatisfiedCount: int(row.DependencySatisfiedCount.Int64),
-			TotalCount:     int(row.DependencyTotalCount.Int64),
-		}
-	}
-	return progress, nil
 }
 
 func taskIDs(tasks []sqlitegen.TaskRecord) []string {
@@ -334,10 +408,27 @@ func workflowTaskIDs(taskIDs []string) []workflow.TaskID {
 	return ids
 }
 
-func boardNodeTaskRecords(rows []sqlitegen.ListBoardNodeTasksRow) []sqlitegen.TaskRecord {
-	tasks := make([]sqlitegen.TaskRecord, 0, len(rows))
+type boardNodeCardsPageTask struct {
+	task          sqlitegen.TaskRecord
+	labelOrdinals *string
+	unlabeled     bool
+}
+
+func boardNodeTaskRecordsGeneralized(rows []sqlitegen.ListBoardNodeTasksGeneralizedRow) []boardNodeCardsPageTask {
+	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
 	for _, row := range rows {
-		tasks = append(tasks, sqlitegen.TaskRecord{
+		var labelOrdinals *string
+		switch value := row.LabelOrdinals.(type) {
+		case string:
+			labelOrdinals = &value
+		case []byte:
+			decoded := string(value)
+			labelOrdinals = &decoded
+		case nil:
+		default:
+			panic(fmt.Sprintf("board label ordinal key has unexpected type %T", row.LabelOrdinals))
+		}
+		tasks = append(tasks, boardNodeCardsPageTask{task: sqlitegen.TaskRecord{
 			ID:                          row.ID,
 			ProjectID:                   row.ProjectID,
 			ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
@@ -358,9 +449,156 @@ func boardNodeTaskRecords(rows []sqlitegen.ListBoardNodeTasksRow) []sqlitegen.Ta
 			CreatedAtUnixMs:             row.CreatedAtUnixMs,
 			UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
 			MetadataJson:                row.MetadataJson,
+		}, labelOrdinals: labelOrdinals, unlabeled: row.LabelsUnlabeled != 0})
+	}
+	return tasks
+}
+
+func boardNodeTaskRecordsUpdatedAsc(rows []sqlitegen.ListBoardNodeTasksUpdatedAscRow) []boardNodeCardsPageTask {
+	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, boardNodeCardsPageTask{
+			task: sqlitegen.TaskRecord{
+				ID:                          row.ID,
+				ProjectID:                   row.ProjectID,
+				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
+				WorkflowID:                  row.WorkflowID,
+				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
+				TaskSeq:                     row.TaskSeq,
+				ShortID:                     row.ShortID,
+				Title:                       row.Title,
+				Body:                        row.Body,
+				SourceUrl:                   row.SourceUrl,
+				SourceWorkspaceID:           row.SourceWorkspaceID,
+				ManagedWorktreeID:           row.ManagedWorktreeID,
+				ExecutionTargetMode:         row.ExecutionTargetMode,
+				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
+				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
+				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
+				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
+				CreatedAtUnixMs:             row.CreatedAtUnixMs,
+				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
+				MetadataJson:                row.MetadataJson,
+			},
+			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
+			unlabeled:     row.LabelsUnlabeled != 0,
 		})
 	}
 	return tasks
+}
+
+func boardNodeTaskRecordsUpdatedAscPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow) []boardNodeCardsPageTask {
+	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, boardNodeCardsPageTask{
+			task: sqlitegen.TaskRecord{
+				ID:                          row.ID,
+				ProjectID:                   row.ProjectID,
+				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
+				WorkflowID:                  row.WorkflowID,
+				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
+				TaskSeq:                     row.TaskSeq,
+				ShortID:                     row.ShortID,
+				Title:                       row.Title,
+				Body:                        row.Body,
+				SourceUrl:                   row.SourceUrl,
+				SourceWorkspaceID:           row.SourceWorkspaceID,
+				ManagedWorktreeID:           row.ManagedWorktreeID,
+				ExecutionTargetMode:         row.ExecutionTargetMode,
+				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
+				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
+				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
+				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
+				CreatedAtUnixMs:             row.CreatedAtUnixMs,
+				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
+				MetadataJson:                row.MetadataJson,
+			},
+			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
+			unlabeled:     row.LabelsUnlabeled != 0,
+		})
+	}
+	return tasks
+}
+
+func boardNodeTaskRecordsUpdatedDesc(rows []sqlitegen.ListBoardNodeTasksUpdatedDescRow) []boardNodeCardsPageTask {
+	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, boardNodeCardsPageTask{
+			task: sqlitegen.TaskRecord{
+				ID:                          row.ID,
+				ProjectID:                   row.ProjectID,
+				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
+				WorkflowID:                  row.WorkflowID,
+				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
+				TaskSeq:                     row.TaskSeq,
+				ShortID:                     row.ShortID,
+				Title:                       row.Title,
+				Body:                        row.Body,
+				SourceUrl:                   row.SourceUrl,
+				SourceWorkspaceID:           row.SourceWorkspaceID,
+				ManagedWorktreeID:           row.ManagedWorktreeID,
+				ExecutionTargetMode:         row.ExecutionTargetMode,
+				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
+				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
+				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
+				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
+				CreatedAtUnixMs:             row.CreatedAtUnixMs,
+				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
+				MetadataJson:                row.MetadataJson,
+			},
+			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
+			unlabeled:     row.LabelsUnlabeled != 0,
+		})
+	}
+	return tasks
+}
+
+func boardNodeTaskRecordsUpdatedDescPrevious(rows []sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow) []boardNodeCardsPageTask {
+	tasks := make([]boardNodeCardsPageTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, boardNodeCardsPageTask{
+			task: sqlitegen.TaskRecord{
+				ID:                          row.ID,
+				ProjectID:                   row.ProjectID,
+				ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
+				WorkflowID:                  row.WorkflowID,
+				WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
+				TaskSeq:                     row.TaskSeq,
+				ShortID:                     row.ShortID,
+				Title:                       row.Title,
+				Body:                        row.Body,
+				SourceUrl:                   row.SourceUrl,
+				SourceWorkspaceID:           row.SourceWorkspaceID,
+				ManagedWorktreeID:           row.ManagedWorktreeID,
+				ExecutionTargetMode:         row.ExecutionTargetMode,
+				ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
+				ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
+				ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
+				ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
+				CreatedAtUnixMs:             row.CreatedAtUnixMs,
+				UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
+				MetadataJson:                row.MetadataJson,
+			},
+			labelOrdinals: nullableLabelOrdinalKey(row.LabelOrdinals),
+			unlabeled:     row.LabelsUnlabeled != 0,
+		})
+	}
+	return tasks
+}
+
+func nullableLabelOrdinalKey(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func boardNodeCardTaskRecords(tasks []boardNodeCardsPageTask) []sqlitegen.TaskRecord {
+	records := make([]sqlitegen.TaskRecord, 0, len(tasks))
+	for _, task := range tasks {
+		records = append(records, task.task)
+	}
+	return records
 }
 
 type boardNodeCardsPageCursor struct {
@@ -369,8 +607,12 @@ type boardNodeCardsPageCursor struct {
 }
 
 type boardNodeCardsPageAnchor struct {
-	updatedAtUnixMs int64
-	taskID          string
+	updatedAtUnixMs *int64
+	createdAtUnixMs *int64
+	labelOrdinals   *string
+	unlabeled       *bool
+	title           *string
+	taskSeq         int64
 }
 
 type boardNodeCardsPageDirection string
@@ -382,17 +624,32 @@ const (
 )
 
 type boardNodeCardsPageTokenPayload struct {
-	Version         int                          `json:"version"`
-	ProjectID       string                       `json:"project_id"`
-	WorkflowID      runtimeids.WorkflowID        `json:"workflow_id"`
-	NodeID          string                       `json:"node_id"`
-	LabelFilter     workflowTaskLabelFilterFacts `json:"label_filter"`
-	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
-	TaskID          string                       `json:"task_id"`
-	Direction       boardNodeCardsPageDirection  `json:"direction"`
+	Version         int                                  `json:"version"`
+	ProjectID       string                               `json:"project_id"`
+	WorkflowID      string                               `json:"workflow_id"`
+	NodeID          string                               `json:"node_id"`
+	LabelFilter     workflowTaskLabelFilterFacts         `json:"label_filter"`
+	Sort            serverapi.WorkflowBoardNodeCardsSort `json:"sort"`
+	UpdatedAtUnixMs *int64                               `json:"updated_at_unix_ms,omitempty"`
+	CreatedAtUnixMs *int64                               `json:"created_at_unix_ms,omitempty"`
+	LabelOrdinals   *string                              `json:"label_ordinals,omitempty"`
+	Unlabeled       *bool                                `json:"unlabeled,omitempty"`
+	Title           *string                              `json:"title,omitempty"`
+	TaskSeq         int64                                `json:"task_seq"`
+	Direction       boardNodeCardsPageDirection          `json:"direction"`
 }
 
-func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts) (boardNodeCardsPageCursor, error) {
+func normalizeBoardNodeCardsSort(sort *serverapi.WorkflowBoardNodeCardsSort) serverapi.WorkflowBoardNodeCardsSort {
+	if sort == nil {
+		return serverapi.WorkflowBoardNodeCardsSort{
+			Field:     serverapi.WorkflowBoardNodeCardsSortFieldUpdated,
+			Direction: serverapi.WorkflowTaskListSortDirectionDesc,
+		}
+	}
+	return *sort
+}
+
+func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, sort serverapi.WorkflowBoardNodeCardsSort) (boardNodeCardsPageCursor, error) {
 	if token == nil {
 		return boardNodeCardsPageCursor{direction: boardNodeCardsPageDirectionOlder}, nil
 	}
@@ -411,14 +668,14 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID ru
 		payload.ProjectID != projectID ||
 		payload.WorkflowID != workflowID ||
 		payload.NodeID != nodeID ||
+		payload.Sort != sort ||
 		!payload.LabelFilter.validCanonical() ||
 		!payload.LabelFilter.equal(labelFilter) ||
 		strings.TrimSpace(payload.ProjectID) == "" ||
-		payload.WorkflowID.IsZero() ||
+		strings.TrimSpace(payload.WorkflowID) == "" ||
 		strings.TrimSpace(payload.NodeID) == "" ||
-		strings.TrimSpace(payload.TaskID) == "" ||
-		payload.TaskID != strings.TrimSpace(payload.TaskID) ||
-		payload.UpdatedAtUnixMs < 0 {
+		payload.TaskSeq < 1 ||
+		!boardNodeCardsPageAnchorMatchesSort(payload, sort) {
 		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
 	}
 	switch payload.Direction {
@@ -428,11 +685,60 @@ func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID ru
 	}
 	return boardNodeCardsPageCursor{
 		direction: payload.Direction,
-		anchor:    &boardNodeCardsPageAnchor{updatedAtUnixMs: payload.UpdatedAtUnixMs, taskID: payload.TaskID},
+		anchor: &boardNodeCardsPageAnchor{
+			updatedAtUnixMs: payload.UpdatedAtUnixMs,
+			createdAtUnixMs: payload.CreatedAtUnixMs,
+			labelOrdinals:   payload.LabelOrdinals,
+			unlabeled:       payload.Unlabeled,
+			title:           payload.Title,
+			taskSeq:         payload.TaskSeq,
+		},
 	}, nil
 }
 
-func boardNodeCardsPageTokens(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, cursor boardNodeCardsPageCursor, tasks []sqlitegen.TaskRecord, hasExtra bool) (*string, *string, error) {
+func boardNodeCardsPageAnchorMatchesSort(payload boardNodeCardsPageTokenPayload, sort serverapi.WorkflowBoardNodeCardsSort) bool {
+	if payload.UpdatedAtUnixMs != nil && *payload.UpdatedAtUnixMs < 0 || payload.CreatedAtUnixMs != nil && *payload.CreatedAtUnixMs < 0 {
+		return false
+	}
+	switch sort.Field {
+	case serverapi.WorkflowBoardNodeCardsSortFieldUpdated:
+		return payload.UpdatedAtUnixMs != nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil
+	case serverapi.WorkflowBoardNodeCardsSortFieldCreated:
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs != nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil
+	case serverapi.WorkflowBoardNodeCardsSortFieldLabels:
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.Unlabeled != nil && payload.Title == nil &&
+			((*payload.Unlabeled && payload.LabelOrdinals == nil) ||
+				(!*payload.Unlabeled && payload.LabelOrdinals != nil && *payload.LabelOrdinals == strings.TrimSpace(*payload.LabelOrdinals)))
+	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title != nil && *payload.Title == boardNodeCardsTitleSortValue(*payload.Title)
+	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil
+	default:
+		return false
+	}
+}
+
+func (a boardNodeCardsPageAnchor) sortValue(sort serverapi.WorkflowBoardNodeCardsSort) string {
+	switch sort.Field {
+	case serverapi.WorkflowBoardNodeCardsSortFieldUpdated:
+		return fmt.Sprintf("%020d", *a.updatedAtUnixMs)
+	case serverapi.WorkflowBoardNodeCardsSortFieldCreated:
+		return fmt.Sprintf("%020d", *a.createdAtUnixMs)
+	case serverapi.WorkflowBoardNodeCardsSortFieldLabels:
+		if a.labelOrdinals == nil {
+			return ""
+		}
+		return *a.labelOrdinals
+	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
+		return *a.title
+	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
+		return fmt.Sprintf("%020d", a.taskSeq)
+	default:
+		panic(fmt.Sprintf("board node cards sort invariant violated: unsupported field %q", sort.Field))
+	}
+}
+
+func boardNodeCardsPageTokens(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, sort serverapi.WorkflowBoardNodeCardsSort, cursor boardNodeCardsPageCursor, tasks []boardNodeCardsPageTask, hasExtra bool) (*string, *string, error) {
 	if len(tasks) == 0 {
 		return nil, nil, nil
 	}
@@ -444,25 +750,25 @@ func boardNodeCardsPageTokens(projectID string, workflowID runtimeids.WorkflowID
 	switch cursor.direction {
 	case boardNodeCardsPageDirectionOlder:
 		if cursor.anchor != nil {
-			previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, boardNodeCardsPageDirectionNewer, first)
+			previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, sort, boardNodeCardsPageDirectionNewer, first)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
 		if hasExtra {
-			nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, boardNodeCardsPageDirectionOlder, last)
+			nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, sort, boardNodeCardsPageDirectionOlder, last)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
 	case boardNodeCardsPageDirectionNewer:
 		if hasExtra {
-			previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, boardNodeCardsPageDirectionNewer, first)
+			previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, sort, boardNodeCardsPageDirectionNewer, first)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
-		nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, boardNodeCardsPageDirectionOlder, last)
+		nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, labelFilter, sort, boardNodeCardsPageDirectionOlder, last)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -472,16 +778,31 @@ func boardNodeCardsPageTokens(projectID string, workflowID runtimeids.WorkflowID
 	return previousPageToken, nextPageToken, nil
 }
 
-func boardNodeCardsPageToken(projectID string, workflowID runtimeids.WorkflowID, nodeID string, labelFilter workflowTaskLabelFilterFacts, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
+func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, sort serverapi.WorkflowBoardNodeCardsSort, direction boardNodeCardsPageDirection, task boardNodeCardsPageTask) (*string, error) {
 	payload := boardNodeCardsPageTokenPayload{
-		Version:         boardNodeCardsPageTokenVersion,
-		ProjectID:       projectID,
-		WorkflowID:      workflowID,
-		NodeID:          nodeID,
-		LabelFilter:     labelFilter,
-		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-		TaskID:          task.ID,
-		Direction:       direction,
+		Version:     boardNodeCardsPageTokenVersion,
+		ProjectID:   projectID,
+		WorkflowID:  workflowID,
+		NodeID:      nodeID,
+		LabelFilter: labelFilter,
+		Sort:        sort,
+		TaskSeq:     task.task.TaskSeq,
+		Direction:   direction,
+	}
+	switch sort.Field {
+	case serverapi.WorkflowBoardNodeCardsSortFieldUpdated:
+		payload.UpdatedAtUnixMs = &task.task.UpdatedAtUnixMs
+	case serverapi.WorkflowBoardNodeCardsSortFieldCreated:
+		payload.CreatedAtUnixMs = &task.task.CreatedAtUnixMs
+	case serverapi.WorkflowBoardNodeCardsSortFieldLabels:
+		payload.LabelOrdinals = task.labelOrdinals
+		payload.Unlabeled = &task.unlabeled
+	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
+		title := boardNodeCardsTitleSortValue(task.task.Title)
+		payload.Title = &title
+	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
+	default:
+		return nil, fmt.Errorf("board node cards sort invariant violated: unsupported field %q", sort.Field)
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -491,7 +812,16 @@ func boardNodeCardsPageToken(projectID string, workflowID runtimeids.WorkflowID,
 	return &token, nil
 }
 
-func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runtimeids.WorkflowID]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
+func boardNodeCardsTitleSortValue(title string) string {
+	return strings.Map(func(character rune) rune {
+		if character >= 'A' && character <= 'Z' {
+			return character + ('a' - 'A')
+		}
+		return character
+	}, title)
+}
+
+func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[string]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
 	links, err := b.queries.ListProjectWorkflowLinks(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
@@ -500,8 +830,8 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 	if err != nil {
 		return nil, nil, err
 	}
-	workflowIDs := make([]runtimeids.WorkflowID, 0, len(links))
-	linkByWorkflowID := map[runtimeids.WorkflowID]sqlitegen.ProjectWorkflowLinkRecord{}
+	workflowIDs := make([]string, 0, len(links))
+	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
 	for _, link := range links {
 		if _, exists := linkByWorkflowID[link.WorkflowID]; exists {
 			continue
@@ -509,13 +839,13 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 		linkByWorkflowID[link.WorkflowID] = link
 		workflowIDs = append(workflowIDs, link.WorkflowID)
 	}
-	activityByWorkflowID := map[runtimeids.WorkflowID]int64{}
+	activityByWorkflowID := map[string]int64{}
 	for _, activity := range taskActivityRows {
 		if _, linked := linkByWorkflowID[activity.WorkflowID]; linked {
 			activityByWorkflowID[activity.WorkflowID] = activity.LatestUpdatedAtUnixMs
 		}
 	}
-	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot, len(workflowIDs))
+	definitions := make(map[string]definitionSnapshot, len(workflowIDs))
 	picker := make([]serverapi.WorkflowPickerItem, 0, len(workflowIDs))
 	for _, workflowID := range workflowIDs {
 		snapshot, err := b.definitions.snapshot(ctx, workflowID)
@@ -535,7 +865,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 			Version:              snapshot.api.Workflow.Version,
 			IsProjectDefault:     link.IsDefault != 0,
 			ValidForTaskCreation: !validation.HasBlockingErrors(),
-			ValidationErrors:     ValidationErrors(workflow.WorkflowIDPointer(snapshot.api.Workflow.ID), validation.Errors),
+			ValidationErrors:     ValidationErrors(snapshot.api.Workflow.ID, validation.Errors),
 		})
 	}
 	sort.SliceStable(picker, func(i, j int) bool {
@@ -550,7 +880,7 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 	return definitions, picker, nil
 }
 
-func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID runtimeids.WorkflowID, labelFilter workflowTaskLabelFilterFacts) error {
+func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, labelFilter workflowTaskLabelFilterFacts) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
 		return err
@@ -582,6 +912,27 @@ func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.W
 	return nil
 }
 
+func (b *Board) projectWorkflowLinkID(ctx context.Context, projectID string, workflowID string) (string, error) {
+	links, err := b.queries.ListProjectWorkflowLinks(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	var linkID string
+	for _, link := range links {
+		if link.WorkflowID != workflowID {
+			continue
+		}
+		if linkID != "" {
+			return "", fmt.Errorf("workflow link invariant violated: project_id=%q workflow_id=%q has multiple links", projectID, workflowID)
+		}
+		linkID = link.ID
+	}
+	if linkID == "" {
+		return "", fmt.Errorf("workflow link not found: project_id=%q workflow_id=%q", projectID, workflowID)
+	}
+	return linkID, nil
+}
+
 type workflowBoardSelector interface {
 	selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem
 }
@@ -593,7 +944,7 @@ func (workflowBoardDefaultSelector) selectFrom(picker []serverapi.WorkflowPicker
 }
 
 type workflowBoardExplicitSelector struct {
-	workflowID runtimeids.WorkflowID
+	workflowID string
 }
 
 func (s workflowBoardExplicitSelector) selectFrom(picker []serverapi.WorkflowPickerItem) *serverapi.WorkflowPickerItem {
@@ -610,7 +961,7 @@ func workflowBoardSelectorFromRequest(req serverapi.WorkflowBoardRequest) workfl
 	return workflowBoardDefaultSelector{}
 }
 
-func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID runtimeids.WorkflowID) *serverapi.WorkflowPickerItem {
+func exactWorkflowBoardSelection(picker []serverapi.WorkflowPickerItem, workflowID string) *serverapi.WorkflowPickerItem {
 	for index := range picker {
 		if picker[index].WorkflowID == workflowID {
 			return &picker[index]

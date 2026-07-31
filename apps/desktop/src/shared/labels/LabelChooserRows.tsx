@@ -3,6 +3,7 @@ import { useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
+import type { VerticalReorderRow } from "@app/ui-kit";
 import type { ProjectLabel } from "@/api";
 import {
   ActionableListRow,
@@ -113,6 +114,7 @@ export function LabelResultRow({
   onDeleteOpenChange,
   onRename,
   onSelect,
+  reorderRow,
   selection,
 }: Readonly<{
   deletion: DeleteState | null;
@@ -122,6 +124,7 @@ export function LabelResultRow({
   onDeleteOpenChange(open: boolean): void;
   onRename(): void;
   onSelect(): void;
+  reorderRow?: VerticalReorderRow | undefined;
   selection: LabelResultRowSelection;
 }>) {
   const { t } = useTranslation();
@@ -162,6 +165,7 @@ export function LabelResultRow({
       highlighted={highlighted}
       name={label.name}
       onSelect={onSelect}
+      reorderRow={reorderRow}
       selection={selection}
     />
   );
@@ -193,12 +197,14 @@ function LabelSelectionRow({
   highlighted,
   name,
   onSelect,
+  reorderRow,
   selection,
 }: Readonly<{
   contextualActions?: ReactNode;
   highlighted: boolean;
   name: string;
   onSelect(): void;
+  reorderRow?: VerticalReorderRow | undefined;
   selection: LabelResultRowSelection;
 }>) {
   const { t } = useTranslation();
@@ -225,6 +231,9 @@ function LabelSelectionRow({
     <ActionableListRow
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
       contextualActions={contextualActions}
+      leadingActions={
+        reorderRow?.activator
+      }
       role="listitem"
       selectButtonProps={presentation.selectButtonProps}
       selected={presentation.selected}

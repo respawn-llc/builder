@@ -112,6 +112,14 @@ export function createProjectLabelEffects({
         authority.requestRefresh();
         return;
       }
+      if (event.resource === "label_catalog") {
+        authority.requestRefresh();
+        await refreshMembership({
+          kind: "subscription.refresh",
+          projectID,
+        });
+        return;
+      }
       if (event.resource !== "task" || event.workflowID === null) {
         return;
       }

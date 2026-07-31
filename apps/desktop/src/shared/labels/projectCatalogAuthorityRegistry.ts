@@ -39,8 +39,15 @@ class ProjectCatalogAuthorityRegistry {
     this.#queryClient = queryClient;
   }
 
-  prepare(projectID: string, listCatalog: () => Promise<ProjectLabelCatalog>): ProjectCatalogAuthorityLease {
-    const entry = this.#entries.get(projectID) ?? this.#createEntry(projectID, listCatalog);
+  prepare(
+    projectID: string,
+    listCatalog: () => Promise<ProjectLabelCatalog>,
+    reorderCatalog: (labelIDs: readonly string[]) => Promise<ProjectLabelCatalog>,
+    onReorderFailure: (error: unknown) => void,
+  ): ProjectCatalogAuthorityLease {
+    const entry =
+      this.#entries.get(projectID) ??
+      this.#createEntry(projectID, listCatalog, reorderCatalog, onReorderFailure);
     return {
       authority: entry.authority,
       dispatchFilterAction: (action) => {
@@ -52,12 +59,19 @@ class ProjectCatalogAuthorityRegistry {
     };
   }
 
-  #createEntry(projectID: string, listCatalog: () => Promise<ProjectLabelCatalog>): RegistryEntry {
+  #createEntry(
+    projectID: string,
+    listCatalog: () => Promise<ProjectLabelCatalog>,
+    reorderCatalog: (labelIDs: readonly string[]) => Promise<ProjectLabelCatalog>,
+    onReorderFailure: (error: unknown) => void,
+  ): RegistryEntry {
     const entry: RegistryEntry = {
       authority: createProjectCatalogAuthority({
         projectID,
         queryClient: this.#queryClient,
         listCatalog,
+        reorderCatalog,
+        onReorderFailure,
       }),
       cleanup: null,
       filterListeners: new Map(),

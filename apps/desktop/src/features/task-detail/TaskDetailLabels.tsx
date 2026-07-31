@@ -3,7 +3,12 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
-import { LabelChooser, useProjectLabelCatalog, useTaskLabelAssignment } from "@/shared/labels";
+import {
+  LabelChooser,
+  selectOrderedProjectLabels,
+  useProjectLabelCatalog,
+  useTaskLabelAssignment,
+} from "@/shared/labels";
 import { Badge, Button, Spinner } from "@/ui";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 
@@ -11,15 +16,11 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const assignment = useTaskLabelAssignment();
-  const labelNamesByID = useMemo(
-    () => new Map(catalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
-    [catalog.data?.labels],
-  );
   const selectedLabelIDs = assignment.snapshot.visibleLabelIDs;
-  const visibleLabels = selectedLabelIDs.flatMap((labelID) => {
-    const name = labelNamesByID.get(labelID);
-    return name === undefined ? [] : [{ id: labelID, name }];
-  });
+  const visibleLabels = useMemo(
+    () => selectOrderedProjectLabels(catalog.data?.labels, selectedLabelIDs),
+    [catalog.data?.labels, selectedLabelIDs],
+  );
   const pendingLabelIDs = new Set(assignment.snapshot.pendingLabelIDs);
   const triggerDisabled = disabled || assignment.snapshot.closed;
   const triggerLoading = catalog.isPending;

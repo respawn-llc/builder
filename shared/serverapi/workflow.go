@@ -1292,8 +1292,34 @@ type WorkflowBoardNodeCardsListRequest struct {
 	WorkflowID  runtimeids.WorkflowID   `json:"workflow_id"`
 	NodeID      string                  `json:"node_id"`
 	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
+	Sort        *WorkflowBoardNodeCardsSort `json:"sort,omitempty"`
 	PageSize    int                     `json:"page_size"`
 	PageToken   *string                 `json:"page_token"`
+}
+
+type WorkflowBoardNodeCardsSortField string
+
+const (
+	WorkflowBoardNodeCardsSortFieldUpdated WorkflowBoardNodeCardsSortField = "updated"
+	WorkflowBoardNodeCardsSortFieldCreated WorkflowBoardNodeCardsSortField = "created"
+	WorkflowBoardNodeCardsSortFieldLabels  WorkflowBoardNodeCardsSortField = "labels"
+	WorkflowBoardNodeCardsSortFieldTitle   WorkflowBoardNodeCardsSortField = "title"
+	WorkflowBoardNodeCardsSortFieldShortID WorkflowBoardNodeCardsSortField = "short_id"
+)
+
+type WorkflowBoardNodeCardsSort struct {
+	Field     WorkflowBoardNodeCardsSortField `json:"field"`
+	Direction WorkflowTaskListSortDirection   `json:"direction"`
+}
+
+func (r WorkflowBoardNodeCardsListRequest) CanonicalSort() WorkflowBoardNodeCardsSort {
+	if r.Sort == nil {
+		return WorkflowBoardNodeCardsSort{
+			Field:     WorkflowBoardNodeCardsSortFieldUpdated,
+			Direction: WorkflowTaskListSortDirectionDesc,
+		}
+	}
+	return *r.Sort
 }
 
 type WorkflowBoardNodeCardsListResponse struct {
@@ -1416,6 +1442,7 @@ const (
 	WorkflowProjectEventResourceWorkflowLink = protocol.WorkflowProjectEventResourceWorkflowLink
 	WorkflowProjectEventResourceTask         = protocol.WorkflowProjectEventResourceTask
 	WorkflowProjectEventResourceLabel        = protocol.WorkflowProjectEventResourceLabel
+	WorkflowProjectEventResourceLabelCatalog = protocol.WorkflowProjectEventResourceLabelCatalog
 )
 
 type WorkflowProjectEventAction = protocol.WorkflowProjectEventAction
@@ -1452,6 +1479,7 @@ const (
 	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
 	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
+	WorkflowProjectEventActionReordered              = protocol.WorkflowProjectEventActionReordered
 )
 
 type WorkflowProjectEvent struct {
@@ -1508,6 +1536,19 @@ func (e WorkflowProjectEvent) Validate() error {
 		}
 		if e.WorkflowID != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidMode, "workflow_id", "workflow_id must be absent for label events")
+		}
+	case WorkflowProjectEventResourceLabelCatalog:
+		if e.ProjectID == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "project_id", "project_id is required")
+		}
+		if e.WorkflowID != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "workflow_id", "workflow_id must be absent for label catalog events")
+		}
+		if e.PrimaryEntityID != *e.ProjectID {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "primary_entity_id", "label catalog events must use project_id as primary_entity_id")
+		}
+		if len(e.RelatedIDs) != 0 {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "related_ids", "label catalog events must not have related IDs")
 		}
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "resource", "resource is invalid")
@@ -1581,6 +1622,8 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 			WorkflowProjectEventActionDeleted:
 			return true
 		}
+	case WorkflowProjectEventResourceLabelCatalog:
+		return action == WorkflowProjectEventActionReordered
 	}
 	return false
 }
@@ -2981,6 +3024,22 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 	}
 	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	}
+	if r.Sort != nil {
+		switch r.Sort.Field {
+		case WorkflowBoardNodeCardsSortFieldUpdated,
+			WorkflowBoardNodeCardsSortFieldCreated,
+			WorkflowBoardNodeCardsSortFieldLabels,
+			WorkflowBoardNodeCardsSortFieldTitle,
+			WorkflowBoardNodeCardsSortFieldShortID:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.field", "board sort field is invalid")
+		}
+		switch r.Sort.Direction {
+		case WorkflowTaskListSortDirectionAsc, WorkflowTaskListSortDirectionDesc:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.direction", "sort direction must be asc or desc")
+		}
 	}
 	return nil
 }
