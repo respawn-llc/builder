@@ -541,7 +541,7 @@ func materializeCompletionTargetCurrentNode(
 		}
 		priorValues.SetTransitionParameter(requirement.TransitionKey, requirement.ParameterName, value)
 	}
-	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource)
+	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource, transitionBranchKey)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -614,6 +614,7 @@ func completionTargetSession(
 	definition workflow.Definition,
 	edge workflow.Edge,
 	source workflow.CurrentNode,
+	targetBranchKey *workflow.TransitionBranchKey,
 ) (*runtimeids.SessionID, error) {
 	if edge.ContextMode == workflow.ContextModeNewSession {
 		return nil, nil
@@ -649,7 +650,7 @@ func completionTargetSession(
 		targetReference, err := workflow.NewCurrentNodeReference(
 			source.Reference.TaskID,
 			edge.TargetNodeID,
-			currentNodeReferenceBranchKey(source.Reference),
+			targetBranchKey,
 		)
 		if err != nil {
 			return nil, err
