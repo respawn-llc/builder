@@ -402,4 +402,4 @@
 - [x] Add regression coverage for empty unfiltered and filtered dependency-list responses.
 - [x] Re-run the previously reported transcript replacement test directly; it passes in isolation.
 - [x] Confirm no new implementation or compliance findings remain in re-review.
-- [x] Human-authorized scope: browser visual QA and the separate end-to-end CLI/GUI acceptance pass belong to the separate QA agent, not this implementation task.
+- [x] Human-authorized scope recorded in KENT-210 comment `comment-6ded210e-8fdb-455e-ae37-fb8ce544e128`: browser visual QA and the separate end-to-end CLI/GUI acceptance pass belong to the separate QA agent, not this implementation task.
