@@ -101,6 +101,26 @@ func TestWorkflowIdentityMigrationConvertsRelationalIDsAndSnapshotsAtomically(t 
 	if foreignKeyViolations != 0 {
 		t.Fatalf("foreign key violations = %d, want 0", foreignKeyViolations)
 	}
+	var migratedDefaultWorkflowLink sql.NullString
+	if err := db.QueryRow(`SELECT default_project_workflow_link_id FROM projects WHERE id = 'project-b'`).Scan(&migratedDefaultWorkflowLink); err != nil {
+		t.Fatalf("read migrated default workflow link: %v", err)
+	}
+	if migratedDefaultWorkflowLink.Valid {
+		t.Fatalf("migrated default workflow link = %q, want SQL NULL", migratedDefaultWorkflowLink.String)
+	}
+	if _, err := db.Exec(`UPDATE projects SET default_project_workflow_link_id = 'link-b' WHERE id = 'project-b'`); err != nil {
+		t.Fatalf("set default workflow link before deletion: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM project_workflow_links WHERE id = 'link-b'`); err != nil {
+		t.Fatalf("delete default workflow link: %v", err)
+	}
+	var defaultWorkflowLink sql.NullString
+	if err := db.QueryRow(`SELECT default_project_workflow_link_id FROM projects WHERE id = 'project-b'`).Scan(&defaultWorkflowLink); err != nil {
+		t.Fatalf("read deleted default workflow link: %v", err)
+	}
+	if defaultWorkflowLink.Valid {
+		t.Fatalf("deleted default workflow link = %q, want SQL NULL", defaultWorkflowLink.String)
+	}
 	gotSentinel, err := os.ReadFile(eventLogPath)
 	if err != nil {
 		t.Fatalf("read sentinel event log: %v", err)

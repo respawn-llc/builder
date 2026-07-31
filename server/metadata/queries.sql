@@ -838,7 +838,7 @@ WHERE workflow_edges.id = sqlc.arg(edge_id)
 -- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
@@ -1004,7 +1004,7 @@ WHERE project_workflow_links.id = sqlc.arg(id)
 
 -- name: GetProjectWorkflowUnlinkState :one
 SELECT
-    COALESCE(p.default_project_workflow_link_id, '') AS default_project_workflow_link_id,
+    p.default_project_workflow_link_id AS default_project_workflow_link_id,
     (SELECT CAST(COUNT(*) AS INTEGER) FROM project_workflow_links active WHERE active.project_id = p.id) AS active_link_count
 FROM projects p
 WHERE p.id = sqlc.arg(project_id);
@@ -1054,7 +1054,7 @@ WHERE id IN (
 -- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE default_project_workflow_link_id IN (
     SELECT id

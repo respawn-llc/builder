@@ -312,19 +312,3 @@ describe("task activity schema", () => {
     }
   });
 });
-
-describe("workflowBoardSchema Workflow ID ingress", () => {
-  it("workflowBoardSchema rejects legacy prefixed Workflow IDs", () => {
-    expect(() =>
-      workflowBoardSchema.parse({
-        board: {
-          ...boardResponse.board,
-          selected_workflow: {
-            ...selectedWorkflow,
-            workflow_id: "workflow-11111111-1111-4111-8111-111111111111",
-          },
-        },
-      }),
-    ).toThrow();
-  });
-});

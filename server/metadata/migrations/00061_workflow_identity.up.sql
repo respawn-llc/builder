@@ -11,10 +11,127 @@ DROP VIEW IF EXISTS task_records;
 DROP VIEW IF EXISTS project_workflow_link_records;
 
 DROP TRIGGER IF EXISTS project_workflow_links_default_delete;
+DROP TRIGGER IF EXISTS projects_default_workflow_link_insert;
+DROP TRIGGER IF EXISTS projects_default_workflow_link_update;
+DROP TRIGGER IF EXISTS projects_primary_workspace_insert;
+DROP TRIGGER IF EXISTS projects_primary_workspace_update;
 DROP TRIGGER IF EXISTS workflow_nodes_current_task_anchor_delete;
 DROP TRIGGER IF EXISTS workflow_nodes_group_workflow_insert;
 DROP TRIGGER IF EXISTS workflow_nodes_group_workflow_update;
 DROP TRIGGER IF EXISTS workflow_nodes_task_reference_kind_update;
+
+DROP INDEX IF EXISTS projects_project_key_idx;
+DROP INDEX IF EXISTS projects_primary_workspace_idx;
+
+CREATE TABLE projects_new (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    project_key TEXT NOT NULL DEFAULT '',
+    next_task_seq INTEGER NOT NULL DEFAULT 1 CHECK (next_task_seq >= 1),
+    default_project_workflow_link_id TEXT,
+    primary_workspace_id TEXT NOT NULL DEFAULT ''
+);
+
+INSERT INTO projects_new (
+    id,
+    display_name,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    metadata_json,
+    project_key,
+    next_task_seq,
+    default_project_workflow_link_id,
+    primary_workspace_id
+)
+SELECT
+    id,
+    display_name,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    metadata_json,
+    project_key,
+    next_task_seq,
+    NULLIF(default_project_workflow_link_id, ''),
+    primary_workspace_id
+FROM projects;
+
+DROP TABLE projects;
+ALTER TABLE projects_new RENAME TO projects;
+
+CREATE UNIQUE INDEX projects_project_key_idx
+    ON projects(project_key)
+    WHERE project_key != '';
+
+CREATE INDEX projects_primary_workspace_idx
+    ON projects(primary_workspace_id)
+    WHERE primary_workspace_id != '';
+
+-- +goose StatementBegin
+CREATE TRIGGER projects_default_workflow_link_insert
+BEFORE INSERT ON projects
+FOR EACH ROW
+WHEN NEW.default_project_workflow_link_id IS NOT NULL
+ AND NOT EXISTS (
+    SELECT 1
+    FROM project_workflow_links pwl
+    WHERE pwl.id = NEW.default_project_workflow_link_id
+      AND pwl.project_id = NEW.id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'default workflow link must belong to project');
+END;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER projects_default_workflow_link_update
+BEFORE UPDATE OF id, default_project_workflow_link_id ON projects
+FOR EACH ROW
+WHEN NEW.default_project_workflow_link_id IS NOT NULL
+ AND NOT EXISTS (
+    SELECT 1
+    FROM project_workflow_links pwl
+    WHERE pwl.id = NEW.default_project_workflow_link_id
+      AND pwl.project_id = NEW.id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'default workflow link must belong to project');
+END;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER projects_primary_workspace_insert
+BEFORE INSERT ON projects
+FOR EACH ROW
+WHEN NEW.primary_workspace_id != ''
+ AND NOT EXISTS (
+    SELECT 1
+    FROM workspaces w
+    WHERE w.id = NEW.primary_workspace_id
+      AND w.project_id = NEW.id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'primary workspace must belong to project');
+END;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER projects_primary_workspace_update
+BEFORE UPDATE OF id, primary_workspace_id ON projects
+FOR EACH ROW
+WHEN NEW.primary_workspace_id != ''
+ AND NOT EXISTS (
+    SELECT 1
+    FROM workspaces w
+    WHERE w.id = NEW.primary_workspace_id
+      AND w.project_id = NEW.id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'primary workspace must belong to project');
+END;
+-- +goose StatementEnd
 
 CREATE TABLE workflows_new (
     id BLOB NOT NULL PRIMARY KEY CHECK (typeof(id) = 'blob' AND length(id) = 16),
@@ -283,7 +400,7 @@ AFTER DELETE ON project_workflow_links
 FOR EACH ROW
 BEGIN
     UPDATE projects
-    SET default_project_workflow_link_id = ''
+    SET default_project_workflow_link_id = NULL
     WHERE id = OLD.project_id
       AND default_project_workflow_link_id = OLD.id;
 END;

@@ -297,7 +297,7 @@ func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskPa
 const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = ?1
 WHERE default_project_workflow_link_id IN (
     SELECT id
@@ -323,7 +323,7 @@ func (q *Queries) ClearDeletedWorkflowDefaultProjectLinks(ctx context.Context, a
 const clearProjectDefaultWorkflowLinks = `-- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = ?1
 WHERE id = ?2
 `
@@ -1484,14 +1484,14 @@ func (q *Queries) GetProjectWorkflowLink(ctx context.Context, id string) (Projec
 
 const getProjectWorkflowUnlinkState = `-- name: GetProjectWorkflowUnlinkState :one
 SELECT
-    COALESCE(p.default_project_workflow_link_id, '') AS default_project_workflow_link_id,
+    p.default_project_workflow_link_id AS default_project_workflow_link_id,
     (SELECT CAST(COUNT(*) AS INTEGER) FROM project_workflow_links active WHERE active.project_id = p.id) AS active_link_count
 FROM projects p
 WHERE p.id = ?1
 `
 
 type GetProjectWorkflowUnlinkStateRow struct {
-	DefaultProjectWorkflowLinkID string
+	DefaultProjectWorkflowLinkID sql.NullString
 	ActiveLinkCount              int64
 }
 
@@ -7322,7 +7322,7 @@ WHERE id = ?3
 `
 
 type SetProjectDefaultWorkflowLinkParams struct {
-	ProjectWorkflowLinkID string
+	ProjectWorkflowLinkID sql.NullString
 	UpdatedAtUnixMs       int64
 	ProjectID             string
 }

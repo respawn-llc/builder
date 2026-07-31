@@ -107,7 +107,7 @@ type Project struct {
 	MetadataJson                 string
 	ProjectKey                   string
 	NextTaskSeq                  int64
-	DefaultProjectWorkflowLinkID string
+	DefaultProjectWorkflowLinkID sql.NullString
 	PrimaryWorkspaceID           string
 }
 

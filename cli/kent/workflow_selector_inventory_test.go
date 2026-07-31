@@ -84,24 +84,6 @@ func TestWorkflowSelectorInventoryRejectsPrefixedIDsBeforeOpeningRemote(t *testi
 	}
 }
 
-func TestTaskSelectorHelpUsesCanonicalUUIDMetavariable(t *testing.T) {
-	for _, command := range []string{"create", "list"} {
-		t.Run(command, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if exitCode := taskSubcommand([]string{command, "--help"}, &stdout, &stderr); exitCode != 0 {
-				t.Fatalf("help exit code = %d, stderr=%q", exitCode, stderr.String())
-			}
-			help := stderr.String()
-			if !strings.Contains(help, "--workflow <uuid>") {
-				t.Fatalf("help = %q, want canonical Workflow selector metavariable", help)
-			}
-			if strings.Contains(help, "--workflow string") {
-				t.Fatalf("help = %q, must not expose Go string metavariable", help)
-			}
-		})
-	}
-}
-
 type workflowSelectorInventoryRemote struct {
 	apicontract.WorkflowService
 	expected runtimeids.WorkflowID

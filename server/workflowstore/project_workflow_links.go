@@ -103,7 +103,7 @@ func (s *Store) shouldSetWorkflowLinkDefault(ctx context.Context, q *sqlitegen.Q
 
 func setProjectDefaultWorkflowLink(ctx context.Context, q *sqlitegen.Queries, now int64, projectID string, linkID string) error {
 	count, err := q.SetProjectDefaultWorkflowLink(ctx, sqlitegen.SetProjectDefaultWorkflowLinkParams{
-		ProjectWorkflowLinkID: linkID,
+		ProjectWorkflowLinkID: sql.NullString{String: linkID, Valid: true},
 		UpdatedAtUnixMs:       now,
 		ProjectID:             projectID,
 	})
@@ -235,7 +235,7 @@ func (s *Store) UnlinkProjectWorkflow(ctx context.Context, linkID string, replac
 			if err != nil {
 				return ProjectWorkflowUnlinkResult{}, err
 			}
-			if state.DefaultProjectWorkflowLinkID == link.ID && state.ActiveLinkCount > 1 {
+			if state.DefaultProjectWorkflowLinkID.Valid && state.DefaultProjectWorkflowLinkID.String == link.ID && state.ActiveLinkCount > 1 {
 				result.Blockers = append(result.Blockers, ProjectWorkflowUnlinkBlocker{
 					Code:    "default_replacement_required",
 					Message: "Default workflow link requires a replacement before unlinking because this project has other linked workflows.",
