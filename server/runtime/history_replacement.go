@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/transcript"
 )
 
 func normalizeHistoryReplacementEngine(engine string) string {
@@ -75,14 +76,13 @@ func preservedUserMessageEntry(msg llm.Message) (ChatEntry, bool) {
 	// manual_compaction_carryover is the legacy wire name for any user message
 	// preserved across a compaction boundary.
 	messageType := llm.MessageTypeCompactionPreservedUserMessage
-	preserved := msg
-	preserved.Role = llm.RoleDeveloper
-	preserved.MessageType = &messageType
-	entry, ok := visibleDeveloperChatEntry(preserved)
-	if !ok {
-		return ChatEntry{}, false
-	}
-	return clonePersistedChatEntry(entry), true
+	return ChatEntry{
+		Visibility:   messageTypeTranscriptVisibility(&messageType),
+		Role:         string(transcript.EntryRoleCompactionPreservedUserMessage),
+		Text:         *msg.Content,
+		MessageType:  messageType,
+		CompactLabel: compactLabelForMessage(llm.Message{MessageType: &messageType}),
+	}, true
 }
 
 func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
