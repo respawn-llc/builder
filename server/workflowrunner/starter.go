@@ -415,6 +415,10 @@ func (s *Starter) planCurrentNodeSession(
 	root workflowstore.ExecutionRoot,
 	sessionPrepared bool,
 ) (launch.SessionPlan, bool, error) {
+	policy, err := resolveCurrentNodeSessionPolicy(input)
+	if err != nil {
+		return launch.SessionPlan{}, false, err
+	}
 	cfg := s.cfg
 	cfg.WorkspaceRoot = root.SourceWorkspaceRoot
 	containerDir := filepath.Join(cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions")
@@ -426,8 +430,7 @@ func (s *Starter) planCurrentNodeSession(
 		}
 		intent = serverapi.OpenExistingSessionLaunchIntent(*input.CurrentNode.SessionID)
 	} else {
-		var err error
-		intent, disposable, err = s.currentNodeSessionIntent(input, containerDir)
+		intent, disposable, err = s.currentNodeSessionIntent(input, containerDir, policy)
 		if err != nil {
 			return launch.SessionPlan{}, false, err
 		}
@@ -458,8 +461,11 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, disposable, err
 		}
 	}
-	if err := validateRetainedWorkflowSessionAgentRole(input, plan); err != nil {
+	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
+	}
+	if policy.assignee != currentNodeSessionAssigneeEstablishTarget {
+		return plan, disposable, nil
 	}
 	err = s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var applyErr error
@@ -475,8 +481,67 @@ func (s *Starter) planCurrentNodeSession(
 	return plan, disposable, err
 }
 
-func validateRetainedWorkflowSessionAgentRole(input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan) error {
-	if input.CurrentNode.SessionID == nil || input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+type currentNodeSessionAssigneePolicy uint8
+
+const (
+	currentNodeSessionAssigneeEstablishTarget currentNodeSessionAssigneePolicy = iota + 1
+	currentNodeSessionAssigneeRequireTargetMatch
+	currentNodeSessionAssigneePreserve
+)
+
+type currentNodeSessionPolicy struct {
+	cloneRetainedSession bool
+	assignee             currentNodeSessionAssigneePolicy
+}
+
+func resolveCurrentNodeSessionPolicy(input workflowstore.CurrentNodeStartContext) (currentNodeSessionPolicy, error) {
+	source := workflow.CanonicalContextSource(input.EnteringEdge.ContextSource)
+	targetOwned := false
+	switch source.Kind {
+	case workflow.ContextSourceImmediateSource, workflow.ContextSourceSelectedNode:
+	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
+		targetOwned = true
+	default:
+		return currentNodeSessionPolicy{}, fmt.Errorf(
+			"current node session policy does not support context source %q",
+			source.Kind,
+		)
+	}
+	switch input.ContextMode {
+	case workflow.ContextModeNewSession:
+		return currentNodeSessionPolicy{
+			assignee: currentNodeSessionAssigneeEstablishTarget,
+		}, nil
+	case workflow.ContextModeCompactAndContinueSession:
+		return currentNodeSessionPolicy{
+			cloneRetainedSession: input.IsFanoutBranch && !targetOwned,
+			assignee:             currentNodeSessionAssigneeEstablishTarget,
+		}, nil
+	case workflow.ContextModeContinueSession:
+		if targetOwned {
+			return currentNodeSessionPolicy{
+				assignee: currentNodeSessionAssigneePreserve,
+			}, nil
+		}
+		return currentNodeSessionPolicy{
+			cloneRetainedSession: input.IsFanoutBranch,
+			assignee:             currentNodeSessionAssigneeRequireTargetMatch,
+		}, nil
+	default:
+		return currentNodeSessionPolicy{}, fmt.Errorf(
+			"current node session policy does not support context mode %q",
+			input.ContextMode,
+		)
+	}
+}
+
+func validateRetainedWorkflowSessionAgentRole(
+	input workflowstore.CurrentNodeStartContext,
+	plan launch.SessionPlan,
+	policy currentNodeSessionPolicy,
+) error {
+	if input.CurrentNode.SessionID == nil ||
+		policy.assignee != currentNodeSessionAssigneeRequireTargetMatch {
 		return nil
 	}
 	roleOverride, err := workflowPromptOverrides(input.Node.SubagentRole).AgentRoleOverride()
@@ -511,11 +576,15 @@ func validateRetainedWorkflowSessionAgentRole(input workflowstore.CurrentNodeSta
 	)
 }
 
-func (s *Starter) currentNodeSessionIntent(input workflowstore.CurrentNodeStartContext, containerDir string) (serverapi.SessionLaunchIntent, bool, error) {
+func (s *Starter) currentNodeSessionIntent(
+	input workflowstore.CurrentNodeStartContext,
+	containerDir string,
+	policy currentNodeSessionPolicy,
+) (serverapi.SessionLaunchIntent, bool, error) {
 	if input.CurrentNode.SessionID == nil {
 		return serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), true, nil
 	}
-	if input.IsFanoutBranch && (input.ContextMode == workflow.ContextModeContinueSession || input.ContextMode == workflow.ContextModeCompactAndContinueSession) {
+	if policy.cloneRetainedSession {
 		id, err := s.cloneSourceSessionForFanout(containerDir, input.CurrentNode.SessionID.String())
 		if err != nil {
 			return serverapi.SessionLaunchIntent{}, false, err

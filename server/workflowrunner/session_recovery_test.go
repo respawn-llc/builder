@@ -60,13 +60,18 @@ func TestCurrentNodeSessionIntentReusesDirectRetainedSession(t *testing.T) {
 	}
 	starter := &Starter{}
 
-	intent, disposable, err := starter.currentNodeSessionIntent(workflowstore.CurrentNodeStartContext{
+	input := workflowstore.CurrentNodeStartContext{
 		CurrentNode: workflow.CurrentNode{
 			Reference: reference,
 			SessionID: &sessionID,
 		},
 		ContextMode: workflow.ContextModeContinueSession,
-	}, t.TempDir())
+	}
+	policy, err := resolveCurrentNodeSessionPolicy(input)
+	if err != nil {
+		t.Fatalf("resolveCurrentNodeSessionPolicy: %v", err)
+	}
+	intent, disposable, err := starter.currentNodeSessionIntent(input, t.TempDir(), policy)
 	if err != nil {
 		t.Fatalf("currentNodeSessionIntent: %v", err)
 	}
@@ -79,6 +84,27 @@ func TestCurrentNodeSessionIntentReusesDirectRetainedSession(t *testing.T) {
 			disposable,
 			sessionID,
 		)
+	}
+}
+
+func TestCurrentNodeSessionPolicyReusesTargetOwnedFanoutSession(t *testing.T) {
+	policy, err := resolveCurrentNodeSessionPolicy(workflowstore.CurrentNodeStartContext{
+		ContextMode:    workflow.ContextModeContinueSession,
+		IsFanoutBranch: true,
+		EnteringEdge: workflow.Edge{
+			ContextSource: workflow.ContextSource{
+				Kind: workflow.ContextSourcePreviousTargetOrNew,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveCurrentNodeSessionPolicy: %v", err)
+	}
+	if policy.cloneRetainedSession {
+		t.Fatal("previous-target fan-out continuation must reuse its target-owned Session")
+	}
+	if policy.assignee != currentNodeSessionAssigneePreserve {
+		t.Fatalf("previous-target assignee policy = %v, want preserve", policy.assignee)
 	}
 }
 
@@ -263,6 +289,9 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	if err := continuedStore.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("coder")}); err != nil {
 		t.Fatalf("set direct continuation role: %v", err)
 	}
+	if err := continuedStore.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+		t.Fatalf("lock direct continuation Session: %v", err)
+	}
 	continuedSessionID, err := runtimeids.ParseSessionID(continuedStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse direct continuation session id: %v", err)
@@ -276,6 +305,36 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	}
 	if directDisposable {
 		t.Fatal("cross-role direct continuation unexpectedly marked retained Session disposable")
+	}
+
+	input.IsFanoutBranch = true
+	input.EnteringEdge.ContextSource = workflow.ContextSource{
+		Kind: workflow.ContextSourcePreviousTargetOrNew,
+	}
+	targetOwnedPlan, targetOwnedDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
+	if err != nil {
+		t.Fatalf("plan target-owned continuation: %v", err)
+	}
+	if targetOwnedPlan.Descriptor.SessionID() != continuedSessionID || targetOwnedDisposable {
+		t.Fatalf(
+			"target-owned continuation = session %q disposable %t, want retained session %q",
+			targetOwnedPlan.Descriptor.SessionID(),
+			targetOwnedDisposable,
+			continuedSessionID,
+		)
+	}
+	targetOwnedRecord, err := metadataStore.ResolvePersistedSession(ctx, continuedSessionID.String())
+	if err != nil {
+		t.Fatalf("resolve target-owned continuation Session: %v", err)
+	}
+	if targetOwnedRecord.Meta == nil ||
+		targetOwnedRecord.Meta.Continuation == nil ||
+		targetOwnedRecord.Meta.Continuation.AgentRole == nil ||
+		*targetOwnedRecord.Meta.Continuation.AgentRole != "coder" {
+		t.Fatalf(
+			"target-owned continuation role = %+v, want preserved coder",
+			targetOwnedRecord.Meta,
+		)
 	}
 }
 
