@@ -296,7 +296,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	return result, nil
 }
 
-func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult, error) {
+func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (result ExecResult, err error) {
 	id := strings.TrimSpace(req.SessionID)
 	if id == "" {
 		return ExecResult{}, errors.New("session_id is required")
@@ -310,7 +310,10 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	defer func() {
 		entry.interactMu.Unlock()
 		if awaitTerminalDelivery {
-			<-entry.done
+			if deliveryErr := waitForTerminalDelivery(ctx, entry); deliveryErr != nil {
+				result = ExecResult{}
+				err = deliveryErr
+			}
 		}
 	}()
 
@@ -399,6 +402,23 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
 	}, nil
+}
+
+func waitForTerminalDelivery(ctx context.Context, entry *processEntry) error {
+	select {
+	case <-entry.done:
+		return nil
+	default:
+	}
+	select {
+	case <-entry.done:
+		return nil
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return &PollingCanceledError{SessionID: entry.id, Active: entry.snapshot().Running}
+		}
+		return ctx.Err()
+	}
 }
 
 func (m *Manager) Kill(id string) error {
