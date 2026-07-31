@@ -896,9 +896,6 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 		return nil, err
 	}
 	blockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), blockers...)
-	if len(blockers) > 0 {
-		return blockers, nil
-	}
 	preparedSessionIDs, err := s.queries.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
@@ -914,8 +911,11 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 			return nil, err
 		}
 		if len(runtimeBlockers) > 0 {
-			return runtimeBlockers, nil
+			blockers = append(blockers, runtimeBlockers...)
 		}
+	}
+	if len(blockers) > 0 {
+		return blockers, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

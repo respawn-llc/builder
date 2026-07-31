@@ -44,6 +44,15 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 	}
 }
 
+func TestProjectHomeSummaryValidateAllowsRootWorkspaceWithoutDisplayName(t *testing.T) {
+	summary := validProjectHomeSummaryForResponseTest()
+	summary.PrimaryWorkspace.RootPath = "/"
+	summary.PrimaryWorkspace.DisplayName = ""
+	if err := summary.Validate(); err != nil {
+		t.Fatalf("filesystem-root workspace summary rejected: %v", err)
+	}
+}
+
 func TestProjectHomeSummaryValidateAllowsLegacyEmptyProjectKey(t *testing.T) {
 	summary := validProjectHomeSummaryForResponseTest()
 	summary.ProjectKey = ""

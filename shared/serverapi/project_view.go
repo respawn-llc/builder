@@ -4,6 +4,7 @@ import (
 	"core/shared/runtimeids"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"core/shared/clientui"
@@ -188,13 +189,15 @@ func (s ProjectHomeSummary) Validate() error {
 		"project_id":               s.ProjectID,
 		"display_name":             s.DisplayName,
 		"primary_workspace_id":     s.PrimaryWorkspace.WorkspaceID,
-		"primary_workspace_name":   s.PrimaryWorkspace.DisplayName,
 		"primary_workspace_root":   s.PrimaryWorkspace.RootPath,
 		"primary_workspace_status": s.PrimaryWorkspace.Availability,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return errors.New(field + " must not be blank")
 		}
+	}
+	if strings.TrimSpace(s.PrimaryWorkspace.DisplayName) == "" && !isFilesystemRootPath(s.PrimaryWorkspace.RootPath) {
+		return errors.New("primary_workspace_name must not be blank")
 	}
 	if s.DefaultWorkflowID == nil {
 		if strings.TrimSpace(s.DefaultWorkflowName) != "" {
@@ -215,6 +218,11 @@ func (s ProjectHomeSummary) Validate() error {
 		return errors.New("default workflow validity must be true when a workflow is present")
 	}
 	return nil
+}
+
+func isFilesystemRootPath(path string) bool {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	return filepath.IsAbs(cleaned) && filepath.Dir(cleaned) == cleaned
 }
 
 func (r ProjectDefaultWorkspaceSetResponse) Validate() error {

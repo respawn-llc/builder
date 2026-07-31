@@ -447,6 +447,29 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 	}
 }
 
+func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(
+		ctx,
+		binding.ProjectID,
+		binding.WorkspaceID,
+		nil,
+		func(context.Context, []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Code:    "active_sessions",
+				Message: "Active runtime sessions still depend on this workspace.",
+				Count:   1,
+			}}, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "default_workspace")
+	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
+}
+
 func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
