@@ -59,10 +59,9 @@ func TestServiceTaskDependencyMutationEventsAreTypedAndIdempotent(t *testing.T) 
 	if err := list.Validate(); err != nil {
 		t.Fatalf("list Validate: %v", err)
 	}
-	if len(list.Directions) != 2 ||
-		list.Directions[0].Direction != serverapi.WorkflowTaskDependencyDirectionBlockedBy ||
-		list.Directions[1].Direction != serverapi.WorkflowTaskDependencyDirectionBlocks {
-		t.Fatalf("list response = %+v, want both direction envelopes", list)
+	if len(list.Directions) != 1 ||
+		list.Directions[0].Direction != serverapi.WorkflowTaskDependencyDirectionBlockedBy {
+		t.Fatalf("list response = %+v, want one non-empty blocked-by direction", list)
 	}
 
 	idempotent, err := service.AddWorkflowTaskDependency(ctx, serverapi.WorkflowTaskDependencyAddRequest{
