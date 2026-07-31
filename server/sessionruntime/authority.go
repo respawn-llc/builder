@@ -11,6 +11,8 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+
+	"github.com/google/uuid"
 )
 
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
@@ -48,10 +50,16 @@ type Authority struct {
 	byScope            map[runtimeids.ExecutionScopeID]*execution
 	workflowExecutions map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
 	resources          map[runtimeids.SessionID]*agentResource
+	pendingTerminals   map[runtimeids.SessionID]*pendingTerminalEvents
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
+}
+
+type pendingTerminalEvents struct {
+	events   []shelltool.Event
+	activity map[uuid.UUID]struct{}
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
@@ -59,6 +67,7 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
 		workflowExecutions: make(map[string]map[workflow.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
+		pendingTerminals:   make(map[runtimeids.SessionID]*pendingTerminalEvents),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
 		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,

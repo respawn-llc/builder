@@ -505,7 +505,7 @@ type recoverySchedulingObserver struct {
 
 func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
 func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
-func (s *recoverySchedulingObserver) DrainPendingNotices() []steeringIntent                  { return nil }
+func (s *recoverySchedulingObserver) flushPendingNotices(string) (int, error)                { return 0, nil }
 func (s *recoverySchedulingObserver) HasPendingNotices() bool                                { return false }
 func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool             { return false }
 

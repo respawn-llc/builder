@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -231,5 +233,58 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 				t.Fatalf("pending notice after completion = %t, want %t", got, tt.wantPending)
 			}
 		})
+	}
+}
+
+func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	if err := engine.ensureMetaContextForRequest(context.Background(), "seed"); err != nil {
+		t.Fatalf("prepare meta context: %v", err)
+	}
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
+	}
+	mustBlockTestEventLogAppends(t, store)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice steer unexpectedly succeeded")
+	}
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 2 || pending[0].sessionID != "first" || pending[1].sessionID != "second" {
+		t.Fatalf("restored pending notices = %+v", pending)
+	}
+}
+
+func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserverFailure(t *testing.T) {
+	observerErr := errors.New("background notice observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
+	}
+	gate.FailNext(observerErr)
+
+	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("flush error = %v, want observer failure", err)
+	}
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 1 || pending[0].sessionID != "second" {
+		t.Fatalf("pending notices after committed failure = %+v", pending)
 	}
 }

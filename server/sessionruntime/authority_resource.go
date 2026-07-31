@@ -975,6 +975,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
+	a.replayPendingTerminalEvents(resource)
 	return resource, nil
 }
 
