@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -291,16 +292,25 @@ func newGoalAuthorityFixture(
 
 func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.AgentRuntimePlan {
 	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference("goal-authority-test-task", "goal-authority-test-node", nil)
+	if err != nil {
+		t.Fatalf("create goal-authority Current Node reference: %v", err)
+	}
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:             settings,
-		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
-		Workdir:              workdir,
-		Client:               goalAuthorityClient{},
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{},
+		Settings:     settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		Workdir:      workdir,
+		Client:       goalAuthorityClient{},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: reference,
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

@@ -20,6 +20,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -390,6 +391,20 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return store, engine
+}
+
+func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExecutionConfig {
+	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference("runtime-control-test-task", "runtime-control-test-node", nil)
+	if err != nil {
+		t.Fatalf("create runtime-control Current Node reference: %v", err)
+	}
+	return &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: reference,
+		},
+	}
 }
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
@@ -1008,10 +1023,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	engine.SetQuestionsEnabled(false)
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1033,10 +1046,8 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
 	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1056,10 +1067,8 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1078,10 +1087,8 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
 	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set-user-goal", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
@@ -1104,11 +1111,8 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:  runtimeids.NewExecutionScopeID(),
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
 	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
