@@ -175,7 +175,9 @@ type Engine struct {
 	controlMutationMu sync.Mutex
 	// outputMutationMu keeps durable transcript writes, runtime projections, and
 	// event emission in one order for concurrent steering producers.
-	outputMutationMu sync.Mutex
+	outputMutationMu           sync.Mutex
+	workflowAssignmentMu       sync.Mutex
+	pendingWorkflowAssignments []queuedWorkflowAssignment
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -469,6 +471,7 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {

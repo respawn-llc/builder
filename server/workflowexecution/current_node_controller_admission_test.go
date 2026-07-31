@@ -396,7 +396,10 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		release: make(chan struct{}),
 	}
 	permit := NewMutationPermit()
-	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{AutomaticConcurrency: 1})
+	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    noOpCurrentNodeAssignmentSteerer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
 	}
@@ -509,7 +512,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 		{
 			name: "automatic queue",
 			apply: func(controller *CurrentNodeController) {
-				controller.automaticQueue = append(controller.automaticQueue, CurrentNodeAutomaticIntent{CurrentNode: reference})
+				controller.automaticQueue = append(controller.automaticQueue, currentNodeQueuedStart{reference: reference, automatic: true})
 			},
 		},
 		{

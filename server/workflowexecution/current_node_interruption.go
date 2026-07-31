@@ -124,17 +124,17 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			c.explicitQueue = explicitQueue
 
 			automaticQueue := c.automaticQueue[:0]
-			for _, intent := range c.automaticQueue {
-				if intent.CurrentNode.TaskID == selector.TaskID {
-					key, keyErr := intent.CurrentNode.Key()
+			for _, start := range c.automaticQueue {
+				if start.reference.TaskID == selector.TaskID {
+					key, keyErr := start.reference.Key()
 					if keyErr != nil {
 						return keyErr
 					}
 					delete(c.queued, key)
-					references = append(references, intent.CurrentNode)
+					references = append(references, start.reference)
 					continue
 				}
-				automaticQueue = append(automaticQueue, intent)
+				automaticQueue = append(automaticQueue, start)
 			}
 			c.automaticQueue = automaticQueue
 

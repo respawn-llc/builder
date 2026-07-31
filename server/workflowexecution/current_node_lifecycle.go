@@ -56,14 +56,22 @@ func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
 			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
 		}
+		starts, err := c.steerStartsAssignments(ctx, []currentNodeQueuedStart{{
+			reference:          started.Mutation.Created[0].Reference,
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+		}})
+		if err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
-			reference: started.Mutation.Created[0].Reference,
-		}); err != nil {
+		if err := c.queueExplicitStartLocked(starts[0]); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		return started, nil
@@ -149,21 +157,31 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		c.mu.Unlock()
 
-		apply := func() (workflowstore.PendingApprovalApplyResult, error) {
+		apply := func() (workflowstore.PendingApprovalApplyResult, []currentNodeQueuedStart, error) {
 			applied, err := c.store.ApplyPendingApproval(ctx, approvalID)
 			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
+				return workflowstore.PendingApprovalApplyResult{}, nil, err
 			}
 			starts, err := currentNodeExplicitStarts(applied.Mutation.Created)
 			if err != nil {
+				return workflowstore.PendingApprovalApplyResult{}, nil, err
+			}
+			return applied, starts, nil
+		}
+		if !sourceLive {
+			applied, starts, err := apply()
+			if err != nil {
+				return workflowstore.PendingApprovalApplyResult{}, err
+			}
+			starts, err = c.steerStartsAssignments(ctx, starts)
+			if err != nil {
+				return workflowstore.PendingApprovalApplyResult{}, err
+			}
+			if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			if sourceLive {
-				c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], starts...)
-				return applied, nil
-			}
 			for _, start := range starts {
 				if err := c.queueExplicitStartLocked(start); err != nil {
 					return workflowstore.PendingApprovalApplyResult{}, err
@@ -171,20 +189,29 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			return applied, nil
 		}
-		if !sourceLive {
-			return apply()
-		}
 		handle, live := c.authority.ExecutionByScope(sourceScopeID)
 		if !live {
 			return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
 		}
 		var applied workflowstore.PendingApprovalApplyResult
+		var starts []currentNodeQueuedStart
+		var pending []*pendingCurrentNodeAssignmentSteer
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			var applyErr error
-			applied, applyErr = apply()
+			applied, starts, applyErr = apply()
+			if applyErr != nil {
+				return applyErr
+			}
+			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
+			c.mu.Lock()
+			c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], starts...)
+			c.mu.Unlock()
 			return applyErr
 		})
-		return applied, err
+		if err != nil {
+			return workflowstore.PendingApprovalApplyResult{}, err
+		}
+		return applied, c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 }
 
@@ -213,6 +240,13 @@ func (c *CurrentNodeController) ApplyManualMove(
 		}
 		starts, err := currentNodeExplicitStarts(moved.Created)
 		if err != nil {
+			return workflowstore.ManualMoveResult{}, err
+		}
+		starts, err = c.steerStartsAssignments(ctx, starts)
+		if err != nil {
+			return workflowstore.ManualMoveResult{}, err
+		}
+		if err := waitCurrentNodeAssignmentSteers(ctx, starts); err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Lock()
@@ -292,8 +326,8 @@ func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (boo
 			return false, nil
 		}
 	}
-	for _, intent := range c.automaticQueue {
-		if intent.CurrentNode.TaskID == taskID {
+	for _, start := range c.automaticQueue {
+		if start.reference.TaskID == taskID {
 			return false, nil
 		}
 	}

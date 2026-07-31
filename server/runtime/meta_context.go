@@ -461,6 +461,32 @@ func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowr
 	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 }
 
+func buildWorkflowAssignmentMessage(assignment WorkflowAssignment) (llm.Message, error) {
+	var kind prompts.WorkflowTaskPromptKind
+	switch assignment.ContextMode {
+	case workflow.ContextModeNewSession:
+		kind = prompts.WorkflowTaskPromptInitialAssignment
+	case workflow.ContextModeContinueSession, workflow.ContextModeCompactAndContinueSession:
+		kind = prompts.WorkflowTaskPromptReassignment
+	default:
+		return llm.Message{}, fmt.Errorf("unsupported workflow assignment context mode %q", assignment.ContextMode)
+	}
+	message, ok, err := workflowModeMetaMessage(
+		kind,
+		assignment.CompletionMode,
+		&assignment.Prompt,
+		assignment.Prompt.TaskCommentCount,
+	)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	if !ok {
+		return llm.Message{}, errors.New("workflow assignment message is empty")
+	}
+	message.SourcePath = textutil.OptionalTrimmedString(assignment.Prompt.Identity)
+	return message, nil
+}
+
 func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (string, error) {
 	instructions := cfg.Instructions
 	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})

@@ -208,7 +208,7 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	}
 	planned := make(chan planResult, 1)
 	go func() {
-		plan, disposable, planErr := starter.planCurrentNodeSession(ctx, input, root)
+		plan, disposable, planErr := starter.planCurrentNodeSession(ctx, input, root, false)
 		result := planResult{disposable: disposable, err: planErr}
 		if planErr == nil {
 			result.sessionID = plan.Descriptor.SessionID()
@@ -270,7 +270,7 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	input.CurrentNode.SessionID = &continuedSessionID
 	input.ContextMode = workflow.ContextModeContinueSession
 
-	_, directDisposable, err := starter.planCurrentNodeSession(ctx, input, root)
+	_, directDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
 	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 		t.Fatalf("plan cross-role direct continuation error = %v, want %v", err, launch.ErrLockedAgentRoleChange)
 	}

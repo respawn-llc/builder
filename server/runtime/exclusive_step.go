@@ -131,6 +131,9 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
+	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
+		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
+	}
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
 		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
 	}

@@ -134,6 +134,23 @@ func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *test
 	}
 }
 
+func TestSelectWorkflowTaskPromptResumeNeverAppendsAssignment(t *testing.T) {
+	t.Parallel()
+	for _, items := range [][]llm.ResponseItem{
+		nil,
+		workflowPromptItems("run-previous"),
+		workflowPromptItems("run-current"),
+	} {
+		if _, ok := selectWorkflowTaskPrompt(
+			items,
+			"run-current",
+			workflowTaskPromptTriggerResumeDelivery,
+		); ok {
+			t.Fatalf("resume selected a workflow assignment for items %+v", items)
+		}
+	}
+}
+
 func TestSelectWorkflowTaskPromptForFanoutCloneWithInheritedAssignment(t *testing.T) {
 	t.Parallel()
 	source := mustCreateTestSession(t)
