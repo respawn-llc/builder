@@ -180,8 +180,8 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 		fixture.authority,
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: 1,
-			AssignmentSteerer:    taskStatusProjectionTestAssignmentSteerer{},
+			AgentConcurrency:  1,
+			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
 		},
 	)
 	if err != nil {
@@ -557,8 +557,8 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 		fixture.authority,
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: 1,
-			AssignmentSteerer:    taskStatusProjectionTestAssignmentSteerer{},
+			AgentConcurrency:  1,
+			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
 		},
 	)
 	if err != nil {
@@ -636,8 +636,8 @@ func TestTaskStatusDurableSnapshotCannotEscapeProjectionCallback(t *testing.T) {
 		fixture.authority,
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: 1,
-			AssignmentSteerer:    taskStatusProjectionTestAssignmentSteerer{},
+			AgentConcurrency:  1,
+			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
 		},
 	)
 	if err != nil {

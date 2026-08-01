@@ -278,8 +278,8 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 		fixture.authority,
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: 1,
-			AssignmentSteerer:    taskStatusProjectionTestAssignmentSteerer{},
+			AgentConcurrency:  1,
+			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
 		},
 	)
 	if err != nil {
