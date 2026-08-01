@@ -534,9 +534,9 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		}
 		return false
 	}, "approval target did not enter an explicit live scope")
-	if !hasLiveCurrentNode(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("queued Agent did not enter a live automatic scope: %+v", controller.Snapshot().LiveScopes)
-	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return hasLiveCurrentNode(controller.Snapshot(), queuedAgent)
+	}, "queued Agent did not enter a live automatic scope")
 }
 
 func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T) {

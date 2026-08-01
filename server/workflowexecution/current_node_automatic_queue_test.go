@@ -25,14 +25,15 @@ func TestCurrentNodeControllerLargeMixedKindQueueSelection(t *testing.T) {
 	agentAvailable := false
 	for queue.len() != 0 {
 		entry, ok := queue.selectEntry(nil, agentAvailable)
-		if !ok && !agentAvailable {
+		if !ok {
+			if agentAvailable {
+				t.Fatalf("queue lost an eligible entry with %d remaining", queue.len())
+			}
 			agentAvailable = true
 			continue
 		}
-		if !ok || entry.start.policy != currentNodeAdmissionAutomaticScript {
-			if !agentAvailable {
-				t.Fatalf("selected queue entry = %+v, want an admissible Script", entry)
-			}
+		if !agentAvailable && entry.start.policy != currentNodeAdmissionAutomaticScript {
+			t.Fatalf("selected queue entry = %+v, want an admissible Script", entry)
 		}
 		queue.remove(entry)
 	}
