@@ -289,6 +289,46 @@ func TestBoardListNodeCardsSupportsScalarSortsAndBidirectionalPagination(t *test
 	}
 }
 
+func TestBoardListNodeCardsTitleSortUsesUnicodeCaseFoldingAcrossPages(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	lower := fixture.startTask(t, "éclair")
+	upper := fixture.startTask(t, "Éclair")
+	sort := serverapi.WorkflowBoardNodeCardsSort{
+		Field:     serverapi.WorkflowBoardNodeCardsSortFieldTitle,
+		Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+	}
+	request := serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: fixture.workflowID,
+		NodeID:     string(fixture.agentNodeID),
+		PageSize:   1,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{
+			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
+		},
+		Sort: &sort,
+	}
+
+	var got []string
+	for {
+		page, err := fixture.board.ListNodeCards(fixture.ctx, request)
+		if err != nil {
+			t.Fatalf("ListNodeCards: %v", err)
+		}
+		if len(page.Cards) != 1 {
+			t.Fatalf("title-sort page cards = %+v, want one card", page.Cards)
+		}
+		got = append(got, page.Cards[0].TaskID)
+		if page.NextPageToken == nil {
+			break
+		}
+		request.PageToken = page.NextPageToken
+	}
+	want := []string{string(lower.task.ID), string(upper.task.ID)}
+	if !equalStrings(got, want) {
+		t.Fatalf("Unicode title-sort order = %v, want %v", got, want)
+	}
+}
+
 func TestBoardShortIDPageTokenRejectsExtraAnchorFields(t *testing.T) {
 	filter := workflowTaskLabelFilterFacts{
 		Kind:             serverapi.WorkflowTaskLabelFilterKindNone,

@@ -4353,7 +4353,7 @@ WHERE ?1 IS NULL
             (CASE ?2
                 WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
                 WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN LOWER(t.title)
+                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
                 WHEN 'short_id' THEN printf('%020d', t.task_seq)
                 ELSE NULL
             END, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
@@ -4361,7 +4361,7 @@ WHERE ?1 IS NULL
             (CASE ?2
                 WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
                 WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN LOWER(t.title)
+                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
                 WHEN 'short_id' THEN printf('%020d', t.task_seq)
                 ELSE NULL
             END, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
@@ -4374,7 +4374,7 @@ ORDER BY
         CASE args.sort_field
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             WHEN 'short_id' THEN printf('%020d', t.task_seq)
             ELSE t.label_ordinals
         END
@@ -4384,7 +4384,7 @@ ORDER BY
         CASE args.sort_field
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             WHEN 'short_id' THEN printf('%020d', t.task_seq)
             ELSE t.label_ordinals
         END
@@ -8078,13 +8078,13 @@ selected_rows AS (
         CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
         CAST(status.node_ids_json AS TEXT) AS node_ids_json,
         CAST(status.attention_types_json AS TEXT) AS attention_types_json,
-        LOWER(t.title) AS title_sort,
+        CAST(kent_label_casefold_v1_fold(t.title) AS TEXT) AS title_sort,
         CASE args.sort_1_field
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             ELSE ''
         END AS sort_1_value,
         CASE args.sort_2_field
@@ -8092,7 +8092,7 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             ELSE ''
         END AS sort_2_value,
         CASE args.sort_3_field
@@ -8100,7 +8100,7 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             ELSE ''
         END AS sort_3_value,
         CASE args.sort_4_field
@@ -8108,7 +8108,7 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             ELSE ''
         END AS sort_4_value,
         CASE args.sort_5_field
@@ -8116,7 +8116,7 @@ selected_rows AS (
             WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'status' THEN printf('%020d', status.primary_status_rank)
             WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             ELSE ''
         END AS sort_5_value
     FROM args

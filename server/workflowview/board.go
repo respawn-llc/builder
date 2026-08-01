@@ -16,6 +16,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/labelcontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -838,12 +839,7 @@ func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string,
 }
 
 func boardNodeCardsTitleSortValue(title string) string {
-	return strings.Map(func(character rune) rune {
-		if character >= 'A' && character <= 'Z' {
-			return character + ('a' - 'A')
-		}
-		return character
-	}, title)
+	return labelcontract.Fold(title)
 }
 
 func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[string]definitionSnapshot, []serverapi.WorkflowPickerItem, error) {
