@@ -10,11 +10,14 @@ func TestWorkspacePathKeyMigrationLeavesPreExistingRowsNull(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 62)
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 68)
 	if err != nil {
-		t.Fatalf("open version 62 database: %v", err)
+		t.Fatalf("open version 68 database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if columnExists(t, db, "workspaces", "managed_worktree_path_key") {
+		t.Fatal("workspace path-key column exists before migration 69")
+	}
 
 	const now = int64(1)
 	if _, err := db.Exec(`
@@ -36,7 +39,7 @@ VALUES ('workspace-path-key-migration', 'project-path-key-migration', '/tmp/path
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 63); err != nil {
+	if _, err := provider.UpTo(t.Context(), 69); err != nil {
 		t.Fatalf("apply workspace path-key migration: %v", err)
 	}
 	var key sql.NullString
