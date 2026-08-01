@@ -373,6 +373,30 @@ VALUES ('task-missing-workspace-snapshot', 'link-1', 1, 1, 'BLD-1', 'Task', 'Bod
 		})
 	})
 
+	t.Run("root source workspace snapshot may omit display name", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		root := string(filepath.Separator)
+		if volume := filepath.VolumeName(t.TempDir()); volume != "" {
+			root = volume + string(filepath.Separator)
+		}
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, root)
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+		execSeed(t, store.db, "terminal root task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-root-workspace', 'link-1', 1, 1, 'BLD-1', 'Root', 'Body', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', '', 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, root)
+		insertTaskCurrentNode(t, store.db, "task-root-workspace", "node-done", nil)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertNoWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
+	})
+
 	t.Run("missing retained session snapshot", func(t *testing.T) {
 		ctx := context.Background()
 		store, _, binding := newMetadataTestStore(t)

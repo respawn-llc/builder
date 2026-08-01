@@ -673,6 +673,37 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	return task_count, err
 }
 
+const listTasksMissingSourceWorkspaceDisplayName = `-- name: ListTasksMissingSourceWorkspaceDisplayName :many
+SELECT metadata_json
+FROM tasks
+WHERE source_workspace_id = ?1
+  AND json_valid(metadata_json)
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+ORDER BY rowid ASC
+`
+
+func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTasksMissingSourceWorkspaceDisplayName, workspaceID)
+	err = recordQueryError(ctx, err, listTasksMissingSourceWorkspaceDisplayName, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var metadata_json string
+		if err := recordQueryError(ctx, rows.Scan(&metadata_json), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, metadata_json)
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countSessionsMissingWorkspaceSnapshot = `-- name: CountSessionsMissingWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions

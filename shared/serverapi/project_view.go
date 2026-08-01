@@ -195,7 +195,7 @@ func (s ProjectHomeSummary) Validate() error {
 			return errors.New(field + " must not be blank")
 		}
 	}
-	if strings.TrimSpace(s.PrimaryWorkspace.DisplayName) == "" && !isFilesystemRootPath(s.PrimaryWorkspace.RootPath) {
+	if strings.TrimSpace(s.PrimaryWorkspace.DisplayName) == "" && !IsFilesystemRootPath(s.PrimaryWorkspace.RootPath) {
 		return errors.New("primary_workspace_name must not be blank")
 	}
 	if s.DefaultWorkflowID == nil {
@@ -219,15 +219,58 @@ func (s ProjectHomeSummary) Validate() error {
 	return nil
 }
 
-func isFilesystemRootPath(path string) bool {
+// IsFilesystemRootPath recognizes filesystem roots without applying local OS path rules.
+func IsFilesystemRootPath(path string) bool {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "/" {
 		return true
 	}
-	return len(trimmed) == 3 &&
-		((trimmed[0] >= 'a' && trimmed[0] <= 'z') || (trimmed[0] >= 'A' && trimmed[0] <= 'Z')) &&
-		trimmed[1] == ':' &&
-		(trimmed[2] == '/' || trimmed[2] == '\\')
+	if isWindowsDriveRoot(trimmed) {
+		return true
+	}
+	return isWindowsUNCRoot(trimmed)
+}
+
+func isWindowsDriveRoot(path string) bool {
+	return len(path) == 3 &&
+		((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) &&
+		path[1] == ':' &&
+		isPathSeparator(path[2])
+}
+
+func isWindowsUNCRoot(path string) bool {
+	if len(path) < 5 || !isPathSeparator(path[0]) || !isPathSeparator(path[1]) {
+		return false
+	}
+	index := 2
+	serverStart := index
+	for index < len(path) && !isPathSeparator(path[index]) {
+		index++
+	}
+	if index == serverStart {
+		return false
+	}
+	for index < len(path) && isPathSeparator(path[index]) {
+		index++
+	}
+	shareStart := index
+	for index < len(path) && !isPathSeparator(path[index]) {
+		index++
+	}
+	if index == shareStart {
+		return false
+	}
+	for index < len(path) {
+		if !isPathSeparator(path[index]) {
+			return false
+		}
+		index++
+	}
+	return true
+}
+
+func isPathSeparator(value byte) bool {
+	return value == '/' || value == '\\'
 }
 
 func (r ProjectDefaultWorkspaceSetResponse) Validate() error {

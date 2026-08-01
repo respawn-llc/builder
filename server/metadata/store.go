@@ -1027,6 +1027,21 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)
 	}
+	rootDisplayNameSnapshots, err := q.ListTasksMissingSourceWorkspaceDisplayName(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list root workspace snapshots: %w", err)
+	}
+	for _, metadataJSON := range rootDisplayNameSnapshots {
+		var payload struct {
+			SourceWorkspaceSnapshot struct {
+				RootPath string `json:"root_path"`
+			} `json:"source_workspace_snapshot"`
+		}
+		if err := unmarshalStoredJSON(metadataJSON, &payload); err == nil &&
+			serverapi.IsFilesystemRootPath(payload.SourceWorkspaceSnapshot.RootPath) {
+			missingSnapshots--
+		}
+	}
 	missingSessionSnapshots, err := q.CountSessionsMissingWorkspaceSnapshot(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing session workspace snapshots: %w", err)

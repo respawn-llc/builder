@@ -45,7 +45,7 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 }
 
 func TestProjectHomeSummaryValidateAllowsRootWorkspaceWithoutDisplayName(t *testing.T) {
-	for _, rootPath := range []string{"/", `C:\`, "C:/"} {
+	for _, rootPath := range []string{"/", `C:\`, "C:/", `\\server\share`, "//server/share/"} {
 		t.Run(rootPath, func(t *testing.T) {
 			summary := validProjectHomeSummaryForResponseTest()
 			summary.PrimaryWorkspace.RootPath = rootPath
@@ -58,7 +58,7 @@ func TestProjectHomeSummaryValidateAllowsRootWorkspaceWithoutDisplayName(t *test
 }
 
 func TestProjectHomeSummaryValidateRejectsBlankNameForNonRootWorkspace(t *testing.T) {
-	for _, rootPath := range []string{"/workspace", `C:\workspace`, "C:/workspace"} {
+	for _, rootPath := range []string{"/workspace", `C:\workspace`, "C:/workspace", `\\server\share\workspace`, "//server/share/workspace"} {
 		t.Run(rootPath, func(t *testing.T) {
 			summary := validProjectHomeSummaryForResponseTest()
 			summary.PrimaryWorkspace.RootPath = rootPath

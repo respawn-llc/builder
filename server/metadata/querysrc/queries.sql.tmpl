@@ -1932,6 +1932,15 @@ WHERE source_workspace_id = sqlc.arg(workspace_id)
       OR NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
   );
 
+-- name: ListTasksMissingSourceWorkspaceDisplayName :many
+SELECT metadata_json
+FROM tasks
+WHERE source_workspace_id = sqlc.arg(workspace_id)
+  AND json_valid(metadata_json)
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+ORDER BY rowid ASC;
+
 -- name: CountSessionsMissingWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
