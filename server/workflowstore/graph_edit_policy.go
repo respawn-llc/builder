@@ -136,7 +136,8 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 	nextEdgesByGroupID := workflowGraphEdgesByTransitionGroupID(next.edges)
 	for _, currentGroup := range current.transitionGroups {
 		nextGroup, exists := nextGroups[currentGroup.ID]
-		if exists && workflowTransitionGroupMetadataOnlyChange(currentGroup, nextGroup) {
+		if exists && (workflowTransitionGroupMetadataOnlyChange(currentGroup, nextGroup) ||
+			workflowTransitionGroupKeyOnlyChange(currentGroup, nextGroup)) {
 			continue
 		}
 		descriptor.TransitionChanges = append(descriptor.TransitionChanges, workflowGraphTransitionChangeDescriptor{
@@ -319,6 +320,18 @@ func workflowTransitionGroupMetadataOnlyChange(current TransitionGroupRecord, ne
 		current.WorkflowID == next.WorkflowID &&
 		current.SourceNodeID == next.SourceNodeID &&
 		current.TransitionID == next.TransitionID
+}
+
+func workflowTransitionGroupKeyOnlyChange(current TransitionGroupRecord, next TransitionGroupRecord) bool {
+	// Key recovery preserves the graph contract and leaves persisted value
+	// namespaces untouched; values under an old key remain unresolved until
+	// the operator supplies the repaired key's value.
+	return current.ID == next.ID &&
+		current.WorkflowID == next.WorkflowID &&
+		current.SourceNodeID == next.SourceNodeID &&
+		current.TransitionID != next.TransitionID &&
+		current.DisplayName == next.DisplayName &&
+		current.Description == next.Description
 }
 
 func workflowEdgeMetadataOnlyChange(current EdgeRecord, next EdgeRecord) bool {

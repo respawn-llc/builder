@@ -159,6 +159,38 @@ func TestTaskMoveRejectsEmptyExtraValueNode(t *testing.T) {
 	}
 }
 
+func TestTaskMoveRejectsNullValueNode(t *testing.T) {
+	resolved := "already resolved"
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					TransitionKey:         "next",
+					Label:                 "Next",
+					SourceNodeDisplayName: "Plan",
+					RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{{
+						NodeKey:       "plan",
+						OutputName:    "summary",
+						Description:   "Summary",
+						ResolvedValue: &resolved,
+					}},
+				}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{
+		"move", "task-1", "implement", "--values-json", `{"plan":null}`,
+	}, &stdout, &stderr)
+	if exitCode != 2 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+}
+
 func TestTaskMoveRequiresExplicitTransitionForMultipleChoices(t *testing.T) {
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{

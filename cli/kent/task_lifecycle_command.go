@@ -792,6 +792,9 @@ func validateManualMoveCLIValues(
 		if _, ok := requiredNodes[nodeKey]; !ok {
 			return fmt.Errorf("manual move value node %s is not required by the selected Transition", nodeKey)
 		}
+		if outputs == nil {
+			return fmt.Errorf("manual move value node %s must be an object", nodeKey)
+		}
 		for outputName, value := range outputs {
 			key := valueIdentity{nodeKey: nodeKey, outputName: outputName}
 			if _, ok := required[key]; !ok {
