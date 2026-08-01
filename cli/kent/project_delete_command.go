@@ -305,7 +305,19 @@ func (outcome projectDeleteOutcome) validate() error {
 		return errors.New("project deletion error requires a project id")
 	}
 	if outcome.Error != nil {
+		if strings.TrimSpace(outcome.Error.Code) == "" || strings.TrimSpace(outcome.Error.Message) == "" {
+			return errors.New("project deletion error requires code and message")
+		}
+		if outcome.Error.Code == "project_delete_blocked" && len(outcome.Error.Blockers) == 0 {
+			return errors.New("project deletion blocked outcome requires blockers")
+		}
+		if outcome.Error.Code != "project_delete_blocked" && len(outcome.Error.Blockers) != 0 {
+			return errors.New("project deletion non-blocked outcome must omit blockers")
+		}
 		for _, blocker := range outcome.Error.Blockers {
+			if strings.TrimSpace(blocker.Code) == "" || strings.TrimSpace(blocker.Message) == "" {
+				return errors.New("project deletion blocker requires code and message")
+			}
 			if _, err := projectDeleteBlockerCount(blocker.Count); err != nil {
 				return err
 			}
@@ -317,29 +329,12 @@ func (outcome projectDeleteOutcome) validate() error {
 func (envelope projectDeleteJSONEnvelope) validate() error {
 	switch envelope.Status {
 	case "ok":
-		if envelope.Result == nil || envelope.Error != nil || strings.TrimSpace(envelope.Result.ProjectID) == "" {
+		if envelope.Result == nil {
 			return errors.New("project deletion success envelope is invalid")
 		}
 	case "error":
-		if envelope.Error == nil || envelope.Result != nil ||
-			strings.TrimSpace(envelope.Error.Code) == "" ||
-			strings.TrimSpace(envelope.Error.Message) == "" ||
-			strings.TrimSpace(envelope.Error.ProjectID) == "" {
+		if envelope.Error == nil {
 			return errors.New("project deletion error envelope is invalid")
-		}
-		if envelope.Error.Code == "project_delete_blocked" && len(envelope.Error.Blockers) == 0 {
-			return errors.New("project deletion blocked envelope requires blockers")
-		}
-		if envelope.Error.Code != "project_delete_blocked" && len(envelope.Error.Blockers) != 0 {
-			return errors.New("project deletion non-blocked envelope must omit blockers")
-		}
-		for _, blocker := range envelope.Error.Blockers {
-			if strings.TrimSpace(blocker.Code) == "" || strings.TrimSpace(blocker.Message) == "" {
-				return errors.New("project deletion error envelope blocker is invalid")
-			}
-			if blocker.Count != nil && *blocker.Count <= 0 {
-				return errors.New("project deletion error envelope blocker count is invalid")
-			}
 		}
 	default:
 		return errors.New("project deletion envelope status is invalid")
