@@ -1037,6 +1037,7 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 			cluster := graphemes.Str()
 			w := lipgloss.Width(cluster)
 			if consumed+w > visibleLimit {
+				span.Hyperlink = nil
 				appendText(span, "…", positioned.leading)
 				return out
 			}
