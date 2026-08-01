@@ -105,12 +105,33 @@ func runCompletionAttempt[T any](
 	scopeID runtimeids.ExecutionScopeID,
 	complete func() (T, error),
 ) (T, error) {
+	return runCompletionAttemptWithRequirement(c, scopeID, complete, false)
+}
+
+func runRequiredCompletionAttempt[T any](
+	c *completionAttemptWorkflowController,
+	scopeID runtimeids.ExecutionScopeID,
+	complete func() (T, error),
+) (T, error) {
+	return runCompletionAttemptWithRequirement(c, scopeID, complete, true)
+}
+
+func runCompletionAttemptWithRequirement[T any](
+	c *completionAttemptWorkflowController,
+	scopeID runtimeids.ExecutionScopeID,
+	complete func() (T, error),
+	required bool,
+) (T, error) {
 	var zero T
 	if c == nil || complete == nil {
 		return zero, errors.New("workflow completion attempt is unavailable")
 	}
 	c.mu.Lock()
 	state, hasAttempt := c.attempts[scopeID]
+	if required && !hasAttempt {
+		c.mu.Unlock()
+		return zero, runtimecommand.ErrCompletionSuperseded
+	}
 	if hasAttempt {
 		lease, err := state.attempt.Acquire()
 		if err != nil {
@@ -139,6 +160,17 @@ func runCompletionAttempt[T any](
 		return result, errors.Join(completionErr, lease.Abort())
 	}
 	return result, errors.Join(completionErr, lease.Commit())
+}
+
+func (c *completionAttemptWorkflowController) discardPendingAttempt(scopeID runtimeids.ExecutionScopeID) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if state, ok := c.attempts[scopeID]; ok && state.lease == nil {
+		delete(c.attempts, scopeID)
+	}
 }
 
 type CompletionFencedCurrentNodeExecution struct {
@@ -209,13 +241,16 @@ func (c *CompletionFencedCurrentNodeExecution) CompleteSessionCurrentNode(
 		return c.completion.authority.WithExactExecutionRuntime(context.Background(), scope.ID(), func(callbackCtx context.Context, _ *runtime.Engine) error {
 			return turn.Apply(func() error {
 				var completionErr error
-				returned, completionErr = runCompletionAttempt(c.completion, req.ScopeID, func() (workflowstore.CurrentNodeCompletionResult, error) {
+				returned, completionErr = runRequiredCompletionAttempt(c.completion, req.ScopeID, func() (workflowstore.CurrentNodeCompletionResult, error) {
 					return c.CurrentNodeController.completeLiveCurrentNode(callbackCtx, req)
 				})
 				return completionErr
 			})
 		})
 	})
+	if err != nil {
+		c.completion.discardPendingAttempt(req.ScopeID)
+	}
 	return returned, err
 }
 
