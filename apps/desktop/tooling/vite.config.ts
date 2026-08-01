@@ -40,7 +40,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: [...configDefaults.exclude, "eslint-fixtures/**"],
+    exclude: [...configDefaults.exclude, "eslint-fixtures/**", "**/*.browser.test.*"],
     globals: true,
     maxWorkers: 2,
     setupFiles: ["./test/setup.ts"],
