@@ -241,6 +241,11 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 					deferredFinalEventEmitted = assistantEventEmitted
 					hasDeferredFinal = true
 				}
+				if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
+					if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+						return stepLoopResult{}, err
+					}
+				}
 				continue
 			}
 			if len(hostedToolExecutions) > 0 {

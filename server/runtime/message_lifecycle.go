@@ -83,7 +83,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 						completed: make(map[string]struct{}, len(expected)),
 					})
 				}
-			} else if msg.Role == llm.RoleAssistant && msg.Content != nil && strings.TrimSpace(*msg.Content) != "" {
+			} else if msg.Role == llm.RoleAssistant &&
+				((msg.Content != nil && strings.TrimSpace(*msg.Content) != "") || len(msg.ReasoningItems) > 0) {
 				manualEligible = true
 			}
 			recoveredHandoff.ApplyMessage(msg)

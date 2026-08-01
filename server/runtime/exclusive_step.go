@@ -92,6 +92,11 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 	if reservation.queueable {
 		for index, queued := range s.nextWaiters {
 			if queued.reservation == nil {
+				select {
+				case <-queued.ready:
+					continue
+				default:
+				}
 				insertAt = index
 				break
 			}
