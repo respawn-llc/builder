@@ -75,9 +75,9 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
 		}
 	}
+	hasQuestion := false
+	hasApproval := false
 	for _, execution := range running {
-		hasQuestion := false
-		hasApproval := false
 		for _, entry := range execution.prompts.pending {
 			if entry == nil {
 				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
@@ -88,15 +88,15 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 				hasQuestion = true
 			}
 		}
-		if hasQuestion || hasApproval {
-			for _, locked := range running {
-				locked.prompts.mu.Unlock()
-			}
-			if hasApproval {
-				return ErrWorkflowApprovalPending
-			}
+	}
+	if hasQuestion || hasApproval {
+		for _, locked := range running {
+			locked.prompts.mu.Unlock()
+		}
+		if hasQuestion {
 			return ErrWorkflowQuestionPending
 		}
+		return ErrWorkflowApprovalPending
 	}
 	err := operation(selection)
 	if err != nil {
