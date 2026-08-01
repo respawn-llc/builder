@@ -333,50 +333,55 @@ type ProjectWorkspaceSelector struct {
 }
 
 func NewProjectWorkspaceSelectorForID(workspaceID string) (ProjectWorkspaceSelector, error) {
-	trimmed := strings.TrimSpace(workspaceID)
-	if trimmed == "" {
-		return ProjectWorkspaceSelector{}, errors.New("workspace_id is required")
+	trimmed, err := normalizeWorkspaceSelectorArm(&workspaceID, "workspace_id")
+	if err != nil {
+		return ProjectWorkspaceSelector{}, err
 	}
-	return ProjectWorkspaceSelector{WorkspaceID: &trimmed}, nil
+	return ProjectWorkspaceSelector{WorkspaceID: trimmed}, nil
 }
 
 func NewProjectWorkspaceSelectorForRoot(workspaceRoot string) (ProjectWorkspaceSelector, error) {
-	trimmed := strings.TrimSpace(workspaceRoot)
-	if trimmed == "" {
-		return ProjectWorkspaceSelector{}, errors.New("workspace_root is required")
+	trimmed, err := normalizeWorkspaceSelectorArm(&workspaceRoot, "workspace_root")
+	if err != nil {
+		return ProjectWorkspaceSelector{}, err
 	}
-	return ProjectWorkspaceSelector{WorkspaceRoot: &trimmed}, nil
+	return ProjectWorkspaceSelector{WorkspaceRoot: trimmed}, nil
 }
 
 func (s ProjectWorkspaceSelector) Validate() error {
-	hasID := s.WorkspaceID != nil
-	hasRoot := s.WorkspaceRoot != nil
-	if hasID == hasRoot {
+	id, idErr := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
+	root, rootErr := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
+	if idErr != nil {
+		return idErr
+	}
+	if rootErr != nil {
+		return rootErr
+	}
+	if (id == nil) == (root == nil) {
 		return errors.New("exactly one workspace_id or workspace_root is required")
-	}
-	if hasID && strings.TrimSpace(*s.WorkspaceID) == "" {
-		return errors.New("workspace_id is required")
-	}
-	if hasRoot && strings.TrimSpace(*s.WorkspaceRoot) == "" {
-		return errors.New("workspace_root is required")
 	}
 	return nil
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceIDValue() *string {
-	if s.WorkspaceID == nil {
-		return nil
-	}
-	value := strings.TrimSpace(*s.WorkspaceID)
-	return &value
+	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
+	return value
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceRootValue() *string {
-	if s.WorkspaceRoot == nil {
-		return nil
+	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
+	return value
+}
+
+func normalizeWorkspaceSelectorArm(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
 	}
-	value := strings.TrimSpace(*s.WorkspaceRoot)
-	return &value
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%s is required", field)
+	}
+	return &trimmed, nil
 }
 
 type ProjectAttachWorkspaceResponse struct {

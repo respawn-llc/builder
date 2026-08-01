@@ -47,15 +47,7 @@ func (e *WorkspaceDetachConflictError) RPCErrorData() json.RawMessage {
 	if e == nil || !validWorkspaceMutationIdentity(e.ProjectID, e.WorkspaceID) {
 		return nil
 	}
-	return marshalRPCErrorData(struct {
-		Type        string `json:"type"`
-		ProjectID   string `json:"project_id"`
-		WorkspaceID string `json:"workspace_id"`
-	}{
-		Type:        "workspace_detach_conflict_error",
-		ProjectID:   strings.TrimSpace(e.ProjectID),
-		WorkspaceID: strings.TrimSpace(e.WorkspaceID),
-	})
+	return marshalWorkspaceMutationIdentity("workspace_detach_conflict_error", e.ProjectID, e.WorkspaceID)
 }
 
 type WorkspaceMutationError struct {
@@ -93,19 +85,37 @@ func (e *WorkspaceMutationError) RPCErrorData() json.RawMessage {
 	if e == nil || !validWorkspaceMutationIdentity(e.ProjectID, e.WorkspaceID) {
 		return nil
 	}
-	return marshalRPCErrorData(struct {
-		Type        string `json:"type"`
-		ProjectID   string `json:"project_id"`
-		WorkspaceID string `json:"workspace_id"`
-	}{
-		Type:        "workspace_mutation_error",
-		ProjectID:   strings.TrimSpace(e.ProjectID),
-		WorkspaceID: strings.TrimSpace(e.WorkspaceID),
-	})
+	return marshalWorkspaceMutationIdentity("workspace_mutation_error", e.ProjectID, e.WorkspaceID)
 }
 
 func validWorkspaceMutationIdentity(projectID string, workspaceID string) bool {
 	return strings.TrimSpace(projectID) != "" && strings.TrimSpace(workspaceID) != ""
+}
+
+type workspaceMutationIdentityEnvelope struct {
+	Type        string `json:"type"`
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func marshalWorkspaceMutationIdentity(kind string, projectID string, workspaceID string) json.RawMessage {
+	return marshalRPCErrorData(workspaceMutationIdentityEnvelope{
+		Type:        kind,
+		ProjectID:   strings.TrimSpace(projectID),
+		WorkspaceID: strings.TrimSpace(workspaceID),
+	})
+}
+
+func decodeWorkspaceMutationIdentity(data json.RawMessage, expectedType string) (workspaceMutationIdentityEnvelope, bool) {
+	var envelope workspaceMutationIdentityEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Type != expectedType ||
+		!validWorkspaceMutationIdentity(envelope.ProjectID, envelope.WorkspaceID) {
+		return workspaceMutationIdentityEnvelope{}, false
+	}
+	envelope.ProjectID = strings.TrimSpace(envelope.ProjectID)
+	envelope.WorkspaceID = strings.TrimSpace(envelope.WorkspaceID)
+	return envelope, true
 }
 
 func DecodeWorkspacePathIdentityError(data json.RawMessage, message string) error {
@@ -121,24 +131,16 @@ func DecodeWorkspacePathIdentityError(data json.RawMessage, message string) erro
 }
 
 func DecodeWorkspaceDetachConflictError(data json.RawMessage, message string) error {
-	var envelope struct {
-		Type        string `json:"type"`
-		ProjectID   string `json:"project_id"`
-		WorkspaceID string `json:"workspace_id"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_detach_conflict_error" || !validWorkspaceMutationIdentity(envelope.ProjectID, envelope.WorkspaceID) {
+	envelope, ok := decodeWorkspaceMutationIdentity(data, "workspace_detach_conflict_error")
+	if !ok {
 		return fallbackProjectWorkspaceRPCError(message, ErrWorkspaceDetachConflict)
 	}
 	return &WorkspaceDetachConflictError{ProjectID: envelope.ProjectID, WorkspaceID: envelope.WorkspaceID}
 }
 
 func DecodeWorkspaceMutationError(data json.RawMessage, message string) error {
-	var envelope struct {
-		Type        string `json:"type"`
-		ProjectID   string `json:"project_id"`
-		WorkspaceID string `json:"workspace_id"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workspace_mutation_error" || !validWorkspaceMutationIdentity(envelope.ProjectID, envelope.WorkspaceID) {
+	envelope, ok := decodeWorkspaceMutationIdentity(data, "workspace_mutation_error")
+	if !ok {
 		return fallbackProjectWorkspaceRPCError(message, ErrWorkspaceMutationFailed)
 	}
 	return &WorkspaceMutationError{
