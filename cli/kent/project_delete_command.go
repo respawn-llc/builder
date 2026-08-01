@@ -258,11 +258,7 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 			return 1
 		}
 		for _, blocker := range outcome.Error.Blockers {
-			count := int64(0)
-			if blocker.Count != nil {
-				count = int64(*blocker.Count)
-			}
-			writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, count)
+			writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, projectDeleteBlockerCount(blocker.Count))
 		}
 		fmt.Fprintln(stderr, outcome.Error.Message)
 		return 1
@@ -280,6 +276,14 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 	}
 	fmt.Fprintf(stdout, "Deleted project %s. Workspace files were not deleted.\n", outcome.Result.ProjectID)
 	return 0
+}
+
+func projectDeleteBlockerCount(count *int) *int64 {
+	if count == nil {
+		return nil
+	}
+	value := int64(*count)
+	return &value
 }
 
 func (outcome projectDeleteOutcome) validate() error {
