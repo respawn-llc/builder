@@ -2073,7 +2073,7 @@ WHERE node.kind IN ('agent', 'script')
       OR session.workspace_id = sqlc.arg(workspace_id)
   );
 
--- name: CountManagedOwnedWorktreesByWorkspace :one
+-- name: CountWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = sqlc.arg(workspace_id);

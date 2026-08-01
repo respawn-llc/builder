@@ -420,16 +420,16 @@ func (q *Queries) CountExecutableCurrentNodesByWorkspace(ctx context.Context, wo
 	return current_node_count, err
 }
 
-const countManagedOwnedWorktreesByWorkspace = `-- name: CountManagedOwnedWorktreesByWorkspace :one
+const countWorktreesByWorkspace = `-- name: CountWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = ?1
 `
 
-func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countManagedOwnedWorktreesByWorkspace, workspaceID)
+func (q *Queries) CountWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countWorktreesByWorkspace, workspaceID)
 	var worktree_count int64
-	err := recordQueryError(ctx, row.Scan(&worktree_count), countManagedOwnedWorktreesByWorkspace, 1)
+	err := recordQueryError(ctx, row.Scan(&worktree_count), countWorktreesByWorkspace, 1)
 
 	return worktree_count, err
 }

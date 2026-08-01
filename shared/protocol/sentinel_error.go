@@ -24,6 +24,9 @@ func NewSentinelError(sentinel error, message string) error {
 func NewSentinelErrorWithRendering(sentinel error, message string, rendering SentinelErrorRendering) error {
 	trimmed := strings.TrimSpace(message)
 	if sentinel == nil {
+		if trimmed == "" {
+			return errors.New("sentinel error requires a sentinel or a message")
+		}
 		return errors.New(trimmed)
 	}
 	if trimmed == "" || trimmed == sentinel.Error() {

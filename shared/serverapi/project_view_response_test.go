@@ -164,7 +164,13 @@ func TestProjectWorkspaceUnlinkSuccessJSONOmitsControlFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal unlink response: %v", err)
 	}
-	if string(payload) != `{"project_id":"project-1","workspace_id":"workspace-1"}` {
+	var fields map[string]string
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode unlink response: %v", err)
+	}
+	if len(fields) != 2 ||
+		fields["project_id"] != "project-1" ||
+		fields["workspace_id"] != "workspace-1" {
 		t.Fatalf("unlink success JSON = %s, want only resolved identity", payload)
 	}
 }

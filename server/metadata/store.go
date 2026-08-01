@@ -379,7 +379,7 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 	canonicalRoot, canonicalErr := canonicalFilesystemPath(workspaceRoot)
 	if canonicalErr != nil {
 		if absErr != nil {
-			return Binding{}, fmt.Errorf("%w: %q: %v", serverapi.ErrWorkspacePathIdentity, workspaceRoot, absErr)
+			return Binding{}, serverapi.WorkspacePathIdentityError{WorkspaceRoot: workspaceRoot, Cause: absErr}
 		}
 		_, statErr := os.Stat(absoluteRoot)
 		if errors.Is(statErr, os.ErrNotExist) {
@@ -1018,11 +1018,11 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 		return nil, fmt.Errorf("count executable workspace current nodes: %w", err)
 	}
 	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
-	ownedWorktrees, err := q.CountManagedOwnedWorktreesByWorkspace(ctx, workspace.ID)
+	worktrees, err := q.CountWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
 		return nil, fmt.Errorf("count workspace worktrees: %w", err)
 	}
-	addCountBlocker("managed_owned_worktrees", "Worktrees still depend on this workspace.", ownedWorktrees)
+	addCountBlocker("managed_owned_worktrees", "Worktrees still depend on this workspace.", worktrees)
 	missingSnapshots, err := q.CountTasksMissingSourceWorkspaceSnapshot(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)

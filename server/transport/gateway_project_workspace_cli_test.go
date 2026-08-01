@@ -48,8 +48,12 @@ func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *t
 	if err != nil {
 		t.Fatalf("split gateway address: %v", err)
 	}
-	kentBinary := strings.TrimSpace(os.Getenv("KENT_PTY_KENT_BINARY"))
-	if kentBinary == "" {
+	kentBinaryValue, kentBinaryConfigured := os.LookupEnv("KENT_PTY_KENT_BINARY")
+	kentBinary := strings.TrimSpace(kentBinaryValue)
+	if kentBinaryConfigured && kentBinary == "" {
+		t.Fatal("KENT_PTY_KENT_BINARY must not be empty when configured")
+	}
+	if !kentBinaryConfigured {
 		kentBinary = filepath.Join(t.TempDir(), "kent")
 		build := exec.Command("go", "build", "-o", kentBinary, "./cli/kent")
 		build.Dir = repoRoot
