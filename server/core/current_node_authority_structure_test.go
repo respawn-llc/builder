@@ -202,7 +202,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowexecution.NewMutationPermit",
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
-		"core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution",
 		"core/server/workflowview.NewTaskStatusProjection",
 		"core/server/workflowsvc.New",
 		"core/server/workflowview.NewTaskSearch",
@@ -229,22 +228,18 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	authorityType := types.NewPointer(authority)
 	starterType := types.NewPointer(starter)
 	controllerType := types.NewPointer(controller)
-	completionFencedController := index.named["core/server/workflowexecution.CompletionFencedCurrentNodeExecution"]
-	completionFencedType := types.NewPointer(completionFencedController)
 	statusProjectionType := types.NewPointer(statusProjection)
 	permitObject := assignedVariableOfType(calls["core/server/workflowexecution.NewMutationPermit"][0], permitType)
 	authorityObject := assignedVariableOfType(calls["core/server/sessionruntime.NewAuthority"][0], authorityType)
 	starterObject := assignedVariableOfType(calls["core/server/workflowrunner.NewStarter"][0], starterType)
 	controllerObject := assignedVariableOfType(controllerCalls[0], controllerType)
-	completionFencedObject := assignedVariableOfType(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], completionFencedType)
 	statusProjectionObject := assignedVariableOfType(calls["core/server/workflowview.NewTaskStatusProjection"][0], statusProjectionType)
 	for name, object := range map[string]*types.Var{
-		"workflow mutation permit":                        permitObject,
-		"session runtime authority":                       authorityObject,
-		"workflow runtime starter":                        starterObject,
-		"workflow execution controller":                   controllerObject,
-		"completion-fenced workflow execution controller": completionFencedObject,
-		"workflow task status projection":                 statusProjectionObject,
+		"workflow mutation permit":        permitObject,
+		"session runtime authority":       authorityObject,
+		"workflow runtime starter":        starterObject,
+		"workflow execution controller":   controllerObject,
+		"workflow task status projection": statusProjectionObject,
 	} {
 		if object == nil {
 			findings = append(findings, currentNodeStructureFinding{
@@ -358,20 +353,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 			})
 		}
 	}
-	if !callReferencesExactly(calls["core/server/workflowsvc.WithCurrentNodeExecution"][0], completionFencedType, completionFencedObject) {
-		findings = append(findings, currentNodeStructureFinding{
-			kind:     findingControllerComposition,
-			position: "core/server/workflowsvc.WithCurrentNodeExecution must reference the completion-fenced Workflow Execution controller",
-		})
-	}
-	if !callReferencesExactly(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], controllerType, controllerObject) ||
-		!callReferencesExactly(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], authorityType, authorityObject) {
-		findings = append(findings, currentNodeStructureFinding{
-			kind:     findingControllerComposition,
-			position: "NewCompletionFencedCurrentNodeExecution must wrap the one production workflow controller and Session runtime Authority",
-		})
-	}
-
 	controllerPosition := controllerCalls[0].call.Pos()
 	recoveryPosition := calls["core/server/workflowexecution.Recover"][0].call.Pos()
 	projectionPosition := calls["core/server/workflowview.NewTaskStatusProjection"][0].call.Pos()
