@@ -10,20 +10,21 @@ import (
 )
 
 type agentStepBoundaryFinalizer struct {
-	engine             *Engine
-	mu                 sync.Mutex
-	open               bool
-	dispatched         bool
-	capturing          bool
-	committed          bool
-	aborted            bool
-	hadPendingRecovery bool
-	stagedFinalPayload *session.EventRecordPayload
-	stagedFinalMessage *llm.Message
-	deferredStream     *deferredAssistantStreamCleanup
-	detachedManual     []*pendingManualCompaction
-	receipt            session.CommitReceipt
-	err                error
+	engine              *Engine
+	mu                  sync.Mutex
+	open                bool
+	dispatched          bool
+	capturing           bool
+	committed           bool
+	aborted             bool
+	hadPendingRecovery  bool
+	stagedFinalPayloads []session.EventRecordPayload
+	stagedFinalMessage  *llm.Message
+	stagedFinalPolicy   steeringMessageEventPolicy
+	deferredStream      *deferredAssistantStreamCleanup
+	detachedManual      []*pendingManualCompaction
+	receipt             session.CommitReceipt
+	err                 error
 }
 
 type deferredAssistantStreamCleanup struct {
@@ -57,8 +58,9 @@ func (f *agentStepBoundaryFinalizer) Open() {
 	f.committed = false
 	f.aborted = false
 	f.hadPendingRecovery = false
-	f.stagedFinalPayload = nil
+	f.stagedFinalPayloads = nil
 	f.stagedFinalMessage = nil
+	f.stagedFinalPolicy = steeringMessageEventDefault
 	f.deferredStream = nil
 	f.detachedManual = nil
 	f.receipt = session.CommitReceipt{}
@@ -99,23 +101,36 @@ func (f *agentStepBoundaryFinalizer) Capturing() bool {
 	return f.open && f.capturing && !f.committed && !f.aborted
 }
 
-func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, payload session.EventRecordPayload) error {
+func (f *agentStepBoundaryFinalizer) stageFinalPayload(payload session.EventRecordPayload) error {
 	if f == nil {
 		return errors.New("agent step boundary finalizer is required")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.open || !f.capturing || f.committed || f.aborted {
-		return errors.New("agent step boundary is not accepting final assistant message")
+		return errors.New("agent step boundary is not accepting final payload")
 	}
-	if f.stagedFinalMessage != nil {
-		return errors.New("agent step boundary already has a final assistant message")
-	}
-	copyMessage := message
-	f.stagedFinalMessage = &copyMessage
 	copyPayload := payload
-	f.stagedFinalPayload = &copyPayload
+	f.stagedFinalPayloads = append(f.stagedFinalPayloads, copyPayload)
 	return nil
+}
+
+func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, payload session.EventRecordPayload, policy steeringMessageEventPolicy) error {
+	if err := f.stageFinalPayload(payload); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	if message.Role == llm.RoleAssistant {
+		copyMessage := message
+		f.stagedFinalMessage = &copyMessage
+	}
+	f.stagedFinalPolicy = policy
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *agentStepBoundaryFinalizer) StageFinalLocalEntry(payload session.EventRecordPayload) error {
+	return f.stageFinalPayload(payload)
 }
 
 func (f *agentStepBoundaryFinalizer) StagedFinalAssistantMessage() *llm.Message {
@@ -232,10 +247,7 @@ func (f *agentStepBoundaryFinalizer) Commit(
 		return receipt, err
 	}
 	f.capturing = false
-	var stagedPayloads []session.EventRecordPayload
-	if f.stagedFinalPayload != nil {
-		stagedPayloads = []session.EventRecordPayload{*f.stagedFinalPayload}
-	}
+	stagedPayloads := append([]session.EventRecordPayload(nil), f.stagedFinalPayloads...)
 	deferredStream := f.deferredStream
 	f.detachedManual = f.engine.compactionRuntimeState().manualBoundaryCoordinator().sealAndTake()
 	f.mu.Unlock()

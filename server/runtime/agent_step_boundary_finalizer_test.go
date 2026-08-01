@@ -260,6 +260,57 @@ func TestUncommittedToolCompletionKeepsLiveToolAbortable(t *testing.T) {
 	}
 }
 
+func TestAgentStepBoundaryFinalizerRejectsUncommittedFinalToolAndLocalPayloads(t *testing.T) {
+	tests := []struct {
+		name  string
+		steer func(*Engine, string) error
+	}{
+		{
+			name: "tool result message",
+			steer: func(engine *Engine, stepID string) error {
+				return engine.steer(stepID, steerFinalMessageIntent(llm.Message{
+					Role:       llm.RoleTool,
+					Content:    textutil.Value("tool output"),
+					ToolCallID: textutil.Value("call-tool"),
+				}))
+			},
+		},
+		{
+			name: "reviewer local outcome",
+			steer: func(engine *Engine, stepID string) error {
+				return engine.steer(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
+					Role: "reviewer_status",
+					Text: "no suggestions",
+				}))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(), Config{})
+			finalizer := engine.openAgentStepBoundary("step-final-payload")
+			finalizer.MarkDispatched()
+			if err := test.steer(engine, "step-final-payload"); err != nil {
+				t.Fatalf("stage final payload: %v", err)
+			}
+			blocker := filemode.MustBlockEventLogAppends(t, filepath.Join(engine.store.Dir(), "events.jsonl"))
+			receipt, err := finalizer.Commit("step-final-payload", nil)
+			if err == nil || receipt.Committed {
+				t.Fatalf("uncommitted final payload: receipt=%+v err=%v", receipt, err)
+			}
+			if err := blocker.Restore(); err != nil {
+				t.Fatalf("restore event log: %v", err)
+			}
+			for _, record := range mustReadRuntimeEvents(t, engine) {
+				switch mustSessionEventPayload(record).(type) {
+				case session.MessageRecord, session.LocalEntryRecord, session.AgentStepBoundaryRecord:
+					t.Fatal("uncommitted final payload left durable facts")
+				}
+			}
+		})
+	}
+}
+
 func mustReadRuntimeEvents(t *testing.T, engine *Engine) []session.EventRecord {
 	t.Helper()
 	records, err := engine.eventLog.ReadRecentRecords(1000)

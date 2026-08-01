@@ -56,7 +56,7 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 		return outcome, nil
 	}
 	if e.cfg.Reviewer.VerboseOutput {
-		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+		if err := e.steer(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
 			Role:          "reviewer_suggestions",
 			Text:          preparation.SuggestionsText,
 			CondensedText: textutil.Value(preparation.SuggestionsText),
@@ -111,7 +111,7 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 			outcome.assistantEventEmitted = true
 		}
 	}
-	if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+	if err := e.steer(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
 		Role: reviewerStatusEntryRole(*reviewerCompletion),
 		Text: reviewerStatusText(*reviewerCompletion, nil),
 	})); err != nil {

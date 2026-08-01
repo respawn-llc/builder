@@ -34,6 +34,7 @@ type steeringIntent struct {
 type steeringItem struct {
 	message                     *steeringMessage
 	goalNoticeAndStatus         *steeringGoalNoticeAndStatus
+	finalLocalEntry             *steeringLocalEntry
 	committedAssistant          *steeringCommittedAssistantMessage
 	completedResponseResolution *steeringCompletedResponseResolution
 	localEntry                  *steeringLocalEntry
@@ -59,6 +60,7 @@ type steeringMessage struct {
 	message     llm.Message
 	eventPolicy steeringMessageEventPolicy
 	persist     bool
+	final       bool
 }
 
 type steeringGoalNoticeAndStatus struct {
@@ -169,6 +171,25 @@ func steerMessagesWithPersistenceIntent(priority steeringPriority, eventPolicy s
 		}})
 	}
 	return steeringIntent{priority: priority, items: items}
+}
+
+func steerFinalMessageIntent(message llm.Message) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{message: &steeringMessage{
+			message:     message,
+			eventPolicy: steeringMessageEventDefault,
+			persist:     true,
+			final:       true,
+		}}},
+	}
+}
+
+func steerFinalLocalEntryIntent(entry storedLocalEntry) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items:    []steeringItem{{finalLocalEntry: &steeringLocalEntry{entry: entry}}},
+	}
 }
 
 func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
@@ -426,6 +447,19 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
+		if item.message.final {
+			finalizer := e.agentStepBoundary(stepID)
+			if finalizer == nil || !finalizer.Capturing() {
+				receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, true)
+				item.recordCommitReceipt(receipt)
+				return err
+			}
+			msg, record, err := e.prepareMessageRecord(stepID, item.message.message)
+			if err != nil {
+				return err
+			}
+			return finalizer.StageFinalAssistant(msg, record, item.message.eventPolicy)
+		}
 		if item.message.persist && shouldStageAgentStepMessage(item.message.message) && e.agentStepBoundary(stepID) != nil && e.agentStepBoundary(stepID).Capturing() {
 			return e.stageAgentStepMessageRaw(stepID, item.message.message, item.message.eventPolicy)
 		}
@@ -451,6 +485,18 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			GoalStatus: &notice.update,
 		})
 		return errors.Join(noticeErr, statusErr)
+	}
+	if item.finalLocalEntry != nil {
+		finalizer := e.agentStepBoundary(stepID)
+		if finalizer == nil || !finalizer.Capturing() {
+			_, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.finalLocalEntry.entry)
+			return err
+		}
+		_, record, err := prepareStoredLocalEntryRecord(item.finalLocalEntry.entry)
+		if err != nil {
+			return err
+		}
+		return finalizer.StageFinalLocalEntry(record)
 	}
 	if item.committedAssistant != nil {
 		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
@@ -599,6 +645,16 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 							Message:                     message,
 							AssistantStreamMetadata:     metadata,
 							AssistantTranscriptStreamID: streamID,
+						}))
+					} else if message.Role != llm.RoleTool && shouldEmitCommittedMessageEvent(message) {
+						err = errors.Join(err, e.emitRaw(Event{
+							Kind:                       EventConversationUpdated,
+							StepID:                     stepID,
+							CommittedTranscriptChanged: true,
+							CommittedEntryStart:        start,
+							CommittedEntryStartSet:     true,
+							CommittedEntryCount:        e.CommittedTranscriptEntryCount(),
+							Message:                    message,
 						}))
 					}
 				case session.LocalEntryRecord:
