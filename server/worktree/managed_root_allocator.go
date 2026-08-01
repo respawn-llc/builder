@@ -511,11 +511,7 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 			if cleanupErr != nil {
 				err = errors.Join(err, cleanupErr)
 			}
-			if claimed && cleanupComplete && a.metadata != nil {
-				if releaseErr := a.metadata.ReleaseWorkspacePathKey(context.Background(), workspaceID, key); releaseErr != nil {
-					err = errors.Join(err, releaseErr)
-				}
-			}
+			_ = cleanupComplete
 		}
 	}()
 	if os.IsNotExist(err) {
