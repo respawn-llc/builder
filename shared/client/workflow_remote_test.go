@@ -435,6 +435,7 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T) {
 	var connectionCount atomic.Int32
 	handlerErr := make(chan error, 1)
+	controlReady := make(chan struct{})
 	dedicatedClosed := make(chan struct{})
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
@@ -452,6 +453,7 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 			return
 		}
 		if connectionCount.Add(1) == 1 {
+			close(controlReady)
 			return
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -491,6 +493,13 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
+	select {
+	case <-controlReady:
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control connection readiness")
+	}
 	request := serverapi.TaskSearchRequest{
 		Mode:     serverapi.TaskSearchModeLiteral,
 		Query:    "needle",
