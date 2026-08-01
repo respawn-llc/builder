@@ -46,6 +46,9 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
 	}
+	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+		return reviewerFollowUpResult{}, err
+	}
 	if e.cfg.Reviewer.VerboseOutput {
 		suggestionsText := reviewerSuggestionsText(suggestions)
 		_ = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{

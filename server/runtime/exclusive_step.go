@@ -565,6 +565,7 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			<-done
 			return ctx.Err()
 		case <-done:
 		}
