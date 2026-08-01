@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 
 	"core/server/llm"
 	"core/shared/textutil"
@@ -111,11 +112,12 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 			outcome.assistantEventEmitted = true
 		}
 	}
-	if err := e.steer(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
+	statusReceipt, statusErr := e.steerWithCommitReceipt(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
 		Role: reviewerStatusEntryRole(*reviewerCompletion),
 		Text: reviewerStatusText(*reviewerCompletion, nil),
-	})); err != nil {
-		return reviewerContinuationOutcome{}, err
+	}))
+	if statusErr != nil && !statusReceipt.Committed {
+		return reviewerContinuationOutcome{}, statusErr
 	}
 	if followUpErr != nil {
 		return reviewerContinuationOutcome{
@@ -124,7 +126,7 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 			assistantEventEmitted: outcome.assistantEventEmitted,
 			handledRecursiveRun:   true,
 			recursiveResult:       stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall},
-		}, followUpErr
+		}, errors.Join(followUpErr, statusErr)
 	}
 	outcome.resolved = resolved
 	outcome.handledRecursiveRun = true
@@ -137,5 +139,5 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 	if err := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion})); err != nil {
 		return outcome, err
 	}
-	return outcome, nil
+	return outcome, statusErr
 }

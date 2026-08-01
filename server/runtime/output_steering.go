@@ -489,7 +489,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.finalLocalEntry != nil {
 		finalizer := e.agentStepBoundary(stepID)
 		if finalizer == nil || !finalizer.Capturing() {
-			_, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.finalLocalEntry.entry)
+			receipt, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.finalLocalEntry.entry)
+			item.recordCommitReceipt(receipt)
 			return err
 		}
 		_, record, err := prepareStoredLocalEntryRecord(item.finalLocalEntry.entry)

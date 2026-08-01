@@ -330,10 +330,14 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	eventsMu.Lock()
 	deferredEvents := append([]Event(nil), events...)
 	eventsMu.Unlock()
+	reviewerCompleted := false
 	for _, evt := range deferredEvents {
 		if evt.Kind == EventReviewerCompleted {
-			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
+			reviewerCompleted = true
 		}
+	}
+	if !reviewerCompleted {
+		t.Fatalf("expected reviewer completed event after committed reviewer status observer failure, got %+v", deferredEvents)
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)
