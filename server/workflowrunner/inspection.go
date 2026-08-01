@@ -74,12 +74,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		return PersistedWorkflowInspection{}, err
 	}
 	app.WorkspaceRoot = executionRoot.SourceWorkspaceRoot
-	overrides := workflowPromptOverrides(input.Node.SubagentRole)
-	plan, err := launch.ResolvePromptFacingSnapshotPlan(app, sessionStore, overrides.HasAny())
-	if err != nil {
-		return PersistedWorkflowInspection{}, err
-	}
-	plan, _, err = applyWorkflowSessionPromptOverridesForRole(plan, input.Node.SubagentRole)
+	plan, err := launch.ResolvePromptFacingSnapshotPlan(app, sessionStore, false)
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}

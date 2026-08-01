@@ -2,9 +2,9 @@ package workflowexecution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -12,11 +12,15 @@ import (
 	"core/shared/runtimeids"
 )
 
-const explicitAdmissionConcurrency = 8
+const (
+	explicitAdmissionConcurrency                                               = 8
+	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
+)
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
+	assignmentSteer    CurrentNodeAssignmentSteer
 	automatic          bool
 	done               chan struct{}
 }
@@ -39,6 +43,64 @@ type currentNodeAdmissionError struct {
 	admitted bool
 }
 
+type pendingCurrentNodeAssignmentSteer struct {
+	ready chan struct{}
+	once  sync.Once
+	steer CurrentNodeAssignmentSteer
+	err   error
+}
+
+func newPendingCurrentNodeAssignmentSteer() *pendingCurrentNodeAssignmentSteer {
+	return &pendingCurrentNodeAssignmentSteer{ready: make(chan struct{})}
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) resolve(steer CurrentNodeAssignmentSteer, err error) {
+	s.once.Do(func() {
+		s.steer = steer
+		s.err = err
+		close(s.ready)
+	})
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) Wait(ctx context.Context) error {
+	steer, err := s.resolved(ctx)
+	if err != nil {
+		return err
+	}
+	return steer.Wait(ctx)
+}
+
+func (s *pendingCurrentNodeAssignmentSteer) resolved(ctx context.Context) (CurrentNodeAssignmentSteer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.steer == nil {
+		return nil, errors.New("resolved current node assignment steer is absent")
+	}
+	return s.steer, nil
+}
+
+func resolvedCurrentNodeAssignmentSteer(ctx context.Context, steer CurrentNodeAssignmentSteer) (CurrentNodeAssignmentSteer, error) {
+	if steer == nil {
+		return nil, nil
+	}
+	if pending, ok := steer.(*pendingCurrentNodeAssignmentSteer); ok {
+		return pending.resolved(ctx)
+	}
+	if err := steer.Wait(ctx); err != nil {
+		return nil, err
+	}
+	return steer, nil
+}
+
 func (e currentNodeAdmissionError) Error() string {
 	return e.cause.Error()
 }
@@ -56,6 +118,10 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		return err
 	}
 	key, err := reference.Key()
+	if err != nil {
+		return err
+	}
+	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
 	if err != nil {
 		return err
 	}
@@ -138,7 +204,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, lease, c); err != nil {
+	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
 		return currentNodeAdmissionError{
 			cause:    c.discardAdmission(reference, key, lease, err),
 			admitted: true,
@@ -212,6 +278,86 @@ func (c *CurrentNodeController) enqueueAutomaticIntents(intents []CurrentNodeAut
 	c.enqueueStarts(automaticQueuedStarts(intents))
 }
 
+func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, error) {
+	steered := append([]currentNodeQueuedStart(nil), starts...)
+	for index := range steered {
+		assignment, err := c.steerAssignment(ctx, steered[index].reference)
+		if err != nil {
+			return nil, err
+		}
+		steered[index].assignmentSteer = assignment
+	}
+	return steered, nil
+}
+
+func (c *CurrentNodeController) steerAndWaitStarts(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+) ([]currentNodeQueuedStart, error) {
+	steered, err := c.steerStartsAssignments(ctx, starts)
+	if err != nil {
+		return nil, errors.Join(err, c.recoverCurrentNodeStartFailures(ctx, starts, false, err))
+	}
+	if err := waitCurrentNodeAssignmentSteers(ctx, steered); err != nil {
+		return nil, errors.Join(err, c.recoverCurrentNodeStartFailures(ctx, steered, false, err))
+	}
+	return steered, nil
+}
+
+func pendingCurrentNodeAssignmentStarts(starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, []*pendingCurrentNodeAssignmentSteer) {
+	pendingStarts := append([]currentNodeQueuedStart(nil), starts...)
+	pending := make([]*pendingCurrentNodeAssignmentSteer, len(pendingStarts))
+	for index := range pendingStarts {
+		pending[index] = newPendingCurrentNodeAssignmentSteer()
+		pendingStarts[index].assignmentSteer = pending[index]
+	}
+	return pendingStarts, pending
+}
+
+func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	pending []*pendingCurrentNodeAssignmentSteer,
+) error {
+	for index, start := range starts {
+		assignment, err := c.steerAssignment(ctx, start.reference)
+		pending[index].resolve(assignment, err)
+		if err != nil {
+			for _, unresolved := range pending[index+1:] {
+				unresolved.resolve(nil, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) steerAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (CurrentNodeAssignmentSteer, error) {
+	assignment, err := c.steerer.SteerCurrentNodeAssignment(ctx, reference)
+	if err != nil {
+		return nil, fmt.Errorf("steer current node assignment %v: %w", reference, err)
+	}
+	if assignment == nil {
+		return nil, fmt.Errorf("steer current node assignment %v returned no completion", reference)
+	}
+	return assignment, nil
+}
+
+func waitCurrentNodeAssignmentSteers(ctx context.Context, starts []currentNodeQueuedStart) error {
+	for _, start := range starts {
+		if start.assignmentSteer == nil {
+			return fmt.Errorf("current node assignment %v has no steer completion", start.reference)
+		}
+		if err := start.assignmentSteer.Wait(ctx); err != nil {
+			return fmt.Errorf("wait for current node assignment %v: %w", start.reference, err)
+		}
+	}
+	return nil
+}
+
 func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 	if len(starts) == 0 || c == nil {
 		return
@@ -224,7 +370,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 	for _, start := range starts {
 		var err error
 		if start.automatic {
-			err = c.queueAutomaticStartLocked(start.reference)
+			err = c.queueAutomaticStartLocked(start)
 		} else {
 			err = c.queueExplicitStartLocked(start)
 		}
@@ -253,15 +399,18 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 	return nil
 }
 
-func (c *CurrentNodeController) queueAutomaticStartLocked(reference workflow.CurrentNodeReference) error {
-	key, err := reference.Key()
+func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueuedStart) error {
+	if !start.automatic {
+		return errors.New("automatic current node start must be automatic")
+	}
+	key, err := start.reference.Key()
 	if err != nil {
 		return err
 	}
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
-	c.automaticQueue = append(c.automaticQueue, CurrentNodeAutomaticIntent{CurrentNode: reference})
+	c.automaticQueue = append(c.automaticQueue, start)
 	c.queued[key] = struct{}{}
 	c.wakeAdmissionWorker()
 	return nil
@@ -372,24 +521,26 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, b
 	index := 0
 	if c.lastAutomaticTask != nil {
 		for candidateIndex, candidate := range c.automaticQueue {
-			if candidate.CurrentNode.TaskID == *c.lastAutomaticTask {
+			if candidate.reference.TaskID == *c.lastAutomaticTask {
 				index = candidateIndex
 				break
 			}
 		}
 	}
-	intent := c.automaticQueue[index]
+	start := c.automaticQueue[index]
 	c.automaticQueue = append(c.automaticQueue[:index], c.automaticQueue[index+1:]...)
-	key, err := intent.CurrentNode.Key()
+	key, err := start.reference.Key()
 	if err != nil {
 		panic(fmt.Sprintf("take automatic current node intent: %v", err))
 	}
 	delete(c.queued, key)
-	start := currentNodeQueuedStart{reference: intent.CurrentNode, automatic: true, done: make(chan struct{})}
+	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+	start.automatic = true
+	start.done = make(chan struct{})
 	c.automaticReservations[key] = start
 	c.admissionWorkers[key] = start
 	c.admissionWG.Add(1)
-	taskID := intent.CurrentNode.TaskID
+	taskID := start.reference.TaskID
 	c.lastAutomaticTask = &taskID
 	return start, true
 }
@@ -462,6 +613,14 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 }
 
 func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.CurrentNodeReference, admitted bool, cause error) {
+	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause)
+}
+
+func (c *CurrentNodeController) handleCurrentNodeStartFailures(
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) {
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
@@ -470,26 +629,54 @@ func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.Curren
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	err := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		interrupt := c.store.InterruptCurrentNode
-		if admitted {
-			interrupt = c.store.InterruptAdmittedCurrentNode
-		}
-		return interrupt(ctx, reference, "workflow_runtime_start_failed", workflow.CurrentNodeInterruptionDetail{
-			Code:   "workflow_runtime_start_failed",
-			Fields: map[string]string{"error": cause.Error()},
-		})
-	})
+	err := c.recoverCurrentNodeStartFailures(cleanupCtx, starts, admitted, cause)
 	if err == nil {
-		c.publishPendingInterruptedCurrentNode(cleanupCtx, reference, "workflow_runtime_start_failed")
-		return
-	}
-	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
 	c.mu.Lock()
 	c.workerErr = errors.Join(c.workerErr, cause, err)
 	c.mu.Unlock()
+}
+
+func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) error {
+	return c.permit.Run(ctx, func(ctx context.Context) error {
+		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
+	})
+}
+
+func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	admitted bool,
+	cause error,
+) error {
+	references := make([]workflow.CurrentNodeReference, 0, len(starts))
+	for _, start := range starts {
+		references = append(references, start.reference)
+	}
+	interrupt := c.store.InterruptCurrentNode
+	if admitted {
+		interrupt = c.store.InterruptAdmittedCurrentNode
+	}
+	interrupted, err := interruptCurrentNodeReferences(
+		ctx,
+		interrupt,
+		references,
+		reasonCurrentNodeRuntimeStartFailed,
+		workflow.CurrentNodeInterruptionDetail{
+			Code:   string(reasonCurrentNodeRuntimeStartFailed),
+			Fields: map[string]string{"error": cause.Error()},
+		},
+	)
+	for _, reference := range interrupted {
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
+	}
+	return err
 }
 
 func currentNodeAutomaticIntents(references []workflow.CurrentNodeReference) ([]CurrentNodeAutomaticIntent, error) {
@@ -535,7 +722,10 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 			return nil, fmt.Errorf("explicit current node start at index %d is duplicated", index)
 		}
 		seen[key] = struct{}{}
-		starts = append(starts, currentNodeQueuedStart{reference: currentNode.Reference})
+		starts = append(starts, currentNodeQueuedStart{
+			reference:          currentNode.Reference,
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+		})
 	}
 	return starts, nil
 }

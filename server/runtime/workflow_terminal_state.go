@@ -34,8 +34,8 @@ func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
 	if e == nil {
 		return nil, nil
 	}
-	if e.currentNodeExecutionActive() {
-		instructions := e.cfg.CurrentNodeExecution.Instructions
+	if execution, active := e.currentNodeExecutionConfig(); active {
+		instructions := execution.Instructions
 		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" {
 			return nil, fmt.Errorf("active Workflow execution has no Task ID")
 		}

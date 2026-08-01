@@ -5,6 +5,8 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func normalizeHistoryReplacementEngine(engine string) string {
@@ -35,17 +37,60 @@ func compactionBoundaryMatcher(matchErr *error) func(session.EventRecord) bool {
 	}
 }
 
-func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {
-	if len(items) == 0 {
-		return nil
+func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem, compactionNumber *int) []ChatEntry {
+	entries := make([]ChatEntry, 0, len(items)+1)
+	hasCompactionSummary := false
+	walker := newResponseItemMessageWalker(func(msg llm.Message) {
+		if entry, ok := preservedUserMessageEntry(msg); ok {
+			entries = append(entries, entry)
+			return
+		}
+		for _, entry := range VisibleChatEntriesFromMessage(msg) {
+			if entry.MessageType == llm.MessageTypeCompactionSummary {
+				hasCompactionSummary = true
+				entry.CompactionNumber = textutil.Pointer(compactionNumber)
+			}
+			entries = append(entries, clonePersistedChatEntry(entry))
+		}
+	})
+	for _, item := range items {
+		walker.Apply(item)
 	}
-	entries := visibleChatEntriesFromResponseItems(items)
-	if len(entries) == 0 {
-		return nil
+	walker.Flush()
+
+	// Empty legacy replacements are segment boundaries only. Non-empty
+	// replacements represent compacted working sets and always receive a notice.
+	if !hasCompactionSummary && len(items) > 0 {
+		entries = append(
+			[]ChatEntry{syntheticCompactionSummaryEntry(compactionNumber)},
+			entries...,
+		)
 	}
-	out := make([]ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, clonePersistedChatEntry(entry))
+	return entries
+}
+
+func preservedUserMessageEntry(msg llm.Message) (ChatEntry, bool) {
+	if msg.Role != llm.RoleUser || msg.MessageType != nil || msg.Content == nil ||
+		strings.TrimSpace(*msg.Content) == "" {
+		return ChatEntry{}, false
 	}
-	return out
+	// manual_compaction_carryover is the legacy wire name for any user message
+	// preserved across a compaction boundary.
+	messageType := llm.MessageTypeCompactionPreservedUserMessage
+	return ChatEntry{
+		Visibility:   messageTypeTranscriptVisibility(&messageType),
+		Role:         string(transcript.EntryRoleCompactionPreservedUserMessage),
+		Text:         *msg.Content,
+		MessageType:  messageType,
+		CompactLabel: compactLabelForMessage(llm.Message{MessageType: &messageType}),
+	}, true
+}
+
+func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
+	return ChatEntry{
+		Visibility:       transcript.EntryVisibilityOngoing,
+		Role:             string(transcript.EntryRoleCompactionSummary),
+		MessageType:      llm.MessageTypeCompactionSummary,
+		CompactionNumber: textutil.Pointer(compactionNumber),
+	}
 }

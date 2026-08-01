@@ -278,6 +278,22 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	var branchValue any
+	if branchScoped {
+		branchValue = string(branchKey)
+	}
+	locked, err := q.AcquireCurrentNodeResumeWriteLock(ctx, sqlitegen.AcquireCurrentNodeResumeWriteLockParams{
+		TaskID:              string(reference.TaskID),
+		NodeID:              string(reference.NodeID),
+		TransitionBranchKey: branchValue,
+	})
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	if locked != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
 	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
@@ -286,7 +302,7 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 		resumed   int64
 		resumeErr error
 	)
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+	if branchScoped {
 		resumed, resumeErr = q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
 			TaskID:              string(reference.TaskID),
 			NodeID:              string(reference.NodeID),

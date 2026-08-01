@@ -26,14 +26,24 @@ type CurrentNodeRunner interface {
 		context.Context,
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
+		CurrentNodeAssignmentSteer,
 		sessionruntime.WorkflowExecutionLease,
 		workflowruntime.Controller,
 	) error
 }
 
+type CurrentNodeAssignmentSteerer interface {
+	SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error)
+}
+
+type CurrentNodeAssignmentSteer interface {
+	Wait(context.Context) error
+}
+
 type CurrentNodeControllerConfig struct {
 	AutomaticConcurrency int
 	Attention            CurrentNodeAttentionLifecycle
+	AssignmentSteerer    CurrentNodeAssignmentSteerer
 }
 
 type CurrentNodeAttentionLifecycle interface {
@@ -101,6 +111,7 @@ type CurrentNodeController struct {
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner    CurrentNodeRunner
+	steerer   CurrentNodeAssignmentSteerer
 	authority *sessionruntime.Authority
 	permit    *MutationPermit
 	attention CurrentNodeAttentionLifecycle
@@ -124,7 +135,7 @@ type CurrentNodeController struct {
 	explicitQueue         []currentNodeQueuedStart
 	explicitQueued        map[workflow.CurrentNodeReferenceKey]struct{}
 	explicitReservations  map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
-	automaticQueue        []CurrentNodeAutomaticIntent
+	automaticQueue        []currentNodeQueuedStart
 	queued                map[workflow.CurrentNodeReferenceKey]struct{}
 	automaticReservations map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
 	admissionWorkers      map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
@@ -161,6 +172,9 @@ func NewCurrentNodeController(
 	if runner == nil {
 		return nil, errors.New("current node workflow runner is required")
 	}
+	if cfg.AssignmentSteerer == nil {
+		return nil, errors.New("current node assignment steerer is required")
+	}
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -174,6 +188,7 @@ func NewCurrentNodeController(
 	controller := &CurrentNodeController{
 		store:                 store,
 		runner:                runner,
+		steerer:               cfg.AssignmentSteerer,
 		authority:             authority,
 		permit:                permit,
 		attention:             cfg.Attention,
@@ -293,6 +308,8 @@ func (c *CurrentNodeController) AnswerWorkflowQuestion(
 
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
 	var completed workflowstore.CurrentNodeCompletionResult
+	var starts []currentNodeQueuedStart
+	var pending []*pendingCurrentNodeAssignmentSteer
 	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		live, exists := c.live[req.ScopeID]
@@ -313,7 +330,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 		if !ok {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		return c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
+		if err := c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			c.mu.Lock()
 			exact, stillLive := c.live[req.ScopeID]
 			if !stillLive || !exact.reference.Equal(live.reference) {
@@ -343,12 +360,16 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			if intentErr != nil {
 				return intentErr
 			}
+			starts, pending = pendingCurrentNodeAssignmentStarts(automaticQueuedStarts(intents))
 			c.mu.Lock()
 			c.completed[req.ScopeID] = struct{}{}
-			c.heldStarts[req.ScopeID] = automaticQueuedStarts(intents)
+			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 	if err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
@@ -392,10 +413,14 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
+		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents))
+		if err != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, err
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		for _, start := range automaticQueuedStarts(intents) {
-			if err := c.queueAutomaticStartLocked(start.reference); err != nil {
+		for _, start := range starts {
+			if err := c.queueAutomaticStartLocked(start); err != nil {
 				return workflowstore.CurrentNodeCompletionResult{}, err
 			}
 		}
@@ -527,6 +552,10 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || !completed || interrupted || closed {
 		return
 	}
+	if err := waitCurrentNodeAssignmentSteers(context.Background(), starts); err != nil {
+		c.handleCurrentNodeStartFailures(starts, false, err)
+		return
+	}
 	c.enqueueStarts(starts)
 }
 
@@ -542,7 +571,9 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 		Gates:            make([]CurrentNodeAdmissionGateSnapshot, 0, len(c.gates)),
 		LiveScopes:       make([]CurrentNodeLiveScopeSnapshot, 0, len(c.live)),
 	}
-	snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, c.automaticQueue...)
+	for _, start := range c.automaticQueue {
+		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{CurrentNode: start.reference})
+	}
 	for _, start := range c.automaticReservations {
 		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{CurrentNode: start.reference})
 	}

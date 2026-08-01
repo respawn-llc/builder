@@ -267,6 +267,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
+	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
 	if err != nil {
 		cleanupNewFailure()
@@ -280,6 +281,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowexecution.CurrentNodeControllerConfig{
 			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
 			Attention:            workflowAttentionFinalizer,
+			AssignmentSteerer:    workflowRuntimeStarter,
 		},
 	)
 	if err != nil {

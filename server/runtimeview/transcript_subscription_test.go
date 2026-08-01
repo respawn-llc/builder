@@ -64,6 +64,30 @@ func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) 
 	}
 }
 
+func TestTranscriptCompactionProjectionCarriesTypedFactsWithoutServerPresentation(t *testing.T) {
+	count := 2
+	detail := "provider summary"
+	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
+		Reason:      transcript.NoticeReasonCompaction,
+		Severity:    transcript.NoticeSeverityInfo,
+		MessageType: llm.MessageTypeCompactionSummary,
+		Compaction: &runtime.TranscriptCompactionNoticeFact{
+			Count:  &count,
+			Detail: &detail,
+		},
+	})
+	if notice.Compaction == nil ||
+		notice.Compaction.Count == nil ||
+		*notice.Compaction.Count != count ||
+		notice.Compaction.Detail == nil ||
+		*notice.Compaction.Detail != detail {
+		t.Fatalf("compaction projection = %+v", notice.Compaction)
+	}
+	if notice.CompactLabel != nil || notice.CondensedText != nil || notice.Diagnostic != nil {
+		t.Fatalf("server-authored compaction presentation leaked into client contract: %+v", notice)
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {

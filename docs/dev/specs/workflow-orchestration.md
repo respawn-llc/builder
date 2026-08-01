@@ -231,6 +231,10 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
+- Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
+- Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
+- When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
+- Resume must not steer or append a Current Node assignment.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -291,7 +295,8 @@
 - During parallel work, each Context Source selection stays within the source Current Node's Transition Branch Key.
 - Manual movement through a concrete Transition Branch supports `previous_target` and `previous_target_or_new`. Kent resolves the Context Source when it applies the move and freezes that choice before pending Approval. Manual movement does not support a selected prior-Node Context Source.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
-- Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
+- `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Agent Node's normalized Assignee identity. Workflow validation rejects statically known source/target identity mismatches, runtime rejects retained-Session mismatches, and a valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
+- `compact_and_continue_session` compacts the reused Session and establishes the target Agent Node's Assignee in a fresh contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.

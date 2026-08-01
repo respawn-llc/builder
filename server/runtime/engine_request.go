@@ -192,7 +192,8 @@ func (e *Engine) enableNativeWebSearch(ctx context.Context) (bool, error) {
 }
 
 func (e *Engine) currentNodeExecutionActive() bool {
-	return e != nil && e.cfg.CurrentNodeExecution != nil && !e.cfg.CurrentNodeExecution.ScopeID.IsZero()
+	_, active := e.currentNodeExecutionConfig()
+	return active
 }
 
 func (e *Engine) workflowPromptActive() bool {
@@ -207,10 +208,10 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 	if e.cfg.WorkflowPrompt != nil {
 		return e.cfg.WorkflowPrompt, true
 	}
-	if !e.currentNodeExecutionActive() {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active {
 		return nil, false
 	}
-	execution := e.cfg.CurrentNodeExecution
 	return &workflowruntime.PromptContract{
 		Identity:               workflowruntime.CurrentNodePromptIdentity(execution.Instructions.CurrentNode),
 		CompletionMode:         execution.CompletionMode,

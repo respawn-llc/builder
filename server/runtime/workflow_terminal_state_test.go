@@ -22,13 +22,17 @@ func TestWorkflowSessionStateRequiresValidTaskAndWorkflowIdentity(t *testing.T) 
 		{name: "valid identity", taskID: "task-1", workflowID: validWorkflowID, wantState: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			engine := &Engine{cfg: Config{CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			execution := &workflowruntime.CurrentNodeExecutionConfig{
 				ScopeID: runtimeids.NewExecutionScopeID(),
 				Instructions: workflowruntime.TaskInstructions{
 					CurrentNode: workflow.CurrentNodeReference{TaskID: testCase.taskID},
 					WorkflowID:  testCase.workflowID,
 				},
-			}}}
+			}
+			engine := &Engine{
+				cfg:                  Config{CurrentNodeExecution: execution},
+				currentNodeExecution: newCurrentNodeExecutionState(execution),
+			}
 
 			state, err := engine.WorkflowSessionState()
 			if testCase.wantState && err != nil {

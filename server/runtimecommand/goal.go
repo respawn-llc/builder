@@ -406,17 +406,7 @@ func appendDormantGoalNotice(
 	if store == nil {
 		return GoalCommandResult{}, errors.New("session store is required")
 	}
-	record, err := runtime.GoalNoticeRecord(kind, goal)
-	if err != nil {
-		result.Err = err
-		return result, err
-	}
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		result.Err = err
-		return result, err
-	}
-	_, receipt, err := eventLog.AppendRecord(nil, record)
+	receipt, err := runtime.SteerPersistedGoalNotice(store, kind, goal)
 	result.NoticeReceipt = receipt
 	result.Err = err
 	return result, err

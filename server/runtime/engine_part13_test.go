@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -139,7 +140,7 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	}
 }
 
-func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCarryover(t *testing.T) {
+func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutPreservedUserMessage(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -170,21 +171,58 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 	}
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	foundFutureMessage := false
-	foundManualCarryover := false
-	for _, message := range messages {
+	var futureMessage *llm.Message
+	foundPreservedUserMessage := false
+	for index := range messages {
+		message := messages[index]
 		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHandoffFutureMessage {
-			foundFutureMessage = true
+			futureMessage = &messages[index]
 		}
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeManualCompactionCarryover {
-			foundManualCarryover = true
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeCompactionPreservedUserMessage {
+			foundPreservedUserMessage = true
 		}
 	}
-	if !foundFutureMessage {
+	if futureMessage == nil {
 		t.Fatalf("expected future-agent message in history, got %+v", messages)
 	}
-	if foundManualCarryover {
-		t.Fatalf("did not expect manual compaction carryover for trigger_handoff, got %+v", messages)
+	if futureMessage.Role != llm.RoleDeveloper ||
+		futureMessage.Content == nil ||
+		*futureMessage.Content != prompts.FormatHandoffFutureAgentMessage("resume with tests") {
+		t.Fatalf("future-agent message = %+v", *futureMessage)
+	}
+	if foundPreservedUserMessage {
+		t.Fatalf("did not expect a compaction-preserved user message for trigger_handoff, got %+v", messages)
+	}
+}
+
+func TestTriggerHandoffWithBlankFutureMessageAppendsNoFutureMessage(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+	}}}
+	eng := mustNewHandoffTestEngine(t, store, client, Config{})
+	eng.compactionRuntimeState().SetSoonReminderIssued(true)
+
+	_, futureAdded, err := eng.TriggerHandoff(
+		context.Background(),
+		"step-1",
+		llm.ToolCall{ID: "call-handoff-blank", Name: string(toolspec.ToolTriggerHandoff)},
+		"keep API details",
+		" \n\t ",
+	)
+	if err != nil {
+		t.Fatalf("trigger handoff: %v", err)
+	}
+	if futureAdded {
+		t.Fatal("blank future-agent message was reported as appended")
+	}
+	if _, err := eng.applyPendingHandoffIfNeeded(context.Background(), "step-1"); err != nil {
+		t.Fatalf("apply pending handoff: %v", err)
+	}
+	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHandoffFutureMessage {
+			t.Fatalf("blank future-agent message reached history: %+v", message)
+		}
 	}
 }
 

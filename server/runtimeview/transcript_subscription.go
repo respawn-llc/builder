@@ -552,6 +552,12 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 			Visibility:      fact.CacheWarning.Visibility,
 		}
 	}
+	if fact.Compaction != nil {
+		notice.Compaction = &clientui.TranscriptCompactionNotice{
+			Count:  textutil.Pointer(fact.Compaction.Count),
+			Detail: optionalStringPointer(fact.Compaction.Detail),
+		}
+	}
 	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
 	diagnosticDetail := fact.DiagnosticDetail
 	if diagnosticCode != "" || strings.TrimSpace(diagnosticDetail) != "" {

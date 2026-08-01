@@ -165,6 +165,57 @@ func TestWorkflowIdentityMigrationRejectsMalformedIdentityWithoutMutation(t *tes
 	}
 }
 
+func TestOpenRepairsWorkflowIdentityMigrationVersionCollision(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 60)
+	if err != nil {
+		t.Fatalf("open version 60 database: %v", err)
+	}
+	seedWorkflowIdentityMigrationFixture(t, db, false)
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 61); err != nil {
+		t.Fatalf("advance legacy database to version 61: %v", err)
+	}
+	for _, version := range []int64{62, 63} {
+		if _, err := db.Exec(
+			`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+			version,
+		); err != nil {
+			t.Fatalf("record collided migration version %d: %v", version, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close collided database: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open collided database: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	summaries, err := store.ListProjectHomeSummaries(t.Context(), "", 10, 0)
+	if err != nil {
+		t.Fatalf("list project home summaries after repair: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("project home summary count = %d, want 2", len(summaries))
+	}
+
+	var workflowIdentityStorage string
+	if err := store.db.QueryRow(`SELECT typeof(id) FROM workflows LIMIT 1`).Scan(&workflowIdentityStorage); err != nil {
+		t.Fatalf("read repaired workflow identity storage: %v", err)
+	}
+	if workflowIdentityStorage != "blob" {
+		t.Fatalf("repaired workflow identity storage = %q, want blob", workflowIdentityStorage)
+	}
+}
+
 func seedWorkflowIdentityMigrationFixture(t *testing.T, db *sql.DB, malformed bool) {
 	t.Helper()
 	workflowA := workflowIdentityMigrationPrefixed

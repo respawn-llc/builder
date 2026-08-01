@@ -159,6 +159,60 @@ func TestStreamingTranscriptScanSeedsLastFinalAnswerFromCompactionBoundary(t *te
 	}
 }
 
+func TestStreamingTranscriptScanProjectsLegacyCompactionWithoutNumber(t *testing.T) {
+	t.Parallel()
+	events := []session.EventRecord{
+		streamScanTestEvent(t, "history_replaced", historyReplacementPayload{
+			Items: llm.ItemsFromMessages([]llm.Message{
+				{Role: llm.RoleUser, Content: textutil.Value("first preserved prompt")},
+				{Role: llm.RoleUser, Content: textutil.Value("second preserved prompt")},
+				{
+					Role:        llm.RoleDeveloper,
+					MessageType: textutil.Value(llm.MessageTypeEnvironment),
+					Content:     textutil.Value("current environment"),
+				},
+			}),
+		}),
+	}
+	scan := newStreamingTranscriptScan(
+		inMemoryTranscriptScanRequest{Offset: 0, Limit: 10},
+		config.CacheWarningModeDefault,
+	)
+	applyEventsToStreaming(t, scan, events)
+	entries := scan.PageSnapshot().Snapshot.Entries
+	if len(entries) != 4 {
+		t.Fatalf("projected entries = %+v, want summary, two preserved messages, and environment", entries)
+	}
+	wantRoles := []string{
+		string(transcript.EntryRoleCompactionSummary),
+		string(transcript.EntryRoleCompactionPreservedUserMessage),
+		string(transcript.EntryRoleCompactionPreservedUserMessage),
+		string(transcript.EntryRoleDeveloperContext),
+	}
+	wantVisibility := []transcript.EntryVisibility{
+		transcript.EntryVisibilityOngoing,
+		transcript.EntryVisibilityDetail,
+		transcript.EntryVisibilityDetail,
+		transcript.EntryVisibilityDetail,
+	}
+	for index := range entries {
+		if entries[index].Role != wantRoles[index] ||
+			entries[index].Visibility != wantVisibility[index] {
+			t.Fatalf(
+				"projected entry %d = %+v, want role %q visibility %q",
+				index,
+				entries[index],
+				wantRoles[index],
+				wantVisibility[index],
+			)
+		}
+	}
+	if entries[1].Text != "first preserved prompt" ||
+		entries[2].Text != "second preserved prompt" {
+		t.Fatalf("preserved message order/content = %+v", entries)
+	}
+}
+
 func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *testing.T) {
 	t.Parallel()
 	events := []session.EventRecord{

@@ -511,7 +511,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	}
 }
 
-func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *testing.T) {
+func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntry(t *testing.T) {
 	t.Parallel()
 	var events []Event
 	engine := mustNewTestEngine(
@@ -524,9 +524,9 @@ func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
-	carryover, ok := manualCompactionCarryoverMessage("carryover")
+	carryover, ok := compactionPreservedUserMessage("carryover")
 	if !ok {
-		t.Fatal("expected typed manual compaction carryover")
+		t.Fatal("expected typed compaction-preserved user message")
 	}
 	if err := engine.steer(
 		"compaction",
@@ -569,7 +569,7 @@ func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *
 	}
 	wantTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
-		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeCompactionPreservedUserMessage,
 	}
 	for index, wantType := range wantTypes {
 		facts := TranscriptCommittedRowFactsFromEvent(committed[index])

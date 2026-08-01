@@ -8,24 +8,24 @@ import (
 	"core/shared/textutil"
 )
 
-type compactionCarryoverCoordinator struct {
+type compactionPreservedContextCoordinator struct {
 	engine *Engine
 }
 
-func newCompactionCarryoverCoordinator(engine *Engine) compactionCarryoverCoordinator {
-	return compactionCarryoverCoordinator{engine: engine}
+func newCompactionPreservedContextCoordinator(engine *Engine) compactionPreservedContextCoordinator {
+	return compactionPreservedContextCoordinator{engine: engine}
 }
 
-func manualCompactionCarryoverMessage(text string) (llm.Message, bool) {
+func compactionPreservedUserMessage(text string) (llm.Message, bool) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return llm.Message{}, false
 	}
-	content := trimCompactionCarryoverText(trimmed, manualCompactionCarryoverMaxChars)
+	content := trimCompactionPreservedUserMessageText(trimmed, compactionPreservedUserMessageMaxChars)
 	return llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover),
-		Content:     textutil.Value(manualCompactionCarryoverHeader + "\n\n" + content),
+		MessageType: textutil.Value(llm.MessageTypeCompactionPreservedUserMessage),
+		Content:     textutil.Value(compactionPreservedUserMessageHeader + "\n\n" + content),
 	}, true
 }
 
@@ -41,7 +41,7 @@ func handoffFutureAgentMessage(text string) (llm.Message, bool) {
 	}, true
 }
 
-func (c compactionCarryoverCoordinator) appendHandoffFutureMessage(stepID string) error {
+func (c compactionPreservedContextCoordinator) appendHandoffFutureMessage(stepID string) error {
 	e := c.engine
 	req := e.handoffRuntimeState().RequestSnapshot()
 	if req == nil {
@@ -63,7 +63,7 @@ func (c compactionCarryoverCoordinator) appendHandoffFutureMessage(stepID string
 	return err
 }
 
-func trimCompactionCarryoverText(text string, maxChars int) string {
+func trimCompactionPreservedUserMessageText(text string, maxChars int) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" || maxChars <= 0 {
 		return trimmed

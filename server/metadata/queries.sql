@@ -3115,6 +3115,17 @@ WHERE task_id = sqlc.arg(task_id)
         AND approval.source_transition_branch_key = task_current_nodes.transition_branch_key
   );
 
+-- name: AcquireCurrentNodeResumeWriteLock :execrows
+UPDATE task_current_nodes
+SET scheduling_state = scheduling_state
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted';
+
 -- name: InterruptSerialAdmittedCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',

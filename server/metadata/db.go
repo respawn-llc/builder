@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 
 	"github.com/pressly/goose/v3"
+	goosedatabase "github.com/pressly/goose/v3/database"
 )
 
 //go:embed migrations/*.up.sql
@@ -26,6 +27,12 @@ const metadataSQLiteConnectionPoolSize = 8
 // routine migration status output silent unless debug logging is explicitly enabled.
 var metadataMigrationDebugLogs = false
 var metadataMigrationLogWriter io.Writer = os.Stderr
+
+const (
+	workflowIdentityMigrationVersion         int64 = 62
+	workflowSessionAgentRoleMigrationVersion int64 = 63
+	workflowIdentityViewName                       = "project_default_workflow_identity"
+)
 
 func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, error) {
 	trimmedRoot, err := filepath.Abs(filepath.Clean(persistenceRoot))
@@ -93,7 +100,11 @@ func runMigrations(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if _, err := provider.Up(context.Background()); err != nil {
+	ctx := context.Background()
+	if err := repairWorkflowIdentityMigrationCollision(ctx, db, provider); err != nil {
+		return err
+	}
+	if _, err := provider.Up(ctx); err != nil {
 		return fmt.Errorf("apply metadata migrations: %w", err)
 	}
 	return nil
@@ -101,6 +112,39 @@ func runMigrations(db *sql.DB) error {
 
 func registerMetadataSQLiteCollations() error {
 	return sqlitegen.RegisterSQLiteExtensions()
+}
+
+// repairWorkflowIdentityMigrationCollision recognizes databases that recorded
+// the former version-62 Session role migration before version 62 became the
+// Workflow identity migration.
+func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, provider *goose.Provider) error {
+	version, err := provider.GetDBVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("read metadata migration version: %w", err)
+	}
+	if version < workflowIdentityMigrationVersion || version > workflowSessionAgentRoleMigrationVersion {
+		return nil
+	}
+	definitions, err := sqlitegen.New(db).ListMetadataSchemaDefinitions(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect metadata schema before migrations: %w", err)
+	}
+	for _, definition := range definitions {
+		if definition.ObjectKind == "view" && definition.ObjectName == workflowIdentityViewName {
+			return nil
+		}
+	}
+
+	versionStore, err := goosedatabase.NewStore(goosedatabase.DialectSQLite3, goose.DefaultTablename)
+	if err != nil {
+		return fmt.Errorf("create metadata migration version store: %w", err)
+	}
+	for collidedVersion := workflowSessionAgentRoleMigrationVersion; collidedVersion >= workflowIdentityMigrationVersion; collidedVersion-- {
+		if err := versionStore.Delete(ctx, db, collidedVersion); err != nil {
+			return fmt.Errorf("repair metadata migration version %d: %w", collidedVersion, err)
+		}
+	}
+	return nil
 }
 
 func newMetadataMigrationProvider(db *sql.DB) (*goose.Provider, error) {

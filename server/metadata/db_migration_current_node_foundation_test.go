@@ -102,6 +102,32 @@ FROM tasks`); err != nil {
 	}
 }
 
+func TestMetadataMigrationIrreversibleMarkersAreRegistered(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtPathWithoutMigrationsForTest(root, dbPath)
+	if err != nil {
+		t.Fatalf("open database without migrations: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var registered int
+	if err := db.QueryRow(`
+SELECT COUNT(*)
+FROM pragma_function_list
+WHERE name IN (
+    'kent_workflow_run_history_cutover_is_irreversible',
+    'kent_current_node_prior_transition_parameters_are_irreversible',
+    'kent_workflow_session_agent_role_backfill_is_irreversible'
+)`).Scan(&registered); err != nil {
+		t.Fatalf("list irreversible migration marker functions: %v", err)
+	}
+	if registered != 3 {
+		t.Fatalf("registered irreversible migration markers = %d, want 3", registered)
+	}
+}
+
 func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testing.T) {
 	t.Parallel()
 	store, err := Open(t.TempDir())
