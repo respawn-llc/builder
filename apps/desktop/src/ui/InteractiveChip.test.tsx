@@ -52,6 +52,7 @@ describe("InteractiveChip", () => {
     render(<ProgressChip label="Dependency progress" maximum={4} value={3} />);
 
     const progress = screen.getByRole("progressbar", { name: "Dependency progress" });
-    expect(progress.closest("button")).toBeNull();
+    expect(progress).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });

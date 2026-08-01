@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -149,7 +149,9 @@ describe("TaskDependenciesArea", () => {
     const progress = screen.getByRole("progressbar");
     expect(progress).toHaveAttribute("aria-valuenow", "0");
     expect(progress).toHaveAttribute("aria-valuemax", "1");
-    expect(progress.closest("button")).toBeNull();
+    expect(
+      screen.queryAllByRole("button").some((button) => within(button).queryByRole("progressbar") !== null),
+    ).toBe(false);
 
     await user.click(screen.getByTestId("dependency-row-task-2"));
     await user.click(screen.getByTestId("dependency-add-blocked-by"));

@@ -32,10 +32,13 @@ describe("TaskInitiatingActionDialogs", () => {
 
     await user.click(screen.getByTestId("initiate-action"));
     await user.click(await screen.findByTestId("dependency-confirmation-proceed"));
-    expect(onResult).toHaveBeenCalledWith({
-      kind: "continue",
-      action: expect.objectContaining({ proceedDespiteDependencies: true }),
-    });
+    const result = onResult.mock.calls[0]?.[0];
+    expect(result?.kind).toBe("continue");
+    if (result?.kind !== "continue") {
+      throw new Error("Expected a continue result.");
+    }
+    expect(result.action.proceedDespiteDependencies).toBe(true);
+    expect(result.selection).toBeUndefined();
     expect(execute).toHaveBeenCalledOnce();
     expect(screen.queryByTestId("dependency-confirmation-proceed")).not.toBeInTheDocument();
   });
@@ -78,11 +81,13 @@ describe("TaskInitiatingActionDialogs", () => {
     await user.click(screen.getByTestId("initiate-action"));
     await user.click(await screen.findByTestId("execution-target-submit"));
 
-    expect(onResult).toHaveBeenCalledWith({
-      kind: "continue",
-      action: expect.objectContaining({ proceedDespiteDependencies: false }),
-      selection: { mode: "default_branch", customRef: null },
-    });
+    const result = onResult.mock.calls[0]?.[0];
+    expect(result?.kind).toBe("continue");
+    if (result?.kind !== "continue") {
+      throw new Error("Expected a continue result.");
+    }
+    expect(result.action.proceedDespiteDependencies).toBe(false);
+    expect(result.selection).toEqual({ mode: "default_branch", customRef: null });
     expect(execute).toHaveBeenCalledOnce();
     expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
