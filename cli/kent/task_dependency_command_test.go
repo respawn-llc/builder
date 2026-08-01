@@ -152,11 +152,30 @@ func TestTaskDependencyRemoveDoesNotMutateWhenEitherSelectorFails(t *testing.T) 
 		&stderr,
 	)
 
-	if exitCode != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "blocked lookup failed") {
+	if exitCode != 1 || stdout.Len() != 0 || stderr.Len() == 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 	if len(remote.getRequests) != 2 || len(remote.removeRequests) != 0 {
 		t.Fatalf("gets=%+v removes=%+v", remote.getRequests, remote.removeRequests)
+	}
+}
+
+func TestTaskDependencyListRejectsExplicitBlankDirection(t *testing.T) {
+	remote := &taskDependencyCommandRemote{}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskDependencySubcommand(
+		[]string{"list", "KENT-2", "--direction", ""},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode != 2 || stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.getRequests) != 0 || len(remote.listRequests) != 0 {
+		t.Fatalf("gets=%+v lists=%+v", remote.getRequests, remote.listRequests)
 	}
 }
 

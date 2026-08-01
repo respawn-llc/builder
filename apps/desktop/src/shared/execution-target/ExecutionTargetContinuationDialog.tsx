@@ -1,20 +1,16 @@
 import { useTranslation } from "react-i18next";
 
 import type {
+  WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
+import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
 import {
-  Button,
-  compactDialogWidth,
-  Dialog,
-  ErrorState,
-  RadioGroup,
-  RadioGroupItem,
-  Spinner,
-  TextInput,
-} from "@/ui";
-import { executionTargetSelectionFromDraft } from "./executionTargetContinuation";
+  executionTargetSelectionFromDraft,
+  proceedWithTaskInitiatingAction,
+  type TaskInitiatingAction,
+} from "./executionTargetContinuation";
 import type {
   PendingTaskInitiatingAction,
   TaskInitiatingActionController,
@@ -23,26 +19,32 @@ import type {
 const concreteModes = ["none", "head", "default_branch", "custom_ref"] as const;
 type ExecutionTargetPending = Extract<PendingTaskInitiatingAction, { kind: "execution_target" }>;
 
+export type TaskInitiatingActionDialogResult =
+  | Readonly<{
+      kind: "continue";
+      action: TaskInitiatingAction;
+      selection?: WorkflowExecutionTargetSelection;
+    }>
+  | Readonly<{
+      kind: "view_dependencies";
+      taskID: string;
+    }>;
+
 export function TaskInitiatingActionDialogs({
   continuation,
-  onViewDependencies,
+  onResult,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
-  onViewDependencies(taskID: string): void;
+  onResult(result: TaskInitiatingActionDialogResult): void;
 }>) {
   const pending = continuation.pending;
   if (pending?.kind === "dependency_confirmation") {
-    return (
-      <DependencyConfirmationDialog
-        continuation={continuation}
-        onViewDependencies={onViewDependencies}
-        pending={pending}
-      />
-    );
+    return <DependencyConfirmationDialog continuation={continuation} onResult={onResult} pending={pending} />;
   }
   return (
     <ExecutionTargetDialog
       continuation={continuation}
+      onResult={onResult}
       pending={pending?.kind === "execution_target" ? pending : null}
     />
   );
@@ -50,11 +52,11 @@ export function TaskInitiatingActionDialogs({
 
 function DependencyConfirmationDialog({
   continuation,
-  onViewDependencies,
+  onResult,
   pending,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
-  onViewDependencies(taskID: string): void;
+  onResult(result: TaskInitiatingActionDialogResult): void;
   pending: Extract<PendingTaskInitiatingAction, { kind: "dependency_confirmation" }>;
 }>) {
   const { t } = useTranslation();
@@ -78,7 +80,7 @@ function DependencyConfirmationDialog({
             data-testid="dependency-confirmation-view"
             onClick={() => {
               continuation.close();
-              onViewDependencies(taskID);
+              onResult({ kind: "view_dependencies", taskID });
             }}
             variant="primary-outline"
           >
@@ -87,7 +89,11 @@ function DependencyConfirmationDialog({
           <Button
             data-testid="dependency-confirmation-proceed"
             onClick={() => {
-              void continuation.proceed();
+              continuation.close();
+              onResult({
+                kind: "continue",
+                action: proceedWithTaskInitiatingAction(pending.action),
+              });
             }}
             variant="primary"
           >
@@ -101,58 +107,66 @@ function DependencyConfirmationDialog({
 
 function ExecutionTargetDialog({
   continuation,
+  onResult,
   pending,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
+  onResult(result: TaskInitiatingActionDialogResult): void;
   pending: ExecutionTargetPending | null;
 }>) {
   const { t } = useTranslation();
-  const submitting = pending?.phase === "submitting";
   return (
     <Dialog
-      closeDisabled={submitting}
       closeLabel={t("app.close")}
       onClose={continuation.close}
       open={pending !== null}
       title={t("executionTargetContinuation.title")}
     >
-      {pending === null ? null : <ExecutionTargetForm continuation={continuation} pending={pending} />}
+      {pending === null ? null : (
+        <ExecutionTargetForm continuation={continuation} onResult={onResult} pending={pending} />
+      )}
     </Dialog>
   );
 }
 
 function ExecutionTargetForm({
   continuation,
+  onResult,
   pending,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
+  onResult(result: TaskInitiatingActionDialogResult): void;
   pending: ExecutionTargetPending;
 }>) {
   const { t } = useTranslation();
-  const submitting = pending.phase === "submitting";
   const selectedTarget = executionTargetSelectionFromDraft(pending.selection);
   return (
     <form
       className="grid gap-[var(--space-4)]"
       onSubmit={(event) => {
         event.preventDefault();
-        void continuation.submit();
+        if (selectedTarget === null) {
+          return;
+        }
+        continuation.close();
+        onResult({
+          kind: "continue",
+          action: pending.action,
+          selection: selectedTarget,
+        });
       }}
     >
       <ExecutionTargetRequirementMessage requirement={pending.requirement} />
-      <ExecutionTargetChoices continuation={continuation} disabled={submitting} pending={pending} />
-      <ExecutionTargetStatus pending={pending} />
+      <ExecutionTargetChoices continuation={continuation} pending={pending} />
       <div className="flex justify-end gap-[var(--space-2)]">
-        <Button disabled={submitting} onClick={continuation.close}>
-          {t("app.cancel")}
-        </Button>
+        <Button onClick={continuation.close}>{t("app.cancel")}</Button>
         <Button
           data-testid="execution-target-submit"
-          disabled={submitting || selectedTarget === null}
+          disabled={selectedTarget === null}
           type="submit"
           variant="primary"
         >
-          {pending.phase === "failed" ? t("app.retry") : t("executionTargetContinuation.continue")}
+          {t("executionTargetContinuation.continue")}
         </Button>
       </div>
     </form>
@@ -161,11 +175,9 @@ function ExecutionTargetForm({
 
 function ExecutionTargetChoices({
   continuation,
-  disabled,
   pending,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
-  disabled: boolean;
   pending: ExecutionTargetPending;
 }>) {
   const { t } = useTranslation();
@@ -173,7 +185,6 @@ function ExecutionTargetChoices({
     <>
       <RadioGroup
         aria-label={t("executionTargetContinuation.choice")}
-        disabled={disabled}
         onValueChange={(mode) => {
           if (isConcreteMode(mode)) {
             continuation.selectMode(mode);
@@ -198,7 +209,6 @@ function ExecutionTargetChoices({
       </RadioGroup>
       {pending.selection.mode === "custom_ref" ? (
         <TextInput
-          disabled={disabled}
           label={t("executionTargetContinuation.customRef")}
           onChange={(event) => {
             continuation.setCustomRef(event.currentTarget.value);
@@ -208,31 +218,6 @@ function ExecutionTargetChoices({
         />
       ) : null}
     </>
-  );
-}
-
-function ExecutionTargetStatus({ pending }: Readonly<{ pending: ExecutionTargetPending }>) {
-  const { t } = useTranslation();
-  if (pending.phase === "failed") {
-    return (
-      <div role="alert">
-        <ErrorState
-          body={pending.error}
-          fullPage={false}
-          reveal={false}
-          title={t("executionTargetContinuation.failed")}
-        />
-      </div>
-    );
-  }
-  if (pending.phase !== "submitting") {
-    return null;
-  }
-  return (
-    <div className="flex items-center gap-[var(--space-2)] text-sm text-[var(--color-muted)]" role="status">
-      <Spinner size="sm" />
-      <span>{t("executionTargetContinuation.resolving")}</span>
-    </div>
   );
 }
 

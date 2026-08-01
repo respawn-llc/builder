@@ -2,7 +2,12 @@ import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import {
+  hasSelectedWorkflow,
+  type BoardColumn,
+  type SelectedWorkflowBoard,
+  type WorkflowExecutionTargetSelection,
+} from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -17,6 +22,7 @@ import {
   moveTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
+  type TaskInitiatingActionDialogResult,
   useTaskInitiatingActionController,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
@@ -497,14 +503,42 @@ function BoardContent({
     );
   }
 
-  function runCardAction(action: TaskInitiatingAction, pendingMove: PendingBoardCardMove): void {
+  function runCardAction(
+    action: TaskInitiatingAction,
+    pendingMove: PendingBoardCardMove,
+    selection?: WorkflowExecutionTargetSelection,
+  ): void {
     setPendingCardMove(pendingMove);
     void initiatingAction
-      .run(action)
+      .run(action, selection)
       .catch(action.kind === "start" ? reportStartError : reportMoveError)
       .finally(() => {
         clearPendingCardMove(pendingMove);
       });
+  }
+
+  function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
+    if (result.kind === "view_dependencies") {
+      openTaskDependencies(result.taskID);
+      return;
+    }
+    const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
+    if (targetColumnID === undefined) {
+      reportStartError(
+        new Error(
+          `Cannot continue ${result.action.kind} action for Task ${result.action.kind === "start" ? result.action.taskID : result.action.input.taskID}: the Workflow has no target board column.`,
+        ),
+      );
+      return;
+    }
+    runCardAction(
+      result.action,
+      {
+        taskID: result.action.kind === "start" ? result.action.taskID : result.action.input.taskID,
+        targetColumnID,
+      },
+      result.selection,
+    );
   }
 
   function clearPendingCardMove(pendingMove: PendingBoardCardMove): void {
@@ -624,7 +658,7 @@ function BoardContent({
       />
       <TaskInitiatingActionDialogs
         continuation={initiatingAction}
-        onViewDependencies={openTaskDependencies}
+        onResult={handleTaskInitiatingDialogResult}
       />
       {taskDeleteDialog.fallback}
       {boardRefreshError === null ? null : (

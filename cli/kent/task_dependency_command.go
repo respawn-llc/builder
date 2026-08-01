@@ -132,6 +132,10 @@ func taskDependencyListSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, "task dep list requires <short-id-or-task-id>")
 		return 2
 	}
+	if flagExplicit(fs, "direction") && strings.TrimSpace(*directionRaw) == "" {
+		fmt.Fprintln(stderr, "--direction must not be blank")
+		return 2
+	}
 	direction, err := parseTaskDependencyDirection(*directionRaw)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

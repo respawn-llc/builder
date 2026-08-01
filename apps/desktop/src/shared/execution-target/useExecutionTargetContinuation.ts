@@ -5,11 +5,8 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { errorMessage } from "@/api";
 import {
-  executionTargetSelectionFromDraft,
   initialExecutionTargetSelectionDraft,
-  proceedWithTaskInitiatingAction,
   type ExecutionTargetSelectionDraft,
   type TaskInitiatingAction,
   type TaskInitiatingActionResult,
@@ -26,17 +23,13 @@ export type PendingTaskInitiatingAction =
       action: TaskInitiatingAction;
       requirement: WorkflowExecutionTargetSelectionRequirement;
       selection: ExecutionTargetSelectionDraft;
-      phase: "ready" | "submitting" | "failed";
-      error: string | null;
     }>;
 
 export type TaskInitiatingActionController = Readonly<{
   pending: PendingTaskInitiatingAction | null;
   running: boolean;
-  run(action: TaskInitiatingAction): Promise<void>;
+  run(action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void>;
   close(): void;
-  proceed(): Promise<void>;
-  submit(): Promise<void>;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
   setCustomRef(customRef: string): void;
 }>;
@@ -56,7 +49,6 @@ export function useTaskInitiatingActionController({
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
   const initialRunRef = useRef<Promise<void> | null>(null);
-  const submittingRef = useRef(false);
 
   const handleResult = useCallback(
     async (result: TaskInitiatingActionResult): Promise<void> => {
@@ -82,22 +74,20 @@ export function useTaskInitiatingActionController({
         action: result.action,
         requirement: result.response.selectionRequired,
         selection: initialExecutionTargetSelectionDraft(result.response.selectionRequired),
-        phase: "ready",
-        error: null,
       });
     },
     [onApplied, onAppliedError],
   );
 
   const run = useCallback(
-    async (action: TaskInitiatingAction): Promise<void> => {
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
       if (initialRunRef.current !== null) {
         await initialRunRef.current;
         return;
       }
       setRunning(true);
       const operation = (async () => {
-        const result = await execute(action);
+        const result = await execute(action, selection);
         await handleResult(result);
       })();
       initialRunRef.current = operation;
@@ -113,51 +103,8 @@ export function useTaskInitiatingActionController({
     [execute, handleResult],
   );
 
-  const proceed = useCallback(async (): Promise<void> => {
-    if (pending?.kind !== "dependency_confirmation" || submittingRef.current) {
-      return;
-    }
-    submittingRef.current = true;
-    const action = proceedWithTaskInitiatingAction(pending.action);
-    setRunning(true);
-    try {
-      await handleResult(await execute(action));
-    } finally {
-      submittingRef.current = false;
-      setRunning(false);
-    }
-  }, [execute, handleResult, pending]);
-
-  const submit = useCallback(async (): Promise<void> => {
-    if (pending?.kind !== "execution_target" || submittingRef.current) {
-      return;
-    }
-    const selection = executionTargetSelectionFromDraft(pending.selection);
-    if (selection === null) {
-      return;
-    }
-    submittingRef.current = true;
-    setPending({ ...pending, phase: "submitting", error: null });
-    let result: TaskInitiatingActionResult;
-    try {
-      result = await execute(pending.action, selection);
-    } catch (error) {
-      setPending({
-        ...pending,
-        phase: "failed",
-        error: errorMessage(error),
-      });
-      submittingRef.current = false;
-      return;
-    }
-    submittingRef.current = false;
-    await handleResult(result);
-  }, [execute, handleResult, pending]);
-
   const close = useCallback(() => {
-    if (!submittingRef.current) {
-      setPending(null);
-    }
+    setPending(null);
   }, []);
 
   const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
@@ -167,7 +114,6 @@ export function useTaskInitiatingActionController({
         : {
             ...current,
             selection: { ...current.selection, mode },
-            error: null,
           },
     );
   }, []);
@@ -179,7 +125,6 @@ export function useTaskInitiatingActionController({
         : {
             ...current,
             selection: { ...current.selection, customRef },
-            error: null,
           },
     );
   }, []);
@@ -189,8 +134,6 @@ export function useTaskInitiatingActionController({
     running,
     run,
     close,
-    proceed,
-    submit,
     selectMode,
     setCustomRef,
   };

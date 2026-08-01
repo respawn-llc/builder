@@ -1,7 +1,7 @@
 import type { MouseEvent, PointerEvent } from "react";
 
 import type { TaskDependencyProgress } from "@/api";
-import { TaskDependencyProgressChip } from "@/shared/task-dependencies";
+import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 
 export function BoardDependencyProgressChip({
   onActivate,
@@ -11,7 +11,7 @@ export function BoardDependencyProgressChip({
   progress: TaskDependencyProgress;
 }>) {
   return (
-    <TaskDependencyProgressChip
+    <TaskDependencyProgressInteractiveChip
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         onActivate();

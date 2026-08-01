@@ -12,6 +12,10 @@
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
 - Text input is plain multiline Markdown. Raw HTML is unavailable. Links allow only safe protocols and open externally. Code is styled distinctly.
 - Desktop uses localized user-facing text, accessible controls, standard compact loading, error, and empty states, and motion that respects reduced-motion preference. macOS, Linux, and browser presentation use a contrast fade for readable top chrome; Windows uses progressive blur without a darkening fade.
+- Dialogs, popups, confirmation flows, and dropdowns only collect an operator
+  result. They close before returning that result to their parent destination.
+  The parent destination owns navigation, server requests, pending state,
+  failures, and retries through its existing action paths.
 - Cards are reserved for board Task cards. Navigation, browsing, and selection collections use list rows.
 
 ## Home And Navigation
@@ -51,6 +55,10 @@
   `satisfied blockers / total blockers` text.
 - The chip uses the primary tone while any direct dependency is unsatisfied and
   the success tone when every direct dependency is satisfied.
+- The chip's accessible name is `Dependencies: N of M complete.`.
+- Hovering or focusing the chip shows `N of M dependencies satisfied`.
+- When every direct dependency is satisfied, the tooltip appends
+  `. Time to cook!`.
 - A Task card with no direct Blocker Tasks omits the chip.
 - The server supplies both dependency-progress counts. Desktop never derives
   them from loaded relationship rows.
@@ -66,21 +74,24 @@
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task
   Dependencies, Desktop opens dependency confirmation before Execution Target
   selection or another continuation dialog.
-- The dependency-confirmation title is `Start task ahead of dependencies?`.
+- The dependency-confirmation title is `Start task ahead of deps?`.
 - The dependency-confirmation body is
-  `The task still has N unsatisfied dependencies, do you still want to start it?`.
+  `This task has N unsatisfied dependencies. Do you still want to start it?`.
 - Dependency confirmation has a corner Close control, outline `View deps`, and
   primary `Start`.
 - Dependency confirmation does not list Blocker Tasks.
 - Close and ordinary dialog dismissal leave the Task unchanged.
-- `View deps` closes the confirmation and opens the Blocked Task's own Task
-  Detail focused on Dependencies.
-- `Start` carries one proceed intent through the remaining start or move
-  continuation.
+- `View deps` closes the confirmation and returns that result to the board. The
+  board opens the Blocked Task's own Task Detail focused on Dependencies.
+- `Start` closes the confirmation and returns one proceed intent to the board.
+  The board applies that result through its existing start or move action path.
 - Dismissing a later continuation leaves the Task unchanged and discards that
   proceed intent.
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
-- Closing Execution Target selection leaves the Task unchanged. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
+- Closing Execution Target selection leaves the Task unchanged. Continue closes
+  the dialog and returns the selection to the board. The board owns resolution,
+  setup, duplicate prevention, and actionable failure through its existing
+  action path.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
 - Agent and Script drop targets exist only for actual Workflow edges. Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
 - A non-startable Backlog Task remains visible.

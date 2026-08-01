@@ -5466,74 +5466,6 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 	return items, nil
 }
 
-const listTaskDependenciesByBlocked = `-- name: ListTaskDependenciesByBlocked :many
-SELECT
-    td.blocker_task_id,
-    td.blocked_task_id
-FROM task_dependencies td
-WHERE td.blocked_task_id = ?1
-ORDER BY td.blocker_task_id ASC
-LIMIT 50
-`
-
-func (q *Queries) ListTaskDependenciesByBlocked(ctx context.Context, blockedTaskID string) ([]TaskDependency, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDependenciesByBlocked, blockedTaskID)
-	err = recordQueryError(ctx, err, listTaskDependenciesByBlocked, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskDependency
-	for rows.Next() {
-		var i TaskDependency
-		if err := recordQueryError(ctx, rows.Scan(&i.BlockerTaskID, &i.BlockedTaskID), listTaskDependenciesByBlocked, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskDependenciesByBlocked, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskDependenciesByBlocked, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTaskDependenciesByBlocker = `-- name: ListTaskDependenciesByBlocker :many
-SELECT
-    td.blocker_task_id,
-    td.blocked_task_id
-FROM task_dependencies td
-WHERE td.blocker_task_id = ?1
-ORDER BY td.blocked_task_id ASC
-LIMIT 50
-`
-
-func (q *Queries) ListTaskDependenciesByBlocker(ctx context.Context, blockerTaskID string) ([]TaskDependency, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskDependenciesByBlocker, blockerTaskID)
-	err = recordQueryError(ctx, err, listTaskDependenciesByBlocker, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskDependency
-	for rows.Next() {
-		var i TaskDependency
-		if err := recordQueryError(ctx, rows.Scan(&i.BlockerTaskID, &i.BlockedTaskID), listTaskDependenciesByBlocker, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskDependenciesByBlocker, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskDependenciesByBlocker, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTaskDependencyBlockedByProjectionRows = `-- name: ListTaskDependencyBlockedByProjectionRows :many
 SELECT
     CAST('blocked-by' AS TEXT) AS direction,
@@ -5932,54 +5864,6 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkflowDependencySurvivorIDs = `-- name: ListWorkflowDependencySurvivorIDs :many
-WITH deleted_tasks AS (
-    SELECT id
-    FROM task_records
-    WHERE task_records.workflow_id = ?1
-)
-SELECT DISTINCT CAST(
-    CASE
-        WHEN td.blocker_task_id IN (SELECT id FROM deleted_tasks) THEN td.blocked_task_id
-        ELSE td.blocker_task_id
-    END AS TEXT
-) AS task_id
-FROM task_dependencies td
-WHERE (
-    td.blocker_task_id IN (SELECT id FROM deleted_tasks)
-    OR td.blocked_task_id IN (SELECT id FROM deleted_tasks)
-)
-AND (
-    td.blocker_task_id NOT IN (SELECT id FROM deleted_tasks)
-    OR td.blocked_task_id NOT IN (SELECT id FROM deleted_tasks)
-)
-ORDER BY task_id ASC
-`
-
-func (q *Queries) ListWorkflowDependencySurvivorIDs(ctx context.Context, workflowID runtimeids.WorkflowID) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowDependencySurvivorIDs, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowDependencySurvivorIDs, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var task_id string
-		if err := recordQueryError(ctx, rows.Scan(&task_id), listWorkflowDependencySurvivorIDs, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, task_id)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowDependencySurvivorIDs, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowDependencySurvivorIDs, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7965,6 +7849,62 @@ func (q *Queries) TouchTasksUpdatedAt(ctx context.Context, arg TouchTasksUpdated
 	}
 	result, err := q.db.ExecContext(ctx, query, queryParams...)
 	err = recordQueryError(ctx, err, query, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const touchWorkflowDependencySurvivors = `-- name: TouchWorkflowDependencySurvivors :execrows
+UPDATE tasks
+SET updated_at_unix_ms = ?1
+WHERE id IN (
+    SELECT DISTINCT CAST(
+        CASE
+            WHEN td.blocker_task_id IN (
+                SELECT id
+                FROM task_records
+                WHERE task_records.workflow_id = ?2
+            ) THEN td.blocked_task_id
+            ELSE td.blocker_task_id
+        END AS TEXT
+    ) AS task_id
+    FROM task_dependencies td
+    WHERE (
+        td.blocker_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = ?2
+        )
+        OR td.blocked_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = ?2
+        )
+    )
+    AND (
+        td.blocker_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = ?2
+        )
+        OR td.blocked_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = ?2
+        )
+    )
+)
+`
+
+type TouchWorkflowDependencySurvivorsParams struct {
+	UpdatedAtUnixMs int64
+	WorkflowID      runtimeids.WorkflowID
+}
+
+func (q *Queries) TouchWorkflowDependencySurvivors(ctx context.Context, arg TouchWorkflowDependencySurvivorsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, touchWorkflowDependencySurvivors, arg.UpdatedAtUnixMs, arg.WorkflowID)
+	err = recordQueryError(ctx, err, touchWorkflowDependencySurvivors, 2)
 	if err != nil {
 		return 0, err
 	}

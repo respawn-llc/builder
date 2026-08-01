@@ -8,5 +8,11 @@ export {
   workflowProjectEventAffectsDependencyBoard,
   workflowProjectEventAffectsDependencyDetail,
 } from "./dependencyEventEffects";
-export { TaskDependencyProgressChip } from "./TaskDependencyProgressChip";
-export type { TaskDependencyProgressChipProps } from "./TaskDependencyProgressChip";
+export {
+  TaskDependencyProgressChip,
+  TaskDependencyProgressInteractiveChip,
+} from "./TaskDependencyProgressChip";
+export type {
+  TaskDependencyProgressChipProps,
+  TaskDependencyProgressInteractiveChipProps,
+} from "./TaskDependencyProgressChip";

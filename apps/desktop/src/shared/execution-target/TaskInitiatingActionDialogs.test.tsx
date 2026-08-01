@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -7,6 +7,7 @@ import {
   startTaskInitiatingAction,
   TaskInitiatingActionDialogs,
   type TaskInitiatingAction,
+  type TaskInitiatingActionDialogResult,
   useTaskInitiatingActionController,
 } from "./index";
 import type { TaskInitiatingActionResult } from "./executionTargetContinuation";
@@ -17,60 +18,30 @@ type ExecuteStub = (
 ) => Promise<Readonly<{ kind: "start"; response: TaskStartResponse }>>;
 
 describe("TaskInitiatingActionDialogs", () => {
-  it("shows dependency confirmation before target selection and preserves proceed intent", async () => {
-    const execute = vi
-      .fn<ExecuteStub>()
-      .mockResolvedValueOnce({
-        kind: "start",
-        response: {
-          outcome: "dependency_confirmation_required",
-          unsatisfiedDependencyCount: 2,
-        },
-      })
-      .mockResolvedValueOnce({
-        kind: "start",
-        response: {
-          outcome: "selection_required",
-          selectionRequired: { reason: "policy_requires_selection" },
-        },
-      })
-      .mockResolvedValueOnce({
-        kind: "start",
-        response: {
-          outcome: "applied",
-          applied: {
-            currentNodes: [
-              {
-                nodeID: "node-1",
-                transitionBranchKey: null,
-                sessionID: null,
-              },
-            ],
-          },
-        },
-      });
-    const onApplied = vi.fn<(result: TaskInitiatingActionResult) => void>();
-    render(<Harness execute={execute} onApplied={onApplied} onViewDependencies={vi.fn()} />);
+  it("closes dependency confirmation and returns approval without executing it", async () => {
+    const execute = vi.fn<ExecuteStub>().mockResolvedValue({
+      kind: "start",
+      response: {
+        outcome: "dependency_confirmation_required",
+        unsatisfiedDependencyCount: 2,
+      },
+    });
+    const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
+    render(<Harness execute={execute} onResult={onResult} />);
     const user = userEvent.setup();
 
     await user.click(screen.getByTestId("initiate-action"));
     await user.click(await screen.findByTestId("dependency-confirmation-proceed"));
-    expect(await screen.findByRole("radiogroup")).toBeInTheDocument();
-    expect(execute.mock.calls[1]?.[0]).toMatchObject({
-      proceedDespiteDependencies: true,
+    expect(onResult).toHaveBeenCalledWith({
+      kind: "continue",
+      action: expect.objectContaining({ proceedDespiteDependencies: true }),
     });
-
-    await user.click(screen.getByTestId("execution-target-submit"));
-    await waitFor(() => {
-      expect(onApplied).toHaveBeenCalledOnce();
-    });
-    expect(execute.mock.calls[2]?.[0]).toMatchObject({
-      proceedDespiteDependencies: true,
-    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("dependency-confirmation-proceed")).not.toBeInTheDocument();
   });
 
-  it("abandons the initiating action when View dependencies is selected", async () => {
-    const onViewDependencies = vi.fn<(taskID: string) => void>();
+  it("closes dependency confirmation and returns View dependencies", async () => {
+    const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
     render(
       <Harness
         execute={vi.fn<ExecuteStub>().mockResolvedValue({
@@ -80,8 +51,7 @@ describe("TaskInitiatingActionDialogs", () => {
             unsatisfiedDependencyCount: 1,
           },
         })}
-        onApplied={vi.fn<(result: TaskInitiatingActionResult) => void>()}
-        onViewDependencies={onViewDependencies}
+        onResult={onResult}
       />,
     );
     const user = userEvent.setup();
@@ -89,19 +59,41 @@ describe("TaskInitiatingActionDialogs", () => {
     await user.click(screen.getByTestId("initiate-action"));
     await user.click(await screen.findByTestId("dependency-confirmation-view"));
 
-    expect(onViewDependencies).toHaveBeenCalledWith("task-1");
+    expect(onResult).toHaveBeenCalledWith({ kind: "view_dependencies", taskID: "task-1" });
     expect(screen.queryByTestId("dependency-confirmation-view")).not.toBeInTheDocument();
+  });
+
+  it("closes target selection and returns the selected target without executing it", async () => {
+    const execute = vi.fn<ExecuteStub>().mockResolvedValue({
+      kind: "start",
+      response: {
+        outcome: "selection_required",
+        selectionRequired: { reason: "policy_requires_selection" },
+      },
+    });
+    const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
+    render(<Harness execute={execute} onResult={onResult} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTestId("initiate-action"));
+    await user.click(await screen.findByTestId("execution-target-submit"));
+
+    expect(onResult).toHaveBeenCalledWith({
+      kind: "continue",
+      action: expect.objectContaining({ proceedDespiteDependencies: false }),
+      selection: { mode: "default_branch", customRef: null },
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
 });
 
 function Harness({
   execute,
-  onApplied,
-  onViewDependencies,
+  onResult,
 }: Readonly<{
   execute: ExecuteStub;
-  onApplied: (result: TaskInitiatingActionResult) => void;
-  onViewDependencies: (taskID: string) => void;
+  onResult: (result: TaskInitiatingActionDialogResult) => void;
 }>) {
   const controller = useTaskInitiatingActionController({
     execute: async (action, selection) => {
@@ -111,7 +103,7 @@ function Harness({
       }
       return { kind: result.kind, response: result.response, action };
     },
-    onApplied,
+    onApplied: vi.fn<(result: TaskInitiatingActionResult) => void>(),
     onAppliedError: vi.fn(),
   });
   return (
@@ -123,7 +115,7 @@ function Harness({
         }}
         type="button"
       />
-      <TaskInitiatingActionDialogs continuation={controller} onViewDependencies={onViewDependencies} />
+      <TaskInitiatingActionDialogs continuation={controller} onResult={onResult} />
     </>
   );
 }

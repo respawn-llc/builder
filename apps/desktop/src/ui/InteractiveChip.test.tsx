@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import { InteractiveChip, ProgressInteractiveChip } from "./index";
+import { InteractiveChip, ProgressChip, ProgressInteractiveChip } from "./index";
 
 describe("InteractiveChip", () => {
   it("exposes toggle state and native keyboard activation", async () => {
@@ -46,5 +46,12 @@ describe("InteractiveChip", () => {
 
     await user.click(screen.getByRole("button", { name: "Dependency progress" }));
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("composes semantic progress without interactive semantics", () => {
+    render(<ProgressChip label="Dependency progress" maximum={4} value={3} />);
+
+    const progress = screen.getByRole("progressbar", { name: "Dependency progress" });
+    expect(progress.closest("button")).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import type { TaskInitiatingActionResult } from "./executionTargetContinuation";
 import {
   moveTaskInitiatingAction,
+  proceedWithTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
   useTaskInitiatingActionController,
@@ -52,7 +53,14 @@ describe("task initiating action controller", () => {
       unsatisfiedDependencyCount: 2,
     });
 
-    await act(async () => result.current.proceed());
+    const dependencyPending = result.current.pending;
+    if (dependencyPending?.kind !== "dependency_confirmation") {
+      throw new Error("Expected dependency confirmation.");
+    }
+    act(() => {
+      result.current.close();
+    });
+    await act(async () => result.current.run(proceedWithTaskInitiatingAction(dependencyPending.action)));
     expect(result.current.pending).toMatchObject({
       kind: "execution_target",
       action: {
@@ -68,23 +76,11 @@ describe("task initiating action controller", () => {
     expect(onApplied).not.toHaveBeenCalled();
   });
 
-  it("prevents duplicate target submission", async () => {
+  it("prevents duplicate parent-owned submission", async () => {
     const completion = deferred<TaskInitiatingActionResult>();
-    let callCount = 0;
     const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
       if (action.kind !== "start") {
         throw new Error("Controller test only supports Start actions.");
-      }
-      callCount += 1;
-      if (callCount === 1) {
-        return {
-          kind: "start",
-          action,
-          response: {
-            outcome: "selection_required",
-            selectionRequired: { reason: "policy_requires_selection" },
-          },
-        };
       }
       return completion.promise;
     });
@@ -96,12 +92,10 @@ describe("task initiating action controller", () => {
       }),
     );
     const action = startTaskInitiatingAction("task-1");
-    await act(async () => result.current.run(action));
-
     await act(async () => {
-      const first = result.current.submit();
-      const second = result.current.submit();
-      expect(execute).toHaveBeenCalledTimes(2);
+      const first = result.current.run(action);
+      const second = result.current.run(action);
+      expect(execute).toHaveBeenCalledOnce();
       completion.resolve({
         kind: "start",
         action,
@@ -120,7 +114,7 @@ describe("task initiating action controller", () => {
       });
       await Promise.all([first, second]);
     });
-    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("carries proceed intent through executable Move continuation", async () => {
@@ -161,7 +155,14 @@ describe("task initiating action controller", () => {
         }),
       ),
     );
-    await act(async () => result.current.proceed());
+    const dependencyPending = result.current.pending;
+    if (dependencyPending?.kind !== "dependency_confirmation") {
+      throw new Error("Expected dependency confirmation.");
+    }
+    act(() => {
+      result.current.close();
+    });
+    await act(async () => result.current.run(proceedWithTaskInitiatingAction(dependencyPending.action)));
 
     expect(result.current.pending).toMatchObject({
       kind: "execution_target",

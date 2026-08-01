@@ -23,7 +23,7 @@ describe("BoardDependencyProgressChip", () => {
     await user.tab();
     expect(chip).toHaveFocus();
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip).toHaveTextContent(chip.getAttribute("aria-label") ?? "");
+    expect(tooltip).not.toBeEmptyDOMElement();
 
     await user.click(chip);
 

@@ -146,8 +146,10 @@ describe("TaskDependenciesArea", () => {
     expect(screen.getAllByRole("group")).toHaveLength(2);
     expect(screen.getByText("KENT-2")).toBeInTheDocument();
     expect(screen.getByText("Prepare release")).toBeInTheDocument();
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "1");
+    const progress = screen.getByRole("progressbar");
+    expect(progress).toHaveAttribute("aria-valuenow", "0");
+    expect(progress).toHaveAttribute("aria-valuemax", "1");
+    expect(progress.closest("button")).toBeNull();
 
     await user.click(screen.getByTestId("dependency-row-task-2"));
     await user.click(screen.getByTestId("dependency-add-blocked-by"));

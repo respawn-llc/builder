@@ -1,7 +1,11 @@
-export { TaskInitiatingActionDialogs } from "./ExecutionTargetContinuationDialog";
+export {
+  TaskInitiatingActionDialogs,
+  type TaskInitiatingActionDialogResult,
+} from "./ExecutionTargetContinuationDialog";
 export {
   executeTaskInitiatingAction,
   moveTaskInitiatingAction,
+  proceedWithTaskInitiatingAction,
   startTaskInitiatingAction,
   taskInitiatingActionTaskID,
   type TaskInitiatingAction,

@@ -44,7 +44,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		return 2
 	}
 	var selectedWorkflow *runtimeids.WorkflowID
-	if flagWasProvided(fs, "workflow") {
+	if flagExplicit(fs, "workflow") {
 		selector, parseErr := parseWorkflowSelector(*workflowRef)
 		if parseErr != nil {
 			fmt.Fprintln(stderr, parseErr)
@@ -213,10 +213,10 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task edit requires <short-id-or-task-id>")
 		return 2
 	}
-	titleProvided := flagWasProvided(fs, "title")
-	bodyProvided := flagWasProvided(fs, "body")
-	bodyFileProvided := flagWasProvided(fs, "body-file")
-	workspaceProvided := flagWasProvided(fs, "source-workspace")
+	titleProvided := flagExplicit(fs, "title")
+	bodyProvided := flagExplicit(fs, "body")
+	bodyFileProvided := flagExplicit(fs, "body-file")
+	workspaceProvided := flagExplicit(fs, "source-workspace")
 	if !titleProvided && !bodyProvided && !bodyFileProvided && !workspaceProvided {
 		fmt.Fprintln(stderr, "task edit requires at least one of --title, --body, --body-file, or --source-workspace")
 		return 2
@@ -305,7 +305,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -509,7 +509,7 @@ func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "task interrupt requires <short-id-or-task-id>")
 		return 2
 	}
-	if flagWasProvided(fs, "session") && strings.TrimSpace(*sessionID) == "" {
+	if flagExplicit(fs, "session") && strings.TrimSpace(*sessionID) == "" {
 		fmt.Fprintln(stderr, "--session requires a non-blank session ID")
 		return 2
 	}
@@ -608,7 +608,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagWasProvided(fs, "execution-target"))
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2

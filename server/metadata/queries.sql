@@ -183,24 +183,6 @@ DELETE FROM task_dependencies
 WHERE blocker_task_id = sqlc.arg(blocker_task_id)
   AND blocked_task_id = sqlc.arg(blocked_task_id);
 
--- name: ListTaskDependenciesByBlocker :many
-SELECT
-    td.blocker_task_id,
-    td.blocked_task_id
-FROM task_dependencies td
-WHERE td.blocker_task_id = sqlc.arg(blocker_task_id)
-ORDER BY td.blocked_task_id ASC
-LIMIT 50;
-
--- name: ListTaskDependenciesByBlocked :many
-SELECT
-    td.blocker_task_id,
-    td.blocked_task_id
-FROM task_dependencies td
-WHERE td.blocked_task_id = sqlc.arg(blocked_task_id)
-ORDER BY td.blocker_task_id ASC
-LIMIT 50;
-
 -- name: ListTaskDependencyProjectionRows :many
 SELECT
     CAST(
@@ -1074,28 +1056,46 @@ WHERE id IN (
     WHERE task_records.workflow_id = sqlc.arg(workflow_id)
 );
 
--- name: ListWorkflowDependencySurvivorIDs :many
-WITH deleted_tasks AS (
-    SELECT id
-    FROM task_records
-    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-)
-SELECT DISTINCT CAST(
-    CASE
-        WHEN td.blocker_task_id IN (SELECT id FROM deleted_tasks) THEN td.blocked_task_id
-        ELSE td.blocker_task_id
-    END AS TEXT
-) AS task_id
-FROM task_dependencies td
-WHERE (
-    td.blocker_task_id IN (SELECT id FROM deleted_tasks)
-    OR td.blocked_task_id IN (SELECT id FROM deleted_tasks)
-)
-AND (
-    td.blocker_task_id NOT IN (SELECT id FROM deleted_tasks)
-    OR td.blocked_task_id NOT IN (SELECT id FROM deleted_tasks)
-)
-ORDER BY task_id ASC;
+-- name: TouchWorkflowDependencySurvivors :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (
+    SELECT DISTINCT CAST(
+        CASE
+            WHEN td.blocker_task_id IN (
+                SELECT id
+                FROM task_records
+                WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+            ) THEN td.blocked_task_id
+            ELSE td.blocker_task_id
+        END AS TEXT
+    ) AS task_id
+    FROM task_dependencies td
+    WHERE (
+        td.blocker_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+    AND (
+        td.blocker_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+);
 
 -- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
 DELETE FROM task_dependencies

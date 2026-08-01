@@ -89,21 +89,11 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
-	survivorIDs, err := q.ListWorkflowDependencySurvivorIDs(ctx, req.WorkflowID)
-	if err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("list workflow dependency survivors: %w", err)
-	}
-	if len(survivorIDs) > 0 {
-		touched, err := q.TouchTasksUpdatedAt(ctx, sqlitegen.TouchTasksUpdatedAtParams{
-			UpdatedAtUnixMs: now,
-			TaskIds:         survivorIDs,
-		})
-		if err != nil {
-			return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors: %w", err)
-		}
-		if touched != int64(len(survivorIDs)) {
-			return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors affected %d rows, want %d", touched, len(survivorIDs))
-		}
+	if _, err := q.TouchWorkflowDependencySurvivors(ctx, sqlitegen.TouchWorkflowDependencySurvivorsParams{
+		WorkflowID:      req.WorkflowID,
+		UpdatedAtUnixMs: now,
+	}); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task dependencies: %w", err)

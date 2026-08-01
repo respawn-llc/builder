@@ -62,13 +62,13 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	labelMatchExplicit := flagWasProvided(fs, "label-match")
+	labelMatchExplicit := flagExplicit(fs, "label-match")
 	labelMatch, err := parseTaskListLabelMatch(*labelMatchRaw, labelMatchExplicit, len(labelFlags)+len(notLabelFlags), *unlabeled)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	workflowProvided := flagWasProvided(fs, "workflow")
+	workflowProvided := flagExplicit(fs, "workflow")
 	var selectedWorkflowID *runtimeids.WorkflowID
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)

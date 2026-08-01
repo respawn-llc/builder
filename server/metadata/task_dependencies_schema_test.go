@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"database/sql"
-	"io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +37,9 @@ func TestOpenCreatesTaskDependencySchema(t *testing.T) {
 	if got, want := indexColumns(t, store.db, "task_dependencies_reverse_idx"), []string{"blocked_task_id", "blocker_task_id"}; !equalStrings(got, want) {
 		t.Fatalf("reverse index columns = %v, want %v", got, want)
 	}
+	if triggers := tableTriggerNames(t, store.db, "task_dependencies"); len(triggers) != 0 {
+		t.Fatalf("task_dependencies triggers = %v, want none", triggers)
+	}
 
 	seedProjectAndTasksForDependencySchema(t, store.db)
 	if _, err := store.db.Exec(`
@@ -52,6 +54,12 @@ func TestOpenCreatesTaskDependencySchema(t *testing.T) {
 	`); err == nil {
 		t.Fatal("duplicate ordered dependency pair unexpectedly succeeded")
 	}
+	if _, err := store.db.Exec(`
+		INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+		VALUES ('task-b', 'task-a'), ('task-c', 'task-c')
+	`); err != nil {
+		t.Fatalf("schema enforced dependency business invariants: %v", err)
+	}
 	if _, err := store.db.Exec(`DELETE FROM tasks WHERE id = 'task-a'`); err != nil {
 		t.Fatalf("delete blocker task: %v", err)
 	}
@@ -59,25 +67,33 @@ func TestOpenCreatesTaskDependencySchema(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM task_dependencies`).Scan(&remaining); err != nil {
 		t.Fatalf("count dependency rows after cascade: %v", err)
 	}
-	if remaining != 0 {
-		t.Fatalf("dependency rows after task cascade = %d, want 0", remaining)
+	if remaining != 1 {
+		t.Fatalf("dependency rows after task cascade = %d, want self-dependency only", remaining)
 	}
+}
 
-	migration, err := fs.ReadFile(migrationsFS, "migrations/00066_task_dependencies.up.sql")
+func tableTriggerNames(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.Query(
+		`SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ? ORDER BY name`,
+		table,
+	)
 	if err != nil {
-		t.Fatalf("read dependency migration: %v", err)
+		t.Fatalf("list triggers for %s: %v", table, err)
 	}
-	for _, forbidden := range []string{
-		"CREATE TRIGGER",
-		"CHECK",
-		"reciprocal",
-		"cardinality",
-		"project",
-	} {
-		if strings.Contains(strings.ToLower(string(migration)), strings.ToLower(forbidden)) {
-			t.Fatalf("dependency migration contains business-invariant mechanism %q", forbidden)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan trigger for %s: %v", table, err)
 		}
+		names = append(names, name)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate triggers for %s: %v", table, err)
+	}
+	return names
 }
 
 type taskDependencyForeignKey struct {
