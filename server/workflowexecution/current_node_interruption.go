@@ -11,7 +11,7 @@ import (
 	"core/server/workflow"
 )
 
-const interruptCleanupTimeout = 30 * time.Second
+const interruptCleanupTimeout = 300 * time.Second
 
 type currentNodeAdmissionWait struct {
 	key  workflow.CurrentNodeReferenceKey

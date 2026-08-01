@@ -71,8 +71,13 @@ func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error
 	if !active || execution.Controller == nil {
 		return nil
 	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return err
+	}
 	return execution.Controller.ResetProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
-		ScopeID: execution.ScopeID,
+		ScopeID:   execution.ScopeID,
+		SessionID: &sessionID,
 	})
 }
 

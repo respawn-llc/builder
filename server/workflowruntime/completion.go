@@ -179,7 +179,8 @@ type ViolationRequest struct {
 }
 
 type ViolationResetRequest struct {
-	ScopeID runtimeids.ExecutionScopeID
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {
