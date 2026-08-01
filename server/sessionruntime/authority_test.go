@@ -1722,16 +1722,33 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{}, func(event runtime.Event) {
+	client := make(lifecycleRequestCaptureClient, 1)
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(50 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("new background shell manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close background shell manager: %v", err)
+		}
+	})
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		Background:      manager,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &client, func(event runtime.Event) {
 		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
 			updates <- *event.Background
 		}
 	})
-	authority := fixture.authority
 
 	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
-	event := runtimewirefixture.BackgroundCompletionEvent("1001", sessionID.String(), t.TempDir())
-	event.NoticeSuppressed = true
 	correlation, err := runtimeids.NewExecutionCorrelation(
 		runtimeids.NewExecutionScopeID(),
 		predecessor.Resource().Generation(),
@@ -1739,28 +1756,79 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	if err != nil {
 		t.Fatalf("new execution correlation: %v", err)
 	}
-	event.Snapshot.ExecutionCorrelation = &correlation
+	releasePath := filepath.Join(t.TempDir(), "release")
+	started, err := manager.Start(context.Background(), shelltool.ExecRequest{
+		Command:              []string{"/bin/sh", "-c", fmt.Sprintf("while [ ! -f %q ]; do sleep 0.01; done; printf done", releasePath)},
+		DisplayCommand:       "wait for release",
+		OwnerSessionID:       sessionID.String(),
+		ExecutionCorrelation: &correlation,
+		Workdir:              t.TempDir(),
+		YieldTime:            50 * time.Millisecond,
+		MaxOutputChars:       16_000,
+	})
+	if err != nil {
+		t.Fatalf("start background shell: %v", err)
+	}
+	if !started.Backgrounded {
+		t.Fatalf("shell must transition to background, got %+v", started)
+	}
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != started.SessionID {
+			t.Fatalf("background registration update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background registration did not reach predecessor runtime")
+	}
 	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release predecessor runtime: %v", err)
 	}
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatalf("release background shell: %v", err)
+	}
 
-	authority.routeBackgroundEvent(event)
-	select {
-	case update := <-updates:
-		t.Fatalf("terminal event reached absent runtime: %+v", update)
-	default:
+	deadline := time.Now().Add(3 * time.Second)
+	var terminal shelltool.Snapshot
+	for {
+		terminal, err = manager.Snapshot(started.SessionID)
+		if err != nil {
+			t.Fatalf("snapshot background shell: %v", err)
+		}
+		if !terminal.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for background shell completion")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
 	select {
 	case update := <-updates:
 		if update.Type != runtime.BackgroundShellEventCompleted ||
-			update.ID != event.Snapshot.ID ||
-			update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("queued terminal event update = %+v", update)
+			update.ID != terminal.ID ||
+			update.ActivityID != terminal.ActivityID {
+			t.Fatalf("retried terminal event update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("queued terminal event did not reach the next runtime")
+		t.Fatal("undelivered terminal event did not reach the next runtime")
+	}
+
+	request := client.await(t)
+	foundNotice := false
+	for _, message := range llm.MessagesFromItems(request.Items) {
+		if message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeBackgroundNotice &&
+			message.BackgroundActivityID != nil &&
+			*message.BackgroundActivityID == terminal.ActivityID.String() {
+			foundNotice = true
+			break
+		}
+	}
+	if !foundNotice {
+		t.Fatal("retried terminal event did not steer a developer background notice")
 	}
 }
 

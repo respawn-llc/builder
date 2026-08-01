@@ -1013,7 +1013,9 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
-	a.flushTerminalBackgroundEvents(resource)
+	if a.options.background != nil {
+		a.options.background.RetryTerminalEvents(sessionID.String())
+	}
 	return resource, nil
 }
 

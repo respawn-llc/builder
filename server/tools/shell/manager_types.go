@@ -249,6 +249,8 @@ type processEntry struct {
 	notify               chan struct{}
 	done                 chan struct{}
 	killRequested        bool
+	terminalEventType    *EventType
+	terminalDelivered    bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }
