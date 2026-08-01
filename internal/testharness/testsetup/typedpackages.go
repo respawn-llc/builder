@@ -1,7 +1,9 @@
 package testsetup
 
 import (
+	"go/ast"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,6 +75,22 @@ func SourcePosition(pkg *packages.Package, position token.Pos) token.Position {
 		return token.Position{}
 	}
 	return pkg.Fset.Position(position)
+}
+
+func CalledFunction(pkg *packages.Package, call *ast.CallExpr) *types.Func {
+	if pkg == nil || pkg.TypesInfo == nil || call == nil {
+		return nil
+	}
+	switch function := call.Fun.(type) {
+	case *ast.Ident:
+		result, _ := pkg.TypesInfo.Uses[function].(*types.Func)
+		return result
+	case *ast.SelectorExpr:
+		result, _ := pkg.TypesInfo.Uses[function.Sel].(*types.Func)
+		return result
+	default:
+		return nil
+	}
 }
 
 func WriteFile(t testing.TB, path, contents string) {

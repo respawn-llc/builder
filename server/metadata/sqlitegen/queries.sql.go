@@ -379,6 +379,8 @@ UPDATE workspaces
 SET managed_worktree_path_key = ?1
 WHERE id = ?2
   AND managed_worktree_path_key IS NULL
+  AND ?1 IS NOT NULL
+  AND length(trim(?1)) > 0
 `
 
 type ClaimWorkspacePathKeyParams struct {

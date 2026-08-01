@@ -30,9 +30,6 @@ func typedPathOwnershipViolations(pkg *packages.Package) []string {
 	identity := workspaceIdentityObjects(pkg, workspaceType)
 	violations := make([]string, 0)
 	for _, file := range pkg.Syntax {
-		if filepath.Base(pkg.Fset.Position(file.Pos()).Filename) == "managed_root_allocator.go" {
-			continue
-		}
 		separators := pathSeparatorObjects(pkg, file)
 		if typedBuilderPathAssembly(pkg, file, identity, separators) {
 			violations = append(violations, "typed Workspace identity builder path construction")
@@ -44,11 +41,20 @@ func typedPathOwnershipViolations(pkg *packages.Package) []string {
 				case "defaultWorktreeRoot", "defaultWorktreePathSeed", "shortRefName", "nextAvailableWorktreeRoot":
 					violations = append(violations, "obsolete path constructor: "+current.Name.Name)
 				}
-			case *ast.Field:
-				for _, name := range current.Names {
-					if name.Name == "baseDir" {
-						if typ, ok := current.Type.(*ast.Ident); ok && typ.Name == "string" {
-							violations = append(violations, "direct Service baseDir state")
+			case *ast.TypeSpec:
+				if current.Name.Name != "Service" {
+					break
+				}
+				structure, ok := current.Type.(*ast.StructType)
+				if !ok {
+					break
+				}
+				for _, field := range structure.Fields.List {
+					for _, name := range field.Names {
+						if name.Name == "baseDir" {
+							if typ, ok := field.Type.(*ast.Ident); ok && typ.Name == "string" {
+								violations = append(violations, "direct Service baseDir state")
+							}
 						}
 					}
 				}
@@ -132,7 +138,7 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 						}
 					}
 				case *ast.CallExpr:
-					callee := calledFunction(pkg, current)
+					callee := testharness.CalledFunction(pkg, current)
 					if callee != nil {
 						signature, ok := callee.Type().(*types.Signature)
 						if ok {
@@ -178,19 +184,6 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 	}
 }
 
-func calledFunction(pkg *packages.Package, call *ast.CallExpr) *types.Func {
-	switch function := call.Fun.(type) {
-	case *ast.Ident:
-		result, _ := pkg.TypesInfo.Uses[function].(*types.Func)
-		return result
-	case *ast.SelectorExpr:
-		result, _ := pkg.TypesInfo.Uses[function.Sel].(*types.Func)
-		return result
-	default:
-		return nil
-	}
-}
-
 func typedCarriesWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
 	switch current := expression.(type) {
 	case *ast.Ident:
@@ -205,7 +198,7 @@ func typedCarriesWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, i
 			sameNamedType(selection.Recv(), workspaceType) &&
 			selection.Obj().Name() == "ID"
 	case *ast.CallExpr:
-		if callee := calledFunction(pkg, current); callee != nil {
+		if callee := testharness.CalledFunction(pkg, current); callee != nil {
 			return identity.returning[callee]
 		}
 		return len(current.Args) == 1 &&
@@ -242,7 +235,7 @@ func typedContainsWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, 
 				found = true
 			}
 		case *ast.CallExpr:
-			if callee := calledFunction(pkg, current); callee != nil && identity.returning[callee] {
+			if callee := testharness.CalledFunction(pkg, current); callee != nil && identity.returning[callee] {
 				found = true
 			}
 		}

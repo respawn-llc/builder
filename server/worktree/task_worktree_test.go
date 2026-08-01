@@ -309,17 +309,21 @@ func TestRestoreLockedTaskWorktreeRebindsHealthyDeterministicRoot(t *testing.T) 
 		t.Fatalf("task source workspace = %+v, stale worktree workspace = %q", taskRow.SourceWorkspaceID, staleRecord.WorkspaceID)
 	}
 
-	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want conflict without Task ownership evidence", err)
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if restored.Created ||
+		taskWorktreeID(restored.Worktree) != taskWorktreeID(materialized.Worktree) ||
+		taskWorktreeRoot(restored.Worktree) != taskWorktreeRoot(materialized.Worktree) {
+		t.Fatalf("restored worktree = %+v, want healthy deterministic root rebound", restored)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if row.ManagedWorktreeID.Valid {
-		t.Fatalf("task managed worktree id = %+v, want unbound", row.ManagedWorktreeID)
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
+		t.Fatalf("task managed worktree id = %+v, want rebound %q", row.ManagedWorktreeID, taskWorktreeID(materialized.Worktree))
 	}
 }
 
@@ -348,8 +352,8 @@ func TestRestoreLockedTaskWorktreeRejectsDetachedUnboundExistingRoot(t *testing.
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 	})
 	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want conflict for unclaimed occupied root", err)
+	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
+		t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
@@ -406,10 +410,12 @@ func TestRestoreLockedTaskWorktreeRecreatesMissingUnboundRootFromRecordedNamedBr
 		t.Fatalf("task managed worktree id = %+v, want missing binding", taskRow.ManagedWorktreeID)
 	}
 
-	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseMissingBranch {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want missing-branch without Task ownership evidence", err)
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if !restored.Created || restored.CreatedBranch {
+		t.Fatalf("restored worktree = %+v, want recreated unbound root from recorded branch", restored)
 	}
 	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, "operator-renamed"); branchErr != nil {
 		t.Fatalf("BranchExists: %v", branchErr)

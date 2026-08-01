@@ -52,4 +52,10 @@ WHERE id = 'workspace-path-key-migration'`).Scan(&key); err != nil {
 	if key.Valid {
 		t.Fatalf("migrated pre-existing workspace path key = %q, want NULL", key.String)
 	}
+	if _, err := db.Exec(`
+UPDATE workspaces
+SET managed_worktree_path_key = ''
+WHERE id = 'workspace-path-key-migration'`); err == nil {
+		t.Fatal("workspace path-key migration accepted an empty key")
+	}
 }

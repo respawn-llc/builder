@@ -457,9 +457,43 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 }
 
 func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest, task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (result TaskWorktreeMaterialization, err error) {
+	records, err := s.metadata.ListWorktreeRecordsByWorkspaceID(ctx, workspace.WorkspaceID)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
+	}
+	matches := make([]metadata.WorktreeRecord, 0, 1)
+	for _, record := range records {
+		if !record.Managed || record.IsMain ||
+			!sameCreationBaseCommit(record.CreationBaseCommitOID, task.ExecutionTargetCommitOid.String) ||
+			!taskWorktreeRootMatchesShortID(record.CanonicalRoot, task.ShortID) {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	if len(matches) > 1 {
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
+	}
+	if len(matches) == 1 {
+		record := matches[0]
+		identity, identityErr := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  workspace.RootPath,
+			ExpectedWorktreeRoot: record.CanonicalRoot,
+		})
+		if identityErr != nil {
+			var typed *ManagedWorktreeIdentityError
+			if errors.As(identityErr, &typed) && typed.Kind == ManagedWorktreeIdentityErrorRootMissing {
+				return s.restoreMissingLockedTaskWorktree(ctx, req, task, workspace, record)
+			}
+			return TaskWorktreeMaterialization{}, lockedTaskWorktreeIdentityError(identityErr)
+		}
+		if _, ok := identity.NamedBranch(); !ok {
+			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
+		}
+		return s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
+	}
 	reservation, err := s.managedRoots.reserveTaskRoot(ctx, workspace.WorkspaceID, workspace.RootPath, task.ShortID)
 	if err != nil {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict, Err: err}
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: err}
 	}
 	defer func() {
 		if cleanupErr := reservation.release(); cleanupErr != nil {
@@ -474,6 +508,28 @@ func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req Lock
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
 	}
 	return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}
+}
+
+func taskWorktreeRootMatchesShortID(root string, shortID string) bool {
+	leaf := filepath.Base(filepath.Clean(strings.TrimSpace(root)))
+	shortID = strings.TrimSpace(shortID)
+	if leaf == shortID {
+		return true
+	}
+	prefix := shortID + "-"
+	if !strings.HasPrefix(leaf, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(leaf, prefix)
+	if len(suffix) < 3 || len(suffix) > 6 {
+		return false
+	}
+	for _, character := range suffix {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sqlitegen.TaskRecord, workspace taskSourceWorkspace, record metadata.WorktreeRecord, identity ManagedWorktreeIdentity) (TaskWorktreeMaterialization, error) {

@@ -85,6 +85,18 @@ func TestWorkspacePathKeyClaimAndRelease(t *testing.T) {
 	if before.Valid {
 		t.Fatalf("new workspace path key = %q, want NULL", before.String)
 	}
+	for _, candidate := range []sql.NullString{{}, {String: "", Valid: true}} {
+		rows, err := store.queries.ClaimWorkspacePathKey(ctx, sqlitegen.ClaimWorkspacePathKeyParams{
+			ManagedWorktreePathKey: candidate,
+			ID:                     binding.WorkspaceID,
+		})
+		if err != nil {
+			t.Fatalf("empty workspace path-key claim %v: %v", candidate, err)
+		}
+		if rows != 0 {
+			t.Fatalf("empty workspace path-key claim %v updated %d rows, want 0", candidate, rows)
+		}
+	}
 
 	claimed, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "source")
 	if err != nil {

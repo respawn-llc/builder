@@ -2073,7 +2073,9 @@ ON CONFLICT(project_id, canonical_root_path) DO NOTHING;
 UPDATE workspaces
 SET managed_worktree_path_key = sqlc.arg(managed_worktree_path_key)
 WHERE id = sqlc.arg(id)
-  AND managed_worktree_path_key IS NULL;
+  AND managed_worktree_path_key IS NULL
+  AND sqlc.arg(managed_worktree_path_key) IS NOT NULL
+  AND length(trim(sqlc.arg(managed_worktree_path_key))) > 0;
 
 -- name: ReleaseWorkspacePathKey :execrows
 UPDATE workspaces
