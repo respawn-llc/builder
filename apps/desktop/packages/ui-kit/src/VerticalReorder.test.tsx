@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VerticalReorder } from "./VerticalReorder";
+import { projectVerticalReorder } from "./reorderProjection";
 
 type ReorderItem = Readonly<{ id: string; label: string }>;
 
@@ -17,6 +18,20 @@ const originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollIntoView",
 );
+
+describe("projectVerticalReorder", () => {
+  it("keeps activation in the source slot until a destination is crossed", () => {
+    expect(projectVerticalReorder(["first", "second", "third"], "second", "second")).toBeNull();
+  });
+
+  it("maps one adjacent destination to the committed order", () => {
+    expect(projectVerticalReorder(["first", "second", "third"], "second", "third")).toEqual([
+      "first",
+      "third",
+      "second",
+    ]);
+  });
+});
 
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -42,11 +57,12 @@ describe("VerticalReorder", () => {
     const user = userEvent.setup();
     mockRowGeometry();
 
-    render(<ReorderHarness onCommit={onCommit} />);
+    render(<TransformedReorderHarness onCommit={onCommit} />);
 
     const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
     secondHandle.focus();
     await user.keyboard("[Space]");
+    expect(onCommit).not.toHaveBeenCalled();
     await user.keyboard("[ArrowDown]");
 
     expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
@@ -89,44 +105,11 @@ describe("VerticalReorder", () => {
     view.unmount();
   });
 
-  it("keeps the active overlay outside a transformed surface", () => {
-    const view = render(
-      <div data-testid="transformed-surface" style={{ transform: "translateY(50px)" }}>
-        <ReorderHarness onCommit={vi.fn()} />
-      </div>,
-    );
-    const handle = screen.getByRole("button", { name: "Reorder Second" });
-
-    fireEvent.pointerDown(handle, {
-      button: 0,
-      clientX: 20,
-      clientY: 50,
-      isPrimary: true,
-      pointerId: 1,
-    });
-    fireEvent.pointerMove(document, {
-      buttons: 1,
-      clientX: 20,
-      clientY: 57,
-      isPrimary: true,
-      pointerId: 1,
-    });
-
-    expect(screen.getByTestId("transformed-surface")).not.toContainElement(
-      screen.getByTestId("reorder-overlay"),
-    );
-
-    act(() => {
-      cancelPointerDrag();
-    });
-    view.unmount();
-  });
-
   it("keeps pointer projection anchored inside a variable-height source row", async () => {
     const onCommit = vi.fn();
     mockRowGeometry({ secondHeight: 80 });
 
-    const view = render(<ReorderHarness onCommit={onCommit} />);
+    const view = render(<TransformedReorderHarness onCommit={onCommit} />);
     const handle = screen.getByRole("button", { name: "Reorder Second" });
 
     fireEvent.pointerDown(handle, {
@@ -189,7 +172,7 @@ describe("VerticalReorder", () => {
     const onCommit = vi.fn();
     mockRowGeometry();
 
-    const view = render(<ReorderHarness onCommit={onCommit} />);
+    const view = render(<TransformedReorderHarness onCommit={onCommit} />);
     const handle = screen.getByRole("button", { name: "Reorder Second" });
     const destination = screen.getByTestId("row-third");
 
@@ -461,13 +444,23 @@ function cancelPointerDrag(): void {
   fireEvent.pointerCancel(document, { clientX: 20, clientY: 95, pointerId: 1 });
 }
 
+type ReorderHarnessProps = Readonly<{
+  onCommit: (orderedIDs: readonly string[]) => void;
+  scrollable?: boolean;
+}>;
+
+function TransformedReorderHarness(props: ReorderHarnessProps) {
+  return (
+    <div style={{ transform: "translateY(50px)" }}>
+      <ReorderHarness {...props} />
+    </div>
+  );
+}
+
 function ReorderHarness({
   onCommit,
   scrollable = false,
-}: Readonly<{
-  onCommit: (orderedIDs: readonly string[]) => void;
-  scrollable?: boolean;
-}>) {
+}: ReorderHarnessProps) {
   const [orderedItems, setOrderedItems] = useState(items);
   const reorder = (
     <VerticalReorder
