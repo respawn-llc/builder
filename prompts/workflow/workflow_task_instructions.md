@@ -18,6 +18,10 @@ You're working on ticket `{{.TaskShortId}}` titled "{{.TaskTitle}}" as part of w
 This ticket has {{.TaskCommentsLabel}}. You can run `{{.TaskCommentListCommand}}` to read the comments when they are relevant.
 {{- end }}
 
+{{- if .ShowTaskDependenciesReminder }}
+This ticket has {{.TaskDependenciesLabel}}. You can run `{{.TaskShowCommand}}` to inspect its current dependencies when they are relevant.
+{{- end }}
+
 ### Completion discipline
 - Before reporting completion, audit the task against current evidence.
 - Map each explicit requirement in the task to concrete artifacts or verification.

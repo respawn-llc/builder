@@ -15,9 +15,12 @@ export type DialogProps = Readonly<{
   contentPadding?: "none" | "chrome";
   surface?: "island" | "transparent";
   style?: CSSProperties;
+  width?: number;
   closeDisabled?: boolean;
   onClose: () => void;
 }>;
+
+export const compactDialogWidth = 420;
 
 export function Dialog({
   title,
@@ -29,6 +32,7 @@ export function Dialog({
   contentPadding = "none",
   surface = "island",
   style,
+  width,
   closeDisabled = false,
   onClose,
 }: DialogProps) {
@@ -63,7 +67,7 @@ export function Dialog({
         )}
         role="dialog"
         ref={dialogRef}
-        style={style}
+        style={dialogStyle(style, width)}
         tabIndex={-1}
       >
         {chrome === "header" ? (
@@ -98,6 +102,20 @@ export function Dialog({
       </section>
     </div>
   );
+}
+
+function dialogStyle(style: CSSProperties | undefined, width: number | undefined): CSSProperties | undefined {
+  if (width === undefined) {
+    return style;
+  }
+  return { ...style, width: responsiveDialogWidth(width) };
+}
+
+function responsiveDialogWidth(width: number): string {
+  if (!Number.isFinite(width) || width <= 0) {
+    throw new Error(`Dialog width must be a positive finite number; received ${String(width)}.`);
+  }
+  return `min(${width.toString()}px, calc(100vw - 32px))`;
 }
 
 function useModalDialogKeyboard(

@@ -15,6 +15,7 @@ export type AppNavigation = Readonly<{
   openWorkflowEditor(input: Readonly<{ workflowID: string; projectID?: string | undefined }>): Promise<void>;
   openWorkflowLibrary(): Promise<"completed" | "failed">;
   openTask(taskID: string): Promise<void>;
+  replaceTask(taskID: string): Promise<void>;
   openProjectTask(projectID: string, workflowID: string, taskID: string): Promise<void>;
   closeProjectTask(projectID: string, workflowID?: string): Promise<void>;
 }>;
@@ -94,6 +95,15 @@ export function useAppNavigation(): AppNavigation {
       async openTask(taskID) {
         await runNavigation(async () => {
           await navigate({ to: "/tasks/$taskId", params: { taskId: taskID } });
+        });
+      },
+      async replaceTask(taskID) {
+        await runImmediateNavigation(async () => {
+          await navigate({
+            to: "/tasks/$taskId",
+            params: { taskId: taskID },
+            replace: true,
+          });
         });
       },
       async openProjectTask(projectID, workflowID, taskID) {

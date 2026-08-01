@@ -356,6 +356,9 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
   if (focus.kind === "question" && focus.askIDs.length === 0) {
     return null;
   }
+  if (focus.kind === "dependencies") {
+    return null;
+  }
   return {
     kind: "task_detail",
     taskID: target.taskID,

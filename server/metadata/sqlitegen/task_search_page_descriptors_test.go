@@ -1,10 +1,12 @@
 package sqlitegen
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"core/shared/tasksearchtext"
 
@@ -105,6 +107,30 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 	}
 	if !hasFTSFilter {
 		t.Fatalf("task-search descriptor query did not invoke a virtual-table filter: %+v", instructions)
+	}
+}
+
+func TestListTaskSearchPageDescriptorsSkipsDirectlyToLargeOffset(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	createTaskSearchPageDescriptorFixture(t, db)
+	params := taskSearchPageDescriptorParams(
+		"literal",
+		"needle",
+		"needle",
+		int64(tasksearchtext.LiteralCaseInsensitive),
+	)
+	params.OffsetRows = 1_000_000_000
+	params.LimitRows = 1
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	rows, err := New(db).ListTaskSearchPageDescriptors(ctx, params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors large offset: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("large-offset descriptors = %+v, want empty page", rows)
 	}
 }
 

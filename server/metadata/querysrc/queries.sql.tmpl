@@ -148,6 +148,100 @@ WHERE id = (
 )
 RETURNING id;
 
+-- name: GetTaskDependency :one
+SELECT blocker_task_id, blocked_task_id
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id)
+LIMIT 1;
+
+-- name: AcquireTaskDependencyWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = sqlc.arg(task_id)
+)
+RETURNING id;
+
+-- name: CountTaskDependenciesByBlocker :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id);
+
+-- name: CountTaskDependenciesByBlocked :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocked_task_id = sqlc.arg(blocked_task_id);
+
+-- name: InsertTaskDependency :exec
+INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
+
+-- name: DeleteTaskDependency :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id);
+
+-- name: ListTaskDependencyProjectionRows :many
+SELECT
+    CAST(
+        CASE
+            WHEN td.blocked_task_id = sqlc.arg(task_id) THEN 'blocked-by'
+            ELSE 'blocks'
+        END AS TEXT
+    ) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related
+  ON related.id = CASE
+      WHEN td.blocked_task_id = sqlc.arg(task_id) THEN td.blocker_task_id
+      ELSE td.blocked_task_id
+  END
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY direction ASC, related.short_id ASC, related.id ASC
+LIMIT 101;
+
+-- name: ListTaskDependencyBlockedByProjectionRows :many
+SELECT
+    CAST('blocked-by' AS TEXT) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related ON related.id = td.blocker_task_id
+WHERE td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY related.short_id ASC, related.id ASC
+LIMIT 51;
+
+-- name: ListTaskDependencyNeighborIDs :many
+SELECT DISTINCT
+    CAST(CASE
+        WHEN td.blocker_task_id = sqlc.arg(task_id) THEN td.blocked_task_id
+        ELSE td.blocker_task_id
+    END AS TEXT) AS task_id
+FROM task_dependencies td
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY task_id ASC
+LIMIT 100;
+
+-- name: DeleteTaskDependenciesByTask :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(task_id)
+   OR blocked_task_id = sqlc.arg(task_id);
+
+-- name: TouchTasksUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (sqlc.slice('task_ids'));
+
 -- name: DeleteTaskLabelAssignment :execrows
 DELETE FROM task_label_assignments
 WHERE task_id = sqlc.arg(task_id)
@@ -954,6 +1048,69 @@ SELECT id
 FROM task_records
 WHERE workflow_id = sqlc.arg(workflow_id);
 
+-- name: AcquireWorkflowDependencyWriteLock :execrows
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id IN (
+    SELECT DISTINCT task_records.project_id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: TouchWorkflowDependencySurvivors :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (
+    SELECT DISTINCT CAST(
+        CASE
+            WHEN td.blocker_task_id IN (
+                SELECT id
+                FROM task_records
+                WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+            ) THEN td.blocked_task_id
+            ELSE td.blocker_task_id
+        END AS TEXT
+    ) AS task_id
+    FROM task_dependencies td
+    WHERE (
+        td.blocker_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+    AND (
+        td.blocker_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+);
+
+-- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+)
+OR blocked_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
 -- name: ListProjectTaskIDs :many
 SELECT id
 FROM task_records
@@ -1664,10 +1821,76 @@ newer_page AS (
       )
     ORDER BY t.updated_at_unix_ms ASC, t.id ASC
     LIMIT sqlc.arg(limit_rows)
+),
+dependency_progress AS (
+    SELECT
+        td.blocked_task_id AS task_id,
+        CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+        CAST(SUM(CASE WHEN (
+            SELECT status.is_done
+            FROM workflow_task_status_records status
+            WHERE status.task_id = td.blocker_task_id
+            LIMIT 1
+        ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+    FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+    WHERE td.blocked_task_id IN (
+        SELECT id FROM older_page
+        UNION ALL
+        SELECT id FROM newer_page
+    )
+    GROUP BY td.blocked_task_id
 )
-SELECT * FROM older_page
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM older_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
 UNION ALL
-SELECT * FROM newer_page;
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM newer_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks
@@ -3558,16 +3781,75 @@ ranked_sources AS (
         ), 0) AS INTEGER) AS source_ordinal_before
     FROM matching_sources
 ),
+task_hits AS (
+    SELECT
+        task_id,
+        MAX(total_hit_count) AS total_hit_count
+    FROM ranked_sources
+    GROUP BY task_id
+),
+hit_count_buckets AS (
+    SELECT
+        total_hit_count,
+        COUNT(*) AS task_count
+    FROM task_hits
+    GROUP BY total_hit_count
+),
+round_intervals AS (
+    SELECT
+        COALESCE(LAG(total_hit_count) OVER (
+            ORDER BY total_hit_count ASC
+        ), 0) + 1 AS first_ordinal,
+        total_hit_count AS last_ordinal,
+        CAST(
+            COALESCE(SUM(total_hit_count * task_count) OVER (
+                ORDER BY total_hit_count ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ), 0)
+            + COALESCE(LAG(total_hit_count) OVER (
+                ORDER BY total_hit_count ASC
+            ), 0) * SUM(task_count) OVER (
+                ORDER BY total_hit_count ASC
+                ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+            )
+            AS INTEGER
+        ) AS rows_before,
+        CAST(SUM(task_count) OVER (
+            ORDER BY total_hit_count ASC
+            ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+        ) AS INTEGER) AS rows_per_round
+    FROM hit_count_buckets
+),
+page_window AS (
+    SELECT
+        capacities.first_ordinal + CAST(
+            (args.offset_rows - capacities.rows_before) / capacities.rows_per_round
+            AS INTEGER
+        ) AS first_ordinal,
+        CAST(
+            (args.offset_rows - capacities.rows_before) % capacities.rows_per_round
+            AS INTEGER
+        ) AS first_round_offset,
+        args.limit_rows
+    FROM round_intervals capacities
+    CROSS JOIN args
+    WHERE args.limit_rows > 0
+      AND args.offset_rows >= capacities.rows_before
+      AND args.offset_rows < capacities.rows_before
+          + (capacities.last_ordinal - capacities.first_ordinal + 1) * capacities.rows_per_round
+    ORDER BY capacities.first_ordinal ASC
+    LIMIT 1
+),
 rounds AS (
     SELECT
-        1 AS ordinal
-    FROM args
+        page_window.first_ordinal AS ordinal
+    FROM page_window
     UNION ALL
     SELECT
         rounds.ordinal + 1
     FROM rounds
-    CROSS JOIN args
-    WHERE rounds.ordinal < args.offset_rows + args.limit_rows
+    CROSS JOIN page_window
+    WHERE rounds.ordinal - page_window.first_ordinal + 1 < page_window.limit_rows
 )
 SELECT
     ranked_sources.task_id,
@@ -3598,6 +3880,6 @@ ORDER BY
     ranked_sources.task_weighted_rank DESC,
     ranked_sources.task_id ASC
 LIMIT (SELECT limit_rows FROM args)
-OFFSET (SELECT offset_rows FROM args);
+OFFSET COALESCE((SELECT first_round_offset FROM page_window), 0);
 {{end}}
 {{if .IncludeTaskSearchPageDescriptors}}{{template "taskSearchPageDescriptors" .}}{{end}}

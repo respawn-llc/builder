@@ -1,4 +1,4 @@
-import type { TaskMoveInput } from "./clientInputs";
+import type { TaskMoveInput, TaskStartInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { compactJsonObject } from "./json";
 import type {
@@ -12,24 +12,21 @@ import {
   taskMoveResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
-import { newSetupOperationID, type SetupOperationID } from "./setupOperationID";
+import { newSetupOperationID } from "./setupOperationID";
 import type { RpcTransport } from "./transport";
 
-export async function startTask(
-  transport: RpcTransport,
-  taskID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-  executionTarget?: WorkflowExecutionTargetSelection,
-): Promise<TaskStartResponse> {
+export async function startTask(transport: RpcTransport, input: TaskStartInput): Promise<TaskStartResponse> {
+  const setupOperationID = input.setupOperationID ?? newSetupOperationID();
   return parseRpcResponse(
     "workflow.task.start",
     taskStartResponseSchema,
     await transport.call(
       "workflow.task.start",
       compactJsonObject({
-        task_id: taskID,
+        task_id: input.taskID,
         setup_operation_id: setupOperationID.toJSONValue(),
-        execution_target: executionTargetPayload(executionTarget),
+        execution_target: executionTargetPayload(input.executionTarget),
+        proceed_despite_dependencies: input.proceedDespiteDependencies ?? false,
       }),
       { timeoutMs: null },
     ),
@@ -48,6 +45,7 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         output_values: input.outputValues ?? {},
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
+        proceed_despite_dependencies: input.proceedDespiteDependencies ?? false,
       }),
       { timeoutMs: null },
     ),
@@ -62,11 +60,7 @@ export async function approveApproval(
   return parseRpcResponse(
     "workflow.task.approve",
     taskApproveResponseSchema,
-    await transport.call(
-      "workflow.task.approve",
-      { approval_id: approvalID },
-      { timeoutMs: null },
-    ),
+    await transport.call("workflow.task.approve", { approval_id: approvalID }, { timeoutMs: null }),
   );
 }
 

@@ -265,6 +265,8 @@ func (e *execution) cleanup() error {
 	if e.workflow != nil {
 		bindingErr = e.workflow.Close()
 		e.workflow = nil
+	} else if e.resource != nil {
+		bindingErr = e.resource.engine.FinishCurrentNodeExecutionActivation()
 	}
 	if e.resource == nil {
 		return bindingErr

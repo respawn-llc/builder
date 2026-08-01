@@ -131,6 +131,13 @@ export async function createTask(transport: RpcTransport, input: TaskMutationInp
         body: input.body,
         source_workspace_id: input.sourceWorkspaceID,
         label_ids: input.labelIDs,
+        dependency_intent:
+          input.dependencyIntent === undefined
+            ? undefined
+            : {
+                related_task_id: input.dependencyIntent.relatedTaskID,
+                new_task_role: input.dependencyIntent.newTaskRole,
+              },
       }),
     ),
   );

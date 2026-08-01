@@ -662,13 +662,14 @@ type WorkflowValidationErrorDetails struct {
 }
 
 type WorkflowTaskCreateRequest struct {
-	ProjectID         string                 `json:"project_id"`
-	WorkflowID        *runtimeids.WorkflowID `json:"workflow_id,omitempty"`
-	Title             string                 `json:"title"`
-	Body              string                 `json:"body,omitempty"`
-	SourceURL         string                 `json:"source_url,omitempty"`
-	SourceWorkspaceID string                 `json:"source_workspace_id,omitempty"`
-	LabelIDs          []string               `json:"label_ids"`
+	ProjectID         string                              `json:"project_id"`
+	WorkflowID        *runtimeids.WorkflowID              `json:"workflow_id,omitempty"`
+	Title             string                              `json:"title"`
+	Body              string                              `json:"body,omitempty"`
+	SourceURL         string                              `json:"source_url,omitempty"`
+	SourceWorkspaceID string                              `json:"source_workspace_id,omitempty"`
+	LabelIDs          []string                            `json:"label_ids"`
+	DependencyIntent  *WorkflowTaskDependencyCreateIntent `json:"dependency_intent,omitempty"`
 }
 
 type WorkflowTaskCreateResponse struct {
@@ -809,15 +810,17 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID           string                            `json:"task_id"`
-	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id"`
-	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	TaskID                     string                            `json:"task_id"`
+	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
+	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
 type WorkflowTaskStartResponse struct {
-	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
-	Applied           *WorkflowTaskStartApplied                    `json:"applied,omitempty"`
-	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	Outcome                    WorkflowTaskActionOutcome                    `json:"outcome,omitempty"`
+	Applied                    *WorkflowTaskStartApplied                    `json:"applied,omitempty"`
+	SelectionRequired          *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	UnsatisfiedDependencyCount *int                                         `json:"unsatisfied_dependency_count,omitempty"`
 }
 
 type WorkflowTaskStartApplied struct {
@@ -854,18 +857,20 @@ type WorkflowTaskApproveApplied struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string                            `json:"task_id"`
-	TargetNodeID     string                            `json:"target_node_id"`
-	OutputValues     map[string]string                 `json:"output_values,omitempty"`
-	Commentary       string                            `json:"commentary,omitempty"`
-	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
-	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	TaskID                     string                            `json:"task_id"`
+	TargetNodeID               string                            `json:"target_node_id"`
+	OutputValues               map[string]string                 `json:"output_values,omitempty"`
+	Commentary                 string                            `json:"commentary,omitempty"`
+	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
+	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
-	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
-	Applied           *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
-	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	Outcome                    WorkflowTaskActionOutcome                    `json:"outcome,omitempty"`
+	Applied                    *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
+	SelectionRequired          *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	UnsatisfiedDependencyCount *int                                         `json:"unsatisfied_dependency_count,omitempty"`
 }
 
 type WorkflowTaskMoveApplied struct {
@@ -1357,17 +1362,23 @@ type WorkflowBoardNodeSummary struct {
 }
 
 type WorkflowBoardTaskCard struct {
-	TaskID          string                  `json:"task_id"`
-	ShortID         string                  `json:"short_id"`
-	Title           string                  `json:"title"`
-	Preview         MarkdownPreview         `json:"preview"`
-	WorkflowID      runtimeids.WorkflowID   `json:"workflow_id"`
-	ActiveNodeIDs   []string                `json:"active_node_ids,omitempty"`
-	SourceWorkspace ProjectWorkspaceSummary `json:"source_workspace"`
-	Status          WorkflowTaskStatus      `json:"status"`
-	Actions         WorkflowTaskActions     `json:"actions"`
-	LabelIDs        []string                `json:"label_ids"`
-	UpdatedAtUnixMs int64                   `json:"updated_at_unix_ms"`
+	TaskID             string                          `json:"task_id"`
+	ShortID            string                          `json:"short_id"`
+	Title              string                          `json:"title"`
+	Preview            MarkdownPreview                 `json:"preview"`
+	WorkflowID         runtimeids.WorkflowID           `json:"workflow_id"`
+	ActiveNodeIDs      []string                        `json:"active_node_ids,omitempty"`
+	SourceWorkspace    ProjectWorkspaceSummary         `json:"source_workspace"`
+	Status             WorkflowTaskStatus              `json:"status"`
+	Actions            WorkflowTaskActions             `json:"actions"`
+	LabelIDs           []string                        `json:"label_ids"`
+	DependencyProgress *WorkflowTaskDependencyProgress `json:"dependency_progress,omitempty"`
+	UpdatedAtUnixMs    int64                           `json:"updated_at_unix_ms"`
+}
+
+type WorkflowTaskDependencyProgress struct {
+	SatisfiedCount int `json:"satisfied_count"`
+	TotalCount     int `json:"total_count"`
 }
 
 type MarkdownPreview struct {
@@ -1440,6 +1451,7 @@ const (
 	WorkflowProjectEventActionQuestionCleared        = protocol.WorkflowProjectEventActionQuestionCleared
 	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
+	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
 )
 
 type WorkflowProjectEvent struct {
@@ -1558,7 +1570,8 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 			WorkflowProjectEventActionQuestionWaiting,
 			WorkflowProjectEventActionQuestionCleared,
 			WorkflowProjectEventActionQuestionAnswered,
-			WorkflowProjectEventActionLabelsChanged:
+			WorkflowProjectEventActionLabelsChanged,
+			WorkflowProjectEventActionDependenciesChanged:
 			return true
 		}
 	case WorkflowProjectEventResourceLabel:
@@ -1635,6 +1648,56 @@ type WorkflowTaskDetail struct {
 	Actions              WorkflowTaskActions         `json:"actions"`
 	LabelIDs             []string                    `json:"label_ids"`
 	AttentionCount       int                         `json:"attention_count"`
+	Dependencies         WorkflowTaskDependencies    `json:"dependencies"`
+}
+
+type WorkflowTaskDependencyDirection string
+
+const (
+	WorkflowTaskDependencyDirectionBlockedBy WorkflowTaskDependencyDirection = "blocked-by"
+	WorkflowTaskDependencyDirectionBlocks    WorkflowTaskDependencyDirection = "blocks"
+)
+
+type WorkflowTaskDependencySatisfaction string
+
+const (
+	WorkflowTaskDependencySatisfied   WorkflowTaskDependencySatisfaction = "satisfied"
+	WorkflowTaskDependencyUnsatisfied WorkflowTaskDependencySatisfaction = "unsatisfied"
+)
+
+type WorkflowTaskDependencyAddAvailability struct {
+	Available    *WorkflowTaskDependencyAvailable    `json:"available,omitempty"`
+	LimitReached *WorkflowTaskDependencyLimitReached `json:"limit_reached,omitempty"`
+}
+
+type WorkflowTaskDependencyAvailable struct {
+	RemainingCapacity int `json:"remaining_capacity"`
+}
+
+type WorkflowTaskDependencyLimitReached struct{}
+
+type WorkflowTaskDependencyItem struct {
+	TaskID       string                              `json:"task_id"`
+	ShortID      string                              `json:"short_id"`
+	Title        string                              `json:"title"`
+	WorkflowID   string                              `json:"workflow_id"`
+	Status       WorkflowTaskStatus                  `json:"status"`
+	Satisfaction *WorkflowTaskDependencySatisfaction `json:"satisfaction,omitempty"`
+}
+
+type WorkflowTaskDependencyDirectionProjection struct {
+	Direction        WorkflowTaskDependencyDirection        `json:"direction"`
+	TotalCount       int                                    `json:"total_count"`
+	UnsatisfiedCount *int                                   `json:"unsatisfied_count,omitempty"`
+	Items            []WorkflowTaskDependencyItem           `json:"items"`
+	AddAvailability  *WorkflowTaskDependencyAddAvailability `json:"add_availability,omitempty"`
+}
+
+type WorkflowTaskDependencies struct {
+	BlockerCount             int                                         `json:"blocker_count"`
+	UnsatisfiedBlockerCount  int                                         `json:"unsatisfied_blocker_count"`
+	DirectlyBlockedTaskCount int                                         `json:"directly_blocked_task_count"`
+	Directions               []WorkflowTaskDependencyDirectionProjection `json:"directions"`
 }
 
 type WorkflowTaskWorkflowSummary struct {
@@ -2156,6 +2219,11 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
 		return err
 	}
+	if r.DependencyIntent != nil {
+		if err := r.DependencyIntent.Validate(); err != nil {
+			return err
+		}
+	}
 	if r.WorkflowID != nil {
 		return validateRequiredWorkflowID(*r.WorkflowID)
 	}
@@ -2222,7 +2290,10 @@ func (r WorkflowTaskDetail) Validate() error {
 	if err := validateRequired("task.summary.id", r.Summary.ID); err != nil {
 		return err
 	}
-	return validateLabelIDs("task.label_ids", r.LabelIDs)
+	if err := validateLabelIDs("task.label_ids", r.LabelIDs); err != nil {
+		return err
+	}
+	return r.Dependencies.Validate()
 }
 
 func (r WorkflowTaskListItem) Validate() error {
@@ -2252,7 +2323,13 @@ func (r WorkflowBoardTaskCard) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return validateLabelIDs("label_ids", r.LabelIDs)
+	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
+		return err
+	}
+	if r.DependencyProgress != nil {
+		return r.DependencyProgress.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowBoardNodeCardsListResponse) Validate() error {
@@ -2595,7 +2672,13 @@ func (r WorkflowTaskApproveRequest) Validate() error {
 }
 
 func (r WorkflowTaskMoveRequest) Validate() error {
-	return validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID))
+	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
+		return err
+	}
+	if r.ExecutionTarget != nil {
+		return r.ExecutionTarget.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskCompleteRequest) Validate() error {

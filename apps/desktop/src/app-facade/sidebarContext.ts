@@ -39,7 +39,8 @@ export type WorkflowInspectorInitialFocus = "firstEditableControl";
 export type TaskDetailInitialFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
   | Readonly<{ kind: "approval"; approvalID: string }>
-  | Readonly<{ kind: "interrupted_current_node" }>;
+  | Readonly<{ kind: "interrupted_current_node" }>
+  | Readonly<{ kind: "dependencies" }>;
 
 export type SidebarResult =
   SidebarCanceledResult | SidebarNewTaskResult | SidebarTaskDetailResult | SidebarWorkflowResult;
@@ -49,6 +50,13 @@ export type SidebarDestination =
       kind: "newTask";
       mode?: SidebarMode;
       boardQueryWorkflowID: string | undefined;
+      initialSourceWorkspaceID?: string | undefined;
+      pendingRelationship?:
+        | Readonly<{
+            originTaskID: string;
+            newTaskRole: "blocker" | "blocked";
+          }>
+        | undefined;
       projectID: string;
       workflowID: string;
     }>
@@ -104,6 +112,7 @@ export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
   closeSidebar(reason?: SidebarCancelReason): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
+  replaceSidebar(destination: SidebarDestination): void;
   phase: SidebarPhase;
   resolveSidebar(result: Exclude<SidebarResult, SidebarCanceledResult>): void;
   resizeSidebar(width: ResolvedSidebarWidth): void;

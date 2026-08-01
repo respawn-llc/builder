@@ -26,6 +26,19 @@ func TestWorkflowProjectEventValidatesTypedResourceActionAndScope(t *testing.T) 
 			valid: true,
 		},
 		{
+			name: "dependency task event",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				WorkflowID:       workflowEventID(),
+				Resource:         WorkflowProjectEventResourceTask,
+				Action:           WorkflowProjectEventActionDependenciesChanged,
+				PrimaryEntityID:  "task-1",
+				RelatedIDs:       []string{"task-2"},
+				OccurredAtUnixMs: 1,
+			},
+			valid: true,
+		},
+		{
 			name: "global workflow event",
 			event: WorkflowProjectEvent{
 				WorkflowID:       workflowEventID(),

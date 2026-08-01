@@ -13,31 +13,55 @@ describe("task lifecycle client", () => {
         method: "workflow.task.start",
         result: {
           outcome: "applied",
-          applied: { current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: "session-1" }] },
+          applied: {
+            current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: "session-1" }],
+          },
         },
       },
       {
         method: "workflow.task.move",
-        result: { outcome: "applied", applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }] } },
+        result: {
+          outcome: "applied",
+          applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }] },
+        },
       },
       {
         method: "workflow.task.approve",
-        result: { outcome: "applied", applied: { task_id: "task-1", current_nodes: [{ node_id: "node-3", transition_branch_key: "branch-a", session_id: null }] } },
+        result: {
+          outcome: "applied",
+          applied: {
+            task_id: "task-1",
+            current_nodes: [{ node_id: "node-3", transition_branch_key: "branch-a", session_id: null }],
+          },
+        },
       },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.startTask("task-1")).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-1" }] } });
-    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-2" }] } });
-    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({ outcome: "applied", applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] } });
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
+      outcome: "applied",
+      applied: { currentNodes: [{ nodeID: "node-1" }] },
+    });
+    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({
+      outcome: "applied",
+      applied: { currentNodes: [{ nodeID: "node-2" }] },
+    });
+    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({
+      outcome: "applied",
+      applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
+    });
 
     expect(transport.calls).toContainEqual({
       method: "workflow.task.approve",
       options: { timeoutMs: null },
       params: { approval_id: "approval-1" },
     });
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("allow_missing_edge");
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("auto_approve");
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
+      "allow_missing_edge",
+    );
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
+      "auto_approve",
+    );
   });
 
   it("maps typed execution-target selection requirements", () => {
@@ -76,6 +100,44 @@ describe("task lifecycle client", () => {
       outcome: "selection_required",
       selectionRequired: { reason: "policy_requires_selection" },
     });
+  });
+
+  it("maps dependency confirmation and sends explicit proceed intent", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.task.start",
+        result: {
+          outcome: "dependency_confirmation_required",
+          unsatisfied_dependency_count: 2,
+        },
+      },
+      {
+        method: "workflow.task.move",
+        result: {
+          outcome: "dependency_confirmation_required",
+          unsatisfied_dependency_count: 3,
+        },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(client.startTask({ taskID: "task-1", proceedDespiteDependencies: true })).resolves.toEqual({
+      outcome: "dependency_confirmation_required",
+      unsatisfiedDependencyCount: 2,
+    });
+    await expect(
+      client.moveTask({
+        taskID: "task-1",
+        targetNodeID: "node-2",
+        proceedDespiteDependencies: true,
+      }),
+    ).resolves.toEqual({
+      outcome: "dependency_confirmation_required",
+      unsatisfiedDependencyCount: 3,
+    });
+
+    expect(transport.calls[0]?.params).toMatchObject({ proceed_despite_dependencies: true });
+    expect(transport.calls[1]?.params).toMatchObject({ proceed_despite_dependencies: true });
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {

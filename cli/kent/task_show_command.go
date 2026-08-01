@@ -29,6 +29,13 @@ type taskShowOutput struct {
 	Actions              serverapi.WorkflowTaskActions         `json:"actions"`
 	LabelIDs             []string                              `json:"label_ids"`
 	AttentionCount       int                                   `json:"attention_count"`
+	Dependencies         *taskShowDependencySummary            `json:"dependencies,omitempty"`
+}
+
+type taskShowDependencySummary struct {
+	BlockerCount            int `json:"blocker_count"`
+	UnsatisfiedBlockerCount int `json:"unsatisfied_blocker_count"`
+	BlockedTaskCount        int `json:"blocked_task_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -79,7 +86,7 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput {
-	return taskShowOutput{
+	output := taskShowOutput{
 		Summary:              task.Summary,
 		Body:                 task.Body,
 		SourceURL:            task.SourceURL,
@@ -97,6 +104,16 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		LabelIDs:             normalizedLabelIDs(task.LabelIDs),
 		AttentionCount:       task.AttentionCount,
 	}
+	if task.Dependencies.BlockerCount != 0 ||
+		task.Dependencies.UnsatisfiedBlockerCount != 0 ||
+		task.Dependencies.DirectlyBlockedTaskCount != 0 {
+		output.Dependencies = &taskShowDependencySummary{
+			BlockerCount:            task.Dependencies.BlockerCount,
+			UnsatisfiedBlockerCount: task.Dependencies.UnsatisfiedBlockerCount,
+			BlockedTaskCount:        task.Dependencies.DirectlyBlockedTaskCount,
+		}
+	}
+	return output
 }
 
 func normalizedLabelIDs(ids []string) []string {
@@ -184,7 +201,7 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 		}
 		fmt.Fprintln(stdout)
 	}
-	return nil
+	return writeTaskDependencyDirections(stdout, task.Dependencies.Directions)
 }
 
 func taskLabelNamesForHumanOutput(ctx context.Context, remote workflowCommandRemote, projectID string, ids []string) ([]string, error) {

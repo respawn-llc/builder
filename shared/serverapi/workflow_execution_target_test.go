@@ -18,6 +18,7 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 
 	for _, request := range []interface{ Validate() error }{
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
+		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &valid},
 	} {
 		if err := request.Validate(); err != nil {
 			t.Fatalf("%T valid selection rejected: %v", request, err)
@@ -33,6 +34,9 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 	} {
 		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("selection %#v validated", selection)
+		}
+		if err := (WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &selection}).Validate(); err == nil {
+			t.Fatalf("move selection %#v validated", selection)
 		}
 	}
 }
@@ -130,6 +134,22 @@ func TestWorkflowTaskMoveRequestHasNoCompatibilityFields(t *testing.T) {
 		if _, exists := requestType.FieldByName(removedField); exists {
 			t.Fatalf("%s still exposes removed compatibility field %s", requestType.Name(), removedField)
 		}
+	}
+}
+
+func TestWorkflowTaskActionResponseValidatesDependencyConfirmationOutcome(t *testing.T) {
+	count := 2
+	response := WorkflowTaskStartResponse{
+		Outcome:                    WorkflowTaskActionOutcomeDependencyConfirmationRequired,
+		UnsatisfiedDependencyCount: &count,
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("dependency confirmation response Validate: %v", err)
+	}
+	invalid := response
+	invalid.UnsatisfiedDependencyCount = nil
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("dependency confirmation response accepted missing count")
 	}
 }
 
@@ -279,6 +299,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
 		LiveSessionIDs: []string{},
 		CurrentScripts: []WorkflowTaskCurrentScript{},
+		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 		ExecutionTarget: &WorkflowExecutionTarget{
 			Mode:       WorkflowExecutionTargetModeNone,
 			Provenance: WorkflowExecutionTargetProvenanceResolved,
@@ -324,6 +345,7 @@ func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T)
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
 		LiveSessionIDs: liveSessionIDs,
 		CurrentScripts: currentScripts,
+		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 	}}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("all current execution targets rejected: %v", err)

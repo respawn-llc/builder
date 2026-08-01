@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,18 +81,18 @@ func (c *fakeWorkflowController) completionRequests() []workflowruntime.Completi
 	return append([]workflowruntime.CompletionRequest(nil), c.requests...)
 }
 
-type fakeTaskCommentCounter struct {
-	count int64
-	err   error
-	calls atomic.Int64
+type fakeTaskAwarenessSource struct {
+	awareness workflowruntime.TaskAwareness
+	err       error
+	calls     atomic.Int64
 }
 
-func (c *fakeTaskCommentCounter) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
+func (c *fakeTaskAwarenessSource) TaskAwareness(context.Context, workflow.TaskID) (workflowruntime.TaskAwareness, error) {
 	c.calls.Add(1)
 	if c.err != nil {
-		return 0, c.err
+		return workflowruntime.TaskAwareness{}, c.err
 	}
-	return c.count, nil
+	return c.awareness, nil
 }
 
 type workflowSteeringClient struct {
@@ -499,12 +500,12 @@ func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
 	}
 }
 
-func TestWorkflowModePromptResumedCurrentNodeMessageSkipsCommentCountQuery(t *testing.T) {
+func TestWorkflowModePromptResumedCurrentNodeMessageSkipsTaskAwarenessQueryAndRewrite(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	counter := &fakeTaskCommentCounter{count: 2}
+	counter := &fakeTaskAwarenessSource{awareness: workflowruntime.TaskAwareness{CommentCount: 2, UnsatisfiedDependencyCount: 1}}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
-	workflowCfg.TaskCommentCounter = counter
+	workflowCfg.TaskAwarenessSource = counter
 	workflowCfg.TaskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
 	promptIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
 	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(promptIdentity), Content: textutil.Value("existing workflow instructions")}); err != nil {
@@ -518,20 +519,31 @@ func TestWorkflowModePromptResumedCurrentNodeMessageSkipsCommentCountQuery(t *te
 		t.Fatalf("submit: %v", err)
 	}
 	if got := counter.calls.Load(); got != 0 {
-		t.Fatalf("CountTaskComments calls = %d, want 0", got)
+		t.Fatalf("TaskAwareness calls = %d, want 0", got)
 	}
 	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
 	if len(workflowMessages) != 1 || messageContent(workflowMessages[0]) != "existing workflow instructions" {
 		t.Fatalf("workflow messages = %+v, want only the existing current-node prompt", workflowMessages)
+	}
+	before := eng.transcriptRuntimeState().SnapshotItems()
+	counter.awareness.UnsatisfiedDependencyCount = 7
+	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "dependency-change"); err != nil {
+		t.Fatalf("prepare same-assignment follow-up: %v", err)
+	}
+	if got := counter.calls.Load(); got != 0 {
+		t.Fatalf("TaskAwareness calls after dependency change = %d, want 0", got)
+	}
+	if after := eng.transcriptRuntimeState().SnapshotItems(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("dependency change rewrote model-visible history: before=%+v after=%+v", before, after)
 	}
 }
 
 func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	counter := &fakeTaskCommentCounter{count: 2}
+	counter := &fakeTaskAwarenessSource{awareness: workflowruntime.TaskAwareness{CommentCount: 2, UnsatisfiedDependencyCount: 1}}
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
-	workflowCfg.TaskCommentCounter = counter
+	workflowCfg.TaskAwarenessSource = counter
 	promptIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
 	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value(promptIdentity), Content: textutil.Value("previous assignment instructions")}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
@@ -544,13 +556,33 @@ func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	if got := counter.calls.Load(); got != 1 {
-		t.Fatalf("CountTaskComments calls = %d, want one refreshed assignment prompt", got)
+		t.Fatalf("TaskAwareness calls = %d, want one refreshed assignment prompt", got)
 	}
 	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "same-assignment-follow-up"); err != nil {
 		t.Fatalf("prepare same-assignment follow-up: %v", err)
 	}
 	if got := counter.calls.Load(); got != 1 {
-		t.Fatalf("CountTaskComments calls after same-assignment follow-up = %d, want one", got)
+		t.Fatalf("TaskAwareness calls after same-assignment follow-up = %d, want one", got)
+	}
+}
+
+func TestWorkflowModeInitialAssignmentQueriesTaskAwarenessOnlyForNewInstructions(t *testing.T) {
+	t.Parallel()
+	source := &fakeTaskAwarenessSource{awareness: workflowruntime.TaskAwareness{
+		UnsatisfiedDependencyCount: 2,
+	}}
+	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
+	workflowCfg.TaskAwarenessSource = source
+	eng := mustNewWorkflowTestEngine(t, mustCreateTestSession(t), &fakeClient{}, workflowCfg, Config{})
+
+	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "initial"); err != nil {
+		t.Fatalf("prepare initial assignment: %v", err)
+	}
+	if err := eng.steerWorkflowModeIfNeeded(context.Background(), "follow-up"); err != nil {
+		t.Fatalf("prepare same-assignment follow-up: %v", err)
+	}
+	if got := source.calls.Load(); got != 1 {
+		t.Fatalf("TaskAwareness calls = %d, want one for the selected initial instruction", got)
 	}
 }
 

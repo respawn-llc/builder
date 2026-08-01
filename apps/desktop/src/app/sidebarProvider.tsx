@@ -95,6 +95,26 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [clearCloseTimeout],
   );
 
+  const replaceSidebar = useCallback(
+    (destination: SidebarDestination): void => {
+      if (activeDestinationRef.current === null || pendingRef.current === null) {
+        throw new Error("Sidebar replacement requires an active destination lifecycle.");
+      }
+      clearCloseTimeout();
+      const nextProfile = sidebarWidthProfile(destination);
+      setActiveWidthProfile(nextProfile);
+      setSidebarWidths((current) =>
+        sidebarWidthForProfile(current, nextProfile) === undefined
+          ? [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }]
+          : current,
+      );
+      setPhase("open");
+      activeDestinationRef.current = destination;
+      setActiveDestination(destination);
+    },
+    [clearCloseTimeout],
+  );
+
   const resolveSidebar = useCallback(
     (result: Exclude<SidebarResult, SidebarCanceledResult>) => {
       const pending = pendingRef.current;
@@ -127,12 +147,22 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       activeDestination,
       closeSidebar,
       openSidebar,
+      replaceSidebar,
       phase,
       resizeSidebar,
       resolveSidebar,
       sidebarWidthPx,
     }),
-    [activeDestination, closeSidebar, openSidebar, phase, resizeSidebar, resolveSidebar, sidebarWidthPx],
+    [
+      activeDestination,
+      closeSidebar,
+      openSidebar,
+      phase,
+      replaceSidebar,
+      resizeSidebar,
+      resolveSidebar,
+      sidebarWidthPx,
+    ],
   );
 
   return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;

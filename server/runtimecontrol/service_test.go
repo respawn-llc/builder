@@ -402,6 +402,20 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	return store, engine
 }
 
+func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExecutionConfig {
+	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference("runtime-control-test-task", "runtime-control-test-node", nil)
+	if err != nil {
+		t.Fatalf("create runtime-control Current Node reference: %v", err)
+	}
+	return &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: reference,
+		},
+	}
+}
+
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
 	store, _ := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
@@ -1018,7 +1032,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlWorkflowExecutionConfig(),
+		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	engine.SetQuestionsEnabled(false)
@@ -1041,7 +1055,7 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlWorkflowExecutionConfig(),
+		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
@@ -1062,7 +1076,7 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlWorkflowExecutionConfig(),
+		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
@@ -1082,7 +1096,7 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlWorkflowExecutionConfig(),
+		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
@@ -1106,7 +1120,7 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlWorkflowExecutionConfig(),
+		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
@@ -1131,18 +1145,6 @@ func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	}
 	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
 		t.Fatalf("goal after complete = %+v, want complete", goal)
-	}
-}
-
-func runtimeControlWorkflowExecutionConfig() *workflowruntime.CurrentNodeExecutionConfig {
-	return &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: runtimeids.NewExecutionScopeID(),
-		Instructions: workflowruntime.TaskInstructions{
-			CurrentNode: workflow.CurrentNodeReference{
-				TaskID: "task-runtime-control",
-				NodeID: "node-runtime-control",
-			},
-		},
 	}
 }
 

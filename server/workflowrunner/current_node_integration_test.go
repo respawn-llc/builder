@@ -23,6 +23,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/server/workflowview"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -32,17 +33,18 @@ import (
 const currentNodeRunnerWait = 5 * time.Second
 
 type currentNodeRunnerFixture struct {
-	cfg         config.App
-	metadata    *metadata.Store
-	store       *workflowstore.Store
-	authority   *sessionruntime.Authority
-	runtimes    *registry.RuntimeRegistry
-	controller  *workflowexecution.CurrentNodeController
-	starter     *Starter
-	projectID   string
-	workspaceID string
-	workspace   string
-	client      *ScriptedClient
+	cfg          config.App
+	metadata     *metadata.Store
+	store        *workflowstore.Store
+	authority    *sessionruntime.Authority
+	runtimes     *registry.RuntimeRegistry
+	controller   *workflowexecution.CurrentNodeController
+	starter      *Starter
+	dependencies *workflowview.TaskDependencies
+	projectID    string
+	workspaceID  string
+	workspace    string
+	client       *ScriptedClient
 
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
@@ -175,9 +177,18 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
+	definitions, err := workflowview.NewDefinitionProjection(store)
+	if err != nil {
+		t.Fatalf("new workflow definition projection: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, definitions, workflowview.NewTaskProjector(), fixture.authority)
+	if err != nil {
+		t.Fatalf("new Task dependency projection: %v", err)
+	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
 		MutationPermit:   permit,
+		TaskDependencies: dependencies,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
@@ -193,6 +204,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		t.Fatalf("new starter: %v", err)
 	}
 	fixture.starter = starter
+	fixture.dependencies = dependencies
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
 		AutomaticConcurrency: 1,
 		AssignmentSteerer:    starter,
@@ -805,6 +817,77 @@ func TestCurrentNodeAgentUsesDurableCommentCountWithoutReadingCommentBodies(t *t
 	if requests := f.client.Requests(); len(requests) != 1 {
 		t.Fatalf("model requests = %d, want one", len(requests))
 	}
+}
+
+func TestCurrentNodeTaskAwarenessMatchesCanonicalDependencyProjectionAcrossTerminalChanges(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(t)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	blocker := f.createTask(t, workflowID)
+	blocked := f.createTask(t, workflowID)
+	if _, err := f.store.AddTaskDependency(context.Background(), workflowstore.TaskDependencyAddRequest{
+		BlockerTaskID: blocker.ID,
+		BlockedTaskID: blocked.ID,
+	}); err != nil {
+		t.Fatalf("add Task dependency: %v", err)
+	}
+	assertAwareness := func(want int64) {
+		t.Helper()
+		awareness, err := f.starter.taskAwarenessSource.TaskAwareness(context.Background(), blocked.ID)
+		if err != nil {
+			t.Fatalf("TaskAwareness: %v", err)
+		}
+		projected, err := f.dependencies.GetTaskDependencies(context.Background(), string(blocked.ID))
+		if err != nil {
+			t.Fatalf("GetTaskDependencies: %v", err)
+		}
+		if awareness.UnsatisfiedDependencyCount != want ||
+			awareness.UnsatisfiedDependencyCount != int64(projected.UnsatisfiedBlockerCount) {
+			t.Fatalf("awareness/projection unsatisfied count = %d/%d, want %d", awareness.UnsatisfiedDependencyCount, projected.UnsatisfiedBlockerCount, want)
+		}
+	}
+	assertAwareness(1)
+
+	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
+		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindTerminal),
+	}); err != nil {
+		t.Fatalf("manual terminal move: %v", err)
+	}
+	assertAwareness(0)
+	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
+		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindStart),
+	}); err != nil {
+		t.Fatalf("reopen blocker: %v", err)
+	}
+	assertAwareness(1)
+
+	started, err := f.store.StartTask(context.Background(), blocker.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("started Current Nodes = %+v, want one", started.Mutation.Created)
+	}
+	if _, err := f.store.CompleteCurrentNode(context.Background(), workflowstore.CurrentNodeCompletionRequest{
+		Source: started.Mutation.Created[0].Reference, TransitionID: "done",
+	}); err != nil {
+		t.Fatalf("complete blocker to ordinary terminal: %v", err)
+	}
+	assertAwareness(0)
+}
+
+func currentNodeKindID(t *testing.T, definition workflow.Definition, kind workflow.NodeKind) workflow.NodeID {
+	t.Helper()
+	for _, node := range definition.Nodes {
+		if node.Kind() == kind {
+			return workflow.NodeIDOf(node)
+		}
+	}
+	t.Fatalf("workflow definition has no %s node", kind)
+	return ""
 }
 
 func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *testing.T) {

@@ -53,7 +53,7 @@ func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		StatusKinds:     statusKinds,
 		PageSize:        *pageSize,
 	}
-	if flagWasProvided(fs, "offset") {
+	if flagExplicit(fs, "offset") {
 		request.Offset = offset
 	}
 	if err := validateTaskSearchCommandRequest(request); err != nil {

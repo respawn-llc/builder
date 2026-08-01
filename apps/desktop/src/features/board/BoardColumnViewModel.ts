@@ -21,6 +21,7 @@ export type KanbanCardVM = Readonly<{
   updatedAt: number;
   activeNodeIDs: readonly string[];
   statusKind: TaskStatusKind;
+  dependencyProgress: BoardCard["dependencyProgress"];
   labels: readonly KanbanCardLabelVM[];
   workspaceChipLabel: string | null;
   borderTone: BoardCardBorderTone;
@@ -75,6 +76,7 @@ export function toKanbanCardVM(
     updatedAt: card.updatedAt,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
+    dependencyProgress: card.dependencyProgress,
     labels: cardLabels(card.labelIDs, labelNamesByID),
     workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
     borderTone: boardCardBorderTone(card.status.kind),

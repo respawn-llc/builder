@@ -147,3 +147,29 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 		t.Fatalf("completed Workflow Session state = %+v error=%v, want absent", state, err)
 	}
 }
+
+func TestIdleCompletionActivationClearsRetainedContract(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir())
+	execution := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: mustTestCurrentNodeReference(t, "task-idle-completion", "node-idle-completion", nil),
+			WorkflowID:  runtimeids.NewWorkflowID(),
+		},
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		CurrentNodeExecution: execution,
+	})
+	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)
+
+	if err := engine.FinishCurrentNodeExecutionActivation(); err != nil {
+		t.Fatalf("finish idle-completion activation: %v", err)
+	}
+	if engine.CurrentNodeExecutionConfigured() {
+		t.Fatal("idle-completed retained Session kept its Current Node contract")
+	}
+	if terminal := engine.WorkflowTerminalState(); terminal.Completed {
+		t.Fatalf("idle-completed retained Session kept terminal state: %+v", terminal)
+	}
+}

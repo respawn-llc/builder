@@ -56,9 +56,41 @@ func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (M
 	case workflow.NodeKindStart, workflow.NodeKindTerminal:
 		return ManualMovePreparation{request: req, target: target}, nil
 	case workflow.NodeKindAgent, workflow.NodeKindScript:
-		if _, _, _, _, err := resolveManualMoveExecutablePath(ctx, s.queries, req.TaskID, definition, workflow.NodeIDOf(target)); err != nil {
+		_, source, edge, sourceDefinition, err := resolveManualMoveExecutablePath(ctx, s.queries, req.TaskID, definition, workflow.NodeIDOf(target))
+		if err != nil {
 			return ManualMovePreparation{}, err
 		}
+		group, err := manualMoveTransitionGroup(definition, edge)
+		if err != nil {
+			return ManualMovePreparation{}, err
+		}
+		preparedRequest, err := prepareCurrentNodeCompletionRequest(CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "manual_move",
+			OutputValues: req.OutputValues,
+			Commentary:   req.Commentary,
+		})
+		if err != nil {
+			return ManualMovePreparation{}, err
+		}
+		if issues := currentNodeCompletionOutputIssues(definition, group, preparedRequest.OutputValues); len(issues) > 0 {
+			return ManualMovePreparation{}, CompletionValidationError{Issues: issues}
+		}
+		if _, err := materializeCompletionTargetCurrentNode(
+			ctx,
+			s.queries,
+			definition,
+			edge,
+			sourceDefinition,
+			target,
+			source,
+			preparedRequest.OutputValues,
+			nil,
+		); err != nil {
+			return ManualMovePreparation{}, err
+		}
+		req.OutputValues = preparedRequest.OutputValues
+		req.Commentary = preparedRequest.Commentary
 		return ManualMovePreparation{request: req, target: target, requiresExecutionTarget: true}, nil
 	default:
 		return ManualMovePreparation{}, ErrManualMoveExecutableTargetNeedsEdge

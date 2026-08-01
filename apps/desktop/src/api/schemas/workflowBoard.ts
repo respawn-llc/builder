@@ -37,6 +37,13 @@ import {
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
+import { taskDependenciesSchema } from "./taskDependencies";
+export {
+  taskDependenciesSchema,
+  taskDependencyAddResponseSchema,
+  taskDependencyListResponseSchema,
+  taskDependencyRemoveResponseSchema,
+} from "./taskDependencies";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -162,6 +169,20 @@ const selectionRequiredResponseSchema = z
       }) as const,
   );
 
+const dependencyConfirmationRequiredResponseSchema = z
+  .object({
+    outcome: z.literal("dependency_confirmation_required"),
+    unsatisfied_dependency_count: z.number().int().positive(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        unsatisfiedDependencyCount: value.unsatisfied_dependency_count,
+      }) as const,
+  );
+
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
   z
     .object({
@@ -181,6 +202,7 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
         }) as const,
     ),
   selectionRequiredResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
 ]);
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
@@ -202,6 +224,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
         }) as const,
     ),
   selectionRequiredResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
 ]);
 
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
@@ -388,6 +411,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       actions: taskActionsSchema,
       label_ids: labelIDListSchema,
       attention_count: z.number().int().nonnegative(),
+      dependencies: taskDependenciesSchema,
     }),
   })
   .transform((value) => ({
@@ -406,6 +430,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     actions: value.task.actions,
     labelIDs: value.task.label_ids,
     attentionCount: value.task.attention_count,
+    dependencies: value.task.dependencies,
     executionTarget: value.task.execution_target,
     worktreePath: value.task.worktree_path,
     currentNodes: value.task.current_nodes,

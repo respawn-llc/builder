@@ -29,7 +29,7 @@ func parseBindingMutationArguments(command string, usage commandUsage, args []st
 	if !ok {
 		return bindingMutationArguments{}, false, exitCode
 	}
-	if !flagWasProvided(fs, "project") || strings.TrimSpace(*projectID) == "" {
+	if !flagExplicit(fs, "project") || strings.TrimSpace(*projectID) == "" {
 		fmt.Fprintln(stderr, "--project <project-id> is required")
 		return bindingMutationArguments{}, false, 2
 	}
@@ -38,15 +38,15 @@ func parseBindingMutationArguments(command string, usage commandUsage, args []st
 		return bindingMutationArguments{}, false, 2
 	}
 	var selectedWorkspaceID *string
-	if flagWasProvided(fs, "workspace") && strings.TrimSpace(*workspaceID) == "" {
+	if flagExplicit(fs, "workspace") && strings.TrimSpace(*workspaceID) == "" {
 		fmt.Fprintln(stderr, "--workspace must not be blank")
 		return bindingMutationArguments{}, false, 2
 	}
-	if flagWasProvided(fs, "workspace") {
+	if flagExplicit(fs, "workspace") {
 		trimmedWorkspaceID := strings.TrimSpace(*workspaceID)
 		selectedWorkspaceID = &trimmedWorkspaceID
 	}
-	if flagWasProvided(fs, "workspace") && len(positionals) > 0 {
+	if flagExplicit(fs, "workspace") && len(positionals) > 0 {
 		fmt.Fprintln(stderr, "workspace path and --workspace are mutually exclusive")
 		return bindingMutationArguments{}, false, 2
 	}

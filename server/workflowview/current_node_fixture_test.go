@@ -95,11 +95,15 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		}
 	})
 	projector := NewTaskProjector()
+	dependencies, err := NewTaskDependencies(metadataStore, definitions, projector, authority)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
 	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, authority, quiescence)
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
+	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}

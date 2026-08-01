@@ -790,7 +790,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	}
 }
 
-func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T) {
+func TestRemoteCompactionTaskAwarenessErrorDoesNotReplaceHistory(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	countErr := errors.New("workflow task comment count failure")
@@ -814,12 +814,12 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		}},
 	}
 	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID:            scopeID,
-		Contract:           workflowruntime.CompletionContract{},
-		CompletionMode:     workflowruntime.CompletionModeTool,
-		Controller:         &externallyCompletedWorkflowController{},
-		TaskCommentCounter: failingWorkflowTaskCommentCounter{err: countErr},
-		Instructions:       workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task-1", "node-1", nil)},
+		ScopeID:             scopeID,
+		Contract:            workflowruntime.CompletionContract{},
+		CompletionMode:      workflowruntime.CompletionModeTool,
+		Controller:          &externallyCompletedWorkflowController{},
+		TaskAwarenessSource: failingWorkflowTaskAwarenessSource{err: countErr},
+		Instructions:        workflowruntime.TaskInstructions{CurrentNode: mustTestCurrentNodeReference(t, "task-1", "node-1", nil)},
 	}, Config{Model: "gpt-5"})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -856,12 +856,12 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 	}
 }
 
-type failingWorkflowTaskCommentCounter struct {
+type failingWorkflowTaskAwarenessSource struct {
 	err error
 }
 
-func (c failingWorkflowTaskCommentCounter) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
-	return 0, c.err
+func (c failingWorkflowTaskAwarenessSource) TaskAwareness(context.Context, workflow.TaskID) (workflowruntime.TaskAwareness, error) {
+	return workflowruntime.TaskAwareness{}, c.err
 }
 
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {

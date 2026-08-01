@@ -61,6 +61,7 @@ type Starter struct {
 	storeOptions         []session.StoreOption
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	mutationPermit       *workflowexecution.MutationPermit
+	taskAwarenessSource  workflowruntime.TaskAwarenessSource
 	closed               atomic.Bool
 }
 
@@ -68,14 +69,19 @@ type StarterOptions struct {
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	RuntimeAuthority     *sessionruntime.Authority
 	MutationPermit       *workflowexecution.MutationPermit
+	TaskDependencies     TaskDependencyCounter
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
 	if strings.TrimSpace(cfg.PersistenceRoot) == "" {
 		return nil, errors.New("workflow runtime persistence root is required")
 	}
-	if metadataStore == nil || store == nil || opts.RuntimeAuthority == nil || opts.MutationPermit == nil {
+	if metadataStore == nil || store == nil || opts.RuntimeAuthority == nil || opts.MutationPermit == nil || opts.TaskDependencies == nil {
 		return nil, errors.New("workflow runtime dependencies are required")
+	}
+	taskAwarenessSource, err := NewTaskAwarenessSource(store, opts.TaskDependencies)
+	if err != nil {
+		return nil, err
 	}
 	return &Starter{
 		cfg:                  cfg,
@@ -87,6 +93,7 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		mutationPermit:       opts.MutationPermit,
+		taskAwarenessSource:  taskAwarenessSource,
 	}, nil
 }
 
@@ -149,7 +156,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if err != nil {
 		return nil, prepared.cleanup(err)
 	}
-	commentCount, err := s.store.CountTaskComments(ctx, input.Task.ID)
+	awareness, err := s.taskAwarenessSource.TaskAwareness(ctx, input.Task.ID)
 	if err != nil {
 		return nil, prepared.cleanup(err)
 	}
@@ -162,7 +169,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 			UseAutomaticToolChoice: !prepared.plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 			Instructions:           instructions,
 			Transitions:            workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
-			TaskCommentCount:       commentCount,
+			TaskAwareness:          awareness,
 		},
 	}
 	var steer runtime.WorkflowAssignmentSteer
@@ -323,7 +330,7 @@ func (s *Starter) startCurrentNodeAgent(
 		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
 		prepared.plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 		controller,
-		s.store,
+		s.taskAwarenessSource,
 	)
 	if err != nil {
 		return prepared.cleanup(err)
