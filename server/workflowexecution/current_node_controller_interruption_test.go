@@ -498,7 +498,14 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 		t.Fatalf("reserved key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{reference: reserved, policy: currentNodeAdmissionAutomaticAgent}
+	controller.agentCapacityActive = 1
+	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
+		reference: reserved,
+		policy:    currentNodeAdmissionAutomaticAgent,
+		agentCapacityLease: &currentNodeAgentCapacityLease{
+			owner: currentNodeAgentCapacityReservation,
+		},
+	}
 	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: live.TaskID}); err != nil {
@@ -513,6 +520,12 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	if hasAutomaticCurrentNodeIntent(controller.Snapshot(), reserved) {
 		t.Fatalf("drained reservation remains in snapshot: %+v", controller.Snapshot())
 	}
+	controller.mu.Lock()
+	if controller.agentCapacityActive != 0 {
+		controller.mu.Unlock()
+		t.Fatalf("Agent capacity after draining reservation = %d, want 0", controller.agentCapacityActive)
+	}
+	controller.mu.Unlock()
 }
 
 func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *testing.T) {

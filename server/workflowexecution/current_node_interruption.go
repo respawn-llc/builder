@@ -168,6 +168,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					continue
 				}
 				delete(c.automaticReservations, key)
+				c.releaseAgentCapacityLocked(start.agentCapacityLease)
 				c.interrupts.addCurrentNode(taskFence, key)
 				references = append(references, start.reference)
 				admissionWaits = appendAdmissionWait(admissionWaits, key, start.done)

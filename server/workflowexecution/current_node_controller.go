@@ -636,8 +636,8 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	c.mu.Lock()
 	live, isLive := c.live[scope.ID()]
-	if isLive && live.policy.countsAgentCapacity() {
-		c.releaseAgentCapacityLocked()
+	if isLive {
+		c.releaseAgentCapacityLocked(live.agentCapacityLease)
 	}
 	delete(c.live, scope.ID())
 	if current, exists := c.liveByNode[key]; exists && current == scope.ID() {

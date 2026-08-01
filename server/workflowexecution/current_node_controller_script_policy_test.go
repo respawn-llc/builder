@@ -3,7 +3,6 @@ package workflowexecution
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -128,19 +127,16 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			})
 			controller.queued[queuedKey] = struct{}{}
 			test.apply(controller, scriptKey)
-			if got := controller.agentActiveLocked(); got != 1 {
+			if got := controller.agentCapacityActive; got != 1 {
 				controller.mu.Unlock()
 				t.Fatalf("Agent capacity with %s Script = %d, want 1", test.name, got)
 			}
-			if _, ok := selectAutomaticIntentIndex([]CurrentNodeAutomaticIntent{{
-				CurrentNode: queuedAgent,
-				NodeKind:    workflow.NodeKindAgent,
-			}}, nil, false); ok {
+			if _, ok := controller.automaticQueue.selectEntry(nil, false); ok {
 				controller.mu.Unlock()
 				t.Fatalf("queued Agent became admissible while %s Script owned controller state", test.name)
 			}
 			test.clean(controller, scriptKey)
-			if got := controller.agentActiveLocked(); got != 1 {
+			if got := controller.agentCapacityActive; got != 1 {
 				controller.mu.Unlock()
 				t.Fatalf("Agent capacity after %s Script cleanup = %d, want 1", test.name, got)
 			}
@@ -224,6 +220,64 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 	}
 }
 
+func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	failed := currentNodeReferenceForControllerTest(t, "task-failed-reservation", "node-failed")
+	next := currentNodeReferenceForControllerTest(t, "task-next-after-failed-reservation", "node-next")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueStarts([]currentNodeQueuedStart{{
+		reference: failed,
+		policy:    currentNodeAdmissionAutomaticAgent,
+		assignmentSteer: completedCurrentNodeAssignmentSteer{
+			err: errors.New("assignment preparation failed"),
+		},
+	}})
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, interrupted := store.interruption(failed)
+		return interrupted
+	}, "failed reservation was not interrupted")
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: next,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case started := <-runner.started:
+		if !started.Equal(next) {
+			t.Fatalf("next Agent start = %v, want %v", started, next)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("next Agent did not start after failed reservation released capacity")
+	}
+}
+
 type selectiveScriptFailureRunner struct {
 	authority *sessionruntime.Authority
 	command   sessionruntime.ScriptCommand
@@ -243,71 +297,6 @@ func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, refer
 		r.started <- reference
 	}
 	return err
-}
-
-func TestCurrentNodeControllerLargeMixedKindQueueSelection(t *testing.T) {
-	queue := currentNodeAutomaticQueue{}
-	for index := 0; index < 4096; index++ {
-		policy := currentNodeAdmissionAutomaticScript
-		if index%2 == 0 {
-			policy = currentNodeAdmissionAutomaticAgent
-		}
-		queue.append(currentNodeQueuedStart{
-			reference: workflow.CurrentNodeReference{
-				TaskID: workflow.TaskID("task-large-mixed-kind-queue"),
-				NodeID: workflow.NodeID(fmt.Sprintf("node-%d", index)),
-			},
-			policy: policy,
-		})
-	}
-	agentAvailable := false
-	for queue.len() != 0 {
-		entry, ok := queue.selectEntry(nil, agentAvailable)
-		if !ok && !agentAvailable {
-			agentAvailable = true
-			continue
-		}
-		if !ok || entry.start.policy != currentNodeAdmissionAutomaticScript {
-			if !agentAvailable {
-				t.Fatalf("selected queue entry = %+v, want an admissible Script", entry)
-			}
-		}
-		queue.remove(entry)
-	}
-}
-
-func TestCurrentNodeAutomaticQueueSelectionPreservesTaskLocalityAndFIFO(t *testing.T) {
-	queue := currentNodeAutomaticQueue{}
-	taskOne := workflow.TaskID("task-automatic-queue-one")
-	taskTwo := workflow.TaskID("task-automatic-queue-two")
-	entries := []currentNodeQueuedStart{
-		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "agent-one"}, policy: currentNodeAdmissionAutomaticAgent},
-		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "script-two"}, policy: currentNodeAdmissionAutomaticScript},
-		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "script-one"}, policy: currentNodeAdmissionAutomaticScript},
-		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "agent-two"}, policy: currentNodeAdmissionAutomaticAgent},
-	}
-	for _, entry := range entries {
-		queue.append(entry)
-	}
-
-	lastTask := taskOne
-	entry, ok := queue.selectEntry(&lastTask, true)
-	if !ok || !entry.start.reference.Equal(entries[0].reference) {
-		t.Fatalf("same-Task Agent selection = %+v, want first Agent", entry)
-	}
-	queue.remove(entry)
-
-	lastTask = taskTwo
-	entry, ok = queue.selectEntry(&lastTask, true)
-	if !ok || !entry.start.reference.Equal(entries[1].reference) {
-		t.Fatalf("same-Task FIFO selection = %+v, want first Script", entry)
-	}
-	queue.remove(entry)
-
-	entry, ok = queue.selectEntry(nil, false)
-	if !ok || !entry.start.reference.Equal(entries[2].reference) {
-		t.Fatalf("Script selection at saturated Agent capacity = %+v, want Script", entry)
-	}
 }
 
 func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {

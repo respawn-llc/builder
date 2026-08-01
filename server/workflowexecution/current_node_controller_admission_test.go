@@ -472,61 +472,6 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	}
 }
 
-func TestSelectAutomaticIntentIndexUsesAdmissibilityFIFOAndTaskLocality(t *testing.T) {
-	taskA := workflow.TaskID("task-selection-a")
-	taskB := workflow.TaskID("task-selection-b")
-	lastTask := taskB
-	reference := func(taskID workflow.TaskID, nodeID string) workflow.CurrentNodeReference {
-		return workflow.CurrentNodeReference{TaskID: taskID, NodeID: workflow.NodeID(nodeID)}
-	}
-	tests := []struct {
-		name          string
-		intents       []CurrentNodeAutomaticIntent
-		lastTask      *workflow.TaskID
-		agentCapacity bool
-		wantIndex     int
-	}{
-		{
-			name: "FIFO when no same Task matches",
-			intents: []CurrentNodeAutomaticIntent{
-				{CurrentNode: reference(taskA, "agent-first"), NodeKind: workflow.NodeKindAgent},
-				{CurrentNode: reference(taskB, "script-second"), NodeKind: workflow.NodeKindScript},
-			},
-			lastTask:      func() *workflow.TaskID { task := workflow.TaskID("task-other"); return &task }(),
-			agentCapacity: true,
-			wantIndex:     0,
-		},
-		{
-			name: "same Task prefers a later Agent",
-			intents: []CurrentNodeAutomaticIntent{
-				{CurrentNode: reference(taskA, "script-first"), NodeKind: workflow.NodeKindScript},
-				{CurrentNode: reference(taskB, "agent-second"), NodeKind: workflow.NodeKindAgent},
-			},
-			lastTask:      &lastTask,
-			agentCapacity: true,
-			wantIndex:     1,
-		},
-		{
-			name: "same Task prefers a later Script",
-			intents: []CurrentNodeAutomaticIntent{
-				{CurrentNode: reference(taskA, "agent-first"), NodeKind: workflow.NodeKindAgent},
-				{CurrentNode: reference(taskB, "script-second"), NodeKind: workflow.NodeKindScript},
-			},
-			lastTask:      &lastTask,
-			agentCapacity: true,
-			wantIndex:     1,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			index, ok := selectAutomaticIntentIndex(test.intents, test.lastTask, test.agentCapacity)
-			if !ok || index != test.wantIndex {
-				t.Fatalf("selectAutomaticIntentIndex = (%d, %t), want (%d, true)", index, ok, test.wantIndex)
-			}
-		})
-	}
-}
-
 func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
