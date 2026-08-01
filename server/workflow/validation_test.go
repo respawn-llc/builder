@@ -334,6 +334,18 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
 	})
 
+	t.Run("duplicate transition key across source nodes blocks execution", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		transitionGroupByIDForValidationTest(t, &def, "group_start").TransitionID = "review"
+
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+			Context:      workflow.ValidationContextExecution,
+			RoleResolver: testsetup.QuestionsEnabled("coder"),
+		})
+
+		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
+	})
+
 	t.Run("join source prompt validates current parameters against join aggregate", func(t *testing.T) {
 		def := joinParameterWorkflow(t)
 

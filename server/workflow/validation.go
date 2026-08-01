@@ -180,7 +180,7 @@ func (s *validationState) indexTransitionGroups() {
 			s.addHard(CodeInvalidTransitionID, "transition id must "+workflowkey.Description, ref)
 		} else {
 			if _, exists := seenTransitions[transitionID]; exists {
-				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref)
+				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow; rename duplicate Transition IDs before execution", ref)
 			}
 			seenTransitions[transitionID] = group.ID
 		}
