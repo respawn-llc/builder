@@ -16,7 +16,11 @@ type CompletionFence struct {
 	generation uint64
 	nextLease  uint64
 	fenced     bool
-	reserved   uint64
+	reserved   *completionLeaseReservation
+}
+
+type completionLeaseReservation struct {
+	leaseID uint64
 }
 
 type CompletionAttempt struct {
@@ -53,7 +57,7 @@ func (f *CompletionFence) Begin() (CompletionAttempt, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced || f.reserved != 0 {
+	if f.fenced || f.reserved != nil {
 		return CompletionAttempt{}, ErrCompletionFenced
 	}
 	return CompletionAttempt{fence: f, generation: f.generation}, nil
@@ -76,7 +80,7 @@ func (f *CompletionFence) BeginInput() (InputAcceptance, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced || f.reserved != 0 {
+	if f.fenced || f.reserved != nil {
 		return InputAcceptance{}, ErrCompletionFenced
 	}
 	previous := f.generation
@@ -122,7 +126,7 @@ func (a CompletionAttempt) Acquire() (CompletionLease, error) {
 	}
 	a.fence.mu.Lock()
 	defer a.fence.mu.Unlock()
-	if a.fence.fenced || a.fence.reserved != 0 {
+	if a.fence.fenced || a.fence.reserved != nil {
 		return CompletionLease{}, ErrCompletionFenced
 	}
 	if a.fence.generation != a.generation {
@@ -153,10 +157,10 @@ func (l *CompletionLease) Reserve() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
-	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+	if l.fence.reserved != nil && l.fence.reserved.leaseID != l.leaseID {
 		return ErrCompletionFenced
 	}
-	l.fence.reserved = l.leaseID
+	l.fence.reserved = &completionLeaseReservation{leaseID: l.leaseID}
 	return nil
 }
 
@@ -174,11 +178,11 @@ func (l *CompletionLease) Commit() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
-	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+	if l.fence.reserved != nil && l.fence.reserved.leaseID != l.leaseID {
 		return ErrCompletionFenced
 	}
 	l.fence.fenced = true
-	l.fence.reserved = 0
+	l.fence.reserved = nil
 	l.terminal = true
 	return nil
 }
@@ -197,11 +201,11 @@ func (l *CompletionLease) Abort() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
-	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+	if l.fence.reserved != nil && l.fence.reserved.leaseID != l.leaseID {
 		return ErrCompletionFenced
 	}
-	if l.fence.reserved == l.leaseID {
-		l.fence.reserved = 0
+	if l.fence.reserved != nil && l.fence.reserved.leaseID == l.leaseID {
+		l.fence.reserved = nil
 	}
 	l.terminal = true
 	return nil
@@ -215,7 +219,7 @@ func (f *CompletionFence) Reopen() error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.reserved != 0 {
+	if f.reserved != nil {
 		return errors.New("runtime command completion fence has a reserved lease")
 	}
 	f.generation++

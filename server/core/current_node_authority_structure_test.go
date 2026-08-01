@@ -401,18 +401,24 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 		}
 	}
 	var findings []currentNodeStructureFinding
+	authoritativeImplementations := make([]*types.Named, 0, len(implementations))
 	for _, implementation := range implementations {
 		if !types.Identical(implementation, canonicalController) {
+			if isCurrentNodeControllerDecorator(implementation, controllerInterface) {
+				continue
+			}
 			findings = append(findings, currentNodeStructureFinding{
 				kind:     findingSecondControllerImplementation,
 				position: namedTypePosition(index, implementation),
 			})
+			continue
 		}
+		authoritativeImplementations = append(authoritativeImplementations, implementation)
 	}
-	if len(implementations) != 1 || !types.Identical(implementations[0], canonicalController) {
+	if len(authoritativeImplementations) != 1 {
 		findings = append(findings, currentNodeStructureFinding{
 			kind:     findingControllerComposition,
-			position: "workflowruntime.Controller must have exactly one concrete implementation",
+			position: "workflowruntime.Controller must have exactly one authoritative implementation",
 		})
 	}
 	controllerStruct, ok := canonicalController.Underlying().(*types.Struct)
@@ -464,6 +470,21 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 		})
 	}
 	return findings
+}
+
+func isCurrentNodeControllerDecorator(named *types.Named, controllerInterface *types.Named) bool {
+	structure, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for fieldIndex := 0; fieldIndex < structure.NumFields(); fieldIndex++ {
+		field := structure.Field(fieldIndex)
+		if !field.Embedded() || !types.Identical(types.Unalias(field.Type()), controllerInterface) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureFinding {

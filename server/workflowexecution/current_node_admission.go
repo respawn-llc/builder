@@ -263,7 +263,11 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
+	controller := workflowruntime.Controller(c)
+	if c.commandAuthority != nil {
+		controller = newCompletionAttemptWorkflowController(controller, c.authority, c.commandAuthority)
+	}
+	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, controller); err != nil {
 		return currentNodeAdmissionError{
 			cause:    c.discardAdmission(reference, key, lease, err),
 			admitted: true,

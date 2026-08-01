@@ -100,9 +100,17 @@ func (s *queuedUserMessageStore) Drain() []queuedUserSteeringIntent {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pending := append([]queuedUserSteeringIntent(nil), s.pending...)
-	s.pending = nil
-	return pending
+	drained := make([]queuedUserSteeringIntent, 0, len(s.pending))
+	remaining := s.pending[:0]
+	for _, pending := range s.pending {
+		if pending.claimed {
+			remaining = append(remaining, pending)
+			continue
+		}
+		drained = append(drained, pending)
+	}
+	s.pending = remaining
+	return drained
 }
 
 func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUserSteeringIntent {

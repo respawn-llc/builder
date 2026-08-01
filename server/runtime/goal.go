@@ -137,13 +137,22 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommand
 }
 
 func (e *Engine) SetGoalWithOrderedTurn(turn OrderedMutationTurn, objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	if turn == nil {
+	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
 		return e.SetGoal(objective, actor)
+	})
+}
+
+func (e *Engine) applyGoalWithOrderedTurn(
+	turn OrderedMutationTurn,
+	apply func() (GoalCommandResult, error),
+) (GoalCommandResult, error) {
+	if turn == nil {
+		return apply()
 	}
 	var result GoalCommandResult
 	err := turn.Apply(func() error {
 		var applyErr error
-		result, applyErr = e.setGoalForStep("", objective, actor)
+		result, applyErr = apply()
 		return applyErr
 	})
 	return result, err
@@ -184,29 +193,15 @@ func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, ac
 }
 
 func (e *Engine) SetGoalStatusWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	if turn == nil {
+	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
 		return e.SetGoalStatus(status, actor)
-	}
-	var result GoalCommandResult
-	err := turn.Apply(func() error {
-		var applyErr error
-		result, applyErr = e.SetGoalStatus(status, actor)
-		return applyErr
 	})
-	return result, err
 }
 
 func (e *Engine) SetGoalStatusWithoutGoalLoopStartWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	if turn == nil {
+	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
 		return e.SetGoalStatusWithoutGoalLoopStart(status, actor)
-	}
-	var result GoalCommandResult
-	err := turn.Apply(func() error {
-		var applyErr error
-		result, applyErr = e.SetGoalStatusWithoutGoalLoopStart(status, actor)
-		return applyErr
 	})
-	return result, err
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
@@ -494,16 +489,9 @@ func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
 }
 
 func (e *Engine) ClearGoalWithOrderedTurn(turn OrderedMutationTurn, actor session.GoalActor) (GoalCommandResult, error) {
-	if turn == nil {
+	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
 		return e.ClearGoal(actor)
-	}
-	var result GoalCommandResult
-	err := turn.Apply(func() error {
-		var applyErr error
-		result, applyErr = e.ClearGoal(actor)
-		return applyErr
 	})
-	return result, err
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {

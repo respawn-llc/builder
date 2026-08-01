@@ -299,6 +299,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
 			Attention:         workflowAttentionFinalizer,
 			AssignmentSteerer: workflowRuntimeStarter,
+			CommandAuthority:  runtimeCommandAuthority,
 		},
 	)
 	if err != nil {

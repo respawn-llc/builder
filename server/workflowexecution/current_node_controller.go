@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -45,6 +46,7 @@ type CurrentNodeControllerConfig struct {
 	AgentConcurrency  int
 	Attention         CurrentNodeAttentionLifecycle
 	AssignmentSteerer CurrentNodeAssignmentSteerer
+	CommandAuthority  *runtimecommand.Authority
 }
 
 type CurrentNodeAttentionLifecycle interface {
@@ -109,11 +111,12 @@ type CurrentNodeController struct {
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
-	runner    CurrentNodeRunner
-	steerer   CurrentNodeAssignmentSteerer
-	authority *sessionruntime.Authority
-	permit    *MutationPermit
-	attention CurrentNodeAttentionLifecycle
+	runner           CurrentNodeRunner
+	steerer          CurrentNodeAssignmentSteerer
+	authority        *sessionruntime.Authority
+	permit           *MutationPermit
+	attention        CurrentNodeAttentionLifecycle
+	commandAuthority *runtimecommand.Authority
 
 	agentConcurrency int
 	workerContext    context.Context
@@ -192,6 +195,7 @@ func NewCurrentNodeController(
 		authority:             authority,
 		permit:                permit,
 		attention:             cfg.Attention,
+		commandAuthority:      cfg.CommandAuthority,
 		agentConcurrency:      cfg.AgentConcurrency,
 		workerContext:         workerContext,
 		workerCancel:          workerCancel,

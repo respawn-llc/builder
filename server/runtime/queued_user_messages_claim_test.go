@@ -23,3 +23,21 @@ func TestQueuedUserMessageClaimRestoresOnNonCommitAndRemovesOnlyCommittedItems(t
 		t.Fatalf("partially committed queue = %#v, want first item", got)
 	}
 }
+
+func TestQueuedUserMessageDrainLeavesClaimedItemsForTheirClaim(t *testing.T) {
+	store := newQueuedUserMessageStore()
+	first := store.Queue("first")
+	second := store.Queue("second")
+	claim := store.ClaimByID(map[string]struct{}{first.ID: {}})
+
+	if drained := store.Drain(); len(drained) != 1 || drained[0].message.ID != second.ID {
+		t.Fatalf("drained items = %#v, want only unclaimed second item", drained)
+	}
+	if got := claim.Items(); len(got) != 1 || got[0].message.ID != first.ID {
+		t.Fatalf("claimed items = %#v, want first item retained", got)
+	}
+	claim.Restore()
+	if got := store.Snapshot(); len(got) != 1 || got[0].ID != first.ID {
+		t.Fatalf("restored queue = %#v, want first item", got)
+	}
+}
