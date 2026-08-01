@@ -4,16 +4,19 @@ import {
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
+  pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type Collision,
   type KeyboardCoordinateGetter,
   type SensorContext,
   type UniqueIdentifier,
   type CollisionDetection,
+  type ClientRect,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -271,22 +274,40 @@ function reorderIDs<ID extends UniqueIdentifier>(
 }
 
 const verticalReorderCollisionDetection: CollisionDetection = ({
+  active,
   collisionRect,
   pointerCoordinates,
   ...args
 }) => {
   if (pointerCoordinates === null) {
-    return closestCenter({ collisionRect, pointerCoordinates, ...args });
+    const collisions = closestCenter({ active, collisionRect, pointerCoordinates, ...args });
+    return keyboardActivationCollisions(active, collisionRect, collisions);
   }
-  const pointerRect = {
-    ...collisionRect,
-    bottom: pointerCoordinates.y + collisionRect.height / 2,
-    left: pointerCoordinates.x - collisionRect.width / 2,
-    right: pointerCoordinates.x + collisionRect.width / 2,
-    top: pointerCoordinates.y - collisionRect.height / 2,
-  };
-  return closestCenter({ collisionRect: pointerRect, pointerCoordinates, ...args });
+  const pointerCollisions = pointerWithin({ active, collisionRect, pointerCoordinates, ...args });
+  return pointerCollisions.length === 0
+    ? closestCenter({ active, collisionRect, pointerCoordinates, ...args })
+    : pointerCollisions;
 };
+
+function keyboardActivationCollisions(
+  active: { id: UniqueIdentifier; rect: { current: { initial: ClientRect | null } } },
+  collisionRect: ClientRect,
+  collisions: Collision[],
+): Collision[] {
+  const initialRect = active.rect.current.initial;
+  if (initialRect === null || rectMoved(initialRect, collisionRect)) {
+    return collisions;
+  }
+  const activeCollision = collisions.find(({ id }) => id === active.id);
+  if (activeCollision === undefined) {
+    return collisions;
+  }
+  return [activeCollision, ...collisions.filter(({ id }) => id !== active.id)];
+}
+
+function rectMoved(initial: ClientRect, current: ClientRect): boolean {
+  return initial.top !== current.top || initial.left !== current.left;
+}
 
 const verticalReorderKeyboardCoordinates: KeyboardCoordinateGetter = (event, { active, context }) => {
   const direction = verticalKeyboardDirection(event.code);
