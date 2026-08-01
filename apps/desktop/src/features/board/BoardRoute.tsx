@@ -6,7 +6,6 @@ import {
   hasSelectedWorkflow,
   type BoardColumn,
   type SelectedWorkflowBoard,
-  type TaskMovePreviewResponse,
   type WorkflowExecutionTargetSelection,
 } from "@/api";
 import { errorMessage } from "@/api";
@@ -20,7 +19,6 @@ import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
   executeTaskInitiatingAction,
-  moveTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
@@ -41,8 +39,9 @@ import { BoardBackgroundRefreshNotice } from "./BoardBackgroundRefreshNotice";
 import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
 import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
-import { ManualMoveDialog, type ManualMoveDialogSubmit } from "./ManualMoveDialog";
+import { ManualMoveDialog } from "./ManualMoveDialog";
 import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
+import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
@@ -69,10 +68,7 @@ const manualMoveBlockerTranslationKeys = {
   parallel_branch_requires_fan_out: "board.moveBlockedFanOut",
 } as const;
 
-function manualMoveBlockerCopy(
-  reason: string,
-  translate: (key: string) => string,
-): string {
+function manualMoveBlockerCopy(reason: string, translate: (key: string) => string): string {
   const key =
     Object.entries(manualMoveBlockerTranslationKeys).find(([candidate]) => candidate === reason)?.[1] ??
     "board.moveBlockedGeneric";
@@ -234,10 +230,6 @@ function BoardContent({
   const [expandedEmptyColumns, setExpandedEmptyColumns] = useState<
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
   >(() => ({ ids: new Set(), scope: "" }));
-  const [manualMoveDrop, setManualMoveDrop] = useState<
-    Readonly<{ id: number; taskID: string; targetNodeID: string; preview: TaskMovePreviewResponse }> | null
-  >(null);
-  const manualMoveDropSequence = useRef(0);
   const { push } = useStatusController();
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
@@ -268,6 +260,12 @@ function BoardContent({
   });
   const actionsDisabled =
     connection.phase !== "connected" || initiatingAction.running || initiatingAction.pending !== null;
+  const manualMove = useManualMoveController({
+    api,
+    onPreviewBlocked: reportMovePreviewBlocked,
+    onPreviewError: reportMoveError,
+    runAction: runCardAction,
+  });
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -384,32 +382,7 @@ function BoardContent({
       return;
     }
     if (dropAction.kind === "move") {
-      const requestID = ++manualMoveDropSequence.current;
-      void api
-        .previewMoveTask(dragPayload.taskID, column.id)
-        .then((preview) => {
-          if (requestID !== manualMoveDropSequence.current) {
-            return;
-          }
-          if (preview.outcome === "no_op") {
-            return;
-          }
-          if (preview.outcome === "blocked") {
-            reportMovePreviewBlocked(preview.blocked.reason);
-            return;
-          }
-          setManualMoveDrop({
-            id: requestID,
-            taskID: dragPayload.taskID,
-            targetNodeID: column.id,
-            preview,
-          });
-        })
-        .catch((error: unknown) => {
-          if (requestID === manualMoveDropSequence.current) {
-            reportMoveError(error);
-          }
-        });
+      manualMove.preview(dragPayload.taskID, column.id);
       return;
     }
     reportRejectedDrop();
@@ -499,33 +472,13 @@ function BoardContent({
   }
 
   function reportMovePreviewBlocked(reason: string): void {
-    const body = manualMoveBlockerCopy(reason, t);
     push({
       id: "board-move-preview-blocked",
       tone: "warning",
       title: t("board.moveBlocked"),
-      body,
+      body: manualMoveBlockerCopy(reason, t),
       durationMs: Infinity,
     });
-  }
-
-  function submitManualMove(input: ManualMoveDialogSubmit): void {
-    if (manualMoveDrop === null) {
-      return;
-    }
-    const drop = manualMoveDrop;
-    manualMoveDropSequence.current += 1;
-    setManualMoveDrop(null);
-    const moveInput = {
-      taskID: drop.taskID,
-      targetNodeID: drop.targetNodeID,
-      ...(input.transitionKey === undefined ? {} : { transitionKey: input.transitionKey }),
-      ...(input.values === undefined ? {} : { values: input.values }),
-    };
-    runCardAction(
-      moveTaskInitiatingAction(moveInput),
-      { taskID: drop.taskID, targetColumnID: drop.targetNodeID },
-    );
   }
 
   function runCardAction(
@@ -663,13 +616,10 @@ function BoardContent({
         <BoardHorizontalScrollbar scrollportRef={scrollportRef} />
       </div>
       <ManualMoveDialog
-        key={manualMoveDrop?.id ?? "closed"}
-        onCancel={() => {
-          manualMoveDropSequence.current += 1;
-          setManualMoveDrop(null);
-        }}
-        onSubmit={submitManualMove}
-        preview={manualMoveDrop?.preview ?? null}
+        key={manualMove.pending?.id ?? "closed"}
+        onCancel={manualMove.cancel}
+        onSubmit={manualMove.submit}
+        preview={manualMove.pending?.preview ?? null}
       />
       <TaskInitiatingActionDialogs
         continuation={initiatingAction}
