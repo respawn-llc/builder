@@ -6,6 +6,7 @@ import type {
   ProjectDeleteResponse,
   ProjectMutationResponse,
   ProjectPage,
+  ProjectSummary,
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "../models";
@@ -25,7 +26,7 @@ export const projectSummarySchema = z
     attention_count: z.number(),
     workflow_count: z.number(),
   })
-  .transform((value) => ({
+  .transform((value): ProjectSummary => ({
     id: value.project_id,
     key: value.project_key,
     name: value.display_name,
@@ -95,7 +96,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .object({
     project_id: z.string(),
     workspace_id: z.string(),
-    unlinked: z.boolean(),
     blockers: z
       .array(
         z.object({
@@ -111,7 +111,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .transform((value) => ({
     projectID: value.project_id,
     workspaceID: value.workspace_id,
-    unlinked: value.unlinked,
     blockers: value.blockers,
     project: value.project ?? null,
   }));

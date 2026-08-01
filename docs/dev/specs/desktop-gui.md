@@ -30,13 +30,12 @@
 
 ## Projects And Workspaces
 
+- Shared Project-workspace relationships and detach safety follow the [Projects And Workspaces](project-workspaces.md) specification.
 - Choosing a directory already attached to a Project opens that Project. Choosing an unattached directory opens Project creation with an editable name and Project Key; the default name is the directory basename.
 - A Project Key is editable at any time, is unique, uses 2–8 uppercase letters or digits, begins with a letter, and is the prefix for future Task Short IDs. Existing Task Short IDs remain unchanged and resolvable.
 - Project name is one line, 1–80 visible characters, and has no leading or trailing whitespace. Name and key save together; an unchanged persisted key, including an empty one, does not block a name-only save. Back discards unsaved name and key edits.
 - Changing the default workspace or attaching or detaching a workspace applies immediately. Workspace lists use infinite scroll, put the default first, then use newest attachment first, and contain at most 100 entries per request.
-- A workspace row shows path, default status, and unlink action. A path may belong to multiple Projects but only once in one Project. Choosing an already attached path focuses its existing row or gives equivalent feedback.
-- Attaching or unlinking never deletes files. Unlink removes only the Project-workspace relationship and never deletes Task, Session, or worktree history.
-- Unlink is blocked for a default or sole workspace, non-terminal dependent Tasks, live Session execution, Kent-managed worktree dependencies, or missing retained Session location information. It is allowed when references are only terminal Tasks and retained Sessions whose locations remain readable.
+- A workspace row shows path, default status, and unlink action. Choosing an already attached path focuses its existing row or gives equivalent feedback.
 - Unlink confirmation explains that files remain on disk, retained Sessions remain readable, and active work blocks removal. It requires no typed confirmation.
 - A Project without a linked default Workflow shows a blocker and disables New Task while directing the operator to configure a Workflow. An invalid linked Workflow remains visible and permits Backlog Task creation.
 

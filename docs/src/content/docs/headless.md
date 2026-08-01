@@ -102,8 +102,25 @@ This is needed to enable functionality related to project management and allows 
 - `kent project` prints the project id for the bound workspace at `path` or `cwd`. Use to learn project IDs.
 - `kent attach <path>` attaches another workspace at [path] to the project already bound to `cwd`.
 - `kent attach --project <project-id> [path]` attaches using the ID.
+- `kent detach --project <project-id> [path]` removes one workspace binding from that project. The path defaults to the current directory; use `--workspace <workspace-id>` when the saved path is inaccessible or missing.
+- `kent project default --project <project-id> [path]` changes the project's default workspace. It accepts the same path or workspace-ID selector and applies immediately.
 - `kent rebind <session-id> <new-path>` retargets a session while keeping its source project and attaches an unbound target workspace to that project.
 - `kent rebind --project <project-id> <session-id> <new-path>` moves a non-workflow session to another project and attaches an unbound target workspace.
+
+Detach and default-workspace selection require an explicit project ID. Path selectors are converted to absolute server paths before the request. A shared path can be detached from one project without changing its binding in another project.
+
+Use `--json` for automation. Successful detach returns `status: "ok"` with `project_id` and `workspace_id`; successful default selection returns the updated project at `result.project`. Operational failures return one `status: "error"` object with a stable error code. Detach blockers include bounded guidance; a default-workspace blocker directs you to choose another attached workspace with `kent project default`.
+
+Detach error codes are `project_not_found`, `workspace_not_attached`, `workspace_detach_blocked`, `workspace_detach_conflict`, and `request_failed`. Default-workspace selection uses `project_not_found`, `workspace_not_attached`, and `request_failed`. JSON omits absent results, error identities, blocker counts, and retryability fields.
+
+Detach blockers use these recovery actions:
+
+- `default_workspace`: choose another attached workspace with `kent project default`, then retry.
+- `active_sessions`: stop active runs or rebind their Sessions, then retry.
+- `non_terminal_tasks`: move editable Backlog Tasks to another source workspace, or complete, manually move, or delete dependent Tasks, then retry.
+- `executable_current_nodes`: stop execution and move, complete, or delete affected Tasks until no executable Current Node uses the workspace, then retry.
+- `managed_owned_worktrees`: delete dependent worktrees or their quiescent owning Tasks, then retry.
+- `missing_history_snapshot`: re-save the editable Task's source workspace; keep the binding if its history cannot be edited.
 
 ## Output Modes
 

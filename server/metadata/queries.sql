@@ -2073,12 +2073,10 @@ WHERE node.kind IN ('agent', 'script')
       OR session.workspace_id = sqlc.arg(workspace_id)
   );
 
--- name: CountManagedOwnedWorktreesByWorkspace :one
+-- name: CountWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND managed <> 0
-  AND created_branch <> 0;
+WHERE workspace_id = sqlc.arg(workspace_id);
 
 -- name: CountTasksMissingSourceWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS task_count
@@ -2088,6 +2086,25 @@ WHERE source_workspace_id = sqlc.arg(workspace_id)
       NOT json_valid(metadata_json)
       OR NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NULL
       OR NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+  );
+
+-- name: ListTasksMissingSourceWorkspaceDisplayName :many
+SELECT metadata_json
+FROM tasks
+WHERE source_workspace_id = sqlc.arg(workspace_id)
+  AND json_valid(metadata_json)
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+ORDER BY rowid ASC;
+
+-- name: CountSessionsMissingWorkspaceSnapshot :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND (
+      NOT json_valid(metadata_json)
+      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
+      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
   );
 
 -- name: ListWorktreesByWorkspaceID :many

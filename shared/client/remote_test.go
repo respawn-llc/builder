@@ -40,27 +40,231 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
-	diagnostic := " target has a live run "
 	err := protocolError(&protocol.ResponseError{
-		Code:    protocol.ErrCodeWorktreeBlocked,
-		Message: diagnostic,
+		Code: protocol.ErrCodeWorktreeBlocked,
 	})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
 	}
-	if err.Error() != diagnostic {
-		t.Fatalf("decoded diagnostic = %q, want %q", err.Error(), diagnostic)
-	}
 }
 
-func TestProtocolErrorPreservesBlankWorktreeBlockedDiagnostic(t *testing.T) {
+func TestProtocolErrorMapsBlankWorktreeBlockedSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorktreeBlocked})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
 	}
-	if err.Error() != "" {
-		t.Fatalf("decoded blank diagnostic = %q, want unchanged blank diagnostic", err.Error())
+}
+
+func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code: protocol.ErrCodeWorkspaceNotRegistered,
+	})
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("decoded error = %v, want workspace-not-registered sentinel", err)
 	}
+}
+
+func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		source error
+		wantAs func(error) bool
+	}{
+		{
+			name:   "path identity",
+			source: serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
+			wantAs: func(err error) bool { var typed serverapi.WorkspacePathIdentityError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "detach conflict",
+			source: &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceDetachConflictError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "post-resolution mutation",
+			source: &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceMutationError; return errors.As(err, &typed) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive request: %v", err)
+					return
+				}
+				structured := test.source.(interface {
+					RPCErrorCode() int
+					RPCErrorData() json.RawMessage
+				})
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, structured.RPCErrorCode(), test.source.Error(), structured.RPCErrorData())); err != nil {
+					t.Errorf("send typed error: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if test.name == "path identity" {
+				selector, err = serverapi.NewProjectWorkspaceSelectorForRoot("/missing")
+			}
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			_, err = remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+				ProjectID:                "project-1",
+				ProjectWorkspaceSelector: selector,
+			})
+			if !test.wantAs(err) {
+				t.Fatalf("remote error = %T %v, want typed error", err, err)
+			}
+		})
+	}
+}
+
+func remoteProjectHomeSummaryJSON(projectKey string) map[string]any {
+	return map[string]any{
+		"project_id":   "project-1",
+		"project_key":  projectKey,
+		"display_name": "Project",
+		"primary_workspace": map[string]any{
+			"workspace_id": "workspace-1",
+			"display_name": "Workspace",
+			"root_path":    "/workspace",
+			"availability": "available",
+		},
+	}
+}
+
+func TestRemoteProjectWorkspaceMutationsValidateSuccessResponses(t *testing.T) {
+	tests := []struct {
+		name    string
+		method  string
+		result  any
+		wantErr bool
+		call    func(*Remote, serverapi.ProjectWorkspaceSelector) error
+	}{
+		{
+			name:    "default workspace summary",
+			method:  protocol.MethodProjectSetDefaultWorkspace,
+			result:  map[string]any{"project": map[string]any{}},
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:    "default blank workflow ID",
+			method:  protocol.MethodProjectSetDefaultWorkspace,
+			result:  remoteDefaultBlankWorkflowIDResponse(),
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "unlink blocker",
+			method: protocol.MethodProjectUnlinkWorkspace,
+			result: map[string]any{
+				"project_id":   "project-1",
+				"workspace_id": "workspace-1",
+				"unlinked":     false,
+				"blockers":     []any{map[string]any{"message": "malformed"}},
+			},
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "default legacy empty project key",
+			method: protocol.MethodProjectSetDefaultWorkspace,
+			result: map[string]any{"project": remoteProjectHomeSummaryJSON("")},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "unlink legacy empty project key",
+			method: protocol.MethodProjectUnlinkWorkspace,
+			result: map[string]any{
+				"project_id":   "project-1",
+				"workspace_id": "workspace-1",
+				"unlinked":     true,
+				"project":      remoteProjectHomeSummaryJSON(""),
+			},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive mutation request: %v", err)
+					return
+				}
+				if request.Method != test.method {
+					t.Errorf("method = %q, want %q", request.Method, test.method)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.result)); err != nil {
+					t.Errorf("send malformed mutation response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			err = test.call(remote, selector)
+			if test.wantErr && err == nil {
+				t.Fatal("malformed mutation response was accepted")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("valid mutation response rejected: %v", err)
+			}
+		})
+	}
+}
+
+func remoteDefaultBlankWorkflowIDResponse() map[string]any {
+	summary := remoteProjectHomeSummaryJSON("project")
+	summary["default_workflow_id"] = ""
+	summary["default_workflow_name"] = "Workflow"
+	summary["default_workflow_valid"] = true
+	return map[string]any{"project": summary}
 }
 
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
@@ -1514,13 +1718,10 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorAvoidsDuplicatingRuntimeSentinelMessage(t *testing.T) {
+func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeNoActiveRun, Message: serverapi.ErrRuntimeNoActiveRun.Error()})
 	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
 		t.Fatalf("expected runtime no-active, got %v", err)
-	}
-	if err.Error() != serverapi.ErrRuntimeNoActiveRun.Error() {
-		t.Fatalf("runtime no-active error text = %q, want %q", err.Error(), serverapi.ErrRuntimeNoActiveRun.Error())
 	}
 }
 

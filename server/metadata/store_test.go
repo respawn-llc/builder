@@ -242,6 +242,12 @@ func TestUnlinkProjectWorkspaceBlocksUnsafeStates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
+	soleBlockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspace sole: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, soleBlockers, "default_workspace")
+	assertNoWorkspaceUnlinkBlocker(t, soleBlockers, "only_workspace")
 	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
@@ -251,6 +257,7 @@ func TestUnlinkProjectWorkspaceBlocksUnsafeStates(t *testing.T) {
 		t.Fatalf("UnlinkProjectWorkspace default: %v", err)
 	}
 	assertWorkspaceUnlinkBlocker(t, defaultBlockers, "default_workspace")
+	assertNoWorkspaceUnlinkBlocker(t, defaultBlockers, "only_workspace")
 
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
@@ -272,6 +279,186 @@ VALUES ('task-active-workspace', 'link-1', 1, 1, 'BLD-1', 'Active', '', ?, ?, ?,
 	assertWorkspaceUnlinkBlocker(t, pendingApprovalBlockers, "non_terminal_tasks")
 }
 
+func TestUnlinkProjectWorkspaceBlocksReferencedWorkspaceDependencies(t *testing.T) {
+	t.Run("executable current node", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+		execSeed(t, store.db, "task", workflowSeedTaskSQL, "task-executable-workspace", "link-1", 1, "BLD-1", now, now)
+		execSeed(t, store.db, "session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('session-executable-workspace', ?, ?, 'projects/project/sessions/session-executable-workspace', ?, ?)`,
+			binding.ProjectID, attached.WorkspaceID, now, now)
+		execSeed(t, store.db, "current node", `INSERT INTO task_current_nodes (task_id, node_id, current_input_values_json, prior_node_values_json, session_id)
+VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameters":{}}', 'session-executable-workspace')`)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertWorkspaceUnlinkBlocker(t, blockers, "executable_current_nodes")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			TaskID:    metadataStringPointer("task-executable-workspace"),
+			SessionID: metadataStringPointer("session-executable-workspace"),
+		})
+	})
+
+	for _, test := range []struct {
+		name          string
+		managed       bool
+		createdBranch bool
+	}{
+		{name: "managed created branch", managed: true, createdBranch: true},
+		{name: "managed existing ref", managed: true, createdBranch: false},
+		{name: "unmanaged worktree", managed: false},
+	} {
+		t.Run("worktree dependency/"+test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, _, binding := newMetadataTestStore(t)
+			attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+			if err != nil {
+				t.Fatalf("AttachWorkspaceToProject: %v", err)
+			}
+			if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
+				ID:              "managed-owned-worktree",
+				WorkspaceID:     attached.WorkspaceID,
+				CanonicalRoot:   t.TempDir(),
+				Managed:         test.managed,
+				CreatedBranch:   test.createdBranch,
+				GitMetadataJSON: "{}",
+			}); err != nil {
+				t.Fatalf("UpsertWorktreeRecord: %v", err)
+			}
+
+			blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+			if err != nil {
+				t.Fatalf("UnlinkProjectWorkspace: %v", err)
+			}
+			assertWorkspaceUnlinkBlocker(t, blockers, "managed_owned_worktrees")
+			assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{})
+			var worktreeCount int
+			if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worktrees WHERE id = 'managed-owned-worktree'`).Scan(&worktreeCount); err != nil {
+				t.Fatalf("count managed worktree: %v", err)
+			}
+			if worktreeCount != 1 {
+				t.Fatalf("managed worktree count = %d, want 1", worktreeCount)
+			}
+		})
+	}
+
+	t.Run("missing history snapshot", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+		execSeed(t, store.db, "task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-missing-workspace-snapshot', 'link-1', 1, 1, 'BLD-1', 'Task', 'Body', ?, ?, ?, '{}')`, attached.WorkspaceID, now, now)
+		insertTaskCurrentNode(t, store.db, "task-missing-workspace-snapshot", "node-done", nil)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			TaskID: metadataStringPointer("task-missing-workspace-snapshot"),
+		})
+	})
+
+	t.Run("root source workspace snapshot may omit display name", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		root := string(filepath.Separator)
+		if volume := filepath.VolumeName(t.TempDir()); volume != "" {
+			root = volume + string(filepath.Separator)
+		}
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, root)
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+		execSeed(t, store.db, "terminal root task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-root-workspace', 'link-1', 1, 1, 'BLD-1', 'Root', 'Body', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', '', 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, root)
+		insertTaskCurrentNode(t, store.db, "task-root-workspace", "node-done", nil)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertNoWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
+	})
+
+	t.Run("missing retained session snapshot", func(t *testing.T) {
+		ctx := context.Background()
+		store, _, binding := newMetadataTestStore(t)
+		attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject: %v", err)
+		}
+		now := time.Now().UTC().UnixMilli()
+		execSeed(t, store.db, "session missing workspace snapshot", `INSERT INTO sessions (
+	id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms, metadata_json
+)
+VALUES ('session-missing-workspace-snapshot', ?, ?, 'session-missing-workspace-snapshot', ?, ?, '{}')`,
+			binding.ProjectID, attached.WorkspaceID, now, now)
+
+		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
+		if err != nil {
+			t.Fatalf("UnlinkProjectWorkspace: %v", err)
+		}
+		assertWorkspaceUnlinkBlocker(t, blockers, "missing_history_snapshot")
+		assertWorkspaceRetainedAfterBlockedUnlink(t, store, ctx, binding.ProjectID, attached.WorkspaceID, retainedWorkspaceRecords{
+			SessionID: metadataStringPointer("session-missing-workspace-snapshot"),
+		})
+	})
+}
+
+type retainedWorkspaceRecords struct {
+	TaskID    *string
+	SessionID *string
+}
+
+func assertWorkspaceRetainedAfterBlockedUnlink(t *testing.T, store *Store, ctx context.Context, projectID string, workspaceID string, retained retainedWorkspaceRecords) {
+	t.Helper()
+	if _, err := store.GetWorkspaceByID(ctx, workspaceID); err != nil {
+		t.Fatalf("workspace after blocked unlink: %v", err)
+	}
+	var bindingCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM workspaces WHERE project_id = ? AND id = ?`, projectID, workspaceID).Scan(&bindingCount); err != nil {
+		t.Fatalf("count retained workspace binding: %v", err)
+	}
+	if bindingCount != 1 {
+		t.Fatalf("retained workspace binding count = %d, want 1", bindingCount)
+	}
+	if retained.TaskID != nil {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE id = ?`, *retained.TaskID).Scan(&count); err != nil {
+			t.Fatalf("count retained task: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("retained task count = %d, want 1", count)
+		}
+	}
+	if retained.SessionID != nil {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = ?`, *retained.SessionID).Scan(&count); err != nil {
+			t.Fatalf("count retained session: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("retained session count = %d, want 1", count)
+		}
+	}
+}
+
 func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
@@ -289,7 +476,7 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil,
 		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
 			if len(preparedSessionIDs) != 0 {
-				return nil, nil, fmt.Errorf("prepared session ids = %v, want none", preparedSessionIDs)
+				return nil, func() {}, nil
 			}
 			mutated := make(chan error, 1)
 			go func() {
@@ -308,6 +495,79 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 	if _, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID); err != nil {
 		t.Fatalf("workspace should remain after authoritative blocker: %v", err)
 	}
+}
+
+func TestWorkspaceUnlinkReturnsStaticAndRuntimeBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(
+		ctx,
+		binding.ProjectID,
+		binding.WorkspaceID,
+		nil,
+		func(context.Context, []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Code:    "active_sessions",
+				Message: "Active runtime sessions still depend on this workspace.",
+				Count:   1,
+			}}, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "default_workspace")
+	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
+}
+
+func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	seedWorkflowGraph(t, store.db, binding.ProjectID, time.Now().UTC().UnixMilli())
+	otherStore, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("open concurrent metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = otherStore.Close() })
+	callbackCalls := 0
+	blockers, err := store.UnlinkProjectWorkspaceWithRuntimeBlockers(
+		ctx,
+		binding.ProjectID,
+		attached.WorkspaceID,
+		nil,
+		func(ctx context.Context, preparedSessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			callbackCalls++
+			if callbackCalls == 1 {
+				if len(preparedSessionIDs) != 0 {
+					return nil, nil, fmt.Errorf("prepared session IDs = %v, want none", preparedSessionIDs)
+				}
+				if err := addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "commit-runtime-blocker", attached.CanonicalRoot, attached.WorkspaceID); err != nil {
+					return nil, nil, err
+				}
+				return nil, func() {}, nil
+			}
+			if len(preparedSessionIDs) == 0 {
+				return nil, nil, errors.New("commit runtime blocker check received no session IDs")
+			}
+			return []serverapi.ProjectWorkspaceUnlinkBlocker{{
+				Code:    "active_sessions",
+				Message: "Active runtime sessions still depend on this workspace.",
+				Count:   1,
+			}}, func() {}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	if callbackCalls != 2 {
+		t.Fatalf("runtime blocker callback calls = %d, want 2", callbackCalls)
+	}
+	assertWorkspaceUnlinkBlocker(t, blockers, "non_terminal_tasks")
+	assertWorkspaceUnlinkBlocker(t, blockers, "active_sessions")
 }
 
 func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *testing.T) {
@@ -335,8 +595,8 @@ func TestWorkspaceUnlinkCommitInvalidatesChangedSessionSetWithoutBlocker(t *test
 			return nil, func() {}, nil
 		},
 	)
-	if !errors.Is(err, ErrWorkspaceUnlinkPreparationInvalidated) {
-		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want preparation invalidated", err)
+	if !errors.Is(err, serverapi.ErrWorkspaceDetachConflict) {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers error = %v, want detach conflict", err)
 	}
 	workspace, err := store.GetWorkspaceByID(ctx, attached.WorkspaceID)
 	if err != nil {
@@ -390,7 +650,7 @@ func TestWorkspaceUnlinkRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testi
 	}
 }
 
-func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
+func TestUnlinkProjectWorkspacePreservesTerminalHistoryWithoutWorktreeDependency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
@@ -400,14 +660,11 @@ func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
 	}
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	worktreeID := "worktree-terminal-workspace"
-	execSeed(t, store.db, "terminal workspace worktree", `INSERT INTO worktrees (id, workspace_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms)
-VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(attached.CanonicalRoot, "terminal-worktree"), now, now)
-	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
+	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	insertTaskCurrentNode(t, store.db, "task-terminal-workspace", "node-done", nil)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -421,21 +678,19 @@ VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NU
 	}
 	var taskCount int
 	var sourceWorkspaceID sql.NullString
-	var managedWorktreeID sql.NullString
 	var metadataJSON string
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*), source_workspace_id, managed_worktree_id, metadata_json FROM tasks WHERE id = 'task-terminal-workspace'`).Scan(&taskCount, &sourceWorkspaceID, &managedWorktreeID, &metadataJSON); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*), source_workspace_id, metadata_json FROM tasks WHERE id = 'task-terminal-workspace'`).Scan(&taskCount, &sourceWorkspaceID, &metadataJSON); err != nil {
 		t.Fatalf("scan preserved task: %v", err)
 	}
-	if taskCount != 1 || sourceWorkspaceID.Valid || managedWorktreeID.Valid || !strings.Contains(metadataJSON, attached.CanonicalRoot) {
-		t.Fatalf("preserved task count/source/managed/metadata = %d/%v/%v/%s", taskCount, sourceWorkspaceID, managedWorktreeID, metadataJSON)
+	if taskCount != 1 || sourceWorkspaceID.Valid || !strings.Contains(metadataJSON, attached.CanonicalRoot) {
+		t.Fatalf("preserved task count/source/metadata = %d/%v/%s", taskCount, sourceWorkspaceID, metadataJSON)
 	}
 	var sessionWorkspaceID sql.NullString
-	var sessionWorktreeID sql.NullString
-	if err := store.db.QueryRowContext(ctx, `SELECT workspace_id, worktree_id FROM sessions WHERE id = 'session-terminal-workspace'`).Scan(&sessionWorkspaceID, &sessionWorktreeID); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT workspace_id FROM sessions WHERE id = 'session-terminal-workspace'`).Scan(&sessionWorkspaceID); err != nil {
 		t.Fatalf("scan preserved session: %v", err)
 	}
-	if sessionWorkspaceID.Valid || sessionWorktreeID.Valid {
-		t.Fatalf("preserved session workspace/worktree = %v/%v, want null/null", sessionWorkspaceID, sessionWorktreeID)
+	if sessionWorkspaceID.Valid {
+		t.Fatalf("preserved session workspace = %v, want null", sessionWorkspaceID)
 	}
 	record, err := store.ResolvePersistedSession(ctx, "session-terminal-workspace")
 	if err != nil {
@@ -481,6 +736,15 @@ func assertWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWork
 		}
 	}
 	t.Fatalf("blockers = %+v, want code %q", blockers, code)
+}
+
+func assertNoWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWorkspaceUnlinkBlocker, code string) {
+	t.Helper()
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			t.Fatalf("blockers = %+v, must not contain code %q", blockers, code)
+		}
+	}
 }
 
 func addMetadataRaceSessionAndActiveTask(
