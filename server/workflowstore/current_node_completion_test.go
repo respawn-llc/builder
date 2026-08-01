@@ -79,8 +79,11 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	if completed.Handoff != (CompletionHandoff{SourceNodeDisplayName: "Plan", DestinationDisplayName: "Review"}) {
 		t.Fatalf("completion handoff = %+v, want Plan -> Review", completed.Handoff)
 	}
-	if len(completed.AutomaticIntents) != 1 || !completed.AutomaticIntents[0].Equal(target) {
+	if len(completed.AutomaticIntents) != 1 || !completed.AutomaticIntents[0].CurrentNode.Equal(target) {
 		t.Fatalf("completion automatic intents = %+v, want review current node", completed.AutomaticIntents)
+	}
+	if completed.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
+		t.Fatalf("completion automatic intent kind = %q, want %q", completed.AutomaticIntents[0].NodeKind, workflow.NodeKindAgent)
 	}
 
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -137,6 +140,61 @@ func TestCompleteCurrentNodeInfersOnlyOutgoingFanoutTransition(t *testing.T) {
 	}
 	if !branches["split_a"] || !branches["split_b"] {
 		t.Fatalf("completion branches = %+v, want split_a and split_b", branches)
+	}
+	if len(completed.AutomaticIntents) != 2 {
+		t.Fatalf("completion automatic intents = %+v, want both fan-out branches", completed.AutomaticIntents)
+	}
+	for _, intent := range completed.AutomaticIntents {
+		if intent.NodeKind != workflow.NodeKindAgent {
+			t.Fatalf("fan-out automatic intent = %+v, want Agent Node kind", intent)
+		}
+	}
+}
+
+func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
+	}
+	if len(split.Mutation.Created) != 2 {
+		t.Fatalf("split mutation = %+v, want two branches", split.Mutation)
+	}
+	for _, intent := range split.AutomaticIntents {
+		if intent.NodeKind != workflow.NodeKindAgent {
+			t.Fatalf("split automatic intent = %+v, want Agent Node kind", intent)
+		}
+	}
+
+	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       first.Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{"joined": "branch complete"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       second.Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode second join arrival: %v", err)
+	}
+	if len(joined.AutomaticIntents) != 1 {
+		t.Fatalf("join continuation automatic intents = %+v, want one synth successor", joined.AutomaticIntents)
+	}
+	if joined.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
+		t.Fatalf("join continuation automatic intent = %+v, want Agent Node kind", joined.AutomaticIntents[0])
 	}
 }
 

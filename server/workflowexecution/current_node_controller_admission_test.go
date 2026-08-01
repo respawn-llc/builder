@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -341,8 +342,8 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	})
 
 	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
-		{CurrentNode: first},
-		{CurrentNode: second},
+		{CurrentNode: first, NodeKind: workflow.NodeKindAgent},
+		{CurrentNode: second, NodeKind: workflow.NodeKindAgent},
 	})
 	select {
 	case entered := <-runner.entered:
@@ -377,6 +378,178 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	}
 }
 
+func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	agent := currentNodeReferenceForControllerTest(t, "task-agent-running", "node-agent-running")
+	queuedAgent := currentNodeReferenceForControllerTest(t, "task-agent-queued", "node-agent-queued")
+	firstScript := currentNodeReferenceForControllerTest(t, "task-script-first", "node-script-first")
+	secondScript := currentNodeReferenceForControllerTest(t, "task-script-second", "node-script-second")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 4),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: agent,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case started := <-runner.started:
+		if !started.Equal(agent) {
+			t.Fatalf("first automatic start = %v, want %v", started, agent)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first automatic Agent Node did not start")
+	}
+	waitForRunningCurrentNode(t, authority, agent)
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
+		{CurrentNode: firstScript, NodeKind: workflow.NodeKindScript},
+		{CurrentNode: secondScript, NodeKind: workflow.NodeKindScript},
+	})
+	seenScripts := map[workflow.CurrentNodeReference]bool{}
+	for len(seenScripts) < 2 {
+		select {
+		case started := <-runner.started:
+			switch {
+			case started.Equal(firstScript), started.Equal(secondScript):
+				seenScripts[started] = true
+			case started.Equal(queuedAgent):
+				t.Fatalf("queued automatic Agent Node started before the occupying Agent was released")
+			default:
+				t.Fatalf("unexpected automatic start %v", started)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("Scripts did not start concurrently while Agent capacity was saturated: %v", seenScripts)
+		}
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		snapshot := controller.Snapshot()
+		return hasLiveCurrentNode(snapshot, firstScript) && hasLiveCurrentNode(snapshot, secondScript)
+	}, "both Script Nodes did not become live before Agent release")
+	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
+		t.Fatalf("automatic queue = %+v, want queued Agent while scripts are live", controller.Snapshot().AutomaticIntents)
+	}
+
+	agentHandle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, agent))
+	if !ok {
+		t.Fatal("occupying Agent has no exact execution")
+	}
+	if err := agentHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop occupying Agent: %v", err)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(queuedAgent) {
+			t.Fatalf("queued Agent start = %v, want %v", started, queuedAgent)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued Agent did not start after occupying Agent released")
+	}
+}
+
+func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	const scriptCount = 3
+	grace := 250 * time.Millisecond
+	script := `trap '' TERM; while :; do sleep 1; done`
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path:              shellPath,
+			Args:              []string{"-c", script},
+			CancellationGrace: &grace,
+		},
+		started: make(chan workflow.CurrentNodeReference, scriptCount),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	references := make([]workflow.CurrentNodeReference, 0, scriptCount)
+	intents := make([]CurrentNodeAutomaticIntent, 0, scriptCount)
+	for index := 0; index < scriptCount; index++ {
+		reference := currentNodeReferenceForControllerTest(t, fmt.Sprintf("task-close-script-%d", index), fmt.Sprintf("node-script-%d", index))
+		references = append(references, reference)
+		intents = append(intents, CurrentNodeAutomaticIntent{
+			CurrentNode: reference,
+			NodeKind:    workflow.NodeKindScript,
+		})
+	}
+	controller.enqueueAutomaticIntents(intents)
+	started := make(map[workflow.CurrentNodeReference]struct{}, scriptCount)
+	for len(started) < scriptCount {
+		select {
+		case reference := <-runner.started:
+			started[reference] = struct{}{}
+			if len(started) == scriptCount {
+				break
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("Scripts did not start: %+v", started)
+		}
+	}
+	for _, reference := range references {
+		waitForRunningCurrentNode(t, authority, reference)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		snapshot := controller.Snapshot()
+		for _, reference := range references {
+			if !hasLiveCurrentNode(snapshot, reference) {
+				return false
+			}
+		}
+		return true
+	}, "all Script Nodes did not enter controller live state")
+
+	closeStarted := time.Now()
+	if err := controller.Close(); err != nil {
+		t.Fatalf("controller Close: %v", err)
+	}
+	if elapsed := time.Since(closeStarted); elapsed >= 2*grace {
+		t.Fatalf("controller Close took %s for %d Script grace windows, want overlapping shutdown", elapsed, scriptCount)
+	}
+}
+
 func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCanObserveQuiescence(t *testing.T) {
 	taskID := workflow.TaskID("task-start-delete-linearization")
 	target := currentNodeReferenceForControllerTest(t, string(taskID), "node-target")
@@ -397,8 +570,8 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	}
 	permit := NewMutationPermit()
 	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
-		AutomaticConcurrency: 1,
-		AssignmentSteerer:    noOpCurrentNodeAssignmentSteerer{},
+		AgentConcurrency:  1,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
@@ -484,7 +657,7 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, automatic: true}
+	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
 	controller.mu.Unlock()
 
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
@@ -512,7 +685,10 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 		{
 			name: "automatic queue",
 			apply: func(controller *CurrentNodeController) {
-				controller.automaticQueue = append(controller.automaticQueue, currentNodeQueuedStart{reference: reference, automatic: true})
+				controller.automaticQueue.append(currentNodeQueuedStart{
+					reference: reference,
+					policy:    currentNodeAdmissionAutomaticAgent,
+				})
 			},
 		},
 		{
@@ -522,13 +698,13 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, automatic: true}
+				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
 			},
 		},
 		{
 			name: "retirement held intent",
 			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, automatic: true}}
+				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
 			},
 		},
 		{

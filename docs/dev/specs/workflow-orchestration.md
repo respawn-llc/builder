@@ -221,7 +221,9 @@
 - Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
 - A Script Node can omit its script path in a Workflow Draft. A missing path, nonexistent path, directory, or non-executable file blocks execution, not draft editing.
 - Relative script paths resolve against the task execution root. Absolute paths resolve on the Kent server host.
-- Kent launches the resolved executable directly with the Execution Root as its working directory. It does not use a shell wrapper, retry the script, or impose a timeout.
+- Kent launches the resolved executable directly with the Execution Root as its working directory. It does not use a shell wrapper, retry the script, or impose a timeout, CPU quota, or memory quota.
+- Kent bounds captured stdout and stderr independently.
+- When interruption stops a Script Node process, Kent requests graceful termination and force-kills the process after a bounded grace period if it remains running.
 - Script input is one JSON object on standard input. Incoming Workflow Parameters are top-level properties. `_kent` is reserved for Task, Node, and parallel Transition Branch identity.
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
 - Invalid stdout, invalid script path, interruption, and execution errors leave the script's current Node interrupted with bounded structured details.
@@ -325,8 +327,10 @@
 
 - Workflow Execution is the single authority for Workflow lifecycle changes. It sequences conflicting operations and reports authoritative live state.
 - Requests to start eligible work automatically are temporary. Kent loses them on restart and does not reconstruct them from saved Task state.
-- Automatic starts use available capacity and prefer to continue related work on the same Task. `[workflow].concurrency` limits automatic starts only.
-- Explicit Start, Resume, approval, and executable manual move may exceed the automatic concurrency limit without preempting existing work.
+- Workflow automation starts Agent Nodes within available agent capacity and prefers to continue related work on the same Task. `[workflow].concurrency` limits these agent runs only.
+- Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
+- When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
+- Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.

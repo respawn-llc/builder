@@ -42,9 +42,9 @@ type CurrentNodeAssignmentSteer interface {
 }
 
 type CurrentNodeControllerConfig struct {
-	AutomaticConcurrency int
-	Attention            CurrentNodeAttentionLifecycle
-	AssignmentSteerer    CurrentNodeAssignmentSteerer
+	AgentConcurrency  int
+	Attention         CurrentNodeAttentionLifecycle
+	AssignmentSteerer CurrentNodeAssignmentSteerer
 }
 
 type CurrentNodeAttentionLifecycle interface {
@@ -54,9 +54,7 @@ type CurrentNodeAttentionLifecycle interface {
 
 // CurrentNodeAutomaticIntent is volatile automatic work. It has a Current Node
 // natural reference rather than a replacement execution identity.
-type CurrentNodeAutomaticIntent struct {
-	CurrentNode workflow.CurrentNodeReference
-}
+type CurrentNodeAutomaticIntent = workflowstore.CurrentNodeAutomaticIntent
 
 type CurrentNodeExplicitStart struct {
 	CurrentNode workflow.CurrentNodeReference
@@ -117,12 +115,12 @@ type CurrentNodeController struct {
 	permit    *MutationPermit
 	attention CurrentNodeAttentionLifecycle
 
-	automaticConcurrency int
-	workerContext        context.Context
-	workerCancel         context.CancelFunc
-	workerWake           chan struct{}
-	workerWG             sync.WaitGroup
-	admissionWG          sync.WaitGroup
+	agentConcurrency int
+	workerContext    context.Context
+	workerCancel     context.CancelFunc
+	workerWake       chan struct{}
+	workerWG         sync.WaitGroup
+	admissionWG      sync.WaitGroup
 
 	mu                    sync.Mutex
 	closed                bool
@@ -136,10 +134,11 @@ type CurrentNodeController struct {
 	explicitQueue         []currentNodeQueuedStart
 	explicitQueued        map[workflow.CurrentNodeReferenceKey]struct{}
 	explicitReservations  map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
-	automaticQueue        []currentNodeQueuedStart
+	automaticQueue        currentNodeAutomaticQueue
 	queued                map[workflow.CurrentNodeReferenceKey]struct{}
 	automaticReservations map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
 	admissionWorkers      map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
+	agentCapacityActive   int
 	interrupts            currentNodeInterruptState
 	workerErr             error
 	lastAutomaticTask     *workflow.TaskID
@@ -182,8 +181,8 @@ func NewCurrentNodeController(
 	if permit == nil {
 		return nil, errors.New("workflow mutation permit is required")
 	}
-	if cfg.AutomaticConcurrency <= 0 {
-		return nil, errors.New("automatic workflow concurrency must be positive")
+	if cfg.AgentConcurrency <= 0 {
+		return nil, errors.New("workflow agent concurrency must be positive")
 	}
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	controller := &CurrentNodeController{
@@ -193,7 +192,7 @@ func NewCurrentNodeController(
 		authority:             authority,
 		permit:                permit,
 		attention:             cfg.Attention,
-		automaticConcurrency:  cfg.AutomaticConcurrency,
+		agentConcurrency:      cfg.AgentConcurrency,
 		workerContext:         workerContext,
 		workerCancel:          workerCancel,
 		workerWake:            make(chan struct{}, 1),
@@ -637,6 +636,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	c.mu.Lock()
 	live, isLive := c.live[scope.ID()]
+	if isLive {
+		c.releaseAgentCapacityLocked(live.agentCapacityLease)
+	}
 	delete(c.live, scope.ID())
 	if current, exists := c.liveByNode[key]; exists && current == scope.ID() {
 		delete(c.liveByNode, key)
@@ -648,6 +650,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	starts := append([]currentNodeQueuedStart(nil), c.heldStarts[scope.ID()]...)
 	delete(c.heldStarts, scope.ID())
 	if gate, gated := c.gates[key]; gated && gate.lease.ScopeID() == scope.ID() {
+		c.releaseAgentCapacityLocked(gate.agentCapacityLease)
 		delete(c.gates, key)
 	}
 	interrupted := c.interrupts.scopeFenced(scope.ID())
@@ -658,6 +661,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		c.wakeAdmissionWorker()
 	}
 	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || !completed || interrupted || closed {
+		if !closed {
+			c.wakeAdmissionWorker()
+		}
 		return
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
@@ -672,6 +678,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		return
 	}
 	c.enqueueStarts(starts)
+	if len(starts) == 0 {
+		c.wakeAdmissionWorker()
+	}
 }
 
 func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
@@ -681,16 +690,23 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snapshot := CurrentNodeExecutionSnapshot{
-		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, len(c.automaticQueue)+len(c.automaticReservations)),
+		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
 		ExplicitStarts:   make([]CurrentNodeExplicitStart, 0, len(c.explicitQueue)+len(c.explicitReservations)),
 		Gates:            make([]CurrentNodeAdmissionGateSnapshot, 0, len(c.gates)),
 		LiveScopes:       make([]CurrentNodeLiveScopeSnapshot, 0, len(c.live)),
 	}
-	for _, start := range c.automaticQueue {
-		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{CurrentNode: start.reference})
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		start := entry.start
+		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
+			CurrentNode: start.reference,
+			NodeKind:    start.policy.nodeKind(),
+		})
 	}
 	for _, start := range c.automaticReservations {
-		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{CurrentNode: start.reference})
+		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
+			CurrentNode: start.reference,
+			NodeKind:    start.policy.nodeKind(),
+		})
 	}
 	for _, start := range c.explicitQueue {
 		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: start.reference})
@@ -702,14 +718,14 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 		snapshot.Gates = append(snapshot.Gates, CurrentNodeAdmissionGateSnapshot{
 			CurrentNode: gate.reference,
 			ScopeID:     gate.lease.ScopeID(),
-			Automatic:   gate.automatic,
+			Automatic:   gate.policy.isAutomatic(),
 		})
 	}
 	for scopeID, live := range c.live {
 		snapshot.LiveScopes = append(snapshot.LiveScopes, CurrentNodeLiveScopeSnapshot{
 			CurrentNode: live.reference,
 			ScopeID:     scopeID,
-			Automatic:   live.automatic,
+			Automatic:   live.policy.isAutomatic(),
 		})
 	}
 	for sourceScope, starts := range c.heldStarts {
@@ -717,7 +733,7 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 			snapshot.HeldIntents = append(snapshot.HeldIntents, CurrentNodeHeldIntentSnapshot{
 				CurrentNode: start.reference,
 				SourceScope: sourceScope,
-				Automatic:   start.automatic,
+				Automatic:   start.policy.isAutomatic(),
 			})
 		}
 	}
@@ -737,7 +753,7 @@ func (c *CurrentNodeController) Close() error {
 	c.closed = true
 	c.explicitQueue = nil
 	c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
-	c.automaticQueue = nil
+	c.automaticQueue.clear()
 	c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
 	c.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
 	gates := make([]currentNodeAdmissionGate, 0, len(c.gates))
@@ -754,12 +770,19 @@ func (c *CurrentNodeController) Close() error {
 	for _, gate := range gates {
 		gate.lease.Cancel()
 	}
-	var stopErrs []error
+	handles := make([]sessionruntime.ExecutionHandle, 0, len(liveScopes))
 	for _, scopeID := range liveScopes {
 		handle, exists := c.authority.ExecutionByScope(scopeID)
-		if !exists {
-			continue
+		if exists {
+			handles = append(handles, handle)
 		}
+	}
+	for _, handle := range handles {
+		handle.RequestStop()
+	}
+	var stopErrs []error
+	for _, handle := range handles {
+		scopeID := handle.Scope().ID()
 		if err := handle.Stop(context.Background()); err != nil {
 			stopErrs = append(stopErrs, fmt.Errorf("stop workflow execution scope %s: %w", scopeID, err))
 		}
