@@ -167,7 +167,7 @@ func (s *backgroundTransitionState) commit() error {
 func (s *backgroundTransitionState) reserve() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status != backgroundTransitionPending {
+	if s.status != backgroundTransitionPending && s.status != backgroundTransitionReserved {
 		return fmt.Errorf("reserve pending background transition: status is %q", s.status)
 	}
 	s.status = backgroundTransitionReserved

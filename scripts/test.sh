@@ -145,8 +145,8 @@ case "$default_go_test_package_parallelism" in
     default_go_test_package_parallelism=4
     ;;
 esac
-if [ "$default_go_test_package_parallelism" -gt 10 ]; then
-    default_go_test_package_parallelism=10
+if [ "$default_go_test_package_parallelism" -gt 18 ]; then
+    default_go_test_package_parallelism=18
 fi
 go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-$default_go_test_package_parallelism}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
