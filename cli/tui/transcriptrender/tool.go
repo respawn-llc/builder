@@ -188,10 +188,10 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 		status := ""
 		if !isWebSearchTool(meta.ToolName) {
 			resultSummary := optionalString(row.ResultSummary)
-			if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
-				resultSummary = ""
-			}
 			if isPatchTool(meta) && !meta.IsError {
+				return toolDisplay{Text: text}
+			}
+			if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) && !isPatchTool(meta) {
 				resultSummary = ""
 			}
 			status = firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)
