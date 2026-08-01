@@ -130,6 +130,10 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   applyDelete(labelID: string): void {
+    const current = this.#currentCatalog();
+    if (current !== undefined && !current.labels.some((label) => label.id === labelID)) {
+      return;
+    }
     this.#advanceCatalog();
     this.#deletedLabelIDs.add(labelID);
     if (this.#deletedLabelIDs.size > workflowLabelMaxIDs) {
