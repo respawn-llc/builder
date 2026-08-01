@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 )
 
@@ -59,7 +60,7 @@ func TestCurrentNodeGeneratedQueriesMatchPersistenceGraph(t *testing.T) {
 	queryFindings := compareGeneratedQueries(sourceStatements, generatedStatements, generatedMethods)
 
 	authorityMutations := authorityMutationQueries(sourceStatements, analysis.authorityRelations)
-	writerCalls := loadAuthorityWriterCalls(t, metadataRepositoryRoot(t), authorityMutations)
+	writerCalls := loadAuthorityWriterCalls(t, testsetup.RepositoryRoot(t), authorityMutations)
 	queryFindings = append(queryFindings, analyzeAuthorityWriterCalls(writerCalls)...)
 	if len(queryFindings) > 0 {
 		t.Fatalf("Current Node generated-query structure violations:\n%s", formatPersistenceFindings(queryFindings))
@@ -136,19 +137,6 @@ func assertPersistenceFinding(t *testing.T, findings []currentNodePersistenceFin
 		}
 	}
 	t.Fatalf("findings =\n%s\nwant category %s", formatPersistenceFindings(findings), want)
-}
-
-func metadataRepositoryRoot(t *testing.T) string {
-	t.Helper()
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	root := filepath.Clean(filepath.Join(workingDirectory, "..", ".."))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("repository root %s: %v", root, err)
-	}
-	return root
 }
 
 func baselinePersistenceFixture() persistenceSchemaModel {
