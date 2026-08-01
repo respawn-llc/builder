@@ -123,6 +123,18 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind Current Node execution: %v", err)
 	}
+	if !engine.CurrentNodeExecutionConfigured() {
+		t.Fatal("bound Current Node execution has no completion contract")
+	}
+	beforeClose, err := engine.WorkflowSessionState()
+	if err != nil {
+		t.Fatalf("WorkflowSessionState before completed binding close: %v", err)
+	}
+	if beforeClose == nil ||
+		beforeClose.TaskID != execution.Instructions.CurrentNode.TaskID ||
+		beforeClose.WorkflowID != execution.Instructions.WorkflowID {
+		t.Fatalf("WorkflowSessionState before completed binding close = %+v, want configured workflow identity", beforeClose)
+	}
 	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)
 
 	if err := binding.Close(); err != nil {
