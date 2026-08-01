@@ -178,12 +178,26 @@ func TestOpenRepairsNullWorkflowSessionAgentRoleAfterBlankRepair(t *testing.T) {
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('project-null-role-repair', 'Project', ?, ?, '{}')`, now, now)
 	seedLegacyWorkflowSession(t, db, "project-null-role-repair", "workspace-null-role-repair", "session-null-role-repair", now)
+	seedLegacyWorkflowSession(t, db, "project-null-role-repair", "workspace-ordinary-null-role", "session-ordinary-null-role", now+1)
+	seedWorkflowGraph(t, db, "project-null-role-repair", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-null-role-repair", "link-1", 1, "ROLE-NULL", now, now)
 	execSeed(t, db, "null role session", `
 UPDATE sessions
-SET continuation_json = '{"agent_role":null,"keep":"null"}',
+SET task_id = 'task-null-role-repair',
+    continuation_json = '{"agent_role":null,"keep":"null"}',
     locked_json = '{"model":"locked-null"}',
     metadata_json = '{"prompt_cache_lineage_generation":6,"keep":"null"}'
 WHERE id = 'session-null-role-repair'`)
+	execSeed(t, db, "workflow session node association", `
+INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES ('session-null-role-repair', 'node-agent', NULL, ?)`, now)
+	execSeed(t, db, "ordinary null role session", `
+UPDATE sessions
+SET continuation_json = '{"agent_role":null,"keep":"ordinary"}',
+    locked_json = '{"model":"locked-ordinary"}',
+    metadata_json = '{"prompt_cache_lineage_generation":9,"keep":"ordinary"}'
+WHERE id = 'session-ordinary-null-role'`)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 64 db: %v", err)
 	}
@@ -197,6 +211,11 @@ WHERE id = 'session-null-role-repair'`)
 		"continuation": map[string]any{"keep": "null"},
 		"locked":       map[string]any{},
 		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(7), "keep": "null"},
+	})
+	assertMigratedSessionJSON(t, store.db, "session-ordinary-null-role", map[string]any{
+		"continuation": map[string]any{"agent_role": nil, "keep": "ordinary"},
+		"locked":       map[string]any{"model": "locked-ordinary"},
+		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(9), "keep": "ordinary"},
 	})
 }
 
