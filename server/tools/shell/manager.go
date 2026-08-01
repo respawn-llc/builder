@@ -269,7 +269,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult
 			}
 		}
 	}()
-	snapshot, backgrounded := entry.transitionToBackground()
+	transitionState := newBackgroundTransitionState()
+	snapshot, backgrounded := entry.transitionToBackground(transitionState)
 	if !backgrounded {
 		if pending := entry.drainPending(); len(pending) > 0 {
 			output = append(output, pending...)
@@ -292,11 +293,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult
 		manager:  m,
 		entry:    entry,
 		snapshot: snapshotWithExecutionCorrelationCopy(snapshot),
-		state:    newBackgroundTransitionState(),
+		state:    transitionState,
 	}
-	entry.mu.Lock()
-	entry.backgroundTransition = backgroundTransition.state
-	entry.mu.Unlock()
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
 		return ExecResult{}, err

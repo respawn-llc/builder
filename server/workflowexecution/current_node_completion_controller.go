@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	"core/server/workflowruntime"
@@ -74,7 +75,6 @@ func (c *completionAttemptWorkflowController) BeginCompletionAttempt(
 		if state.lease != nil {
 			return fmt.Errorf("workflow completion attempt already reserved for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
 		}
-		return nil
 	}
 	c.attempts[scopeID] = completionAttemptState{attempt: attempt}
 	return nil
@@ -196,9 +196,23 @@ func (c *CompletionFencedCurrentNodeExecution) CompleteSessionCurrentNode(
 	if err := c.completion.BeginCompletionAttempt(ctx, req.ScopeID); err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	return runCompletionAttempt(c.completion, req.ScopeID, func() (workflowstore.CurrentNodeCompletionResult, error) {
-		return c.CurrentNodeController.completeLiveCurrentNode(ctx, req)
+	scope, ok := c.completion.authority.CurrentExecutionScope(req.ScopeID)
+	if !ok {
+		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+	}
+	returned := workflowstore.CurrentNodeCompletionResult{}
+	err = c.completion.commands.DispatchAgent(ctx, scope, func(turn runtime.OrderedMutationTurn) error {
+		return c.completion.authority.WithExactExecutionRuntime(context.Background(), scope.ID(), func(callbackCtx context.Context, _ *runtime.Engine) error {
+			return turn.Apply(func() error {
+				var completionErr error
+				returned, completionErr = runCompletionAttempt(c.completion, req.ScopeID, func() (workflowstore.CurrentNodeCompletionResult, error) {
+					return c.CurrentNodeController.completeLiveCurrentNode(callbackCtx, req)
+				})
+				return completionErr
+			})
+		})
 	})
+	return returned, err
 }
 
 func (c *completionAttemptWorkflowController) takeAttempt(

@@ -611,7 +611,10 @@ func (p *processEntry) isRunning() bool {
 	return p.running
 }
 
-func (p *processEntry) transitionToBackground() (Snapshot, bool) {
+func (p *processEntry) transitionToBackground(transition *backgroundTransitionState) (Snapshot, bool) {
+	if transition == nil {
+		panic("background transition state is required")
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.running {
@@ -619,6 +622,7 @@ func (p *processEntry) transitionToBackground() (Snapshot, bool) {
 	}
 	p.backgrounded = true
 	p.state = "running"
+	p.backgroundTransition = transition
 	return p.snapshotLocked(), true
 }
 
