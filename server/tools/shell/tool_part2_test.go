@@ -233,3 +233,34 @@ func TestManagerCloseKillsRunningProcesses(t *testing.T) {
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
 }
+
+func TestManagerCloseAbortsReservedBackgroundTransition(t *testing.T) {
+	manager, err := NewManager(WithMinimumExecToBgTime(50*time.Millisecond), WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond))
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	result, err := manager.Start(context.Background(), ExecRequest{
+		Command:        []string{"/bin/sh", "-c", "sleep 30"},
+		DisplayCommand: "sleep 30",
+		Workdir:        t.TempDir(),
+		YieldTime:      50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("start background process: %v", err)
+	}
+	if result.PendingTransition == nil {
+		t.Fatal("expected pending background transition")
+	}
+	if err := result.PendingTransition.Reserve(); err != nil {
+		t.Fatalf("reserve transition: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("close manager: %v", err)
+	}
+	if err := result.PendingTransition.Commit(); err == nil {
+		t.Fatal("reserved transition committed after manager close")
+	}
+	if manager.Count() != 0 {
+		t.Fatalf("manager count = %d, want zero after reserved transition abort", manager.Count())
+	}
+}
