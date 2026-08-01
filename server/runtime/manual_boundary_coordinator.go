@@ -24,13 +24,16 @@ type manualBoundaryGeneration struct {
 }
 
 type manualBoundaryCoordinator struct {
-	mu         sync.Mutex
-	current    *manualBoundaryGeneration
-	nextID     uint64
-	armed      bool
-	armedErr   error
-	turnActive bool
-	changed    chan struct{}
+	mu                      sync.Mutex
+	current                 *manualBoundaryGeneration
+	nextID                  uint64
+	armed                   bool
+	armedErr                error
+	turnActive              bool
+	changed                 chan struct{}
+	highestAcceptedOrder    *uint64
+	resolvedAcceptanceOrder uint64
+	resolvedAcceptance      map[uint64]struct{}
 }
 
 type pendingManualCompactionState uint8
@@ -59,12 +62,60 @@ type manualCompactionResult struct {
 }
 
 func newManualBoundaryCoordinator() *manualBoundaryCoordinator {
-	return &manualBoundaryCoordinator{changed: make(chan struct{})}
+	return &manualBoundaryCoordinator{
+		changed:            make(chan struct{}),
+		resolvedAcceptance: make(map[uint64]struct{}),
+	}
 }
 
 func (c *manualBoundaryCoordinator) signalLocked() {
 	close(c.changed)
 	c.changed = make(chan struct{})
+}
+
+func (c *manualBoundaryCoordinator) registerAcceptance(order *uint64) {
+	if c == nil || order == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.highestAcceptedOrder == nil || *order > *c.highestAcceptedOrder {
+		c.highestAcceptedOrder = cloneManualCompactionAcceptanceOrder(order)
+	}
+	c.signalLocked()
+	c.mu.Unlock()
+}
+
+func (c *manualBoundaryCoordinator) resolveAcceptance(order *uint64) {
+	if c == nil || order == nil {
+		return
+	}
+	c.mu.Lock()
+	c.resolveAcceptanceLocked(*order)
+	c.mu.Unlock()
+}
+
+func (c *manualBoundaryCoordinator) resolveAcceptanceLocked(order uint64) {
+	if order <= c.resolvedAcceptanceOrder {
+		return
+	}
+	if c.resolvedAcceptance == nil {
+		c.resolvedAcceptance = make(map[uint64]struct{})
+	}
+	c.resolvedAcceptance[order] = struct{}{}
+	for {
+		next := c.resolvedAcceptanceOrder + 1
+		if _, ok := c.resolvedAcceptance[next]; !ok {
+			break
+		}
+		delete(c.resolvedAcceptance, next)
+		c.resolvedAcceptanceOrder = next
+	}
+	c.signalLocked()
+}
+
+func (c *manualBoundaryCoordinator) acceptanceCallbacksSettledLocked() bool {
+	return c.highestAcceptedOrder == nil ||
+		c.resolvedAcceptanceOrder >= *c.highestAcceptedOrder
 }
 
 func (c *manualBoundaryCoordinator) beginGeneration() uint64 {
@@ -162,6 +213,9 @@ func (c *manualBoundaryCoordinator) enqueueForGenerationOrdered(
 			copy(pending[insertAt+1:], pending[insertAt:])
 			pending[insertAt] = entry
 			c.current.pending = pending
+			if entry.acceptanceOrder != nil {
+				c.resolveAcceptanceLocked(*entry.acceptanceOrder)
+			}
 			c.mu.Unlock()
 			return entry, nil
 		}
@@ -196,16 +250,25 @@ func (c *manualBoundaryCoordinator) sealAndTake() []*pendingManualCompaction {
 	if c == nil {
 		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil || c.current.phase != manualBoundaryGenerationOpen {
-		return nil
+	for {
+		c.mu.Lock()
+		if c.current == nil || c.current.phase != manualBoundaryGenerationOpen {
+			c.mu.Unlock()
+			return nil
+		}
+		if !c.acceptanceCallbacksSettledLocked() {
+			changed := c.changed
+			c.mu.Unlock()
+			<-changed
+			continue
+		}
+		c.current.phase = manualBoundaryGenerationDraining
+		entries := append([]*pendingManualCompaction(nil), c.current.pending...)
+		c.current.pending = nil
+		c.signalLocked()
+		c.mu.Unlock()
+		return entries
 	}
-	c.current.phase = manualBoundaryGenerationDraining
-	entries := append([]*pendingManualCompaction(nil), c.current.pending...)
-	c.current.pending = nil
-	c.signalLocked()
-	return entries
 }
 
 func (c *manualBoundaryCoordinator) finishGeneration() {

@@ -329,16 +329,6 @@ func (e *Engine) pendingModelRecoveryForStep(stepID string) bool {
 	return recovery != nil && strings.TrimSpace(recovery.StepID) == strings.TrimSpace(stepID)
 }
 
-func (s *defaultExclusiveStepLifecycle) drainManualBoundary(stepID string, entries []*pendingManualCompaction) {
-	if s == nil || s.engine == nil {
-		return
-	}
-	compactor, ok := s.engine.compactionFlow.(*defaultContextCompactor)
-	if ok {
-		compactor.drainPendingManualCompactions(stepID, entries)
-	}
-}
-
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {
 	_, err := s.InterruptCurrent(nil)
 	return err

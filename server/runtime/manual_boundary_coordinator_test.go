@@ -85,6 +85,52 @@ func TestManualBoundaryCoordinatorOrdersPendingEntriesByAcceptanceOrder(t *testi
 	}
 }
 
+func TestManualBoundaryCoordinatorWaitsForEarlierAcceptanceBeforeSealing(t *testing.T) {
+	coordinator := newManualBoundaryCoordinator()
+	coordinator.beginGeneration()
+	firstOrder := uint64(1)
+	secondOrder := uint64(2)
+	coordinator.registerAcceptance(&secondOrder)
+	second, err := coordinator.enqueueForGenerationOrdered(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		&secondOrder,
+	)
+	if err != nil {
+		t.Fatalf("enqueue second accepted request: %v", err)
+	}
+
+	sealed := make(chan []*pendingManualCompaction, 1)
+	go func() {
+		sealed <- coordinator.sealAndTake()
+	}()
+	select {
+	case entries := <-sealed:
+		t.Fatalf("sealed entries before earlier acceptance arrived: %+v", entries)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	coordinator.registerAcceptance(&firstOrder)
+	first, err := coordinator.enqueueForGenerationOrdered(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		&firstOrder,
+	)
+	if err != nil {
+		t.Fatalf("enqueue first accepted request: %v", err)
+	}
+	select {
+	case entries := <-sealed:
+		if len(entries) != 2 || entries[0] != first || entries[1] != second {
+			t.Fatalf("sealed entries = %+v, want acceptance order first then second", entries)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("boundary did not seal after all earlier accepted requests arrived")
+	}
+}
+
 func TestManualBoundaryCoordinatorMovesLateAdmissionToNextGeneration(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
 	firstGeneration := coordinator.beginGeneration()

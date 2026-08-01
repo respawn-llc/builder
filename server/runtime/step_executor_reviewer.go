@@ -111,6 +111,9 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 			)
 			outcome.assistantEventEmitted = true
 		}
+	} else {
+		reviewerCompletion.Outcome = "followup_failed"
+		reviewerCompletion.Error = followUpErr.Error()
 	}
 	statusReceipt, statusErr := e.steerWithCommitReceipt(stepID, steerFinalLocalEntryIntent(storedLocalEntry{
 		Role: reviewerStatusEntryRole(*reviewerCompletion),

@@ -137,18 +137,23 @@ func (c *defaultContextCompactor) compactManualContext(
 	admit bool,
 	acceptanceOrder *uint64,
 ) (session.CommitReceipt, error) {
+	coordinator := c.engine.compactionRuntimeState().manualBoundaryCoordinator()
+	if acceptanceOrder != nil {
+		coordinator.registerAcceptance(acceptanceOrder)
+		defer coordinator.resolveAcceptance(acceptanceOrder)
+	}
 	if admit {
 		if err := c.engine.admitManualCompactionForRequest(); err != nil {
 			return session.CommitReceipt{}, err
 		}
 		if snapshot := c.steps.Snapshot(); snapshot != nil && isAgentStepCapable(snapshot.ActiveKind) {
-			entry, err := c.engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGenerationOrdered(ctx, instructions, onActive, acceptanceOrder)
+			entry, err := coordinator.enqueueForGenerationOrdered(ctx, instructions, onActive, acceptanceOrder)
 			if err == nil {
 				select {
 				case result := <-entry.done:
 					return result.receipt, result.err
 				case <-ctx.Done():
-					if c.engine.compactionRuntimeState().manualBoundaryCoordinator().cancel(entry) {
+					if coordinator.cancel(entry) {
 						return session.CommitReceipt{}, ctx.Err()
 					}
 					result := <-entry.done

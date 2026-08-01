@@ -67,21 +67,21 @@ type Coordinator struct {
 }
 
 type sessionLedger struct {
-	records                 map[string]clientui.RuntimeInputReconciliation
-	terminal                map[string]time.Time
-	terminalOrder           []string
-	evicted                 map[string]clientui.RuntimeOperationRef
-	evictedAt               map[string]time.Time
-	evictedOrder            []string
-	operations              map[string]*operationEntry
-	tombstones              map[string]clientui.RuntimeOperationRef
-	tombstoneAt             map[string]time.Time
-	failedReqs              map[string]any
-	queuedByClientRequestID map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
-	queuedByQueueItemID     map[runtimeids.QueueItemID]*queuedOperationIdentity
-	queuedByOperationKey    map[string]*queuedOperationIdentity
-	commitBarriers          map[string]*operationCommitBarrier
-	nextAcceptanceOrder     uint64
+	records                    map[string]clientui.RuntimeInputReconciliation
+	terminal                   map[string]time.Time
+	terminalOrder              []string
+	evicted                    map[string]clientui.RuntimeOperationRef
+	evictedAt                  map[string]time.Time
+	evictedOrder               []string
+	operations                 map[string]*operationEntry
+	tombstones                 map[string]clientui.RuntimeOperationRef
+	tombstoneAt                map[string]time.Time
+	failedReqs                 map[string]any
+	queuedByClientRequestID    map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
+	queuedByQueueItemID        map[runtimeids.QueueItemID]*queuedOperationIdentity
+	queuedByOperationKey       map[string]*queuedOperationIdentity
+	commitBarriers             map[string]*operationCommitBarrier
+	nextCompactAcceptanceOrder uint64
 }
 
 type queuedOperationIdentity struct {
@@ -203,8 +203,15 @@ func Do[Req any, Resp any](
 				return zero, ctx.Err()
 			}
 		}
-		ledger.nextAcceptanceOrder++
-		acceptanceOrder := ledger.nextAcceptanceOrder
+		var (
+			acceptanceOrder    uint64
+			hasAcceptanceOrder bool
+		)
+		if ref.Kind == clientui.RuntimeOperationKindCompact {
+			ledger.nextCompactAcceptanceOrder++
+			acceptanceOrder = ledger.nextCompactAcceptanceOrder
+			hasAcceptanceOrder = true
+		}
 		attemptCtx, cancel := context.WithCancel(context.Background())
 		entry := &operationEntry{
 			req:             req,
@@ -220,7 +227,7 @@ func Do[Req any, Resp any](
 		resp, err := run(ctx, Attempt{
 			ctx:                attemptCtx,
 			acceptanceOrder:    acceptanceOrder,
-			hasAcceptanceOrder: true,
+			hasAcceptanceOrder: hasAcceptanceOrder,
 		})
 
 		coord.mu.Lock()
