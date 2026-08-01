@@ -1416,7 +1416,7 @@ func writeWorkflowUnlinkBlockers(stderr io.Writer, blockers []serverapi.Workflow
 	}
 	fmt.Fprintln(stderr, "Cannot unlink; resolve these blockers first:")
 	for _, blocker := range blockers {
-		writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, workflowBlockerCount(blocker.Count))
+		writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, workflowBlockerCount(int64(blocker.Count)))
 		for _, task := range blocker.Tasks {
 			fmt.Fprintf(stderr, "    %s: %s\n", task.ShortID, task.Title)
 		}
@@ -1431,12 +1431,11 @@ func writeWorkflowBlockerLine(w io.Writer, code string, message string, count *i
 	fmt.Fprintf(w, "- [%s] %s\n", code, message)
 }
 
-func workflowBlockerCount(count int) *int64 {
+func workflowBlockerCount(count int64) *int64 {
 	if count <= 0 {
 		return nil
 	}
-	value := int64(count)
-	return &value
+	return &count
 }
 
 func workflowDisplayNameFromKey(key string) string {

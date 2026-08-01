@@ -279,7 +279,7 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 }
 
 func projectDeleteBlockerCount(count *int) *int64 {
-	if count == nil {
+	if count == nil || *count <= 0 {
 		return nil
 	}
 	value := int64(*count)

@@ -354,6 +354,24 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 	}
 }
 
+func TestProjectDeletePlainBlockerRenderingPreservesOptionalCount(t *testing.T) {
+	var withoutCount bytes.Buffer
+	writeWorkflowBlockerLine(&withoutCount, "blocked", "message", projectDeleteBlockerCount(nil))
+
+	positive := 2
+	var withCount bytes.Buffer
+	writeWorkflowBlockerLine(&withCount, "blocked", "message", projectDeleteBlockerCount(&positive))
+
+	if withoutCount.Len() == 0 || withCount.Len() <= withoutCount.Len() || bytes.Equal(withoutCount.Bytes(), withCount.Bytes()) {
+		t.Fatalf("plain blocker outputs have unexpected count shapes: absent=%q positive=%q", withoutCount.String(), withCount.String())
+	}
+	for _, nonpositive := range []int{0, -1} {
+		if count := projectDeleteBlockerCount(&nonpositive); count != nil {
+			t.Fatalf("count %d projected as present: %v", nonpositive, *count)
+		}
+	}
+}
+
 func TestProjectDeleteRejectsNegativeServerBlockerCount(t *testing.T) {
 	const projectID = "project-123"
 	remote := &projectDeleteTestOperations{
