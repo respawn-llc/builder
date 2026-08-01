@@ -35,6 +35,9 @@ type defaultExclusiveStepLifecycle struct {
 	heldWaiter         *exclusiveStepWaiter
 	reservationWaiters map[*exclusiveStepReservation]*exclusiveStepWaiter
 	reservations       map[*exclusiveStepReservation]struct{}
+	suspended          *exclusiveRunState
+	boundaryReady      bool
+	boundaryDone       chan struct{}
 	runSeq             uint64
 	terminalPublishing bool
 }
@@ -361,11 +364,18 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	}
 
 	s.mu.Lock()
-	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter || s.active != nil || s.terminalPublishing {
+	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter ||
+		(s.active != nil && !(s.boundaryReady && waiter.reservation != nil)) ||
+		s.terminalPublishing {
 		s.mu.Unlock()
 		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
 	}
 	s.nextWaiters = s.nextWaiters[1:]
+	if s.active != nil && s.boundaryReady && waiter.reservation != nil {
+		s.suspended = s.active
+		s.active = nil
+		s.boundaryReady = false
+	}
 	if waiter == s.heldWaiter {
 		s.heldWaiter = nil
 	}
@@ -465,7 +475,7 @@ func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWa
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
-	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) == 0 {
+	if (s.active != nil && !s.boundaryReady) || s.terminalPublishing || len(s.nextWaiters) == 0 {
 		return
 	}
 	if s.heldReservation != nil && s.heldWaiter == nil {
@@ -506,8 +516,36 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
 	s.terminalPublishing = false
+	if s.suspended != nil {
+		s.active = s.suspended
+		s.suspended = nil
+		if s.boundaryDone != nil {
+			close(s.boundaryDone)
+			s.boundaryDone = nil
+		}
+	}
 	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
+}
+
+func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
+	s.mu.Lock()
+	if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
+		len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	done := make(chan struct{})
+	s.boundaryDone = done
+	s.boundaryReady = true
+	s.notifyNextWaiterLocked()
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) snapshotLocked() *RunSnapshot {

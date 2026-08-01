@@ -67,12 +67,16 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
 				expected := make(map[string]struct{}, len(msg.ToolCalls))
+				userShellGeneration := true
 				for _, call := range msg.ToolCalls {
 					if call.ID != "" {
 						expected[call.ID] = struct{}{}
 					}
+					if !isUserInitiatedShellCall(call) {
+						userShellGeneration = false
+					}
 				}
-				if len(expected) > 0 {
+				if len(expected) > 0 && !userShellGeneration {
 					generationsByStep[stepID] = append(generationsByStep[stepID], &restoredToolGeneration{
 						expected:  expected,
 						completed: make(map[string]struct{}, len(expected)),
@@ -187,6 +191,16 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.handoffRuntimeState().QueueRequest(req.summarizerPrompt, req.futureAgentMessage)
 	}
 	return nil
+}
+
+func isUserInitiatedShellCall(call llm.ToolCall) bool {
+	if call.Name != string(toolspec.ToolExecCommand) {
+		return false
+	}
+	var input struct {
+		UserInitiated bool `json:"user_initiated"`
+	}
+	return json.Unmarshal(call.Input, &input) == nil && input.UserInitiated
 }
 
 func isCompactionSoonReminderMessage(msg llm.Message) bool {

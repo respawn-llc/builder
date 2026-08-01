@@ -172,6 +172,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
 			e.compactionRuntimeState().SetManualCompactionEligible(true)
+			if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
+				return stepLoopResult{}, err
+			}
 		}
 
 		if responseOutputIsReasoningOnly(resp.OutputItems) {
@@ -349,6 +352,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
+		if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
+			return stepLoopResult{}, err
+		}
 		patchEditsApplied = patchEditsApplied || applied
 		if terminal {
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
@@ -483,6 +489,9 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
+		if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
+			return preparedCompletedResponse{}, err
+		}
 	}
 
 	var assistantCommittedCoordinate *committedAssistantCoordinate
@@ -585,8 +594,21 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	}
 	if len(localToolCalls) > 0 || len(hostedToolExecutions) > 0 {
 		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+		if err := drainAgentStepBoundary(ctx, s.engine.stepLifecycle); err != nil {
+			return false, false, err
+		}
 	}
 	return patchEditsApplied, terminal, nil
+}
+
+func drainAgentStepBoundary(ctx context.Context, lifecycle exclusiveStepLifecycle) error {
+	drainer, ok := lifecycle.(interface {
+		DrainAgentStepBoundary(context.Context) error
+	})
+	if !ok {
+		return nil
+	}
+	return drainer.DrainAgentStepBoundary(ctx)
 }
 
 func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.Context, stepID string, localToolCalls []llm.ToolCall) (bool, bool, error) {
