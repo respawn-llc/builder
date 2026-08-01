@@ -121,7 +121,6 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 ) {
 	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
-	e.compactionRuntimeState().SetManualCompactionEligible(true)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
 		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)

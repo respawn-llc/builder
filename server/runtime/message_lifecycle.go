@@ -42,6 +42,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	}
 	var rollbackLocator rollbackCandidateLocatorTracker
 	manualEligible := false
+	toolCallsByStep := make(map[string]int)
+	toolCompletionsByStep := make(map[string]int)
 	for _, record := range activeWindow.Records {
 		stepID, _ := textutil.OptionalExact(record.StepID())
 		payload, err := record.Payload()
@@ -60,6 +62,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
 			}
+			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
+				toolCallsByStep[stepID] += len(msg.ToolCalls)
+			}
 			if msg.Role == llm.RoleAssistant && msg.Phase != nil && *msg.Phase == llm.MessagePhaseFinal {
 				manualEligible = true
 			}
@@ -71,7 +76,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload); err != nil {
 				return err
 			}
-			manualEligible = true
+			toolCompletionsByStep[stepID]++
 			completion, err := storedToolCompletionFromSessionRecord(payload)
 			if err != nil {
 				return fmt.Errorf("restore session tool completion record: %w", err)
@@ -130,6 +135,12 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
 			}
 			reminderIssued = false
+		}
+	}
+	for stepID, completions := range toolCompletionsByStep {
+		if expected := toolCallsByStep[stepID]; expected > 0 && completions == expected {
+			manualEligible = true
+			break
 		}
 	}
 	restoredRollbackCandidate, err := rollbackLocator.Resolve(activeWindow.EndOffset)

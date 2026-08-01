@@ -170,6 +170,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
 			return stepLoopResult{}, err
 		}
+		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
+			e.compactionRuntimeState().SetManualCompactionEligible(true)
+		}
 
 		if responseOutputIsReasoningOnly(resp.OutputItems) {
 			continue
@@ -345,6 +348,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
+		e.compactionRuntimeState().SetManualCompactionEligible(true)
 		patchEditsApplied = patchEditsApplied || applied
 		if terminal {
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
@@ -575,6 +579,9 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	}
 	if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
 		return false, false, err
+	}
+	if len(localToolCalls) > 0 || len(hostedToolExecutions) > 0 {
+		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
 	return patchEditsApplied, terminal, nil
 }
