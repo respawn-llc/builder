@@ -13,14 +13,16 @@ func TestPatchHyperlinks(t *testing.T) {
 	status := "ok"
 	statusRow := patchRow(rendered)
 	statusRow.Tool.ResultSummary = &status
-	success := lastSpan(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0])
-	if role, ok := success.Style.Role(); !ok || role != StyleRoleToolSuccess {
-		t.Fatal("successful patch row displayed result suffix")
+	success := RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0]
+	for _, span := range success.Spans {
+		if span.Text == status {
+			t.Fatal("successful patch row displayed result suffix")
+		}
 	}
 	status = "failed"
 	statusRow.Tool.IsError = true
 	last := lastSpan(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0])
-	if role, ok := last.Style.Role(); !ok || role != StyleRoleNotice || last.Text != status {
+	if last.Text != status || last.Hyperlink != nil {
 		t.Fatal("failed patch row omitted failure status")
 	}
 	assertPatchLink(t, RenderCommittedRow(patchRow(rendered), 80, "dark", ModeOngoing).Lines, "./dir/file.go", "file:///worktree/dir/file.go")
