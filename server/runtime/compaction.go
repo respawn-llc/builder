@@ -13,7 +13,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -46,7 +45,7 @@ const (
 var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output missing checkpoint item")
 
 var (
-	ErrManualCompactionTooSoon = errors.New("manual compaction requires an editing tool call since the latest compaction")
+	ErrManualCompactionTooSoon = errors.New("manual compaction requires a tool call since the latest compaction")
 
 	// errHandoffDisabledByUser is returned when the user has disabled handoff and the agent requests one.
 	errHandoffDisabledByUser = errors.New(handoffDisabledByUserMessage)
@@ -121,24 +120,16 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	if !manualCompactionHasEditingTool(c.engine.transcriptRuntimeState().SnapshotItems()) {
+	if !manualCompactionHasToolCall(c.engine.transcriptRuntimeState().SnapshotItems()) {
 		return session.CommitReceipt{}, ErrManualCompactionTooSoon
 	}
 	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive)
 }
 
-func manualCompactionHasEditingTool(items []llm.ResponseItem) bool {
+func manualCompactionHasToolCall(items []llm.ResponseItem) bool {
 	for _, item := range items {
-		if item.Type != llm.ResponseItemTypeFunctionCall &&
-			item.Type != llm.ResponseItemTypeCustomToolCall {
-			continue
-		}
-		name, ok := textutil.OptionalTrimmed(item.Name)
-		if !ok {
-			continue
-		}
-		toolID, ok := toolspec.ParseID(name)
-		if ok && (toolID == toolspec.ToolEdit || toolID == toolspec.ToolPatch) {
+		if item.Type == llm.ResponseItemTypeFunctionCall ||
+			item.Type == llm.ResponseItemTypeCustomToolCall {
 			return true
 		}
 	}

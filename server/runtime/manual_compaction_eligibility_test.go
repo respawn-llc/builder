@@ -10,7 +10,7 @@ import (
 	"core/shared/textutil"
 )
 
-func TestManualCompactionRequiresEditingToolSinceLatestCompaction(t *testing.T) {
+func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{
@@ -35,7 +35,7 @@ func TestManualCompactionRequiresEditingToolSinceLatestCompaction(t *testing.T) 
 	}
 }
 
-func TestManualCompactionAcceptsEditingToolSinceLatestCompaction(t *testing.T) {
+func TestManualCompactionAcceptsToolCallSinceLatestCompaction(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{
