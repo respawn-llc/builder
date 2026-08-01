@@ -218,11 +218,12 @@ func (s *defaultExclusiveStepLifecycle) Interrupt() error {
 func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
-	if active == nil || active.cancel == nil {
+	suspended := s.suspended
+	if active == nil && suspended == nil {
 		s.mu.Unlock()
 		return nil, nil
 	}
-	if s.active.interrupted {
+	if (active != nil && active.interrupted) || (suspended != nil && suspended.interrupted) {
 		s.mu.Unlock()
 		return nil, nil
 	}
@@ -230,9 +231,19 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 	if beforeCancel != nil {
 		beforeCancel(cloneRunSnapshot(snapshot))
 	}
-	s.active.interrupted = true
+	if active != nil {
+		active.interrupted = true
+	}
+	if suspended != nil {
+		suspended.interrupted = true
+	}
 	s.mu.Unlock()
-	active.cancel()
+	if active != nil && active.cancel != nil {
+		active.cancel()
+	}
+	if suspended != nil && suspended.cancel != nil {
+		suspended.cancel()
+	}
 	s.mu.Lock()
 	if s.active == nil || s.active.sequence != active.sequence {
 		s.mu.Unlock()

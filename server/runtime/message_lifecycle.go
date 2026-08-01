@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -197,10 +198,7 @@ func isUserInitiatedShellCall(call llm.ToolCall) bool {
 	if call.Name != string(toolspec.ToolExecCommand) {
 		return false
 	}
-	var input struct {
-		UserInitiated bool `json:"user_initiated"`
-	}
-	return json.Unmarshal(call.Input, &input) == nil && input.UserInitiated
+	return tools.ParseShellToolCallUserInitiated(call.Input)
 }
 
 func isCompactionSoonReminderMessage(msg llm.Message) bool {

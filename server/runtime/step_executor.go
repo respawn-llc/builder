@@ -586,6 +586,10 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
 			return false, false, err
 		}
+		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+		if err := s.engine.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+			return false, false, err
+		}
 		return patchEditsApplied, true, nil
 	}
 	if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
