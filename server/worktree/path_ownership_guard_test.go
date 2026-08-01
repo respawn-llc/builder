@@ -113,25 +113,16 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 			ast.Inspect(file, func(node ast.Node) bool {
 				switch current := node.(type) {
 				case *ast.AssignStmt:
-					if len(current.Lhs) == 1 && len(current.Rhs) == 1 {
-						if lhs, ok := current.Lhs[0].(*ast.Ident); ok &&
-							typedCarriesWorkspaceIdentity(pkg, current.Rhs[0], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
-							object := pkg.TypesInfo.Defs[lhs]
-							if object == nil {
-								object = pkg.TypesInfo.Uses[lhs]
-							}
-							if object != nil && !objects[object] {
-								objects[object] = true
-								changed = true
-							}
+					for index := range current.Lhs {
+						if index < len(current.Rhs) &&
+							assignWorkspaceIdentity(pkg, current.Lhs[index], current.Rhs[index], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+							changed = true
 						}
 					}
 				case *ast.ValueSpec:
-					if len(current.Names) == 1 && len(current.Values) == 1 &&
-						typedCarriesWorkspaceIdentity(pkg, current.Values[0], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
-						object := pkg.TypesInfo.Defs[current.Names[0]]
-						if object != nil && !objects[object] {
-							objects[object] = true
+					for index := range current.Names {
+						if index < len(current.Values) &&
+							assignWorkspaceIdentity(pkg, current.Names[index], current.Values[index], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
 							changed = true
 						}
 					}
@@ -180,6 +171,25 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 			return workspaceIdentityAnalysis{objects: objects, returning: returning}
 		}
 	}
+}
+
+func assignWorkspaceIdentity(pkg *packages.Package, target ast.Expr, value ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
+	if !typedCarriesWorkspaceIdentity(pkg, value, identity, workspaceType) {
+		return false
+	}
+	targetIdent, ok := target.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	object := pkg.TypesInfo.Defs[targetIdent]
+	if object == nil {
+		object = pkg.TypesInfo.Uses[targetIdent]
+	}
+	if object == nil || identity.objects[object] {
+		return false
+	}
+	identity.objects[object] = true
+	return true
 }
 
 func typedCarriesWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
@@ -511,6 +521,13 @@ func managedRoot(base string, binding Binding) string { return filepath.Join(bas
 type path string
 type Service struct { baseDir path }
 func noop() Service { return Service{} }`,
+		`package fixture
+import "path/filepath"
+type Workspace struct { ID string }
+func automatic(base string, workspace Workspace) string {
+	_, wid := "ignored", workspace.ID
+	return filepath.Join(base, wid, "leaf")
+}`,
 	}
 	for index, source := range fixtures {
 		root := t.TempDir()

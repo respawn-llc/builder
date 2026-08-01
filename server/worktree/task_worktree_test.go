@@ -16,6 +16,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -863,8 +864,20 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
-	if taskWorktreeID(resp.Worktree) == "" || strings.Contains(taskWorktreeRoot(resp.Worktree), source.WorkspaceID) {
-		t.Fatalf("worktree = %+v, want compact root without source workspace id %q", resp.Worktree, source.WorkspaceID)
+	sourceWorkspace, err := env.store.GetWorkspaceByID(env.ctx, source.WorkspaceID)
+	if err != nil {
+		t.Fatalf("get source workspace: %v", err)
+	}
+	if !sourceWorkspace.ManagedWorktreePathKey.Valid {
+		t.Fatalf("source workspace path key is missing: %+v", sourceWorkspace)
+	}
+	canonicalBase, err := config.CanonicalWorkspaceRoot(env.baseDir)
+	if err != nil {
+		t.Fatalf("canonical managed worktree base: %v", err)
+	}
+	expectedParent := filepath.Join(canonicalBase, sourceWorkspace.ManagedWorktreePathKey.String)
+	if taskWorktreeID(resp.Worktree) == "" || filepath.Dir(taskWorktreeRoot(resp.Worktree)) != expectedParent {
+		t.Fatalf("worktree = %+v, want compact parent %q", resp.Worktree, expectedParent)
 	}
 	if got := runGit(t, sourceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
 		t.Fatalf("source branch list = %q, want task branch %q", got, task.ShortID)
