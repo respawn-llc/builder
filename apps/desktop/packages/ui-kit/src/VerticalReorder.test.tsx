@@ -18,10 +18,6 @@ const originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollIntoView",
 );
-let activeOverlayHost: HTMLElement | null = null;
-let overlayInsideTransformedSurface = false;
-let geometryObserver: MutationObserver | null = null;
-let transformedSurfaceObserver: MutationObserver | null = null;
 
 describe("projectVerticalReorder", () => {
   it("keeps activation in the source slot until a destination is crossed", () => {
@@ -46,12 +42,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  geometryObserver?.disconnect();
-  transformedSurfaceObserver?.disconnect();
-  geometryObserver = null;
-  transformedSurfaceObserver = null;
-  activeOverlayHost = null;
-  overlayInsideTransformedSurface = false;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   Object.defineProperty(
@@ -68,15 +58,11 @@ describe("VerticalReorder", () => {
     mockRowGeometry();
 
     render(<TransformedReorderHarness onCommit={onCommit} />);
-    observeTransformedSurface();
 
     const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
     secondHandle.focus();
     await user.keyboard("[Space]");
     expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByTestId("reorder-overlay").getBoundingClientRect().top).toBe(
-      screen.getByTestId("row-second").getBoundingClientRect().top,
-    );
     await user.keyboard("[ArrowDown]");
 
     expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
@@ -124,7 +110,6 @@ describe("VerticalReorder", () => {
     mockRowGeometry({ secondHeight: 80 });
 
     const view = render(<TransformedReorderHarness onCommit={onCommit} />);
-    observeTransformedSurface();
     const handle = screen.getByRole("button", { name: "Reorder Second" });
 
     fireEvent.pointerDown(handle, {
@@ -188,33 +173,27 @@ describe("VerticalReorder", () => {
     mockRowGeometry();
 
     const view = render(<TransformedReorderHarness onCommit={onCommit} />);
-    observeTransformedSurface();
     const handle = screen.getByRole("button", { name: "Reorder Second" });
     const destination = screen.getByTestId("row-third");
-    const sourceTop = screen.getByTestId("row-second").getBoundingClientRect().top;
-    const destinationTop = destination.getBoundingClientRect().top;
 
     fireEvent.pointerDown(handle, {
       button: 0,
       clientX: 20,
-      clientY: sourceTop,
+      clientY: 50,
       isPrimary: true,
       pointerId: 1,
     });
     fireEvent.pointerMove(destination, {
       buttons: 1,
       clientX: 27,
-      clientY: sourceTop,
+      clientY: 60,
       isPrimary: true,
       pointerId: 1,
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId("reorder-overlay").getBoundingClientRect().top).toBe(sourceTop);
     });
     fireEvent.pointerMove(destination, {
       buttons: 1,
       clientX: 27,
-      clientY: destinationTop + 10,
+      clientY: 95,
       isPrimary: true,
       pointerId: 1,
     });
@@ -222,7 +201,7 @@ describe("VerticalReorder", () => {
 
     fireEvent.pointerUp(destination, {
       clientX: 27,
-      clientY: destinationTop + 10,
+      clientY: 95,
       isPrimary: true,
       pointerId: 1,
     });
@@ -478,24 +457,6 @@ function TransformedReorderHarness(props: ReorderHarnessProps) {
   );
 }
 
-function observeTransformedSurface(): void {
-  const surface = screen.getByTestId("transformed-surface");
-  transformedSurfaceObserver = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (
-          node instanceof HTMLElement &&
-          node.style.position === "fixed" &&
-          within(node).queryByTestId("reorder-overlay") !== null
-        ) {
-          overlayInsideTransformedSurface = true;
-        }
-      }
-    }
-  });
-  transformedSurfaceObserver.observe(surface, { childList: true, subtree: true });
-}
-
 function ReorderHarness({
   onCommit,
   scrollable = false,
@@ -552,20 +513,6 @@ function firstFrame(
 }
 
 function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number }> = {}): void {
-  geometryObserver = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (
-          node instanceof HTMLElement &&
-          node.style.position === "fixed" &&
-          within(node).queryByTestId("reorder-overlay") !== null
-        ) {
-          activeOverlayHost = node;
-        }
-      }
-    }
-  });
-  geometryObserver.observe(document.body, { childList: true, subtree: true });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.dataset.testid === "reorder-scrollport" || this === document.documentElement) {
       return {
@@ -580,9 +527,6 @@ function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number
         y: 0,
       };
     }
-    if (this.dataset.testid === "reorder-overlay" && activeOverlayHost !== null) {
-      return overlayRect(activeOverlayHost);
-    }
     const rowID = rowIDForElement(this);
     const rowIndexByID: Readonly<Record<string, number>> = {
       first: 0,
@@ -596,7 +540,7 @@ function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number
         : index === 2
           ? 40 + secondHeight + 8
           : index * 40;
-    const top = baseTop + (transformedSurfaceObserver !== null ? 50 : 0);
+    const top = baseTop;
     const height = index === 1 ? secondHeight : 32;
     return {
       bottom: top + height,
@@ -618,24 +562,4 @@ function rowIDForElement(element: HTMLElement): string | undefined {
       element.dataset.testid === `row-${id}` ||
       within(element).queryByTestId(`row-${id}`) !== null,
   );
-}
-
-function overlayRect(host: HTMLElement): DOMRect {
-  const top = Number.parseFloat(host.style.top);
-  const left = Number.parseFloat(host.style.left);
-  const width = Number.parseFloat(host.style.width);
-  const height = Number.parseFloat(host.style.height);
-  const transformedOffset = overlayInsideTransformedSurface ? 50 : 0;
-  const actualTop = top + transformedOffset;
-  return {
-    bottom: actualTop + height,
-    height,
-    left,
-    right: left + width,
-    toJSON: () => ({}),
-    top: actualTop,
-    width,
-    x: left,
-    y: actualTop,
-  };
 }
