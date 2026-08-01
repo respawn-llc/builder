@@ -168,19 +168,12 @@ func (p *TaskStatusProjection) Project(
 	if !json.Valid([]byte(observation.LiveTaskStatesJSON)) {
 		return nil, errors.New("task status observation live task states are malformed")
 	}
-	ids := make([]workflow.TaskID, 0, len(taskIDs))
-	seen := make(map[workflow.TaskID]struct{}, len(taskIDs))
-	for _, taskID := range taskIDs {
-		if strings.TrimSpace(string(taskID)) == "" {
-			return nil, errors.New("workflow task id is required")
-		}
-		if _, exists := seen[taskID]; exists {
-			return nil, fmt.Errorf("workflow task id %q is duplicated", taskID)
-		}
-		seen[taskID] = struct{}{}
-		ids = append(ids, taskID)
+	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
+	if err != nil {
+		return nil, err
 	}
-	statuses, err := durable.ProjectedStatuses(ctx, ids, observation.LiveTaskStatesJSON)
+	ids := encodedTaskIDs.values
+	statuses, err := durable.projectedStatuses(ctx, encodedTaskIDs, observation.LiveTaskStatesJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -390,16 +383,16 @@ func (s *TaskStatusDurableSnapshot) TasksByTask(
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	idsJSON, err := encodeTaskIDs(taskIDs)
+	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.queries.ListTasksByIDs(ctx, idsJSON)
+	rows, err := s.queries.ListTasksByIDs(ctx, encodedTaskIDs.json)
 	if err != nil {
 		return nil, err
 	}
-	requested := taskIDSet(taskIDs)
-	tasks := make(map[workflow.TaskID]sqlitegen.TaskRecord, len(taskIDs))
+	requested := taskIDSet(encodedTaskIDs.values)
+	tasks := make(map[workflow.TaskID]sqlitegen.TaskRecord, len(encodedTaskIDs.values))
 	for _, row := range rows {
 		taskID := workflow.TaskID(row.ID)
 		if _, ok := requested[taskID]; !ok {
@@ -410,7 +403,7 @@ func (s *TaskStatusDurableSnapshot) TasksByTask(
 		}
 		tasks[taskID] = row
 	}
-	for _, taskID := range taskIDs {
+	for _, taskID := range encodedTaskIDs.values {
 		if _, exists := tasks[taskID]; !exists {
 			return nil, fmt.Errorf("workflow task query omitted task %q", taskID)
 		}
@@ -433,36 +426,33 @@ func (s *TaskStatusDurableSnapshot) ProjectedStatuses(
 	taskIDs []workflow.TaskID,
 	liveTaskStatesJSON string,
 ) (map[workflow.TaskID]workflowTaskStatusFact, error) {
+	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.projectedStatuses(ctx, encodedTaskIDs, liveTaskStatesJSON)
+}
+
+func (s *TaskStatusDurableSnapshot) projectedStatuses(
+	ctx context.Context,
+	taskIDs taskIDsEncoding,
+	liveTaskStatesJSON string,
+) (map[workflow.TaskID]workflowTaskStatusFact, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	if len(taskIDs) == 0 {
+	if len(taskIDs.values) == 0 {
 		return map[workflow.TaskID]workflowTaskStatusFact{}, nil
 	}
-	ids := make([]string, 0, len(taskIDs))
-	requested := make(map[workflow.TaskID]struct{}, len(taskIDs))
-	for _, taskID := range taskIDs {
-		if strings.TrimSpace(string(taskID)) == "" {
-			return nil, errors.New("workflow task id is required")
-		}
-		if _, duplicate := requested[taskID]; duplicate {
-			return nil, fmt.Errorf("workflow task id %q is duplicated", taskID)
-		}
-		requested[taskID] = struct{}{}
-		ids = append(ids, string(taskID))
-	}
-	taskIDsJSON, err := json.Marshal(ids)
-	if err != nil {
-		return nil, fmt.Errorf("encode workflow task ids: %w", err)
-	}
+	requested := taskIDSet(taskIDs.values)
 	rows, err := s.queries.ListWorkflowTaskStatusProjectionByTasks(ctx, sqlitegen.ListWorkflowTaskStatusProjectionByTasksParams{
-		TaskIdsJson:        string(taskIDsJSON),
+		TaskIdsJson:        taskIDs.json,
 		LiveTaskStatesJson: liveTaskStatesJSON,
 	})
 	if err != nil {
 		return nil, err
 	}
-	statuses := make(map[workflow.TaskID]workflowTaskStatusFact, len(taskIDs))
+	statuses := make(map[workflow.TaskID]workflowTaskStatusFact, len(taskIDs.values))
 	for _, row := range rows {
 		taskID := workflow.TaskID(row.TaskID)
 		if _, ok := requested[taskID]; !ok {
@@ -498,17 +488,17 @@ func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	idsJSON, err := encodeTaskIDs(taskIDs)
+	encodedTaskIDs, err := encodeTaskIDs(taskIDs)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.queries.ListTaskPendingApprovalsByTasks(ctx, idsJSON)
+	rows, err := s.queries.ListTaskPendingApprovalsByTasks(ctx, encodedTaskIDs.json)
 	if err != nil {
 		return nil, err
 	}
-	requested := taskIDSet(taskIDs)
-	approvals := make(map[workflow.TaskID][]sqlitegen.TaskPendingApproval, len(taskIDs))
-	for _, taskID := range taskIDs {
+	requested := taskIDSet(encodedTaskIDs.values)
+	approvals := make(map[workflow.TaskID][]sqlitegen.TaskPendingApproval, len(encodedTaskIDs.values))
+	for _, taskID := range encodedTaskIDs.values {
 		approvals[taskID] = nil
 	}
 	for _, row := range rows {
@@ -570,24 +560,31 @@ func (s *TaskStatusDurableSnapshot) Definition(
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 
-func encodeTaskIDs(taskIDs []workflow.TaskID) (string, error) {
+type taskIDsEncoding struct {
+	values []workflow.TaskID
+	json   string
+}
+
+func encodeTaskIDs(taskIDs []workflow.TaskID) (taskIDsEncoding, error) {
 	ids := make([]string, 0, len(taskIDs))
+	values := make([]workflow.TaskID, 0, len(taskIDs))
 	seen := make(map[workflow.TaskID]struct{}, len(taskIDs))
 	for _, taskID := range taskIDs {
 		if strings.TrimSpace(string(taskID)) == "" {
-			return "", errors.New("workflow task id is required")
+			return taskIDsEncoding{}, errors.New("workflow task id is required")
 		}
 		if _, exists := seen[taskID]; exists {
-			return "", fmt.Errorf("workflow task id %q is duplicated", taskID)
+			return taskIDsEncoding{}, fmt.Errorf("workflow task id %q is duplicated", taskID)
 		}
 		seen[taskID] = struct{}{}
+		values = append(values, taskID)
 		ids = append(ids, string(taskID))
 	}
 	raw, err := json.Marshal(ids)
 	if err != nil {
-		return "", fmt.Errorf("encode workflow task ids: %w", err)
+		return taskIDsEncoding{}, fmt.Errorf("encode workflow task ids: %w", err)
 	}
-	return string(raw), nil
+	return taskIDsEncoding{values: values, json: string(raw)}, nil
 }
 
 func taskIDSet(taskIDs []workflow.TaskID) map[workflow.TaskID]struct{} {

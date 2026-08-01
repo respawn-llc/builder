@@ -333,14 +333,14 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				}
 				prompt, present := promptsByID[promptReference.ID]
 				if !present {
-					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, promptReference.ID)
+					continue
 				}
 				question, present, err := pendingQuestionFromPrompt(prompt)
 				if err != nil {
 					return nil, err
 				}
 				if !present {
-					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, promptReference.ID)
+					continue
 				}
 				if prompt.Approval != (promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval) {
 					return nil, fmt.Errorf("task %q session %q prompt %q changed prompt kind", taskID, execution.Agent.SessionID, promptReference.ID)

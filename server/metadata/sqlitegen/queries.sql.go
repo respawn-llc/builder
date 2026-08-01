@@ -639,7 +639,7 @@ func (q *Queries) CountProjectWorkspaces(ctx context.Context, projectID string) 
 const countSessionsMissingWorkspaceSnapshot = `-- name: CountSessionsMissingWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
-WHERE workspace_id = ?1
+WHERE workspace_id = CAST(?1 AS TEXT)
   AND (
       NOT json_valid(metadata_json)
       OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
@@ -2447,43 +2447,6 @@ func (q *Queries) GetWorkflowNodeGroupByKey(ctx context.Context, arg GetWorkflow
 		&i.DisplayName,
 		&i.SortOrder,
 	), getWorkflowNodeGroupByKey, 2)
-
-	return i, err
-}
-
-const getWorkflowTaskStatusRecord = `-- name: GetWorkflowTaskStatusRecord :one
-SELECT
-    task_id,
-    is_done,
-    CAST(kind AS TEXT) AS kind,
-    primary_status_rank,
-    CAST(node_ids_json AS TEXT) AS node_ids_json,
-    CAST(attention_types_json AS TEXT) AS attention_types_json
-FROM workflow_task_status_records
-WHERE task_id = ?1
-LIMIT 1
-`
-
-type GetWorkflowTaskStatusRecordRow struct {
-	TaskID             string
-	IsDone             int64
-	Kind               string
-	PrimaryStatusRank  int64
-	NodeIdsJson        string
-	AttentionTypesJson string
-}
-
-func (q *Queries) GetWorkflowTaskStatusRecord(ctx context.Context, taskID string) (GetWorkflowTaskStatusRecordRow, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowTaskStatusRecord, taskID)
-	var i GetWorkflowTaskStatusRecordRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.TaskID,
-		&i.IsDone,
-		&i.Kind,
-		&i.PrimaryStatusRank,
-		&i.NodeIdsJson,
-		&i.AttentionTypesJson,
-	), getWorkflowTaskStatusRecord, 1)
 
 	return i, err
 }

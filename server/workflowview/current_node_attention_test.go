@@ -340,3 +340,33 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 		t.Fatalf("live approval attention item = %+v", item)
 	}
 }
+
+func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {
+	surfaces := newRealTaskStatusSurfaces(t, false)
+	fixture := surfaces.fixture
+	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Retired prompt")}
+	request := realTaskStatusApprovalRequest()
+	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
+	agentTarget, ok := execution.target.(taskStatusAgentTarget)
+	if !ok {
+		t.Fatalf("prompt execution target = %T, want agent", execution.target)
+	}
+	attention, err := NewAttention(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		fixture.authority,
+		currentNodeViewPrompts{},
+	)
+	if err != nil {
+		t.Fatalf("NewAttention: %v", err)
+	}
+	response, err := attention.ListTask(fixture.ctx, serverapi.WorkflowTaskAttentionListRequest{
+		TaskID: string(started.task.ID),
+	})
+	if err != nil {
+		t.Fatalf("Attention.ListTask: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("retired prompt attention = %+v, want no items for session %s", response.Items, agentTarget.sessionID)
+	}
+}

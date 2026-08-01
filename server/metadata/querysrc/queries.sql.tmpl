@@ -1347,18 +1347,6 @@ FROM task_records
 WHERE id = sqlc.arg(id)
 LIMIT 1;
 
--- name: GetWorkflowTaskStatusRecord :one
-SELECT
-    task_id,
-    is_done,
-    CAST(kind AS TEXT) AS kind,
-    primary_status_rank,
-    CAST(node_ids_json AS TEXT) AS node_ids_json,
-    CAST(attention_types_json AS TEXT) AS attention_types_json
-FROM workflow_task_status_records
-WHERE task_id = sqlc.arg(task_id)
-LIMIT 1;
-
 -- name: ListTasksByIDs :many
 SELECT
     id,
@@ -2181,7 +2169,7 @@ ORDER BY rowid ASC;
 -- name: CountSessionsMissingWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
-WHERE workspace_id = sqlc.arg(workspace_id)
+WHERE workspace_id = CAST(sqlc.arg(workspace_id) AS TEXT)
   AND (
       NOT json_valid(metadata_json)
       OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
