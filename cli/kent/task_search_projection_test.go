@@ -73,9 +73,9 @@ func TestTaskSearchPlainRendererWritesCompleteHierarchyWithoutBlankMetadataRows(
 			ShortID: "KNT-1",
 			Title:   "Task",
 			Lines: []taskSearchPlainLine{
-				{Kind: taskSearchPlainLineKindHit, FTS5Snippet: "one"},
+				{Kind: taskSearchPlainLineKindHit, FTS5: &serverapi.TaskSearchFTS5Hit{Snippet: "one"}},
 				{Kind: taskSearchPlainLineKindCommentHeading},
-				{Kind: taskSearchPlainLineKindHit, FTS5Snippet: "two"},
+				{Kind: taskSearchPlainLineKindHit, FTS5: &serverapi.TaskSearchFTS5Hit{Snippet: "two"}},
 			},
 			RemainingHitCount: 1,
 		}},
@@ -113,8 +113,8 @@ func TestTaskSearchPlainFragmentUsesOnlyStructuredLiteralEllipsesAndFoldsWhitesp
 		t.Fatalf("literal fragment = %q", literal)
 	}
 	raw := taskSearchPlainFragment(taskSearchPlainLine{
-		Kind:        taskSearchPlainLineKindHit,
-		FTS5Snippet: "  raw\tfragment  ",
+		Kind: taskSearchPlainLineKindHit,
+		FTS5: &serverapi.TaskSearchFTS5Hit{Snippet: "  raw\tfragment  "},
 	})
 	if raw != "raw fragment" {
 		t.Fatalf("raw fragment = %q", raw)

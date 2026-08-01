@@ -32,9 +32,9 @@ const (
 )
 
 type taskSearchPlainLine struct {
-	Kind        taskSearchPlainLineKind
-	Literal     *serverapi.TaskSearchLiteralHit
-	FTS5Snippet string
+	Kind    taskSearchPlainLineKind
+	Literal *serverapi.TaskSearchLiteralHit
+	FTS5    *serverapi.TaskSearchFTS5Hit
 }
 
 func taskSearchPlainProjectionFromResponse(response serverapi.TaskSearchResponse) (taskSearchPlainProjection, error) {
@@ -57,7 +57,7 @@ func taskSearchPlainProjectionFromResponse(response serverapi.TaskSearchResponse
 			if response.Mode == serverapi.TaskSearchModeLiteral {
 				line.Literal = hit.Literal
 			} else {
-				line.FTS5Snippet = hit.FTS5.Snippet
+				line.FTS5 = hit.FTS5
 			}
 			lines = append(lines, line)
 		}
@@ -106,7 +106,7 @@ func writeTaskSearchPlainProjection(stdout io.Writer, projection taskSearchPlain
 
 func taskSearchPlainFragment(line taskSearchPlainLine) string {
 	if line.Literal == nil {
-		return taskSearchPlainWhitespace(line.FTS5Snippet)
+		return taskSearchPlainWhitespace(line.FTS5.Snippet)
 	}
 	var fragment strings.Builder
 	if line.Literal.LeftTruncated {
