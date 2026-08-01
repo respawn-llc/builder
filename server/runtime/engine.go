@@ -178,8 +178,6 @@ type Engine struct {
 	outputMutationMu           sync.Mutex
 	workflowAssignmentMu       sync.Mutex
 	pendingWorkflowAssignments []queuedWorkflowAssignment
-	agentBoundaryMu            sync.Mutex
-	agentBoundaries            map[string]*agentStepBoundaryFinalizer
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -306,7 +304,6 @@ func New(
 		modelRequestsState:   newModelRequestRuntimeState(),
 		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
 		compactionPlanner:    newCompactionPlanner(),
-		agentBoundaries:      make(map[string]*agentStepBoundaryFinalizer),
 	}
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
@@ -805,6 +802,11 @@ func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, ste
 	})
 }
 
+func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
+	e.ensureOrchestrationCollaborators()
+	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
+}
+
 func (e *Engine) ensureLocked() (session.LockedContract, error) {
 	if locked, ok := e.lockedContractState().Snapshot(); ok {
 		return locked, nil
@@ -866,10 +868,6 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 // 400 is unrelated to missing outputs (nothing to repair), the original error is
 // returned unchanged.
 func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
-	return e.generateWithMissingToolOutputRepairAtDispatch(ctx, stepID, rebuild, onDelta, onReasoningDelta, onAttemptReset, nil)
-}
-
-func (e *Engine) generateWithMissingToolOutputRepairAtDispatch(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func(), onDispatch func()) (llm.Response, error) {
 	for {
 		req, err := rebuild()
 		if err != nil {
@@ -894,7 +892,7 @@ func (e *Engine) generateWithMissingToolOutputRepairAtDispatch(ctx context.Conte
 				onReasoningDelta(delta)
 			}
 		}
-		resp, err := e.generateWithRetryClientAtDispatch(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset, onDispatch)
+		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset)
 		if err == nil {
 			return resp, nil
 		}
@@ -915,10 +913,6 @@ func (e *Engine) generateWithMissingToolOutputRepairAtDispatch(ctx context.Conte
 }
 
 func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
-	return e.generateWithRetryClientAtDispatch(ctx, stepID, client, req, onDelta, onReasoningDelta, onAttemptReset, nil)
-}
-
-func (e *Engine) generateWithRetryClientAtDispatch(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func(), onDispatch func()) (llm.Response, error) {
 	prepared, err := e.modelRequests().RequestCache().Prepare(req)
 	if err != nil {
 		return llm.Response{}, err
@@ -927,7 +921,6 @@ func (e *Engine) generateWithRetryClientAtDispatch(ctx context.Context, stepID s
 		return llm.Response{}, err
 	}
 	var lastErr error
-	var dispatchOnce sync.Once
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -962,14 +955,6 @@ func (e *Engine) generateWithRetryClientAtDispatch(ctx context.Context, stepID s
 				onReasoningDelta(delta)
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			return llm.Response{}, err
-		}
-		dispatchOnce.Do(func() {
-			if onDispatch != nil {
-				onDispatch()
-			}
-		})
 		if streamingClient, ok := client.(llm.StreamEventsClient); ok {
 			resp, attemptErr = streamingClient.GenerateStreamWithEvents(ctx, req, llm.StreamCallbacks{
 				OnAssistantDelta:        attemptOnDelta,

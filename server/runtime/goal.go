@@ -451,7 +451,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	return result, err
 }
 
-func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID *string) {
+func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	if e == nil || e.store == nil {
 		return
 	}
@@ -485,15 +485,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID *string) {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	workflowStepID := ""
-	if stepID != nil {
-		workflowStepID = strings.TrimSpace(*stepID)
-		if workflowStepID == "" {
-			reportErr(errors.New("workflow completion step identity must not be empty when provided"))
-			return
-		}
-	}
-	if _, err := e.steerGoalNoticeAndStatus(workflowStepID, msg, goalStatusUpdateFromState(completed)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
 		reportErr(err)
 	}
 }
@@ -659,7 +651,6 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 func (e *Engine) surfaceRunError(err error) {
 	if err == nil ||
 		errors.Is(err, context.Canceled) ||
-		errors.Is(err, errTerminalRunErrorPersisted) ||
 		errors.Is(err, ErrAgentBusy) ||
 		errors.Is(err, errGoalLoopInactive) ||
 		errors.Is(err, ErrEngineClosed) {
@@ -669,18 +660,16 @@ func (e *Engine) surfaceRunError(err error) {
 	if message == "" {
 		message = err.Error()
 	}
-	if !errors.Is(err, errAgentStepBoundaryUncommitted) {
-		if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
+	if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		Visibility: transcript.EntryVisibilityAuto,
+		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text:       message,
+	})); appendErr != nil {
+		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-			Text:       message,
-		})); appendErr != nil {
-			_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
-				Visibility: transcript.EntryVisibilityAuto,
-				Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-				Text:       "Failed to persist run error: " + appendErr.Error(),
-			}))
-		}
+			Text:       "Failed to persist run error: " + appendErr.Error(),
+		}))
 	}
 	e.SetStreamingError(message)
 }

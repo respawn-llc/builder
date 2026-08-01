@@ -833,7 +833,6 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "exclusive-compactor-step")
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		Usage:     llm.Usage{WindowTokens: 200000},

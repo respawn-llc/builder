@@ -65,7 +65,6 @@ func TestManualCompactionPreservesLastVisibleUserMessage(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "manual-visible-user-step")
 
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{
@@ -144,7 +143,6 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "workspace-skill", "from workspace")
 
 	store := mustCreateNamedTestSession(t, "ws", workspace)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "manual-local-step")
 	client := &fakeCompactionClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
@@ -246,7 +244,6 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCompaction(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "manual-local-omits-step")
 
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
@@ -277,7 +274,6 @@ func TestManualLocalCompactionOmitsCarryoverWithoutNewUserMessageSincePreviousCo
 func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "manual-reopen-step")
 
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{

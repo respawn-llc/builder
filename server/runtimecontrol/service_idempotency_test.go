@@ -13,7 +13,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/shared/clientui"
-	"core/shared/llmerrors"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -301,87 +300,6 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
 			}
 		})
-	}
-}
-
-func TestServiceCompactionRetainsTypedAdmissionRejectionForReplay(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
-		Model:                        "gpt-5",
-		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
-	})
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
-	req := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "compact now",
-		OperationRef:    ref,
-	}
-
-	firstErr := service.CompactContext(context.Background(), req)
-	secondErr := service.CompactContext(context.Background(), req)
-
-	var firstAdmission *serverapi.ManualCompactionAdmissionError
-	var secondAdmission *serverapi.ManualCompactionAdmissionError
-	if !errors.As(firstErr, &firstAdmission) || firstAdmission.Reason != serverapi.ManualCompactionAdmissionTooSoon {
-		t.Fatalf("first compaction error = %v, want typed too-soon admission", firstErr)
-	}
-	if !errors.As(secondErr, &secondAdmission) || secondAdmission.Reason != serverapi.ManualCompactionAdmissionTooSoon {
-		t.Fatalf("replayed compaction error = %v, want retained typed too-soon admission", secondErr)
-	}
-	if client.compactionCalls != 0 {
-		t.Fatalf("compaction provider calls = %d, want no provider call for rejected request", client.compactionCalls)
-	}
-}
-
-func TestServiceCompactionRetryRetainsUncommittedFailureBehavior(t *testing.T) {
-	providerErr := &llmerrors.APIStatusError{StatusCode: 400, Body: "compaction provider failed"}
-	trimmed := 1
-	client := &runtimeControlFakeClient{
-		responses: []llm.Response{{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: textutil.Value("seeded"),
-				Phase:   textutil.Value(llm.MessagePhaseFinal),
-			},
-			Usage: llm.Usage{WindowTokens: 100},
-		}},
-		compactionErrors: []error{providerErr},
-		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
-				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
-			},
-			Usage:             llm.Usage{WindowTokens: 200000},
-			TrimmedItemsCount: &trimmed,
-		}},
-	}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
-		Model:                        "gpt-5",
-		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
-	})
-	if _, err := engine.SubmitUserMessage(context.Background(), "seed runtime transcript"); err != nil {
-		t.Fatalf("seed runtime transcript: %v", err)
-	}
-	if client.compactionCalls != 0 {
-		t.Fatalf("seed unexpectedly used compaction provider: %d", client.compactionCalls)
-	}
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
-	req := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "compact now",
-		OperationRef:    ref,
-	}
-
-	if err := service.CompactContext(context.Background(), req); !errors.Is(err, providerErr) {
-		t.Fatalf("first compaction error = %v, want provider failure", err)
-	}
-	if err := service.CompactContext(context.Background(), req); err != nil {
-		t.Fatalf("retry after uncommitted compaction failure: %v", err)
-	}
-	if client.compactionCalls != 2 {
-		t.Fatalf("compaction provider calls = %d, want failed attempt plus retry", client.compactionCalls)
 	}
 }
 

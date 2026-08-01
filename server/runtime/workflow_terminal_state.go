@@ -78,7 +78,7 @@ func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
 	}
 	transitioned := e.recordWorkflowTerminalState(source)
 	if transitioned {
-		e.cascadeCompleteActiveGoalOnWorkflowCompletion(nil)
+		e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 	}
 }
 

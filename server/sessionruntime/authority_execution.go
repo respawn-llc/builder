@@ -76,9 +76,7 @@ type execution struct {
 	stopErr  error
 	prompts  executionPromptStore
 
-	phase              executionPhase
-	exactCallbackPhase exactCallbackAdmissionPhase
-	exactCallbacks     int
+	phase executionPhase
 
 	closeResource bool
 }
@@ -288,23 +286,6 @@ func (e *execution) cleanup() error {
 		)
 	}
 	cleanupErr := bindingErr
-	if e.exactCallbackPhase != exactCallbackAdmissionOpen {
-		return fmt.Errorf("agent execution scope %s exact callback admission phase is not open", e.scope.ID())
-	}
-	e.exactCallbackPhase = exactCallbackAdmissionClosing
-	resource.signalLocked()
-	for e.exactCallbacks != 0 {
-		changed := resource.changed
-		resource.mu.Unlock()
-		<-changed
-		resource.mu.Lock()
-		if resource.current != e {
-			return fmt.Errorf(
-				"agent execution scope %s stopped being current while waiting for exact callbacks",
-				e.scope.ID(),
-			)
-		}
-	}
 	if resource.askBroker != nil {
 		switch {
 		case resource.askScope == nil:

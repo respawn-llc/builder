@@ -18,6 +18,32 @@ func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
 	}
 }
 
+func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"},
+		ProviderCapabilitiesOverride: &llm.ProviderCapabilities{ProviderID: "test"},
+	})
+	blocker := mustBlockTestEventLogAppends(t, store)
+	t.Cleanup(func() { _ = blocker.Restore() })
+	original := llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")}
+	result, err := (&defaultReviewerPipeline{engine: engine}).RunFollowUp(
+		context.Background(), "review", original, 7, true,
+		&fakeClient{
+			caps:      llm.ProviderCapabilities{ProviderID: "test"},
+			responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["fix"]}`)}}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("run reviewer follow-up: %v", err)
+	}
+	if result.Completion == nil || result.Completion.Outcome != "followup_failed" || result.Completion.SuggestionsCount != 1 ||
+		result.Message.Role != original.Role ||
+		result.AssistantCommittedStart != 7 || !result.AssistantCommittedStartSet {
+		t.Fatalf("follow-up failure result = completion:%+v message:%+v", result.Completion, result.Message)
+	}
+}
+
 func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 	store := mustCreateTestSession(t)
 	main, reviewer := reviewerAppliedClients()
@@ -57,72 +83,6 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 	for _, record := range window.Records {
 		if entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok && entry.Role == string(transcript.EntryRoleReviewerStatus) {
 			t.Fatalf("uncommitted reviewer status persisted: %+v", entry)
-		}
-	}
-}
-
-func TestReviewerCompletionPublicationFailureSurfacesAfterCommittedBoundary(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize event log: %v", err)
-	}
-	main := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("initial"),
-		},
-	}}}
-	reviewer := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value(`{"suggestions":[]}`),
-		},
-	}}}
-	var engine *Engine
-	var events []Event
-	engine = mustNewTestEngine(t, store, main, tools.NewRegistry(), Config{
-		Model:    "gpt-5",
-		Reviewer: ReviewerConfig{Frequency: "all", Model: "gpt-5", Client: reviewer},
-		OnEvent: func(event Event) {
-			events = append(events, event)
-			if event.Kind == EventLocalEntryAdded &&
-				event.LocalEntry != nil &&
-				event.LocalEntry.Role == string(transcript.EntryRoleReviewerStatus) {
-				engine.eventLog = session.MaterializedEventLog{}
-			}
-		},
-	})
-
-	_, submitErr := engine.SubmitUserMessage(context.Background(), "turn")
-	engine.eventLog = eventLog
-	if submitErr == nil {
-		t.Fatal("reviewer completion publication failure was not surfaced")
-	}
-
-	window, readErr := eventLog.ReadRecentRecords(32)
-	if readErr != nil {
-		t.Fatalf("read committed reviewer records: %v", readErr)
-	}
-	boundaries := 0
-	statuses := 0
-	for _, record := range window.Records {
-		switch payload := mustSessionEventPayload(record).(type) {
-		case session.AgentStepBoundaryRecord:
-			boundaries++
-		case session.LocalEntryRecord:
-			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-				statuses++
-			}
-		}
-	}
-	if boundaries != 1 || statuses != 1 {
-		t.Fatalf("committed reviewer facts = boundaries:%d statuses:%d, want 1/1", boundaries, statuses)
-	}
-	for _, event := range events {
-		if event.Kind == EventReviewerCompleted {
-			t.Fatalf("reviewer completion event was emitted despite publication failure: %+v", event)
 		}
 	}
 }

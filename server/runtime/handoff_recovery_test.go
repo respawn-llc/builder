@@ -16,7 +16,6 @@ import (
 func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "handoff-compaction-step")
 	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -163,7 +162,6 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "manual-handoff-step")
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},

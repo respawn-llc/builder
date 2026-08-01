@@ -85,7 +85,6 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarning(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "remote-trim-overflow-step")
 	client := &fakeCompactionClient{
 		inputTokenCountFn: func(req llm.Request) int {
 			total := 0
@@ -209,7 +208,6 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "unsupported-view-image-step")
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -269,7 +267,6 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "unsupported-overflow-step")
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -304,7 +301,6 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	withCompactionRetryDelays(t, []time.Duration{0})
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "transient-compaction-step")
 	client := &fakeCompactionClient{
 		compactionErrors: []error{errors.New("temporary upstream failure"), nil},
 		compactionResponses: []llm.CompactionResponse{{

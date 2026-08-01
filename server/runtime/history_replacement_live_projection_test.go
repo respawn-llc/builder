@@ -14,7 +14,6 @@ import (
 func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "remote-replacement-step")
 	var events []Event
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{

@@ -11,6 +11,8 @@ import (
 	"core/shared/transcript"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -193,6 +195,52 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 	}
 }
 
+func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:    "gpt-5",
+		Reviewer: ReviewerConfig{Model: "gpt-5"},
+	})
+	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
+		t.Fatalf("append first message: %v", err)
+	}
+
+	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
+		Usage:     llm.Usage{InputTokens: 10},
+	}}}
+
+	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
+	info, err := os.Stat(eventsPath)
+	if err != nil {
+		t.Fatalf("stat events log: %v", err)
+	}
+	if err := os.Chmod(eventsPath, 0o400); err != nil {
+		t.Fatalf("chmod events log readonly: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
+
+	result, err := eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
+	if err != nil {
+		t.Fatalf("run reviewer follow-up: %v", err)
+	}
+	if messageContent(result.Message) != "original final" {
+		t.Fatalf("follow-up result message = %q, want original final", messageContent(result.Message))
+	}
+	if result.Completion == nil {
+		t.Fatal("expected reviewer completion after follow-up append failure")
+	}
+	if result.Completion.Outcome != "followup_failed" {
+		t.Fatalf("reviewer completion outcome = %q, want followup_failed", result.Completion.Outcome)
+	}
+	if result.Completion.SuggestionsCount != 1 {
+		t.Fatalf("reviewer completion suggestions = %d, want 1", result.Completion.SuggestionsCount)
+	}
+	if strings.TrimSpace(result.Completion.Error) == "" {
+		t.Fatal("expected reviewer completion to include append failure error")
+	}
+}
+
 func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstructionAppendFailure(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -330,14 +378,10 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	eventsMu.Lock()
 	deferredEvents := append([]Event(nil), events...)
 	eventsMu.Unlock()
-	reviewerCompleted := false
 	for _, evt := range deferredEvents {
 		if evt.Kind == EventReviewerCompleted {
-			reviewerCompleted = true
+			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
 		}
-	}
-	if !reviewerCompleted {
-		t.Fatalf("expected reviewer completed event after committed reviewer status observer failure, got %+v", deferredEvents)
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)

@@ -61,7 +61,6 @@ const (
 	ErrCodeWorkspaceMutationFailed           = -32051
 	ErrCodeWorkflowTaskSearch                = -32052
 	ErrCodeWorkflowTaskDependency            = -32053
-	ErrCodeManualCompactionAdmission         = -32054
 )
 
 type Request struct {

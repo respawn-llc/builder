@@ -23,7 +23,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			record := l.records[key]
 			delete(l.records, key)
 			delete(l.terminal, key)
-			if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed || entry.retained) {
+			if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
 				delete(l.operations, key)
 			}
 			delete(l.failedReqs, key)
@@ -39,7 +39,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 		record := l.records[key]
 		delete(l.records, key)
 		delete(l.terminal, key)
-		if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed || entry.retained) {
+		if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
 			delete(l.operations, key)
 		}
 		delete(l.failedReqs, key)

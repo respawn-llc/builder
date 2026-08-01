@@ -44,7 +44,6 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
-	CompactContextWithActiveHookAtAcceptanceOrder(ctx context.Context, args string, onActive func(), acceptanceOrder *uint64, acceptanceBaseline *uint64) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
@@ -123,17 +122,16 @@ type messageLifecycle interface {
 
 type reviewerPipeline interface {
 	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	PrepareFollowUp(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerFollowUpPreparation, error)
+	RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error)
 	RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error)
 }
 
-type reviewerFollowUpPreparation struct {
-	Suggestions           []string
-	SuggestionsText       string
-	Instruction           string
-	CacheHitPercent       int
-	HasCacheHitPercentage bool
-	Completion            *ReviewerStatus
+type reviewerFollowUpResult struct {
+	Message                    llm.Message
+	Completion                 *ReviewerStatus
+	AssistantCommittedStart    int
+	AssistantCommittedStartSet bool
+	AssistantEventEmitted      bool
 }
 
 type phaseProtocolTurn struct {
@@ -189,6 +187,9 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				messages: e.messageFlow,
 				tools:    e.toolFlow,
 			}
+		}
+		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {
+			reviewer.stepRunner = e.stepFlow
 		}
 	})
 }

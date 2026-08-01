@@ -3,7 +3,6 @@ package runtimeops
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,65 +34,6 @@ func TestCoordinatorRecordsExactInputOperationOutcomes(t *testing.T) {
 	assertState(t, snapshot, refs[2], clientui.RuntimeInputReconciliationFailedWithRestore)
 	assertState(t, snapshot, refs[3], clientui.RuntimeInputReconciliationCanceledNotCommitted)
 	assertState(t, snapshot, refs[4], clientui.RuntimeInputReconciliationUnknown)
-}
-
-func TestCoordinatorAssignsAcceptanceOrderBeforeRunningOperation(t *testing.T) {
-	coord := NewCoordinator()
-	firstRef := testRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
-	secondRef := testRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
-	firstRef.ClientRequestID = runtimeids.NewRuntimeClientRequestID()
-	secondRef.ClientRequestID = runtimeids.NewRuntimeClientRequestID()
-
-	var firstOrder uint64
-	_, err := Do(
-		coord,
-		context.Background(),
-		"session-acceptance-order",
-		firstRef,
-		"first",
-		func(left, right string) bool { return left == right },
-		func(_ context.Context, attempt Attempt) (struct{}, error) {
-			var ok bool
-			firstOrder, ok = attempt.AcceptanceOrder()
-			if !ok {
-				return struct{}{}, errors.New("first operation has no acceptance order")
-			}
-			if baseline, baselineOK := attempt.AcceptanceBaseline(); !baselineOK || baseline != 0 {
-				return struct{}{}, fmt.Errorf("first acceptance baseline = %d/%t, want 0/true", baseline, baselineOK)
-			}
-			return struct{}{}, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("first operation: %v", err)
-	}
-
-	var secondOrder uint64
-	_, err = Do(
-		coord,
-		context.Background(),
-		"session-acceptance-order",
-		secondRef,
-		"second",
-		func(left, right string) bool { return left == right },
-		func(_ context.Context, attempt Attempt) (struct{}, error) {
-			var ok bool
-			secondOrder, ok = attempt.AcceptanceOrder()
-			if !ok {
-				return struct{}{}, errors.New("second operation has no acceptance order")
-			}
-			if baseline, baselineOK := attempt.AcceptanceBaseline(); !baselineOK || baseline != firstOrder {
-				return struct{}{}, fmt.Errorf("second acceptance baseline = %d/%t, want %d/true", baseline, baselineOK, firstOrder)
-			}
-			return struct{}{}, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("second operation: %v", err)
-	}
-	if firstOrder == 0 || secondOrder != firstOrder+1 {
-		t.Fatalf("acceptance orders = first:%d second:%d, want consecutive order", firstOrder, secondOrder)
-	}
 }
 
 func TestCoordinatorCancelTerminalOperationDoesNotInterruptActiveRuntime(t *testing.T) {

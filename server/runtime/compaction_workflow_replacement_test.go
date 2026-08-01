@@ -137,11 +137,9 @@ func TestWorkflowRequestAfterCompactionUsesOneCurrentAssignmentPrompt(t *testing
 					}),
 				},
 			}
-			store := mustCreateTestSession(t)
-			appendAgentStepBoundaryForEligibilityTest(t, store, "workflow-compaction-step")
 			engine := mustNewWorkflowTestEngine(
 				t,
-				store,
+				mustCreateTestSession(t),
 				client,
 				&workflowruntime.CurrentNodeExecutionConfig{
 					ScopeID: scopeID,

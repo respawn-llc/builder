@@ -16,7 +16,6 @@ import (
 
 func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) {
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "remote-overflow-step")
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
 			&llm.ProviderAPIError{
@@ -154,7 +153,6 @@ func newRemoteCompactionFixture(
 	t.Helper()
 
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "remote-provider-step")
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},

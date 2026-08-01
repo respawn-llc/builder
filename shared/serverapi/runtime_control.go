@@ -353,9 +353,6 @@ func (r RuntimeCompactContextRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	if r.Args != "" && strings.TrimSpace(r.Args) == "" {
-		return errors.New("additional compaction instructions cannot be blank")
-	}
 	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindCompact, r.ClientRequestID)
 }
 func (r RuntimeCompactContextForPreSubmitRequest) Validate() error {

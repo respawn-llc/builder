@@ -173,7 +173,6 @@ func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "local-overflow-tool-step")
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -234,7 +233,6 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "local-overflow-no-tool-step")
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -268,7 +266,6 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredContextWindow(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "local-overflow-schedule-step")
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},

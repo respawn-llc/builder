@@ -103,8 +103,8 @@ func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitReq
 	var resp serverapi.RuntimeLiveWaitResponse
 	var waitHandle *runtime.LiveRunWaitHandle
 	var sessionName string
-	err = s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		handle, err := engine.CaptureActiveRunResult(ctx)
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		handle, err := engine.CaptureActiveRunResult(callbackCtx)
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			return serverapi.ErrRuntimeNoActiveRun
 		}

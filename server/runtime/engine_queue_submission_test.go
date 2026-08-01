@@ -12,20 +12,6 @@ import (
 	"core/shared/textutil"
 )
 
-type persistenceFailureAfterResponseClient struct {
-	hookClient
-	gate    *sessiontest.PersistenceGate
-	failure error
-}
-
-func (c *persistenceFailureAfterResponseClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
-	response, err := c.hookClient.Generate(ctx, req)
-	if err == nil {
-		c.gate.FailNext(c.failure)
-	}
-	return response, err
-}
-
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -63,23 +49,17 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 		t.TempDir(),
 		session.WithPersistenceObserver(gate),
 	)
-	sink := &finishFailureLifecycleSink{}
+	sink := &finishFailureLifecycleSink{gate: gate, failure: finalizationErr}
 	engine := mustNewTestEngine(
 		t,
 		store,
-		&persistenceFailureAfterResponseClient{
-			hookClient: hookClient{
-				response: llm.Response{
-					Assistant: llm.Message{
-						Role:    llm.RoleAssistant,
-						Phase:   textutil.Value(llm.MessagePhaseFinal),
-						Content: textutil.Value("completed"),
-					},
-				},
+		&fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("completed"),
 			},
-			gate:    gate,
-			failure: finalizationErr,
-		},
+		}}},
 		tools.NewRegistry(),
 		Config{Model: "gpt-5", StepLifecycle: sink},
 	)
@@ -87,12 +67,12 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 
 	_, receipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 	if !receipt.Committed ||
-		!errors.Is(err, finalizationErr) ||
-		!errors.Is(err, errTerminalRunErrorPersisted) {
+		!errors.Is(err, errPendingModelRecoveryClear) ||
+		!errors.Is(err, finalizationErr) {
 		t.Fatalf("queued submission receipt=%+v error=%v", receipt, err)
 	}
-	if sink.ended == nil || sink.ended.Status != RunStatusFailed {
-		t.Fatalf("queued step finalization = %+v, want failed terminal status", sink.ended)
+	if sink.ended == nil || sink.ended.Status != RunStatusCompleted {
+		t.Fatalf("queued step finalization = %+v", sink.ended)
 	}
 	if engine.HasQueuedUserWork() {
 		t.Fatal("committed queued input retained retry ownership")

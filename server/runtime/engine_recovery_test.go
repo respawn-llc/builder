@@ -33,20 +33,18 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
-			if event.Kind == EventModelResponse && !failureArmed {
+			if event.Kind == EventAssistantMessage && !failureArmed {
 				failureArmed = true
-				gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-					return snapshot.Meta.PendingModelRecovery == nil && snapshot.Meta.LastSequence > 1
-				}, clearErr)
+				gate.FailNext(clearErr)
 			}
 		},
 	})
 
-	if _, err := engine.SubmitUserMessage(context.Background(), "input"); !errors.Is(err, clearErr) {
-		t.Fatalf("submit error = %v, want committed observer failure", err)
+	if _, err := engine.SubmitUserMessage(context.Background(), "input"); !errors.Is(err, errPendingModelRecoveryClear) {
+		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
 	}
 	if !failureArmed {
-		t.Fatal("model response did not arm pending-recovery clear failure")
+		t.Fatal("assistant commit did not arm pending-recovery clear failure")
 	}
 
 	clearFailureEvents := 0
@@ -55,8 +53,8 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 			clearFailureEvents++
 		}
 	}
-	if clearFailureEvents != 0 {
-		t.Fatalf("committed observer emitted pending-recovery clear failures = %d, want zero", clearFailureEvents)
+	if clearFailureEvents != 1 {
+		t.Fatalf("typed pending-recovery clear failures = %d, want one", clearFailureEvents)
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
@@ -357,7 +355,6 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 		context.Background(),
 		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			engine.agentStepBoundary(stepID).MarkDispatched()
 			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
 				return err
 			}
@@ -395,7 +392,6 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 		context.Background(),
 		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
 		func(_ context.Context, stepID string) error {
-			engine.agentStepBoundary(stepID).MarkDispatched()
 			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
 				return err
 			}
@@ -427,7 +423,7 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 		t.TempDir(),
 		session.WithPersistenceObserver(gate),
 	)
-	sink := &finishFailureLifecycleSink{}
+	sink := &finishFailureLifecycleSink{gate: gate, failure: finishErr}
 	var events []Event
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:         "gpt-5",
@@ -442,15 +438,10 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 		context.Background(),
 		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true},
 		func(_ context.Context, stepID string) error {
-			engine.agentStepBoundary(stepID).MarkDispatched()
-			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
-				return err
-			}
-			gate.FailNext(finishErr)
-			return nil
+			return engine.markProviderVisibleModelRecovery(stepID)
 		},
 	)
-	if !errors.Is(err, finishErr) || errors.Is(err, errPendingModelRecoveryClear) {
+	if !errors.Is(err, errPendingModelRecoveryClear) || !errors.Is(err, finishErr) {
 		t.Fatalf("exclusive step finish error = %v", err)
 	}
 	if sink.ended == nil ||
@@ -477,8 +468,8 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 			finished = event.RunState
 		}
 	}
-	if clearFailurePublished {
-		t.Fatalf("committed observer published pending-recovery clear failure: %+v", events)
+	if !clearFailurePublished {
+		t.Fatalf("events omitted typed pending-recovery clear failure: %+v", events)
 	}
 	if running == nil ||
 		running.Status != RunStatusRunning ||
@@ -539,6 +530,7 @@ func (s *finishFailureLifecycleSink) StepEnded(
 	snapshot StepLifecycleSnapshot,
 ) error {
 	s.ended = &snapshot
+	s.gate.FailNext(s.failure)
 	return nil
 }
 

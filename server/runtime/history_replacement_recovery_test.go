@@ -645,7 +645,6 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAndFork(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "reminder-recovery-step")
 	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,

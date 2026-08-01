@@ -2,7 +2,6 @@ package runtimeops
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -67,23 +66,20 @@ type Coordinator struct {
 }
 
 type sessionLedger struct {
-	records                       map[string]clientui.RuntimeInputReconciliation
-	terminal                      map[string]time.Time
-	terminalOrder                 []string
-	evicted                       map[string]clientui.RuntimeOperationRef
-	evictedAt                     map[string]time.Time
-	evictedOrder                  []string
-	operations                    map[string]*operationEntry
-	tombstones                    map[string]clientui.RuntimeOperationRef
-	tombstoneAt                   map[string]time.Time
-	failedReqs                    map[string]any
-	queuedByClientRequestID       map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
-	queuedByQueueItemID           map[runtimeids.QueueItemID]*queuedOperationIdentity
-	queuedByOperationKey          map[string]*queuedOperationIdentity
-	commitBarriers                map[string]*operationCommitBarrier
-	nextCompactAcceptanceOrder    uint64
-	settledCompactAcceptanceOrder uint64
-	settledCompactAcceptances     map[uint64]struct{}
+	records                 map[string]clientui.RuntimeInputReconciliation
+	terminal                map[string]time.Time
+	terminalOrder           []string
+	evicted                 map[string]clientui.RuntimeOperationRef
+	evictedAt               map[string]time.Time
+	evictedOrder            []string
+	operations              map[string]*operationEntry
+	tombstones              map[string]clientui.RuntimeOperationRef
+	tombstoneAt             map[string]time.Time
+	failedReqs              map[string]any
+	queuedByClientRequestID map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
+	queuedByQueueItemID     map[runtimeids.QueueItemID]*queuedOperationIdentity
+	queuedByOperationKey    map[string]*queuedOperationIdentity
+	commitBarriers          map[string]*operationCommitBarrier
 }
 
 type queuedOperationIdentity struct {
@@ -93,23 +89,17 @@ type queuedOperationIdentity struct {
 }
 
 type operationEntry struct {
-	req             any
-	resp            any
-	err             error
-	done            chan struct{}
-	cancel          context.CancelFunc
-	completed       bool
-	successful      bool
-	committed       bool
-	retained        bool
-	active          bool
-	interruptActive bool
-	completedAt     time.Time
-	createdAt       time.Time
-}
-
-type retainedTerminalOutcome interface {
-	RetainRuntimeOperation()
+	req         any
+	resp        any
+	err         error
+	done        chan struct{}
+	cancel      context.CancelFunc
+	completed   bool
+	successful  bool
+	committed   bool
+	active      bool
+	completedAt time.Time
+	createdAt   time.Time
 }
 
 type operationCommitBarrier struct {
@@ -132,10 +122,7 @@ func NewCoordinator(options ...CoordinatorOption) *Coordinator {
 }
 
 type Attempt struct {
-	ctx                context.Context
-	acceptanceOrder    uint64
-	hasAcceptanceOrder bool
-	acceptanceBaseline uint64
+	ctx context.Context
 }
 
 func (a Attempt) Context() context.Context {
@@ -143,17 +130,6 @@ func (a Attempt) Context() context.Context {
 		return context.Background()
 	}
 	return a.ctx
-}
-
-func (a Attempt) AcceptanceOrder() (uint64, bool) {
-	return a.acceptanceOrder, a.hasAcceptanceOrder
-}
-
-func (a Attempt) AcceptanceBaseline() (uint64, bool) {
-	if !a.hasAcceptanceOrder {
-		return 0, false
-	}
-	return a.acceptanceBaseline, true
 }
 
 func Do[Req any, Resp any](
@@ -165,44 +141,12 @@ func Do[Req any, Resp any](
 	same func(Req, Req) bool,
 	run func(context.Context, Attempt) (Resp, error),
 ) (Resp, error) {
-	return do(coord, ctx, sessionID, ref, req, same, nil, run)
-}
-
-func DoWithAcceptance[Req any, Resp any](
-	coord *Coordinator,
-	ctx context.Context,
-	sessionID string,
-	ref clientui.RuntimeOperationRef,
-	req Req,
-	same func(Req, Req) bool,
-	beforeRun func(Attempt) error,
-	run func(context.Context, Attempt) (Resp, error),
-) (Resp, error) {
-	return do(coord, ctx, sessionID, ref, req, same, beforeRun, run)
-}
-
-func do[Req any, Resp any](
-	coord *Coordinator,
-	ctx context.Context,
-	sessionID string,
-	ref clientui.RuntimeOperationRef,
-	req Req,
-	same func(Req, Req) bool,
-	beforeRun func(Attempt) error,
-	run func(context.Context, Attempt) (Resp, error),
-) (Resp, error) {
 	var zero Resp
 	if run == nil {
 		return zero, nil
 	}
 	if coord == nil {
-		attempt := Attempt{ctx: ctx}
-		if beforeRun != nil {
-			if err := beforeRun(attempt); err != nil {
-				return zero, err
-			}
-		}
-		return run(ctx, attempt)
+		return run(ctx, Attempt{ctx: ctx})
 	}
 	if err := ref.Validate(); err != nil {
 		return zero, err
@@ -233,7 +177,7 @@ func do[Req any, Resp any](
 			coord.mu.Unlock()
 			select {
 			case <-done:
-				if existing.successful || existing.committed || existing.retained {
+				if existing.successful || existing.committed {
 					resp, ok := existing.resp.(Resp)
 					if !ok {
 						return zero, fmt.Errorf("runtime operation response type mismatch for %s", key)
@@ -245,54 +189,18 @@ func do[Req any, Resp any](
 				return zero, ctx.Err()
 			}
 		}
-		var (
-			acceptanceOrder    uint64
-			hasAcceptanceOrder bool
-		)
-		if ref.Kind == clientui.RuntimeOperationKindCompact {
-			ledger.nextCompactAcceptanceOrder++
-			acceptanceOrder = ledger.nextCompactAcceptanceOrder
-			hasAcceptanceOrder = true
-		}
 		attemptCtx, cancel := context.WithCancel(context.Background())
 		entry := &operationEntry{
-			req:             req,
-			done:            make(chan struct{}),
-			cancel:          cancel,
-			createdAt:       coord.now(),
-			interruptActive: true,
+			req:       req,
+			done:      make(chan struct{}),
+			cancel:    cancel,
+			createdAt: coord.now(),
 		}
 		ledger.operations[key] = entry
 		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, false, coord.now())
-		attempt := Attempt{
-			ctx:                attemptCtx,
-			acceptanceOrder:    acceptanceOrder,
-			hasAcceptanceOrder: hasAcceptanceOrder,
-			acceptanceBaseline: ledger.settledCompactAcceptanceOrder,
-		}
-		if beforeRun != nil {
-			if beforeRunErr := beforeRun(attempt); beforeRunErr != nil {
-				entry.err = beforeRunErr
-				entry.completed = true
-				entry.retained = errors.As(beforeRunErr, new(retainedTerminalOutcome))
-				entry.completedAt = coord.now()
-				if hasAcceptanceOrder {
-					markCompactAcceptanceSettledLocked(ledger, acceptanceOrder)
-				}
-				coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationFailedWithRestore, true, coord.now())
-				if !entry.retained {
-					delete(ledger.operations, key)
-					ledger.failedReqs[key] = req
-				}
-				ledger.markTerminalEvictableLocked(key, coord.now())
-				close(entry.done)
-				coord.mu.Unlock()
-				return zero, beforeRunErr
-			}
-		}
 		coord.mu.Unlock()
 
-		resp, err := run(ctx, attempt)
+		resp, err := run(ctx, Attempt{ctx: attemptCtx})
 
 		coord.mu.Lock()
 		_, tombstoned := ledger.tombstones[key]
@@ -306,19 +214,14 @@ func do[Req any, Resp any](
 		entry.completed = true
 		entry.successful = err == nil
 		entry.committed = committedSideEffect
-		var retained retainedTerminalOutcome
-		entry.retained = err != nil && errors.As(err, &retained)
 		entry.completedAt = coord.now()
-		if hasAcceptanceOrder {
-			markCompactAcceptanceSettledLocked(ledger, acceptanceOrder)
-		}
 		if err != nil {
 			if committedSideEffect {
 				delete(ledger.failedReqs, key)
 			} else if tombstoned {
 				delete(ledger.operations, key)
 				delete(ledger.failedReqs, key)
-			} else if !entry.retained {
+			} else {
 				delete(ledger.operations, key)
 				ledger.failedReqs[key] = req
 			}
@@ -355,7 +258,7 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 		if record, ok := ledger.records[key]; ok {
 			switch record.State {
 			case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
-				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && entry.interruptActive && operationCancellationInterruptsActive(ref) {
+				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
 					cancel = entry.cancel
 					c.mu.Unlock()
 					return CancellationResult{InterruptActive: true, cancel: cancel}, nil
@@ -371,7 +274,7 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 			}
 			if !entry.completed {
 				cancel = entry.cancel
-				interruptActive = entry.active && entry.interruptActive && operationCancellationInterruptsActive(ref)
+				interruptActive = entry.active && operationCancellationInterruptsActive(ref)
 			}
 		}
 		if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {
@@ -584,38 +487,19 @@ func (c *Coordinator) ledgerLocked(sessionID string) *sessionLedger {
 		return ledger
 	}
 	ledger := &sessionLedger{
-		records:                   make(map[string]clientui.RuntimeInputReconciliation),
-		terminal:                  make(map[string]time.Time),
-		evicted:                   make(map[string]clientui.RuntimeOperationRef),
-		evictedAt:                 make(map[string]time.Time),
-		operations:                make(map[string]*operationEntry),
-		tombstones:                make(map[string]clientui.RuntimeOperationRef),
-		tombstoneAt:               make(map[string]time.Time),
-		failedReqs:                make(map[string]any),
-		queuedByClientRequestID:   make(map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity),
-		queuedByQueueItemID:       make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
-		queuedByOperationKey:      make(map[string]*queuedOperationIdentity),
-		commitBarriers:            make(map[string]*operationCommitBarrier),
-		settledCompactAcceptances: make(map[uint64]struct{}),
+		records:                 make(map[string]clientui.RuntimeInputReconciliation),
+		terminal:                make(map[string]time.Time),
+		evicted:                 make(map[string]clientui.RuntimeOperationRef),
+		evictedAt:               make(map[string]time.Time),
+		operations:              make(map[string]*operationEntry),
+		tombstones:              make(map[string]clientui.RuntimeOperationRef),
+		tombstoneAt:             make(map[string]time.Time),
+		failedReqs:              make(map[string]any),
+		queuedByClientRequestID: make(map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity),
+		queuedByQueueItemID:     make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
+		queuedByOperationKey:    make(map[string]*queuedOperationIdentity),
+		commitBarriers:          make(map[string]*operationCommitBarrier),
 	}
 	c.sessions[key] = ledger
 	return ledger
-}
-
-func markCompactAcceptanceSettledLocked(ledger *sessionLedger, order uint64) {
-	if ledger == nil || order == 0 {
-		return
-	}
-	if ledger.settledCompactAcceptances == nil {
-		ledger.settledCompactAcceptances = make(map[uint64]struct{})
-	}
-	ledger.settledCompactAcceptances[order] = struct{}{}
-	for {
-		next := ledger.settledCompactAcceptanceOrder + 1
-		if _, ok := ledger.settledCompactAcceptances[next]; !ok {
-			return
-		}
-		delete(ledger.settledCompactAcceptances, next)
-		ledger.settledCompactAcceptanceOrder = next
-	}
 }

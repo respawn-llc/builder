@@ -32,7 +32,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	meta := e.store.Meta()
 	recoveredHandoff := newPersistedHandoffRecovery()
 	reminderIssued := meta.CompactionSoonReminderIssued
-	manualEligible := false
 	var matchErr error
 	activeWindow, err := e.eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
@@ -125,11 +124,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
 			}
 			reminderIssued = false
-			manualEligible = false
-		case session.AgentStepBoundaryRecord:
-			if strings.TrimSpace(payload.SessionID) == strings.TrimSpace(meta.SessionID) {
-				manualEligible = true
-			}
 		}
 	}
 	restoredRollbackCandidate, err := rollbackLocator.Resolve(activeWindow.EndOffset)
@@ -140,7 +134,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
-	e.compactionRuntimeState().SetManualCompactionEligible(manualEligible)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {
 		return err
 	}

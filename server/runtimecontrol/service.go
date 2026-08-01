@@ -208,40 +208,6 @@ func (s *Service) runAgentExecution(
 	return s.execution.RunAgentExecution(ctx, sessionID, run)
 }
 
-func (s *Service) runManualCompactionExecution(
-	ctx context.Context,
-	sessionID string,
-	attempt runtimeops.Attempt,
-	run func(context.Context, *runtime.Engine) error,
-) error {
-	runCtx, stop := mergeOperationContexts(ctx, attempt.Context())
-	defer stop()
-	for {
-		err := s.runAgentExecution(runCtx, sessionID, run)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, serverapi.ErrSessionRunStarting) {
-			return err
-		}
-		id, parseErr := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-		if parseErr != nil {
-			return parseErr
-		}
-		err = s.withLiveExecutionRuntime(runCtx, id, run)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
-			!errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-			return err
-		}
-		if runCtx.Err() != nil {
-			return context.Cause(runCtx)
-		}
-	}
-}
-
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
 	if s == nil {
 		return nil
@@ -533,34 +499,12 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err := runtimeops.DoWithAcceptance(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(attempt runtimeops.Attempt) error {
-		order, ok := attempt.AcceptanceOrder()
-		if !ok {
-			return nil
-		}
-		baseline, _ := attempt.AcceptanceBaseline()
-		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			engine.RegisterManualCompactionAcceptance(&order, &baseline)
-			return nil
-		})
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			return nil
-		}
-		return err
-	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		var acceptanceOrder *uint64
-		var acceptanceBaseline *uint64
-		if order, ok := attempt.AcceptanceOrder(); ok {
-			acceptanceOrder = &order
-			if baseline, ok := attempt.AcceptanceBaseline(); ok {
-				acceptanceBaseline = &baseline
-			}
-		}
+	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
 		var receipt session.CommitReceipt
-		err := s.runManualCompactionExecution(ctx, req.SessionID, attempt, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextWithActiveHookAtAcceptanceOrder(runCtx, req.Args, func() {
-				s.markManualCompactionActive(memoReq.SessionID, req.OperationRef, engine)
-			}, acceptanceOrder, acceptanceBaseline)
+		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			})
 			receipt = compactReceipt
 			return compactErr
 		})
@@ -568,23 +512,6 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return struct{}{}, err
 	})
 	return err
-}
-
-func (s *Service) markManualCompactionActive(sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) {
-	if s == nil || s.operations == nil {
-		return
-	}
-	snapshot := runtimeactivity.ActiveStepFromProvider(engine)
-	if snapshot != nil {
-		switch snapshot.ActiveKind {
-		case clientui.RuntimeActivityActiveKindUserTurn,
-			clientui.RuntimeActivityActiveKindWorkflowTurn,
-			clientui.RuntimeActivityActiveKindGoalLoop:
-			s.operations.MarkOperationAttemptOnly(sessionID, ref)
-			return
-		}
-	}
-	s.operations.MarkOperationActive(sessionID, ref)
 }
 
 func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {

@@ -441,7 +441,6 @@ func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	appendAgentStepBoundaryForEligibilityTest(t, store, "missing-output-repair-step")
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.APIStatusError{StatusCode: 400},
