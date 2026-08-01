@@ -253,6 +253,19 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 	if !hasEventKind(events, EventReviewerCompleted) {
 		t.Fatalf("expected reviewer_completed event, got %+v", events)
 	}
+	statusEventIdx := -1
+	completedEventIdx := -1
+	for idx, evt := range events {
+		if evt.Kind == EventLocalEntryAdded && evt.LocalEntry != nil && evt.LocalEntry.Role == string(transcript.EntryRoleReviewerStatus) {
+			statusEventIdx = idx
+		}
+		if evt.Kind == EventReviewerCompleted {
+			completedEventIdx = idx
+		}
+	}
+	if statusEventIdx < 0 || completedEventIdx <= statusEventIdx {
+		t.Fatalf("reviewer completion event preceded committed reviewer status: status=%d completion=%d events=%+v", statusEventIdx, completedEventIdx, events)
+	}
 	for _, evt := range events {
 		if evt.Kind != EventReviewerCompleted {
 			continue

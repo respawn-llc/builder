@@ -665,16 +665,18 @@ func (e *Engine) surfaceRunError(err error) {
 	if message == "" {
 		message = err.Error()
 	}
-	if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAuto,
-		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-		Text:       message,
-	})); appendErr != nil {
-		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+	if !errors.Is(err, errAgentStepBoundaryUncommitted) {
+		if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-			Text:       "Failed to persist run error: " + appendErr.Error(),
-		}))
+			Text:       message,
+		})); appendErr != nil {
+			_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+				Visibility: transcript.EntryVisibilityAuto,
+				Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
+				Text:       "Failed to persist run error: " + appendErr.Error(),
+			}))
+		}
 	}
 	e.SetStreamingError(message)
 }

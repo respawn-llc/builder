@@ -124,8 +124,11 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 				case result := <-entry.done:
 					return result.receipt, result.err
 				case <-ctx.Done():
-					c.engine.compactionRuntimeState().manualBoundaryCoordinator().cancel(entry)
-					return session.CommitReceipt{}, ctx.Err()
+					if c.engine.compactionRuntimeState().manualBoundaryCoordinator().cancel(entry) {
+						return session.CommitReceipt{}, ctx.Err()
+					}
+					result := <-entry.done
+					return result.receipt, result.err
 				}
 			}
 			if !errors.Is(err, errManualBoundaryNoGeneration) {
@@ -241,6 +244,11 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+		if manualAdmission {
+			if err := e.admitManualCompaction(); err != nil {
+				return err
+			}
+		}
 		lease, err := e.compactionRuntimeState().acquireCompactionGate(manualAdmission, e.cfg.Debug)
 		if err != nil {
 			return err

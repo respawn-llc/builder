@@ -91,6 +91,52 @@ func TestManualCompactionAdmissionPrecedenceReturnsActiveDuringAnyCompactionMode
 	}
 }
 
+func TestManualCompactionRechecksEligibilityAfterQueuedRunNextOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Engine)
+		want   ManualCompactionAdmissionReason
+	}{
+		{
+			name: "eligibility reset",
+			mutate: func(engine *Engine) {
+				engine.compactionRuntimeState().SetManualCompactionEligible(false)
+			},
+			want: ManualCompactionAdmissionReasonTooSoon,
+		},
+		{
+			name: "policy disabled",
+			mutate: func(engine *Engine) {
+				engine.cfg.CompactionMode = "none"
+			},
+			want: ManualCompactionAdmissionReasonDisabled,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeCompactionClient{}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{})
+			steps := &stubExclusiveStepLifecycle{
+				snapshot: &RunSnapshot{ActiveKind: ActiveKindRuntimeMaintenance},
+			}
+			steps.runFn = func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+				test.mutate(engine)
+				return fn(ctx, "queued-manual-compaction")
+			}
+			compactor := engine.compactionFlow.(*defaultContextCompactor)
+			compactor.steps = steps
+			engine.compactionRuntimeState().SetManualCompactionEligible(true)
+
+			_, err := engine.CompactContextWithActiveHook(context.Background(), "", nil)
+			assertManualCompactionAdmissionReason(t, err, test.want)
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if len(client.compactionCalls) != 0 {
+				t.Fatalf("provider compaction calls = %d, want zero after ownership recheck", len(client.compactionCalls))
+			}
+		})
+	}
+}
+
 func TestManualCompactionAdmissionAllowsASecondCompactAfterALaterAgentStep(t *testing.T) {
 	store := mustCreateTestSession(t)
 	appendAgentStepBoundaryForEligibilityTest(t, store, "initial-step")

@@ -25,6 +25,33 @@ var ErrExclusiveStepReservationPending = errors.New("manual compaction is alread
 
 var errTerminalRunErrorPersisted = errors.New("terminal run error persisted")
 var errAgentStepNotDispatched = errors.New("agent step ended before provider dispatch")
+var errAgentStepBoundaryUncommitted = errors.New("agent step boundary finalization did not commit")
+
+type agentStepBoundaryUncommittedError struct {
+	cause error
+}
+
+func (e *agentStepBoundaryUncommittedError) Error() string {
+	if e == nil || e.cause == nil {
+		return errAgentStepBoundaryUncommitted.Error()
+	}
+	return fmt.Sprintf("%s: %v", errAgentStepBoundaryUncommitted, e.cause)
+}
+
+func (e *agentStepBoundaryUncommittedError) Unwrap() error {
+	if e == nil {
+		return errAgentStepBoundaryUncommitted
+	}
+	return e.cause
+}
+
+func (e *agentStepBoundaryUncommittedError) Is(target error) bool {
+	return target == errAgentStepBoundaryUncommitted
+}
+
+func uncommittedBoundaryFinalizationError(cause error) error {
+	return &agentStepBoundaryUncommittedError{cause: cause}
+}
 
 // errPendingModelRecoveryClear wraps failures to clear the recovery marker at
 // step end after terminal transcript state has already been published.
@@ -246,7 +273,9 @@ func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
 			boundary.Complete(receipt)
 			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
 		} else {
-			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
+			finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
+			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
+			return finalizationErr
 		}
 		return commitErr
 	}
@@ -271,8 +300,9 @@ func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
 			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
 			return errors.Join(commitErr, errTerminalRunErrorPersisted)
 		}
-		s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
-		return commitErr
+		finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
+		s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
+		return finalizationErr
 	}
 	receipt, commitErr = boundary.Commit(stepID, nil)
 	if receipt.Committed {
@@ -280,8 +310,9 @@ func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
 		s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
 		return commitErr
 	}
-	s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
-	return commitErr
+	finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
+	s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
+	return finalizationErr
 }
 
 func (e *Engine) pendingModelRecoveryForStep(stepID string) bool {

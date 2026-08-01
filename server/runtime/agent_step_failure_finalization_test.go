@@ -63,6 +63,48 @@ func TestExclusiveStepLifecycleFinalizesProviderFailureOnceBeforeTerminalPublica
 	}
 }
 
+func TestUncommittedBoundaryFailureDoesNotPersistFallbackRunError(t *testing.T) {
+	providerErr := errors.New("provider failed before finalization append")
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	blocker := mustBlockTestEventLogAppends(t, store)
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			engine.agentStepBoundary(stepID).MarkDispatched()
+			return providerErr
+		},
+	)
+	if !errors.Is(err, providerErr) || !errors.Is(err, errAgentStepBoundaryUncommitted) {
+		t.Fatalf("lifecycle error = %v, want provider and uncommitted-finalization errors", err)
+	}
+	if restoreErr := blocker.Restore(); restoreErr != nil {
+		t.Fatalf("restore event log: %v", restoreErr)
+	}
+
+	engine.surfaceRunError(err)
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if readErr != nil {
+		t.Fatalf("read finalization records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.AgentStepBoundaryRecord:
+			t.Fatalf("uncommitted boundary persisted: %+v", payload)
+		case session.LocalEntryRecord:
+			if payload.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				t.Fatalf("fallback run error persisted without boundary: %+v", payload)
+			}
+		}
+	}
+	if snapshot := engine.ChatSnapshot(); snapshot.StreamingError == "" {
+		t.Fatal("uncommitted boundary failure did not surface a streaming error")
+	}
+}
+
 func TestSubmitUserMessagePersistsProviderFailureWithOneBoundaryAndOneRunError(t *testing.T) {
 	t.Parallel()
 

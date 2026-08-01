@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"core/server/tools"
 )
 
 func TestManualBoundaryCoordinatorSealsOneGenerationAndFencesLateAdmission(t *testing.T) {
@@ -138,4 +140,64 @@ func TestManualBoundaryCoordinatorExecutionOwnershipIsOneShot(t *testing.T) {
 	default:
 		t.Fatal("entry did not complete")
 	}
+}
+
+func TestOwnedManualCompactionWaitsForCompletionAfterCallerCancellation(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeCompactionClient{}, tools.NewRegistry(), Config{})
+	steps := &stubExclusiveStepLifecycle{
+		snapshot: &RunSnapshot{ActiveKind: ActiveKindUserTurn},
+	}
+	compactor := engine.compactionFlow.(*defaultContextCompactor)
+	compactor.steps = steps
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	coordinator := engine.compactionRuntimeState().manualBoundaryCoordinator()
+	coordinator.beginGeneration()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resultDone := make(chan manualCompactionResult, 1)
+	go func() {
+		receipt, err := compactor.compactManualContext(ctx, compactionInstructionsInput{}, nil, true)
+		resultDone <- manualCompactionResult{receipt: receipt, err: err}
+	}()
+
+	var entry *pendingManualCompaction
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		coordinator.mu.Lock()
+		if coordinator.current != nil && len(coordinator.current.pending) == 1 {
+			entry = coordinator.current.pending[0]
+			coordinator.mu.Unlock()
+			break
+		}
+		coordinator.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	if entry == nil {
+		t.Fatal("manual compaction did not enqueue an active-generation entry")
+	}
+	detached := coordinator.sealAndTake()
+	if len(detached) != 1 || detached[0] != entry || !coordinator.beginExecution(entry) {
+		t.Fatal("manual compaction entry did not transfer execution ownership")
+	}
+	cancel()
+
+	select {
+	case result := <-resultDone:
+		t.Fatalf("owned compaction returned before completion: %+v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	lateErr := errors.New("owned compaction completed after cancellation")
+	entry.complete(manualCompactionResult{err: lateErr})
+	select {
+	case result := <-resultDone:
+		if !errors.Is(result.err, lateErr) || errors.Is(result.err, context.Canceled) {
+			t.Fatalf("owned compaction result = %+v, want late completion error", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("owned compaction waiter did not receive completion")
+	}
+	coordinator.finishGeneration()
+	coordinator.endTurn()
 }
