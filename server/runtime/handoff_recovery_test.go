@@ -204,6 +204,7 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 		t.Fatal("queued trigger-handoff request is absent before manual compaction")
 	}
 
+	completeManualEligibilityAgentStep(t, engine)
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("manual compact: %v", err)
 	}

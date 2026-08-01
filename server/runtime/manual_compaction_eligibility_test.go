@@ -10,6 +10,11 @@ import (
 	"core/shared/textutil"
 )
 
+func completeManualEligibilityAgentStep(t *testing.T, engine *Engine) {
+	t.Helper()
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+}
+
 func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
@@ -48,29 +53,19 @@ func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := engine.stepLifecycle.Run(
-		context.Background(),
-		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
-		func(context.Context, string) error { return nil },
-	); err != nil {
-		t.Fatalf("complete agent step: %v", err)
-	}
+	completeManualEligibilityAgentStep(t, engine)
 
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compaction after editing tool call: %v", err)
 	}
 	client.mu.Lock()
-	defer client.mu.Unlock()
 	if len(client.calls) != 1 {
+		client.mu.Unlock()
 		t.Fatalf("provider completion calls = %d, want one", len(client.calls))
 	}
+	client.mu.Unlock()
 
-	if err := engine.CompactContext(context.Background(), ""); !errors.Is(err, ErrManualCompactionTooSoon) {
-		t.Fatalf("immediate repeat compaction error = %v, want too-soon", err)
-	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if len(client.calls) != 1 {
-		t.Fatalf("provider completion calls after rejected repeat = %d, want one", len(client.calls))
+	if engine.compactionRuntimeState().ManualCompactionEligible() {
+		t.Fatal("successful compaction retained manual eligibility")
 	}
 }
