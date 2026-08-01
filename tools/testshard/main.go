@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	shardThreshold = 30
+	shardThreshold = 20
 	maxShards      = 24
 
 	runtimePackagePath                 = "core/server/runtime"

@@ -194,7 +194,7 @@ func (s *backgroundTransitionState) abort() bool {
 func (s *backgroundTransitionState) abortIfPending() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status != backgroundTransitionPending {
+	if s.status != backgroundTransitionPending && s.status != backgroundTransitionReserved {
 		return
 	}
 	s.status = backgroundTransitionAborted
