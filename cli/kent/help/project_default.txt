@@ -1,0 +1,18 @@
+Usage of kent project default:
+  kent project default --project <project-id> [path]
+  kent project default --project <project-id> --workspace <workspace-id>
+
+Choose a project's default workspace.
+
+The path defaults to the current directory. Paths are converted to absolute
+server paths before the request. Use --workspace when a saved path is missing
+or inaccessible. The path and --workspace selectors are mutually exclusive.
+Selecting the current default is an idempotent success.
+
+Use --json for one stable JSON result or error object.
+
+Examples:
+  kent project default --project <project-id> ../other-checkout
+  kent project default --project <project-id> --workspace <workspace-id> --json
+
+Flags:

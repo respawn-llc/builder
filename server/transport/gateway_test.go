@@ -131,6 +131,38 @@ func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+	}{
+		{
+			name: "path identity",
+			err:  serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
+			code: protocol.ErrCodeWorkspacePathIdentity,
+		},
+		{
+			name: "detach conflict",
+			err:  &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			code: protocol.ErrCodeWorkspaceDetachConflict,
+		},
+		{
+			name: "mutation failure",
+			err:  &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
+			code: protocol.ErrCodeWorkspaceMutationFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := responseForError("project-workspace", test.err)
+			if response.Error == nil || response.Error.Code != test.code || len(response.Error.Data) == 0 {
+				t.Fatalf("response = %+v, want code %d with data", response.Error, test.code)
+			}
+		})
+	}
+}
+
 func TestResponseForErrorSurfacesIrreconcilableRecoveryEvidence(t *testing.T) {
 	detail := &session.IrreconcilableRecoveryDetail{
 		SessionID:             "session-1",

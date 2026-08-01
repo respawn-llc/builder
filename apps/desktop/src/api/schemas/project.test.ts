@@ -1,4 +1,4 @@
-import { projectSummarySchema } from "./project";
+import { projectSummarySchema, workspaceUnlinkResponseSchema } from "./project";
 
 const project = {
   project_id: "project-1",
@@ -41,5 +41,26 @@ describe("projectSummarySchema", () => {
         default_workflow_id: "11111111-1111-4111-8111-11111111111A",
       }),
     ).toThrow();
+  });
+
+  it("uses blockers as the unlink outcome discriminator", () => {
+    expect(
+      workspaceUnlinkResponseSchema.parse({
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+      }),
+    ).toMatchObject({
+      projectID: "project-1",
+      workspaceID: "workspace-1",
+      blockers: [],
+      project: null,
+    });
+    expect(
+      workspaceUnlinkResponseSchema.parse({
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        blockers: [{ code: "default_workspace", message: "blocked" }],
+      }).blockers,
+    ).toHaveLength(1);
   });
 });

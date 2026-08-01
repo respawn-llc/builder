@@ -200,6 +200,8 @@ var (
 	taskCommentReplaceUsage = leafCommandUsage(config.Command+" task comment replace <comment-id> --body <text>", "Replace a comment's body.")
 	taskCommentDeleteUsage  = leafCommandUsage(config.Command+" task comment delete <comment-id>", "Permanently delete a comment.", "", "User-only; unavailable inside Kent shell commands.")
 	projectUsage            = commandUsage{helpFile: "project.txt"}
+	projectDefaultUsage     = commandUsage{helpFile: "project_default.txt", includeEmbeddedFlags: true}
+	detachUsage             = commandUsage{helpFile: "detach.txt", includeEmbeddedFlags: true}
 	projectListUsage        = commandUsage{helpFile: "project_list.txt"}
 	projectCreateUsage      = commandUsage{helpFile: "project_create.txt", includeEmbeddedFlags: true}
 	attachUsage             = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}

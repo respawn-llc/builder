@@ -32,3 +32,11 @@
 - Terminal.app, terminals outside the whitelist, and sessions inside tmux, Zellij, or GNU screen render an explicit Markdown link as clickable `label destination`; unsupported terminals ignore OSC 8 and retain the visible destination.
 - GFM table layout remains library-owned. Explicit links inside table cells render clickable `label destination` on every terminal, independent of the terminal whitelist.
 - Autolinks render the destination once in both modes.
+
+## Patch File Hyperlinks
+
+- Kent must emit OSC 8 on every terminal for a patch path that identifies a syntactically absolute local path. Patch file hyperlinks must work on every operating system supported by the TUI.
+- Kent must resolve a relative patch path against the working directory used for that patch before deriving its destination. A compact row must continue to display the workspace-relative label while its destination uses the resolved absolute local-file URI. A Detail header must display the available absolute path and use the same destination.
+- Local-file URIs must use forward slashes on every operating system, including for Windows drive paths.
+- Only displayed path characters may be part of the hyperlink. Counts, the Detail selection rail, trailing whitespace, and truncation markers must remain outside it, including when a path wraps. Every displayed path fragment must remain linked across wrapping and truncation.
+- Unsupported terminals must ignore OSC 8 and retain the visible path without additional destination text. Added, deleted, unsuccessful, and nonexistent files must remain linked when their paths identify absolute local paths. Moved files must link to their destination paths. Patch links must keep the existing styling. When context does not identify an absolute path or file rows cannot be identified, Kent must keep the visible path or content and leave it unlinked.

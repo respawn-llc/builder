@@ -360,85 +360,6 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	}, nil
 }
 
-func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
-	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	defer lease.Release()
-	if err := s.metadata.SetProjectDefaultWorkspace(ctx, req.ProjectID, req.WorkspaceID); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
-}
-
-func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
-	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	defer lease.Release()
-	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
-		blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil || len(blockers) > 0 {
-			return blockers, nil, err
-		}
-		release, err := s.blockSessionStarts(ctx, sessionIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		blockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil {
-			release()
-			return nil, nil, err
-		}
-		return blockers, release, nil
-	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, nil, runtimeBlocker)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	resp := serverapi.ProjectWorkspaceUnlinkResponse{
-		ProjectID:   strings.TrimSpace(req.ProjectID),
-		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
-		Blockers:    blockers,
-		Unlinked:    len(blockers) == 0,
-	}
-	if !resp.Unlinked {
-		return resp, nil
-	}
-	projects, err := s.metadata.ListProjectHomeSummaries(ctx, req.ProjectID, 1, 0)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if len(projects) > 0 {
-		resp.Project = &projects[0]
-	}
-	return resp, nil
-}
-
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
@@ -460,20 +381,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	}
 
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-		blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil || len(blockers) > 0 {
-			return blockers, nil, err
-		}
-		release, err := s.blockSessionStarts(ctx, sessionIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		blockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil {
-			release()
-			return nil, nil, err
-		}
-		return blockers, release, nil
+		return withRuntimeBlockers(ctx, sessionIDs, s.projectActiveSessionBlockers, s.blockSessionStarts)
 	}
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
 		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
@@ -517,6 +425,28 @@ func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (
 		return func() {}, nil
 	}
 	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
+}
+
+func withRuntimeBlockers[T any](
+	ctx context.Context,
+	sessionIDs []string,
+	check func(context.Context, []string) ([]T, error),
+	block func(context.Context, []string) (func(), error),
+) ([]T, func(), error) {
+	blockers, err := check(ctx, sessionIDs)
+	if err != nil || len(blockers) > 0 {
+		return blockers, nil, err
+	}
+	release, err := block(ctx, sessionIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	blockers, err = check(ctx, sessionIDs)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return blockers, release, nil
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {

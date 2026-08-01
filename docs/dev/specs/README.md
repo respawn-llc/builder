@@ -9,6 +9,7 @@ Before writing, rewriting, reviewing, or validating a spec, follow the
 Area specs:
 
 - `core-runtime-tools.md`: product scope, sessions, authentication, configuration, tools, headless operation, and compaction.
+- `project-workspaces.md`: Project-workspace relationships, detach safety, API selection, and CLI detach/default contracts.
 - `tui-transcript.md`: terminal modes, transcript visibility, rendering, input, slash commands, worktrees, notifications.
 - `tui-startup.md`: interactive TUI launch, authentication, project binding, session selection, and attach behavior.
 - `tui-chat-core.md`: main-input composer — editing model, prompt history, path autocomplete UX, queue/steering pane, interrupts, clipboard paste.
