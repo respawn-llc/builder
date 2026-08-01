@@ -1391,6 +1391,64 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 }
 
+func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	authority := fixture.authority
+	currentStarted := make(chan struct{})
+	releaseCurrent := make(chan struct{})
+	current, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(currentStarted)
+			<-releaseCurrent
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start current execution: %v", err)
+	}
+	<-currentStarted
+
+	type replacementResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	replaced := make(chan replacementResult, 1)
+	go func() {
+		handle, replaceErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   ReplaceAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		replaced <- replacementResult{handle: handle, err: replaceErr}
+	}()
+	select {
+	case outcome := <-replaced:
+		t.Fatalf("replacement returned before current execution finished: %v", outcome.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseCurrent)
+	if _, err := current.Wait(context.Background()); err != nil {
+		t.Fatalf("wait current execution: %v", err)
+	}
+	outcome := <-replaced
+	if outcome.err != nil {
+		t.Fatalf("replace after current execution finished: %v", outcome.err)
+	}
+	if _, err := outcome.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait replacement execution: %v", err)
+	}
+}
+
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
