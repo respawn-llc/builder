@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -24,6 +25,31 @@ type taskStatusProjectionTestRunner struct{}
 
 type taskStatusProjectionTestAssignmentSteerer struct{}
 
+type taskStatusLiveTarget interface {
+	taskStatusLiveTarget()
+}
+
+type taskStatusNoLiveTarget struct{}
+
+func (taskStatusNoLiveTarget) taskStatusLiveTarget() {}
+
+type taskStatusAgentTarget struct {
+	sessionID runtimeids.SessionID
+}
+
+func (taskStatusAgentTarget) taskStatusLiveTarget() {}
+
+type taskStatusScriptTarget struct {
+	path string
+}
+
+func (taskStatusScriptTarget) taskStatusLiveTarget() {}
+
+type taskStatusExpectedTarget struct {
+	nodeID workflow.NodeID
+	live   taskStatusLiveTarget
+}
+
 type controllerBackedTaskStatusRunner struct {
 	authority *sessionruntime.Authority
 	mu        sync.Mutex
@@ -31,23 +57,14 @@ type controllerBackedTaskStatusRunner struct {
 }
 
 type controllerBackedTaskStatusExecution struct {
-	targetKind       controllerBackedTaskStatusTargetKind
-	sessionID        runtimeids.SessionID
+	target           taskStatusLiveTarget
 	plan             sessionruntime.AgentRuntimePlan
 	request          *tools.AskQuestionRequest
-	scriptPath       string
 	queued           bool
 	admissionRelease <-chan struct{}
 	executionRelease <-chan struct{}
 	started          chan<- sessionruntime.ExecutionHandle
 }
-
-type controllerBackedTaskStatusTargetKind uint8
-
-const (
-	controllerBackedAgentTarget controllerBackedTaskStatusTargetKind = iota + 1
-	controllerBackedScriptTarget
-)
 
 func newControllerBackedTaskStatusRunner(authority *sessionruntime.Authority) *controllerBackedTaskStatusRunner {
 	return &controllerBackedTaskStatusRunner{
@@ -79,12 +96,13 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	if !ok {
 		return fmt.Errorf("no test execution configured for Task %q", reference.TaskID)
 	}
-	if config.targetKind == controllerBackedScriptTarget {
+	switch target := config.target.(type) {
+	case taskStatusScriptTarget:
 		lease.Release()
 		handle, err := r.authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
 			Workflow: &lease,
 			Command: sessionruntime.ScriptCommand{
-				Path: config.scriptPath,
+				Path: target.path,
 				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
 			},
 		})
@@ -93,43 +111,43 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 		}
 		config.started <- handle
 		return nil
-	}
-	if config.targetKind != controllerBackedAgentTarget {
-		return fmt.Errorf("unsupported test execution target kind %d", config.targetKind)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(config.sessionID)
-	if err != nil {
-		return err
-	}
-	if !config.queued {
-		lease.Release()
-	}
-	handle, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: descriptor,
-		Runtime:    &config.plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			if config.request != nil {
-				_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
-				return err
-			}
-			<-config.executionRelease
-			return nil
-		},
-	})
-	if err != nil {
-		return err
-	}
-	config.started <- handle
-	if config.queued {
-		select {
-		case <-config.admissionRelease:
-		case <-ctx.Done():
-			return context.Cause(ctx)
+	case taskStatusAgentTarget:
+		descriptor, err := session.NewOpenSessionDescriptor(target.sessionID)
+		if err != nil {
+			return err
 		}
+		if !config.queued {
+			lease.Release()
+		}
+		handle, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+			Descriptor: descriptor,
+			Runtime:    &config.plan,
+			Workflow:   &lease,
+			Resource:   sessionruntime.OpenAgentResource{},
+			Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+				if config.request != nil {
+					_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
+					return err
+				}
+				<-config.executionRelease
+				return nil
+			},
+		})
+		if err != nil {
+			return err
+		}
+		config.started <- handle
+		if config.queued {
+			select {
+			case <-config.admissionRelease:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+		return nil
+	default:
+		return errors.New("unsupported test execution target")
 	}
-	return nil
 }
 
 func (taskStatusProjectionTestAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (workflowexecution.CurrentNodeAssignmentSteer, error) {
@@ -211,10 +229,9 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 }
 
 type realTaskStatusExecution struct {
-	handle     sessionruntime.ExecutionHandle
-	release    chan struct{}
-	sessionID  string
-	scriptPath string
+	handle  sessionruntime.ExecutionHandle
+	release chan struct{}
+	target  taskStatusLiveTarget
 }
 
 func startRealTaskStatusExecution(
@@ -224,10 +241,11 @@ func startRealTaskStatusExecution(
 	queued bool,
 	request *tools.AskQuestionRequest,
 ) (startedCurrentNodeViewTask, realTaskStatusExecution) {
+	sessionID := surfaces.fixture.newCurrentNodeViewSession(t)
 	return startControllerBackedTaskStatusExecution(t, surfaces, backlog, controllerBackedTaskStatusExecution{
-		targetKind: controllerBackedAgentTarget,
-		queued:     queued,
-		request:    request,
+		target:  taskStatusAgentTarget{sessionID: sessionID},
+		queued:  queued,
+		request: request,
 	})
 }
 
@@ -239,8 +257,7 @@ func startRealTaskStatusScriptExecution(
 ) (startedCurrentNodeViewTask, realTaskStatusExecution) {
 	t.Helper()
 	return startControllerBackedTaskStatusExecution(t, surfaces, backlog, controllerBackedTaskStatusExecution{
-		targetKind: controllerBackedScriptTarget,
-		scriptPath: scriptPath,
+		target: taskStatusScriptTarget{path: scriptPath},
 	})
 }
 
@@ -251,14 +268,9 @@ func startControllerBackedTaskStatusExecution(
 	options controllerBackedTaskStatusExecution,
 ) (startedCurrentNodeViewTask, realTaskStatusExecution) {
 	t.Helper()
-	var sessionID runtimeids.SessionID
-	if options.targetKind == controllerBackedAgentTarget {
-		sessionID = surfaces.fixture.newCurrentNodeViewSession(t)
-	}
 	release := make(chan struct{})
 	admissionRelease := make(chan struct{})
 	startedHandle := make(chan sessionruntime.ExecutionHandle, 1)
-	options.sessionID = sessionID
 	options.plan = surfaces.fixture.newAgentRuntimePlan(t)
 	options.admissionRelease = admissionRelease
 	options.executionRelease = release
@@ -284,10 +296,11 @@ func startControllerBackedTaskStatusExecution(
 		task:        backlog.task,
 		currentNode: startedResult.Mutation.Created[0].Reference,
 	}
-	if options.targetKind == controllerBackedAgentTarget {
+	agentTarget, isAgent := options.target.(taskStatusAgentTarget)
+	if isAgent {
 		if _, err := surfaces.fixture.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
 			Association: workflowstore.TaskSessionAssociationRequest{
-				SessionID:    sessionID,
+				SessionID:    agentTarget.sessionID,
 				CurrentNode:  task.currentNode,
 				AssociatedAt: time.Now().UTC(),
 			},
@@ -323,8 +336,8 @@ func startControllerBackedTaskStatusExecution(
 		if executions[0].Queued != options.queued {
 			return false
 		}
-		if options.targetKind == controllerBackedScriptTarget {
-			return executions[0].Script != nil && executions[0].Script.Path == options.scriptPath
+		if scriptTarget, ok := options.target.(taskStatusScriptTarget); ok {
+			return executions[0].Script != nil && executions[0].Script.Path == scriptTarget.path
 		}
 		if options.request == nil {
 			return true
@@ -336,10 +349,9 @@ func startControllerBackedTaskStatusExecution(
 		return executions[0].HasPendingPromptKind(kind)
 	}, "timed out waiting for stable live Task status execution")
 	return task, realTaskStatusExecution{
-		handle:     handle,
-		release:    release,
-		sessionID:  sessionID.String(),
-		scriptPath: options.scriptPath,
+		handle:  handle,
+		release: release,
+		target:  options.target,
 	}
 }
 
