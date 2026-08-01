@@ -222,6 +222,9 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 		_, err = c.CompleteIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
 			SessionID: req.SessionID,
 		}, req.TransitionID, req.OutputValues, req.Commentary)
+		if err == nil {
+			c.clearProtocolViolations(req.ScopeID)
+		}
 	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
@@ -399,11 +402,8 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		return workflowstore.CurrentNodeCompletionResult{}, errors.New("current node workflow controller is required")
 	}
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.CurrentNodeCompletionResult, error) {
-		source, err := c.store.ResolveIdleExecutableCurrentNode(ctx, selector)
+		source, err := c.resolveQuiescentIdleCurrentNode(ctx, selector)
 		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
-		}
-		if err := c.EnsureTaskQuiescent(source.Reference.TaskID); err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
 		completed, err := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
@@ -442,32 +442,134 @@ func (c *CurrentNodeController) RecordProtocolViolation(ctx context.Context, req
 		return workflowruntime.ViolationResult{}, errors.New("workflow protocol violation cap must be positive")
 	}
 	if _, err := c.liveLease(req.ScopeID); err != nil {
+		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) && req.SessionID != nil {
+			return c.recordIdleCurrentNodeProtocolViolation(ctx, req)
+		}
 		return workflowruntime.ViolationResult{}, err
 	}
-	c.mu.Lock()
-	c.violations[req.ScopeID]++
-	count := c.violations[req.ScopeID]
-	c.mu.Unlock()
-	interrupted := count >= int64(req.MaxCount)
-	if interrupted {
-		cause := errors.New("workflow protocol violation budget exhausted")
-		if req.Detail != "" {
-			cause = errors.New(req.Detail)
-		}
-		if err := c.FailCurrentNodeScope(ctx, req.ScopeID, reasonProtocolViolationCap, cause); err != nil {
+	result := c.incrementProtocolViolation(req.ScopeID, req.MaxCount)
+	if result.Interrupted {
+		if err := c.FailCurrentNodeScope(ctx, req.ScopeID, reasonProtocolViolationCap, workflowProtocolViolationCause(req)); err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
 	}
-	return workflowruntime.ViolationResult{Count: count, Interrupted: interrupted}, nil
+	return result, nil
 }
 
-func (c *CurrentNodeController) ResetProtocolViolationBudget(_ context.Context, req workflowruntime.ViolationResetRequest) error {
+func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
+	ctx context.Context,
+	req workflowruntime.ViolationRequest,
+) (workflowruntime.ViolationResult, error) {
+	var interruptedReference *workflow.CurrentNodeReference
+	result, err := RunMutation(ctx, c.permit, func(ctx context.Context) (workflowruntime.ViolationResult, error) {
+		source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
+			SessionID: req.SessionID,
+		})
+		if err != nil {
+			return workflowruntime.ViolationResult{}, err
+		}
+		if source.Scheduling == nil {
+			return workflowruntime.ViolationResult{}, errors.New("idle current node scheduling is required")
+		}
+		switch source.Scheduling.State {
+		case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingInterrupted:
+		default:
+			return workflowruntime.ViolationResult{}, fmt.Errorf(
+				"idle current node has unsupported scheduling state %q",
+				source.Scheduling.State,
+			)
+		}
+		result := c.incrementProtocolViolation(req.ScopeID, req.MaxCount)
+		if !result.Interrupted {
+			return result, nil
+		}
+		if source.Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
+			c.clearProtocolViolations(req.ScopeID)
+			return result, nil
+		}
+		if err := c.store.InterruptCurrentNode(
+			ctx,
+			source.Reference,
+			reasonProtocolViolationCap,
+			workflow.CurrentNodeInterruptionDetail{
+				Code:   string(reasonProtocolViolationCap),
+				Fields: map[string]string{"error": workflowProtocolViolationCause(req).Error()},
+			},
+		); err != nil {
+			return workflowruntime.ViolationResult{}, err
+		}
+		reference := source.Reference
+		interruptedReference = &reference
+		c.clearProtocolViolations(req.ScopeID)
+		return result, nil
+	})
+	if err != nil {
+		return workflowruntime.ViolationResult{}, err
+	}
+	if interruptedReference != nil {
+		c.publishPendingInterruptedCurrentNode(ctx, *interruptedReference, reasonProtocolViolationCap)
+	}
+	return result, nil
+}
+
+func (c *CurrentNodeController) resolveQuiescentIdleCurrentNode(
+	ctx context.Context,
+	selector workflowstore.IdleCurrentNodeSelector,
+) (workflow.CurrentNode, error) {
+	source, err := c.store.ResolveIdleExecutableCurrentNode(ctx, selector)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	if err := c.EnsureTaskQuiescent(source.Reference.TaskID); err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	return source, nil
+}
+
+func (c *CurrentNodeController) incrementProtocolViolation(
+	scopeID runtimeids.ExecutionScopeID,
+	maxCount int,
+) workflowruntime.ViolationResult {
+	c.mu.Lock()
+	c.violations[scopeID]++
+	count := c.violations[scopeID]
+	c.mu.Unlock()
+	return workflowruntime.ViolationResult{
+		Count:       count,
+		Interrupted: count >= int64(maxCount),
+	}
+}
+
+func (c *CurrentNodeController) clearProtocolViolations(scopeID runtimeids.ExecutionScopeID) {
+	c.mu.Lock()
+	delete(c.violations, scopeID)
+	c.mu.Unlock()
+}
+
+func workflowProtocolViolationCause(req workflowruntime.ViolationRequest) error {
+	if req.Detail != "" {
+		return errors.New(req.Detail)
+	}
+	return errors.New("workflow protocol violation budget exhausted")
+}
+
+func (c *CurrentNodeController) ResetProtocolViolationBudget(ctx context.Context, req workflowruntime.ViolationResetRequest) error {
 	if _, err := c.liveLease(req.ScopeID); err != nil {
+		if !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) || req.SessionID == nil {
+			return err
+		}
+		_, err = RunMutation(ctx, c.permit, func(ctx context.Context) (workflow.CurrentNode, error) {
+			source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
+				SessionID: req.SessionID,
+			})
+			if err == nil {
+				c.clearProtocolViolations(req.ScopeID)
+			}
+			return source, err
+		})
 		return err
 	}
-	c.mu.Lock()
-	delete(c.violations, req.ScopeID)
-	c.mu.Unlock()
+	c.clearProtocolViolations(req.ScopeID)
 	return nil
 }
 
@@ -558,7 +660,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || !completed || interrupted || closed {
 		return
 	}
-	committed, err := waitCurrentNodeAssignmentSteers(context.Background(), starts)
+	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	committed, err := waitCurrentNodeAssignmentSteers(waitCtx, starts)
 	if err != nil {
 		c.handleCurrentNodeStartFailures(committed, false, err)
 		return

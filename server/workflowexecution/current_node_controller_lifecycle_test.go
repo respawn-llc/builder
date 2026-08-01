@@ -53,8 +53,17 @@ func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testi
 		_ = authority.Close(context.Background())
 	})
 
+	scopeID := runtimeids.NewExecutionScopeID()
+	if _, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
+		ScopeID:   scopeID,
+		SessionID: &sessionID,
+		Kind:      workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount:  2,
+	}); err != nil {
+		t.Fatalf("record retained Session protocol violation before completion: %v", err)
+	}
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      runtimeids.NewExecutionScopeID(),
+		ScopeID:      scopeID,
 		SessionID:    &sessionID,
 		TransitionID: "next",
 	}); err != nil {
@@ -62,6 +71,73 @@ func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testi
 	}
 	if calls := store.completionCount(); calls != 1 {
 		t.Fatalf("completion calls = %d, want 1", calls)
+	}
+	controller.mu.Lock()
+	_, retainedViolation := controller.violations[scopeID]
+	controller.mu.Unlock()
+	if retainedViolation {
+		t.Fatal("successful retained Session completion kept its retired-scope violation counter")
+	}
+}
+
+func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterScopeRetires(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	source := currentNodeReferenceForControllerTest(t, "task-retained-session-violation", "node-source")
+	sourceNode := workflow.CurrentNode{
+		Reference: source,
+		SessionID: &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	request := workflowruntime.ViolationRequest{
+		ScopeID:   runtimeids.NewExecutionScopeID(),
+		SessionID: &sessionID,
+		Kind:      workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount:  2,
+	}
+
+	first, err := controller.RecordProtocolViolation(context.Background(), request)
+	if err != nil {
+		t.Fatalf("record first retained Session protocol violation: %v", err)
+	}
+	if first.Count != 1 || first.Interrupted {
+		t.Fatalf("first retained Session protocol violation = %+v", first)
+	}
+	if err := controller.ResetProtocolViolationBudget(context.Background(), workflowruntime.ViolationResetRequest{
+		ScopeID:   request.ScopeID,
+		SessionID: &sessionID,
+	}); err != nil {
+		t.Fatalf("reset retained Session protocol violation budget: %v", err)
+	}
+	afterReset, err := controller.RecordProtocolViolation(context.Background(), request)
+	if err != nil {
+		t.Fatalf("record retained Session protocol violation after reset: %v", err)
+	}
+	if afterReset.Count != 1 || afterReset.Interrupted {
+		t.Fatalf("retained Session protocol violation after reset = %+v", afterReset)
+	}
+	atCap, err := controller.RecordProtocolViolation(context.Background(), request)
+	if err != nil {
+		t.Fatalf("record retained Session protocol violation at cap: %v", err)
+	}
+	if atCap.Count != 2 || !atCap.Interrupted {
+		t.Fatalf("retained Session protocol violation at cap = %+v", atCap)
+	}
+	controller.mu.Lock()
+	_, retainedViolation := controller.violations[request.ScopeID]
+	controller.mu.Unlock()
+	if retainedViolation {
+		t.Fatal("retained Session kept retired-scope violation counter after reaching cap")
 	}
 }
 
@@ -365,7 +441,17 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	assignmentDeadline := make(chan time.Time, 1)
+	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer: deadlineRecordingCurrentNodeAssignmentSteerer{
+			reference: successor,
+			deadline:  assignmentDeadline,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -404,6 +490,15 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}
 	if err := sourceHandle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop source: %v", err)
+	}
+	select {
+	case deadline := <-assignmentDeadline:
+		remaining := time.Until(deadline)
+		if remaining < interruptCleanupTimeout-time.Second || remaining > interruptCleanupTimeout {
+			t.Fatalf("finalization assignment wait deadline remaining = %s, want %s", remaining, interruptCleanupTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("finalization did not wait for successor assignment with a deadline")
 	}
 	select {
 	case started := <-runner.started:

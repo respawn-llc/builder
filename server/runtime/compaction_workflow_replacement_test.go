@@ -260,6 +260,9 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 	if err != nil || !receipt.Committed {
 		t.Fatalf("compact workflow context: receipt=%+v error=%v", receipt, err)
 	}
+	if controller.resetSessionID == nil || controller.resetSessionID.String() != engine.SessionID() {
+		t.Fatalf("workflow protocol budget reset Session = %v, want %s", controller.resetSessionID, engine.SessionID())
+	}
 
 	violation, err := engine.recordWorkflowProtocolViolation(
 		context.Background(),
@@ -284,6 +287,7 @@ func (p *workflowTaskAwarenessProbe) TaskAwareness(context.Context, workflow.Tas
 type workflowProtocolBudgetController struct {
 	externallyCompletedWorkflowController
 	violationCount atomic.Int64
+	resetSessionID *runtimeids.SessionID
 }
 
 func (c *workflowProtocolBudgetController) RecordProtocolViolation(
@@ -294,9 +298,10 @@ func (c *workflowProtocolBudgetController) RecordProtocolViolation(
 }
 
 func (c *workflowProtocolBudgetController) ResetProtocolViolationBudget(
-	context.Context,
-	workflowruntime.ViolationResetRequest,
+	_ context.Context,
+	request workflowruntime.ViolationResetRequest,
 ) error {
+	c.resetSessionID = request.SessionID
 	c.violationCount.Store(0)
 	return nil
 }

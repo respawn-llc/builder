@@ -69,6 +69,44 @@ func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.Comm
 	return s.receipt, s.err
 }
 
+type deadlineRecordingCurrentNodeAssignmentSteerer struct {
+	reference workflow.CurrentNodeReference
+	deadline  chan<- time.Time
+}
+
+func (s deadlineRecordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+	_ context.Context,
+	reference workflow.CurrentNodeReference,
+) (CurrentNodeAssignmentSteer, error) {
+	if !reference.Equal(s.reference) {
+		return completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}, nil
+	}
+	return &deadlineRecordingCurrentNodeAssignmentSteer{deadline: s.deadline}, nil
+}
+
+type deadlineRecordingCurrentNodeAssignmentSteer struct {
+	deadline chan<- time.Time
+	mu       sync.Mutex
+	recorded bool
+}
+
+func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recorded {
+		return session.CommitReceipt{Committed: true}, nil
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return session.CommitReceipt{}, errors.New("assignment steer wait context has no deadline")
+	}
+	s.recorded = true
+	s.deadline <- deadline
+	return session.CommitReceipt{Committed: true}, nil
+}
+
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference
