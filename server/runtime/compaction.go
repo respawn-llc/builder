@@ -74,8 +74,17 @@ func (e *Engine) CompactContext(ctx context.Context, args string) error {
 }
 
 func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
+	return e.CompactContextWithActiveHookAtAcceptanceOrder(ctx, args, onActive, nil)
+}
+
+func (e *Engine) CompactContextWithActiveHookAtAcceptanceOrder(
+	ctx context.Context,
+	args string,
+	onActive func(),
+	acceptanceOrder *uint64,
+) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithActiveHook(ctx, args, onActive)
+	return e.compactionFlow.CompactContextWithActiveHookAtAcceptanceOrder(ctx, args, onActive, acceptanceOrder)
 }
 
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
@@ -101,24 +110,39 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
+	return c.CompactContextWithActiveHookAtAcceptanceOrder(ctx, args, onActive, nil)
+}
+
+func (c *defaultContextCompactor) CompactContextWithActiveHookAtAcceptanceOrder(
+	ctx context.Context,
+	args string,
+	onActive func(),
+	acceptanceOrder *uint64,
+) (session.CommitReceipt, error) {
 	instructions, err := newCompactionInstructionsInput(args)
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive, true)
+	return c.compactManualContext(ctx, instructions, onActive, true, acceptanceOrder)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
-	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false, nil)
 }
 
-func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), admit bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactManualContext(
+	ctx context.Context,
+	instructions compactionInstructionsInput,
+	onActive func(),
+	admit bool,
+	acceptanceOrder *uint64,
+) (session.CommitReceipt, error) {
 	if admit {
 		if err := c.engine.admitManualCompactionForRequest(); err != nil {
 			return session.CommitReceipt{}, err
 		}
 		if snapshot := c.steps.Snapshot(); snapshot != nil && isAgentStepCapable(snapshot.ActiveKind) {
-			entry, err := c.engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGeneration(ctx, instructions, onActive)
+			entry, err := c.engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGenerationOrdered(ctx, instructions, onActive, acceptanceOrder)
 			if err == nil {
 				select {
 				case result := <-entry.done:

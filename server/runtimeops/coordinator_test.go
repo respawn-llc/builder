@@ -36,6 +36,59 @@ func TestCoordinatorRecordsExactInputOperationOutcomes(t *testing.T) {
 	assertState(t, snapshot, refs[4], clientui.RuntimeInputReconciliationUnknown)
 }
 
+func TestCoordinatorAssignsAcceptanceOrderBeforeRunningOperation(t *testing.T) {
+	coord := NewCoordinator()
+	firstRef := testRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
+	secondRef := testRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
+	firstRef.ClientRequestID = runtimeids.NewRuntimeClientRequestID()
+	secondRef.ClientRequestID = runtimeids.NewRuntimeClientRequestID()
+
+	var firstOrder uint64
+	_, err := Do(
+		coord,
+		context.Background(),
+		"session-acceptance-order",
+		firstRef,
+		"first",
+		func(left, right string) bool { return left == right },
+		func(_ context.Context, attempt Attempt) (struct{}, error) {
+			var ok bool
+			firstOrder, ok = attempt.AcceptanceOrder()
+			if !ok {
+				return struct{}{}, errors.New("first operation has no acceptance order")
+			}
+			return struct{}{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("first operation: %v", err)
+	}
+
+	var secondOrder uint64
+	_, err = Do(
+		coord,
+		context.Background(),
+		"session-acceptance-order",
+		secondRef,
+		"second",
+		func(left, right string) bool { return left == right },
+		func(_ context.Context, attempt Attempt) (struct{}, error) {
+			var ok bool
+			secondOrder, ok = attempt.AcceptanceOrder()
+			if !ok {
+				return struct{}{}, errors.New("second operation has no acceptance order")
+			}
+			return struct{}{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("second operation: %v", err)
+	}
+	if firstOrder == 0 || secondOrder != firstOrder+1 {
+		t.Fatalf("acceptance orders = first:%d second:%d, want consecutive order", firstOrder, secondOrder)
+	}
+}
+
 func TestCoordinatorCancelTerminalOperationDoesNotInterruptActiveRuntime(t *testing.T) {
 	coord := NewCoordinator()
 	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)

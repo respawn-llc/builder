@@ -54,6 +54,37 @@ func TestManualBoundaryCoordinatorRejectsAdmissionWithoutDispatchedGeneration(t 
 	}
 }
 
+func TestManualBoundaryCoordinatorOrdersPendingEntriesByAcceptanceOrder(t *testing.T) {
+	coordinator := newManualBoundaryCoordinator()
+	coordinator.beginGeneration()
+	firstOrder := uint64(1)
+	secondOrder := uint64(2)
+
+	second, err := coordinator.enqueueForGenerationOrdered(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		&secondOrder,
+	)
+	if err != nil {
+		t.Fatalf("enqueue second accepted request: %v", err)
+	}
+	first, err := coordinator.enqueueForGenerationOrdered(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		&firstOrder,
+	)
+	if err != nil {
+		t.Fatalf("enqueue first accepted request: %v", err)
+	}
+
+	entries := coordinator.sealAndTake()
+	if len(entries) != 2 || entries[0] != first || entries[1] != second {
+		t.Fatalf("pending entries = %+v, want acceptance order first then second", entries)
+	}
+}
+
 func TestManualBoundaryCoordinatorMovesLateAdmissionToNextGeneration(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
 	firstGeneration := coordinator.beginGeneration()
@@ -157,7 +188,7 @@ func TestOwnedManualCompactionWaitsForCompletionAfterCallerCancellation(t *testi
 	defer cancel()
 	resultDone := make(chan manualCompactionResult, 1)
 	go func() {
-		receipt, err := compactor.compactManualContext(ctx, compactionInstructionsInput{}, nil, true)
+		receipt, err := compactor.compactManualContext(ctx, compactionInstructionsInput{}, nil, true, nil)
 		resultDone <- manualCompactionResult{receipt: receipt, err: err}
 	}()
 

@@ -534,11 +534,15 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
 	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+		var acceptanceOrder *uint64
+		if order, ok := attempt.AcceptanceOrder(); ok {
+			acceptanceOrder = &order
+		}
 		var receipt session.CommitReceipt
 		err := s.runManualCompactionExecution(ctx, req.SessionID, attempt, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
+			compactReceipt, compactErr := engine.CompactContextWithActiveHookAtAcceptanceOrder(runCtx, req.Args, func() {
 				s.markManualCompactionActive(memoReq.SessionID, req.OperationRef, engine)
-			})
+			}, acceptanceOrder)
 			receipt = compactReceipt
 			return mapManualCompactionAdmissionError(compactErr)
 		})

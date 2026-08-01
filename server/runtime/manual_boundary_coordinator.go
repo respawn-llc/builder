@@ -43,13 +43,14 @@ const (
 )
 
 type pendingManualCompaction struct {
-	mu           sync.Mutex
-	state        pendingManualCompactionState
-	generationID uint64
-	ctx          context.Context
-	instructions compactionInstructionsInput
-	onActive     func()
-	done         chan manualCompactionResult
+	mu              sync.Mutex
+	state           pendingManualCompactionState
+	generationID    uint64
+	acceptanceOrder *uint64
+	ctx             context.Context
+	instructions    compactionInstructionsInput
+	onActive        func()
+	done            chan manualCompactionResult
 }
 
 type manualCompactionResult struct {
@@ -120,6 +121,15 @@ func (c *manualBoundaryCoordinator) enqueueForGeneration(
 	instructions compactionInstructionsInput,
 	onActive func(),
 ) (*pendingManualCompaction, error) {
+	return c.enqueueForGenerationOrdered(ctx, instructions, onActive, nil)
+}
+
+func (c *manualBoundaryCoordinator) enqueueForGenerationOrdered(
+	ctx context.Context,
+	instructions compactionInstructionsInput,
+	onActive func(),
+	acceptanceOrder *uint64,
+) (*pendingManualCompaction, error) {
 	if c == nil {
 		return nil, errors.New("manual boundary coordinator is required")
 	}
@@ -127,17 +137,31 @@ func (c *manualBoundaryCoordinator) enqueueForGeneration(
 		ctx = context.Background()
 	}
 	entry := &pendingManualCompaction{
-		state:        pendingManualCompactionQueued,
-		ctx:          ctx,
-		instructions: instructions,
-		onActive:     onActive,
-		done:         make(chan manualCompactionResult, 1),
+		state:           pendingManualCompactionQueued,
+		acceptanceOrder: cloneManualCompactionAcceptanceOrder(acceptanceOrder),
+		ctx:             ctx,
+		instructions:    instructions,
+		onActive:        onActive,
+		done:            make(chan manualCompactionResult, 1),
 	}
 	for {
 		c.mu.Lock()
 		if c.current != nil && c.current.phase == manualBoundaryGenerationOpen {
 			entry.generationID = c.current.id
-			c.current.pending = append(c.current.pending, entry)
+			pending := c.current.pending
+			insertAt := len(pending)
+			if entry.acceptanceOrder != nil {
+				for index, candidate := range pending {
+					if candidate.acceptanceOrder == nil || *entry.acceptanceOrder < *candidate.acceptanceOrder {
+						insertAt = index
+						break
+					}
+				}
+			}
+			pending = append(pending, nil)
+			copy(pending[insertAt+1:], pending[insertAt:])
+			pending[insertAt] = entry
+			c.current.pending = pending
 			c.mu.Unlock()
 			return entry, nil
 		}
@@ -158,6 +182,14 @@ func (c *manualBoundaryCoordinator) enqueueForGeneration(
 		case <-changed:
 		}
 	}
+}
+
+func cloneManualCompactionAcceptanceOrder(order *uint64) *uint64 {
+	if order == nil {
+		return nil
+	}
+	copyOrder := *order
+	return &copyOrder
 }
 
 func (c *manualBoundaryCoordinator) sealAndTake() []*pendingManualCompaction {

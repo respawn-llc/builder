@@ -81,6 +81,7 @@ type sessionLedger struct {
 	queuedByQueueItemID     map[runtimeids.QueueItemID]*queuedOperationIdentity
 	queuedByOperationKey    map[string]*queuedOperationIdentity
 	commitBarriers          map[string]*operationCommitBarrier
+	nextAcceptanceOrder     uint64
 }
 
 type queuedOperationIdentity struct {
@@ -129,7 +130,9 @@ func NewCoordinator(options ...CoordinatorOption) *Coordinator {
 }
 
 type Attempt struct {
-	ctx context.Context
+	ctx                context.Context
+	acceptanceOrder    uint64
+	hasAcceptanceOrder bool
 }
 
 func (a Attempt) Context() context.Context {
@@ -137,6 +140,10 @@ func (a Attempt) Context() context.Context {
 		return context.Background()
 	}
 	return a.ctx
+}
+
+func (a Attempt) AcceptanceOrder() (uint64, bool) {
+	return a.acceptanceOrder, a.hasAcceptanceOrder
 }
 
 func Do[Req any, Resp any](
@@ -196,6 +203,8 @@ func Do[Req any, Resp any](
 				return zero, ctx.Err()
 			}
 		}
+		ledger.nextAcceptanceOrder++
+		acceptanceOrder := ledger.nextAcceptanceOrder
 		attemptCtx, cancel := context.WithCancel(context.Background())
 		entry := &operationEntry{
 			req:             req,
@@ -208,7 +217,11 @@ func Do[Req any, Resp any](
 		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, false, coord.now())
 		coord.mu.Unlock()
 
-		resp, err := run(ctx, Attempt{ctx: attemptCtx})
+		resp, err := run(ctx, Attempt{
+			ctx:                attemptCtx,
+			acceptanceOrder:    acceptanceOrder,
+			hasAcceptanceOrder: true,
+		})
 
 		coord.mu.Lock()
 		_, tombstoned := ledger.tombstones[key]

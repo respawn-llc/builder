@@ -99,15 +99,9 @@ func (s *compactionRuntimeState) releaseCompactionGate() {
 }
 
 func (e *Engine) admitManualCompaction() error {
-	if e == nil {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonTooSoon}
-	}
-	state := e.compactionRuntimeState()
-	if state.CompactionActive() {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonActive}
-	}
-	if e.CompactionMode() == "none" {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonDisabled}
+	state, err := e.admitManualCompactionPolicy()
+	if err != nil {
+		return err
 	}
 	if !state.ManualCompactionEligible() {
 		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonTooSoon}
@@ -115,15 +109,21 @@ func (e *Engine) admitManualCompaction() error {
 	return nil
 }
 
-func (e *Engine) admitManualCompactionForRequest() error {
+func (e *Engine) admitManualCompactionPolicy() (*compactionRuntimeState, error) {
 	if e == nil {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonTooSoon}
+		return nil, &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonTooSoon}
 	}
-	if e.compactionRuntimeState().CompactionActive() {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonActive}
+	state := e.compactionRuntimeState()
+	if state.CompactionActive() {
+		return nil, &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonActive}
 	}
 	if e.CompactionMode() == "none" {
-		return &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonDisabled}
+		return nil, &ManualCompactionAdmissionError{Reason: ManualCompactionAdmissionReasonDisabled}
 	}
-	return nil
+	return state, nil
+}
+
+func (e *Engine) admitManualCompactionForRequest() error {
+	_, err := e.admitManualCompactionPolicy()
+	return err
 }
