@@ -22,6 +22,7 @@ import (
 	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func appendSessionMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
@@ -601,7 +602,7 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 		Transition: serverapi.SessionTransition{
 			Action:          serverapi.SessionTransitionActionOpenSession,
 			TargetSessionID: parent.Meta().SessionID,
-			InitialInput:    "draft reply",
+			InitialInput:    textutil.Value("draft reply"),
 		},
 	})
 	if err != nil {

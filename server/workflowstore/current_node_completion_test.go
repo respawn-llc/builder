@@ -79,8 +79,11 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	if completed.Handoff != (CompletionHandoff{SourceNodeDisplayName: "Plan", DestinationDisplayName: "Review"}) {
 		t.Fatalf("completion handoff = %+v, want Plan -> Review", completed.Handoff)
 	}
-	if len(completed.AutomaticIntents) != 1 || !completed.AutomaticIntents[0].Equal(target) {
+	if len(completed.AutomaticIntents) != 1 || !completed.AutomaticIntents[0].CurrentNode.Equal(target) {
 		t.Fatalf("completion automatic intents = %+v, want review current node", completed.AutomaticIntents)
+	}
+	if completed.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
+		t.Fatalf("completion automatic intent kind = %q, want %q", completed.AutomaticIntents[0].NodeKind, workflow.NodeKindAgent)
 	}
 
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -107,6 +110,205 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	}
 	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(target) {
 		t.Fatalf("current nodes after stale completion = %+v, want unchanged review", currentNodes)
+	}
+}
+
+func TestCompleteCurrentNodeInfersOnlyOutgoingFanoutTransition(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode without transition ID: %v", err)
+	}
+	if len(completed.Mutation.Created) != 2 {
+		t.Fatalf("completion mutation = %+v, want two fan-out branches", completed.Mutation)
+	}
+	branches := map[workflow.TransitionBranchKey]bool{}
+	for _, currentNode := range completed.Mutation.Created {
+		branchKey, present := currentNode.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("completion Current Node = %+v, want branch scope", currentNode)
+		}
+		branches[branchKey] = true
+	}
+	if !branches["split_a"] || !branches["split_b"] {
+		t.Fatalf("completion branches = %+v, want split_a and split_b", branches)
+	}
+	if len(completed.AutomaticIntents) != 2 {
+		t.Fatalf("completion automatic intents = %+v, want both fan-out branches", completed.AutomaticIntents)
+	}
+	for _, intent := range completed.AutomaticIntents {
+		if intent.NodeKind != workflow.NodeKindAgent {
+			t.Fatalf("fan-out automatic intent = %+v, want Agent Node kind", intent)
+		}
+	}
+}
+
+func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
+	}
+	if len(split.Mutation.Created) != 2 {
+		t.Fatalf("split mutation = %+v, want two branches", split.Mutation)
+	}
+	for _, intent := range split.AutomaticIntents {
+		if intent.NodeKind != workflow.NodeKindAgent {
+			t.Fatalf("split automatic intent = %+v, want Agent Node kind", intent)
+		}
+	}
+
+	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       first.Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{"joined": "branch complete"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       second.Reference,
+		TransitionID: "join",
+		OutputValues: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode second join arrival: %v", err)
+	}
+	if len(joined.AutomaticIntents) != 1 {
+		t.Fatalf("join continuation automatic intents = %+v, want one synth successor", joined.AutomaticIntents)
+	}
+	if joined.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
+		t.Fatalf("join continuation automatic intent = %+v, want Agent Node kind", joined.AutomaticIntents[0])
+	}
+}
+
+func TestCompleteCurrentNodeFanoutPreviousTargetOrNewRetainsBranchSessions(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	branches := []struct {
+		edgeKey   string
+		targetKey string
+	}{
+		{edgeKey: "split_a", targetKey: "impl_a"},
+		{edgeKey: "split_b", targetKey: "impl_b"},
+	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		for _, branch := range branches {
+			edge := edgeByKey(t, definition, branch.edgeKey)
+			record := workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID)
+			record.ContextMode = workflow.ContextModeContinueSession
+			record.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	expectedSessions := make(map[workflow.TransitionBranchKey]runtimeids.SessionID)
+	for index, branch := range branches {
+		target := nodeByKey(t, definition, branch.targetKey)
+		branchKey := workflow.TransitionBranchKey(branch.edgeKey)
+		targetReference, err := workflow.NewCurrentNodeReference(
+			task.ID,
+			workflow.NodeIDOf(target),
+			&branchKey,
+		)
+		if err != nil {
+			t.Fatalf("NewCurrentNodeReference %s: %v", branch.edgeKey, err)
+		}
+		expectedSessions[branchKey] = associateTaskSessionForTest(
+			t,
+			ctx,
+			store,
+			binding,
+			cfg,
+			targetReference,
+			time.UnixMilli(1_700_000_000_000+int64(index)).UTC(),
+		)
+	}
+
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if len(completed.Mutation.Created) != len(expectedSessions) {
+		t.Fatalf("completion created = %+v, want one Current Node per retained branch session", completed.Mutation.Created)
+	}
+	for _, currentNode := range completed.Mutation.Created {
+		branchKey, present := currentNode.Reference.TransitionBranchKey()
+		if !present {
+			t.Fatalf("completion Current Node = %+v, want branch scope", currentNode)
+		}
+		expectedSessionID, exists := expectedSessions[branchKey]
+		if !exists {
+			t.Fatalf("completion branch = %q, want one of %+v", branchKey, expectedSessions)
+		}
+		if currentNode.SessionID == nil || *currentNode.SessionID != expectedSessionID {
+			t.Fatalf("completion branch %q session = %v, want retained session %q", branchKey, currentNode.SessionID, expectedSessionID)
+		}
+	}
+}
+
+func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		source := nodeByKey(t, def, "plan")
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           groupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(source),
+			TransitionID: "alternate",
+			DisplayName:  "Alternate",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
+			WorkflowID:        workflowID,
+			TransitionGroupID: groupID,
+			Key:               "alternate",
+			TargetNodeID:      workflow.NodeIDOf(done),
+			ContextMode:       workflow.ContextModeNewSession,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	_, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	var validation CompletionValidationError
+	if !errors.As(err, &validation) ||
+		len(validation.Issues) != 1 ||
+		validation.Issues[0].Code != CompletionCodeTransitionIDRequired {
+		t.Fatalf("completion error = %v, want transition-required validation", err)
 	}
 }
 
@@ -599,12 +801,13 @@ func TestCompleteCurrentNodePreviousTargetOrNewContextUsesLatestAssociatedSessio
 }
 
 type reworkContextCompletionFixture struct {
-	ctx     context.Context
-	store   *Store
-	binding metadata.Binding
-	cfg     config.App
-	review  workflow.CurrentNode
-	audit   workflow.CurrentNode
+	ctx        context.Context
+	store      *Store
+	binding    metadata.Binding
+	cfg        config.App
+	workflowID runtimeids.WorkflowID
+	review     workflow.CurrentNode
+	audit      workflow.CurrentNode
 }
 
 func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.ContextSourceKind) reworkContextCompletionFixture {
@@ -617,7 +820,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	}
 	audit := nodeByKey(t, definition, "audit")
 	review := nodeByKey(t, definition, "review")
-	reworkGroupID := workflow.TransitionGroupID("group-rework-" + string(workflowID))
+	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		auditRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(audit))
 		auditRecord.OutputFields = append(auditRecord.OutputFields, workflow.OutputField{Name: "summary", Description: "Rework summary."})
@@ -629,14 +832,18 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",
 			TargetNodeID:      workflow.NodeIDOf(review),
 			ContextMode:       workflow.ContextModeContinueSession,
 			ContextSource:     workflow.ContextSource{Kind: contextSource},
-			PromptTemplate:    "Review {{.Inputs.summary}}.",
+			PromptTemplate:    "Review {{.Params.summary}}.",
+			Parameters: []workflow.Parameter{{
+				Key:         "summary",
+				Description: "Rework summary.",
+			}},
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -658,12 +865,13 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 		t.Fatalf("CompleteCurrentNode review: %v", err)
 	}
 	return reworkContextCompletionFixture{
-		ctx:     ctx,
-		store:   store,
-		binding: binding,
-		cfg:     cfg,
-		review:  reviewResult.Mutation.Created[0],
-		audit:   auditResult.Mutation.Created[0],
+		ctx:        ctx,
+		store:      store,
+		binding:    binding,
+		cfg:        cfg,
+		workflowID: workflowID,
+		review:     reviewResult.Mutation.Created[0],
+		audit:      auditResult.Mutation.Created[0],
 	}
 }
 

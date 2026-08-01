@@ -2,69 +2,25 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type blockingBackgroundStepLifecycle struct {
 	started chan struct{}
 	stopped chan error
-	busy    bool
-}
-
-type reschedulingBackgroundStepLifecycle struct {
-	blockingBackgroundStepLifecycle
-	runs          atomic.Int32
-	firstStarted  chan struct{}
-	releaseFirst  chan struct{}
-	secondStarted chan struct{}
-}
-
-func (s *reschedulingBackgroundStepLifecycle) Run(context.Context, exclusiveStepOptions, func(context.Context, string) error) error {
-	switch s.runs.Add(1) {
-	case 1:
-		close(s.firstStarted)
-		<-s.releaseFirst
-	default:
-		close(s.secondStarted)
-	}
-	return context.Canceled
-}
-
-type retainingBackgroundMutationLease struct {
-	released chan struct{}
-}
-
-func (l *retainingBackgroundMutationLease) OrderedMutation(context.Context, func(OrderedMutationTurn) error) error {
-	return errors.New("retained background test lease is not executable")
-}
-
-func (l *retainingBackgroundMutationLease) Release() error {
-	select {
-	case l.released <- struct{}{}:
-	default:
-	}
-	return nil
-}
-
-type retainingBackgroundMutationTurn struct {
-	lease OrderedMutationLease
-}
-
-func (t retainingBackgroundMutationTurn) Apply(apply func() error) error {
-	return apply()
-}
-
-func (t retainingBackgroundMutationTurn) RetainLease() (OrderedMutationLease, error) {
-	return t.lease, nil
 }
 
 func (s *blockingBackgroundStepLifecycle) Run(ctx context.Context, _ exclusiveStepOptions, _ func(stepCtx context.Context, stepID string) error) error {
@@ -93,7 +49,7 @@ func (s *blockingBackgroundStepLifecycle) Interrupt() error                     
 func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
-func (s *blockingBackgroundStepLifecycle) IsBusy() bool { return s.busy }
+func (s *blockingBackgroundStepLifecycle) IsBusy() bool { return false }
 func (s *blockingBackgroundStepLifecycle) Snapshot() *RunSnapshot {
 	return nil
 }
@@ -102,112 +58,6 @@ func (s *blockingBackgroundStepLifecycle) WithActiveStep(func(stepID string) err
 }
 func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() error) error {
 	return ErrActiveStepInactive
-}
-
-func TestBackgroundShellUpdateAppliesThroughLexicalTurn(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	dispatchCalled := false
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		OrderedMutation: func(func(OrderedMutationTurn) error) error {
-			dispatchCalled = true
-			return errors.New("background update attempted nested dispatch")
-		},
-	})
-
-	engine.HandleBackgroundShellUpdateWithOrderedTurn(
-		testOrderedMutationTurn{},
-		BackgroundShellEvent{Type: BackgroundShellEventCompleted, ID: "process-1"},
-		false,
-	)
-	if dispatchCalled {
-		t.Fatal("background update attempted to re-enter the Session dispatcher")
-	}
-}
-
-func TestBackgroundNoticeReleasesRetainedLexicalCapacityAfterApply(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	engine.ensureOrchestrationCollaborators()
-	scheduler, ok := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
-	if !ok {
-		t.Fatal("background scheduler has unexpected implementation")
-	}
-	lease := &retainingBackgroundMutationLease{released: make(chan struct{}, 1)}
-	if err := engine.HandleBackgroundShellUpdateWithOrderedTurn(
-		retainingBackgroundMutationTurn{lease: lease},
-		BackgroundShellEvent{Type: BackgroundShellEventCompleted, ID: "process-1"},
-		true,
-	); err != nil {
-		t.Fatalf("background update: %v", err)
-	}
-	batch := scheduler.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
-	if !batch.BeginApply() {
-		t.Fatal("background notice batch did not begin")
-	}
-	if _, err := batch.Apply(func(steeringIntent) error { return nil }); err != nil {
-		t.Fatalf("background notice apply: %v", err)
-	}
-	select {
-	case <-lease.released:
-	case <-time.After(2 * time.Second):
-		t.Fatal("retained background capacity was not released after notice application")
-	}
-}
-
-func TestBackgroundNoticeReleasesRetainedLexicalCapacityOnCancellation(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	engine.ensureOrchestrationCollaborators()
-	scheduler, ok := engine.backgroundFlow.(*defaultBackgroundNoticeScheduler)
-	if !ok {
-		t.Fatal("background scheduler has unexpected implementation")
-	}
-	lease := &retainingBackgroundMutationLease{released: make(chan struct{}, 1)}
-	if err := engine.HandleBackgroundShellUpdateWithOrderedTurn(
-		retainingBackgroundMutationTurn{lease: lease},
-		BackgroundShellEvent{Type: BackgroundShellEventKilled, ID: "process-2"},
-		true,
-	); err != nil {
-		t.Fatalf("background update: %v", err)
-	}
-	scheduler.CancelPendingBackgroundNotices()
-	select {
-	case <-lease.released:
-	case <-time.After(2 * time.Second):
-		t.Fatal("retained background capacity was not released on cancellation")
-	}
-}
-
-func TestCombinedUserFlushAppliesRetainedNoticeInCurrentLexicalTurn(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	engine.ensureOrchestrationCollaborators()
-	lease := &retainingBackgroundMutationLease{released: make(chan struct{}, 1)}
-	if err := engine.HandleBackgroundShellUpdateWithOrderedTurn(
-		retainingBackgroundMutationTurn{lease: lease},
-		BackgroundShellEvent{Type: BackgroundShellEventCompleted, ID: "process-3"},
-		true,
-	); err != nil {
-		t.Fatalf("background update: %v", err)
-	}
-	engine.QueueUserMessage("queued input")
-	result, err := engine.commitPendingUserInjectionsInTurn("step-1", allPendingUserInjectionSelection{}, testOrderedMutationTurn{})
-	if err != nil {
-		t.Fatalf("combined user flush: %v", err)
-	}
-	if result.flushed != 2 || result.continueCombinedFlush {
-		t.Fatalf("combined flush result = %+v, want user and notice applied in-turn", result)
-	}
-	select {
-	case <-lease.released:
-	case <-time.After(2 * time.Second):
-		t.Fatal("combined flush did not release retained notice capacity")
-	}
 }
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
@@ -246,32 +96,6 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	case <-closeDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("engine close did not wait for queued background continuation")
-	}
-}
-
-func TestBackgroundNoticeSchedulerReschedulesAfterActiveTask(t *testing.T) {
-	steps := &reschedulingBackgroundStepLifecycle{
-		firstStarted:  make(chan struct{}),
-		releaseFirst:  make(chan struct{}),
-		secondStarted: make(chan struct{}),
-	}
-	engine := &Engine{}
-	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
-	t.Cleanup(func() { _ = engine.Close() })
-
-	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("first")})
-	select {
-	case <-steps.firstStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first background notice task did not start")
-	}
-
-	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("second")})
-	close(steps.releaseFirst)
-	select {
-	case <-steps.secondStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("notice queued during active task was not rescheduled")
 	}
 }
 
@@ -343,94 +167,124 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 	}
 }
 
-func TestBackgroundNoticeBatchSuppressesClaimedTerminalNoticeBeforeApply(t *testing.T) {
-	scheduler := &defaultBackgroundNoticeScheduler{
-		engine: &Engine{},
-		steps:  &blockingBackgroundStepLifecycle{busy: true},
-	}
+func TestBackgroundNoticeSchedulerPreservesNoticeWhenMetaContextPreparationFails(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	mustBlockTestEventLogAppends(t, store)
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+
 	scheduler.QueueDeveloperNotice(llm.Message{
 		Role:    llm.RoleDeveloper,
-		Name:    textutil.Value("process-1"),
-		Content: textutil.Value("terminal notice"),
+		Content: textutil.Value("queued background notice"),
 	})
 
-	batch := scheduler.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
-	if batch.Empty() {
-		t.Fatal("combined flush did not claim the terminal notice")
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice preparation unexpectedly succeeded")
 	}
-	if result := scheduler.SuppressPendingBackgroundNotice("process-1"); !result.matched || result.disposition != backgroundNoticeSuppressed {
-		t.Fatalf("suppression result = %#v, want matched suppressed", result)
-	}
-	if batch.BeginApply() {
-		t.Fatal("suppressed claim became applicable")
-	}
-	if scheduler.HasPendingNotices() {
-		t.Fatal("suppressed notice remained pending")
+	if !scheduler.HasPendingNotices() {
+		t.Fatal("background notice was lost after meta-context preparation failed")
 	}
 }
 
-func TestBackgroundNoticeBatchSettlesEachEntryExactlyOnceAfterFailure(t *testing.T) {
-	scheduler := &defaultBackgroundNoticeScheduler{
-		engine: &Engine{},
-		steps:  &blockingBackgroundStepLifecycle{busy: true},
-	}
-	for _, processID := range []string{"process-1", "process-2", "process-3"} {
-		scheduler.QueueDeveloperNotice(llm.Message{
-			Role:    llm.RoleDeveloper,
-			Name:    textutil.Value(processID),
-			Content: textutil.Value(processID),
+func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		block       bool
+		wantPending bool
+	}{
+		{name: "committed"},
+		{name: "uncommitted append failure", block: true, wantPending: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			steps := &stubExclusiveStepLifecycle{busy: true}
+			scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+			engine.stepLifecycle = steps
+			engine.backgroundFlow = scheduler
+
+			scheduler.QueueDeveloperNotice(llm.Message{
+				Role:    llm.RoleDeveloper,
+				Name:    textutil.Value("42"),
+				Content: textutil.Value("queued background notice"),
+			})
+			if tt.block {
+				mustBlockTestEventLogAppends(t, store)
+			}
+
+			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
+			receipt, err := engine.persistToolCompletionRaw("step", tools.Result{
+				CallID:       "write-stdin-call",
+				Name:         toolspec.ToolWriteStdin,
+				Output:       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
+				Presentation: &presentation,
+			})
+			if receipt.Committed == tt.wantPending {
+				t.Fatalf("completion receipt = %+v, want committed=%t", receipt, !tt.wantPending)
+			}
+			if tt.wantPending && err == nil {
+				t.Fatal("uncommitted completion did not surface append failure")
+			}
+			if !tt.wantPending && err != nil {
+				t.Fatalf("persist committed completion: %v", err)
+			}
+			if got := scheduler.HasPendingNotices(); got != tt.wantPending {
+				t.Fatalf("pending notice after completion = %t, want %t", got, tt.wantPending)
+			}
 		})
 	}
+}
 
-	batch := scheduler.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
-	if !batch.BeginApply() {
-		t.Fatal("claimed notices did not begin application")
+func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	if err := engine.ensureMetaContextForRequest(context.Background(), "seed"); err != nil {
+		t.Fatalf("prepare meta context: %v", err)
 	}
-	calls := 0
-	errExpected := errors.New("steering failed")
-	_, err := batch.Apply(func(steeringIntent) error {
-		calls++
-		if calls == 2 {
-			return errExpected
-		}
-		return nil
-	})
-	if !errors.Is(err, errExpected) {
-		t.Fatalf("apply error = %v, want %v", err, errExpected)
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
 	}
-	if calls != 2 {
-		t.Fatalf("steering calls = %d, want 2", calls)
+	mustBlockTestEventLogAppends(t, store)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice steer unexpectedly succeeded")
 	}
-	if got := batch.Dispositions(); len(got) != 3 ||
-		got[0] != backgroundNoticeApplied ||
-		got[1] != backgroundNoticeFailed ||
-		got[2] != backgroundNoticeNotAppliedAfterPriorFailure {
-		t.Fatalf("batch dispositions = %v", got)
-	}
-	if scheduler.HasPendingNotices() {
-		t.Fatal("terminally settled notices remained pending")
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 2 || pending[0].sessionID != "first" || pending[1].sessionID != "second" {
+		t.Fatalf("restored pending notices = %+v", pending)
 	}
 }
 
-func TestBackgroundNoticeSchedulerCancelsPendingClaimsOnShutdown(t *testing.T) {
-	scheduler := &defaultBackgroundNoticeScheduler{
-		engine: &Engine{},
-		steps:  &blockingBackgroundStepLifecycle{busy: true},
+func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserverFailure(t *testing.T) {
+	observerErr := errors.New("background notice observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
 	}
-	scheduler.QueueDeveloperNotice(llm.Message{
-		Role:    llm.RoleDeveloper,
-		Name:    textutil.Value("process-1"),
-		Content: textutil.Value("terminal notice"),
-	})
-	batch := scheduler.ClaimPendingNotices(backgroundNoticeClaimStandalone)
-	if batch.Empty() {
-		t.Fatal("shutdown test did not claim notice")
+	gate.FailNext(observerErr)
+
+	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("flush error = %v, want observer failure", err)
 	}
-	scheduler.CancelPendingBackgroundNotices()
-	if scheduler.HasPendingNotices() {
-		t.Fatal("shutdown left claimed notice pending")
-	}
-	if batch.BeginApply() {
-		t.Fatal("canceled shutdown claim became applicable")
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 1 || pending[0].sessionID != "second" {
+		t.Fatalf("pending notices after committed failure = %+v", pending)
 	}
 }

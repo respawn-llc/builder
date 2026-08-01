@@ -42,8 +42,8 @@ export function HomeRoute() {
   const queryClient = useQueryClient();
   const creation = useProjectCreation();
   const projects = useProjectPages();
-  const attention = useGlobalAttentionPages();
-  useGlobalAttentionEvents();
+  const attentionSubscriptionReady = useGlobalAttentionEvents();
+  const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
@@ -240,6 +240,12 @@ const AttentionRow = memo(function AttentionRow({
   item: AttentionItem;
   openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
 }>) {
+  const { t } = useTranslation();
+  const message =
+    item.message ??
+    (item.kind === "approval"
+      ? t("app.attention.approvalFallback")
+      : t("app.attention.interruptedCurrentNodeFallback"));
   return (
     <button
       className={cx(
@@ -270,7 +276,7 @@ const AttentionRow = memo(function AttentionRow({
         ) : null}
       </div>
       {item.taskTitle.length > 0 ? <strong className="min-w-0 truncate">{item.taskTitle}</strong> : null}
-      <span className="min-w-0 text-sm break-words">{item.message}</span>
+      <span className="min-w-0 text-sm break-words">{message}</span>
       <span className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</span>
     </button>
   );

@@ -29,9 +29,13 @@ import type {
   QuestionAttentionItem,
 } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
+import { workflowIDSchema } from "./workflowID";
+
+export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
 export const nonBlankString = z.string().trim().min(1);
+export const nullableWorkflowIDSchema = workflowIDSchema.nullish().transform((value) => value ?? null);
 export const numberValue = z.number().default(0);
 export const nullableString = z
   .string()
@@ -163,7 +167,7 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
   .object({
     code: z.string(),
     message: z.string(),
-    workflow_id: emptyString,
+    workflow_id: nullableWorkflowIDSchema,
     node_id: emptyString,
     transition_group_id: emptyString,
     edge_id: emptyString,
@@ -199,10 +203,7 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
-    workflow_id: z
-      .string()
-      .min(1)
-      .refine((value) => value.trim() === value),
+    workflow_id: workflowIDSchema,
     display_name: z.string(),
     description: emptyString,
     version: z.number(),
@@ -328,12 +329,23 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
         truncated: z.boolean(),
       })
       .strict(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     active_node_ids: stringList,
     source_workspace: workspaceSummarySchema,
     status: taskStatusSchema,
     actions: taskActionsSchema,
     label_ids: labelIDListSchema,
+    dependency_progress: z
+      .object({
+        satisfied_count: z.number().int().nonnegative(),
+        total_count: z.number().int().positive(),
+      })
+      .strict()
+      .refine((value) => value.satisfied_count <= value.total_count)
+      .optional()
+      .transform((value) =>
+        value === undefined ? null : { satisfiedCount: value.satisfied_count, totalCount: value.total_count },
+      ),
     updated_at_unix_ms: z.number(),
   })
   .strict()
@@ -348,23 +360,23 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     status: value.status,
     actions: value.actions,
     labelIDs: value.label_ids,
+    dependencyProgress: value.dependency_progress,
     updatedAt: value.updated_at_unix_ms,
   }));
 
 const attentionItemBaseWireSchema = z.object({
   id: nonBlankString,
   project_id: nonBlankString,
-  workflow_id: nonBlankString,
+  workflow_id: workflowIDSchema,
   task_id: nonBlankString,
   task_short_id: nonBlankString,
   task_title: nonBlankString,
-  message: z.string(),
   occurred_at_unix_ms: z.number(),
 });
 
 type AttentionItemBase = Pick<
   QuestionAttentionItem,
-  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "message" | "occurredAt"
+  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "occurredAt"
 >;
 
 function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSchema>): AttentionItemBase {
@@ -375,7 +387,6 @@ function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSche
     taskID: value.task_id,
     taskShortID: value.task_short_id,
     taskTitle: value.task_title,
-    message: value.message,
     occurredAt: value.occurred_at_unix_ms,
   };
 }
@@ -430,6 +441,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
       question_id: nonBlankString,
+      message: nonBlankString,
       suggestions: stringList,
       recommended_option_index: nullablePositiveInteger,
       question: questionPromptSchema.nullish(),
@@ -441,6 +453,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       currentNode: value.current_node,
       sessionID: value.session_id,
       questionID: value.question_id,
+      message: value.message,
       suggestions: value.suggestions,
       recommendedOptionIndex: value.recommended_option_index,
       question: value.question ?? null,
@@ -450,6 +463,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: z.literal("approval"),
       approval_id: nonBlankString,
       approval_snapshot: approvalSnapshotSchema,
+      message: nullableNonBlankString,
     })
     .strict()
     .transform((value): ApprovalAttentionItem => ({
@@ -457,6 +471,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: value.kind,
       approvalID: value.approval_id,
       approvalSnapshot: value.approval_snapshot,
+      message: value.message,
     })),
   attentionItemBaseWireSchema
     .extend({
@@ -464,6 +479,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
       detail_json: nullableNonBlankString,
+      message: nullableNonBlankString,
     })
     .strict()
     .transform((value): InterruptedCurrentNodeAttentionItem => ({
@@ -472,6 +488,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       currentNode: value.current_node,
       sessionID: value.session_id,
       detailJSON: value.detail_json,
+      message: value.message,
     })),
 ]);
 

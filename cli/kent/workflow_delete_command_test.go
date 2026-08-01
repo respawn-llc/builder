@@ -7,13 +7,19 @@ import (
 	"testing"
 
 	"core/shared/apicontract"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-const (
-	workflowDeleteTestSelector = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	workflowDeleteTestID       = "workflow-" + workflowDeleteTestSelector
-)
+const workflowDeleteTestSelector = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+var workflowDeleteTestID = func() runtimeids.WorkflowID {
+	id, err := runtimeids.ParseWorkflowID(workflowDeleteTestSelector)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}()
 
 type workflowDeleteCommandRemote struct {
 	apicontract.WorkflowService
@@ -77,7 +83,7 @@ func TestWorkflowDeleteWithoutConfirmReturnsPreviewOnly(t *testing.T) {
 		t.Fatalf("decode output: %v; output=%q", err, stdout.String())
 	}
 	expectedOutputImpact := impact
-	expectedOutputImpact.WorkflowID = workflowDeleteTestSelector
+	expectedOutputImpact.WorkflowID = workflowDeleteTestID
 	if output.Deleted || output.Impact != expectedOutputImpact || len(output.Blockers) != 0 {
 		t.Fatalf("output = %+v, want preview impact without deletion", output)
 	}
@@ -124,7 +130,7 @@ func TestWorkflowDeleteConfirmUsesPreviewedImpact(t *testing.T) {
 		t.Fatalf("decode output: %v; output=%q", err, stdout.String())
 	}
 	expectedOutputImpact := impact
-	expectedOutputImpact.WorkflowID = workflowDeleteTestSelector
+	expectedOutputImpact.WorkflowID = workflowDeleteTestID
 	if !output.Deleted || output.Impact != expectedOutputImpact || len(output.Blockers) != 0 {
 		t.Fatalf("output = %+v, want confirmed deletion", output)
 	}
@@ -166,7 +172,7 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 		t.Fatalf("decode output: %v; output=%q", err, stdout.String())
 	}
 	expectedImpact := impact
-	expectedImpact.WorkflowID = workflowDeleteTestSelector
+	expectedImpact.WorkflowID = workflowDeleteTestID
 	if output.Deleted || output.Impact != expectedImpact || len(output.Blockers) != 1 || output.Blockers[0] != blocker {
 		t.Fatalf("output = %+v, want typed current-node blocker", output)
 	}
@@ -178,7 +184,7 @@ func TestWorkflowDeleteRejectsMismatchedResponseIdentity(t *testing.T) {
 		Version:    17,
 	}
 	mismatchedImpact := validImpact
-	mismatchedImpact.WorkflowID = "workflow-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	mismatchedImpact.WorkflowID = runtimeids.NewWorkflowID()
 
 	tests := []struct {
 		name               string

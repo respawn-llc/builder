@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { Button, Dialog } from "@/ui";
+import { Button, compactDialogWidth, Dialog } from "@/ui";
 import {
   workflowDeleteConfirmationTextKeys,
   type WorkflowDeleteConfirmationCounts,
@@ -25,8 +25,8 @@ export function WorkflowGraphDeleteConfirmationDialog({
       closeLabel={t("app.close")}
       onClose={onCancel}
       open
-      style={{ width: "min(420px, calc(100vw - 32px))" }}
       title={t(textKeys.titleKey)}
+      width={compactDialogWidth}
     >
       <WorkflowDeleteConfirmationContent
         counts={counts}

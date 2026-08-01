@@ -273,22 +273,18 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) tools.Result {
 	e := t.engine
 	result := tools.Result{CallID: call.ID, Name: toolspec.ToolCompleteNode}
-	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
 		result.IsError = true
 		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
 		result.Summary = textutil.Value("not in current-node execution")
 		return result
 	}
-	parsed, err := workflowruntime.DecodeCompletion(call.Input, e.cfg.CurrentNodeExecution.Contract)
+	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
-	completed, err := e.cfg.CurrentNodeExecution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      e.cfg.CurrentNodeExecution.ScopeID,
-		TransitionID: parsed.TransitionID,
-		OutputValues: parsed.OutputValues,
-		Commentary:   parsed.Commentary,
-	})
+	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}

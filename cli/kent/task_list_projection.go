@@ -5,22 +5,22 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 type taskListOutput struct {
 	ProjectID                   string                                                `json:"project_id"`
-	WorkflowID                  *string                                               `json:"workflow_id,omitempty"`
+	WorkflowID                  *runtimeids.WorkflowID                                `json:"workflow_id,omitempty"`
 	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	NextPageToken               *string                                               `json:"next_page_token,omitempty"`
+	NextOffset                  *int                                                  `json:"next_offset,omitempty"`
 	Tasks                       []taskListItem                                        `json:"tasks"`
 }
 
 type taskListItem struct {
 	ShortID         string                       `json:"short_id"`
 	TaskID          string                       `json:"task_id"`
-	WorkflowID      string                       `json:"workflow_id"`
+	WorkflowID      runtimeids.WorkflowID        `json:"workflow_id"`
 	Status          serverapi.WorkflowTaskStatus `json:"status"`
 	ColumnKeys      *[]string                    `json:"column_keys,omitempty"`
 	Title           string                       `json:"title"`
@@ -44,7 +44,7 @@ type taskListRenderItem struct {
 
 type taskListExpectedScope struct {
 	ProjectID     string
-	WorkflowID    *string
+	WorkflowID    *runtimeids.WorkflowID
 	WorkflowOwner taskListExpectedWorkflowOwner
 }
 
@@ -90,11 +90,11 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone && len(resp.Tasks) != 0 {
 		return taskListProjection{}, errors.New("task list response with no matching workflows cannot contain tasks")
 	}
-	var selectedWorkflowID *string
+	var selectedWorkflowID *runtimeids.WorkflowID
 	if resp.Scope.WorkflowID != nil {
-		workflowID, err := workflowIDForCLI(*resp.Scope.WorkflowID)
-		if err != nil {
-			return taskListProjection{}, err
+		workflowID := *resp.Scope.WorkflowID
+		if workflowID.IsZero() {
+			return taskListProjection{}, errors.New("workflow_id is required")
 		}
 		selectedWorkflowID = &workflowID
 		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
@@ -105,17 +105,16 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 	showColumns := selectedWorkflowID != nil
 	items := make([]taskListItem, 0, len(resp.Tasks))
 	rows := make([]taskListRenderItem, 0, len(resp.Tasks))
-	var soleWorkflowID *string
+	var soleWorkflowID *runtimeids.WorkflowID
 	for _, task := range resp.Tasks {
-		workflowID, err := workflowIDForCLI(task.WorkflowID)
-		if err != nil {
-			return taskListProjection{}, err
+		workflowID := task.WorkflowID
+		if workflowID.IsZero() {
+			return taskListProjection{}, errors.New("workflow_id is required")
 		}
 		if selectedWorkflowID != nil && workflowID != *selectedWorkflowID {
 			return taskListProjection{}, fmt.Errorf("task list response task %q workflow %q does not match selected workflow %q", task.TaskID, workflowID, *selectedWorkflowID)
 		}
-		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne &&
-			expectedScope.WorkflowOwner == taskListExpectedWorkflowFromRequest {
+		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
 			if soleWorkflowID == nil {
 				value := workflowID
 				soleWorkflowID = &value
@@ -170,7 +169,7 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			ProjectID:                   resp.Scope.ProjectID,
 			WorkflowID:                  selectedWorkflowID,
 			MatchingWorkflowCardinality: resp.MatchingWorkflowCardinality,
-			NextPageToken:               textutil.Pointer(resp.NextPageToken),
+			NextOffset:                  resp.NextOffset,
 			Tasks:                       items,
 		},
 		Rows: rows,

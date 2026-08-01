@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ func TestTaskDeleteActionUsesWorkflowExecutionQuiescence(t *testing.T) {
 	}
 	cards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -74,7 +73,7 @@ func TestTaskDeleteActionUsesWorkflowExecutionQuiescence(t *testing.T) {
 	}
 	cards, err = fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -93,7 +92,8 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "List task")
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
+	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
@@ -103,7 +103,7 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
 			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
 		},
-		PageSize: 20,
+		Limit: &limit,
 	})
 	if err != nil {
 		t.Fatalf("TaskList.List: %v", err)
@@ -138,7 +138,8 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 	}
 	sort.Strings(want)
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
+	limit := 1
 	request := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
@@ -149,10 +150,10 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 			Field:     serverapi.WorkflowTaskListSortFieldUpdated,
 			Direction: serverapi.WorkflowTaskListSortDirectionDesc,
 		}},
-		PageSize: 1,
+		Limit: &limit,
 	}
 	var got []string
-	var firstToken string
+	var nextOffset *int
 	for pageIndex := 0; ; pageIndex++ {
 		page, err := fixture.tasks.List(fixture.ctx, request)
 		if err != nil {
@@ -162,25 +163,79 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 			t.Fatalf("task list page %d = %+v, want one task", pageIndex, page.Tasks)
 		}
 		got = append(got, page.Tasks[0].TaskID)
-		if pageIndex == 0 {
-			if page.NextPageToken == nil {
-				t.Fatal("first task-list page has no continuation token")
-			}
-			firstToken = *page.NextPageToken
-		}
-		if page.NextPageToken == nil {
+		if page.NextOffset == nil {
 			break
 		}
-		request.PageToken = *page.NextPageToken
+		nextOffset = page.NextOffset
+		request.Offset = nextOffset
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("task-list pagination order = %v, want %v", got, want)
 	}
-	request.PageToken = firstToken
+	request.Offset = nextOffset
 	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive}
-	if _, err := fixture.tasks.List(fixture.ctx, request); !errors.Is(err, ErrInvalidPageToken) {
-		t.Fatalf("task-list token replay with changed filter error = %v, want invalid page token", err)
+	if _, err := fixture.tasks.List(fixture.ctx, request); err != nil {
+		t.Fatalf("task-list offset with changed filter error = %v", err)
 	}
+}
+
+func TestProjectWideTaskListBeyondEndRetainsMatchingWorkflowCardinality(t *testing.T) {
+	t.Run("one", func(t *testing.T) {
+		fixture := newCurrentNodeViewFixture(t, false)
+		fixture.createBacklogTask(t, "Only workflow task")
+		projectID := fixture.binding.ProjectID
+		offset := 1
+		limit := 1
+
+		page, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+			Offset:      &offset,
+			Limit:       &limit,
+		})
+		if err != nil {
+			t.Fatalf("TaskList.List at end: %v", err)
+		}
+		if len(page.Tasks) != 0 ||
+			page.NextOffset != nil ||
+			page.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
+			t.Fatalf("project-wide task-list page at end = %+v", page)
+		}
+	})
+
+	t.Run("multiple", func(t *testing.T) {
+		fixture := newCurrentNodeViewFixture(t, false)
+		fixture.createBacklogTask(t, "First workflow task")
+		secondWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+		if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, secondWorkflowID, false); err != nil {
+			t.Fatalf("LinkWorkflow second workflow: %v", err)
+		}
+		if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  fixture.binding.ProjectID,
+			WorkflowID: &secondWorkflowID,
+			Title:      "Second workflow task",
+		}); err != nil {
+			t.Fatalf("CreateTask second workflow: %v", err)
+		}
+		projectID := fixture.binding.ProjectID
+		offset := 3
+		limit := 1
+
+		page, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+			Offset:      &offset,
+			Limit:       &limit,
+		})
+		if err != nil {
+			t.Fatalf("TaskList.List beyond end: %v", err)
+		}
+		if len(page.Tasks) != 0 ||
+			page.NextOffset != nil ||
+			page.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+			t.Fatalf("project-wide task-list page beyond end = %+v", page)
+		}
+	})
 }
 
 func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
@@ -200,7 +255,8 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 	fixture.setTaskUpdatedAt(t, interrupted.task.ID, 1_000)
 	fixture.setTaskUpdatedAt(t, backlog.ID, 2_000)
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
+	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
@@ -208,7 +264,7 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
 			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
 		},
-		PageSize: 20,
+		Limit: &limit,
 	})
 	if err != nil {
 		t.Fatalf("TaskList.List: %v", err)
@@ -304,7 +360,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
 	board, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(terminalNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -321,13 +377,14 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	}
 
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
+	doneLimit := 20
 	doneOnly, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		PageSize:    20,
+		Limit:       &doneLimit,
 	})
 	if err != nil {
 		t.Fatalf("TaskList.List done filter: %v", err)
@@ -339,6 +396,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	}
 
 	active := fixture.startTask(t, "Active after done")
+	statusLimit := 1
 	statusPage := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
@@ -351,7 +409,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 			Field:     serverapi.WorkflowTaskListSortFieldStatus,
 			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
 		}},
-		PageSize: 1,
+		Limit: &statusLimit,
 	}
 	firstPage, err := fixture.tasks.List(fixture.ctx, statusPage)
 	if err != nil {
@@ -360,10 +418,10 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	if len(firstPage.Tasks) != 1 ||
 		firstPage.Tasks[0].TaskID != string(done.task.ID) ||
 		firstPage.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindDone ||
-		firstPage.NextPageToken == nil {
+		firstPage.NextOffset == nil {
 		t.Fatalf("first status page = %+v, want done and a cursor", firstPage)
 	}
-	statusPage.PageToken = *firstPage.NextPageToken
+	statusPage.Offset = firstPage.NextOffset
 	secondPage, err := fixture.tasks.List(fixture.ctx, statusPage)
 	if err != nil {
 		t.Fatalf("TaskList.List second status page: %v", err)
@@ -371,7 +429,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 	if len(secondPage.Tasks) != 1 ||
 		secondPage.Tasks[0].TaskID != string(active.task.ID) ||
 		secondPage.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-		secondPage.NextPageToken != nil {
+		secondPage.NextOffset != nil {
 		t.Fatalf("second status page = %+v, want active with no cursor", secondPage)
 	}
 }
@@ -454,7 +512,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 	}
 	queuedCards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -476,7 +534,8 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 	}
 
 	projectID := fixture.binding.ProjectID
-	workflowID := string(fixture.workflowID)
+	workflowID := fixture.workflowID
+	listLimit := 20
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
@@ -485,7 +544,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 			serverapi.WorkflowTaskStatusKindRunning,
 		},
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		PageSize:    20,
+		Limit:       &listLimit,
 	})
 	if err != nil {
 		t.Fatalf("TaskList.List: %v", err)
@@ -497,6 +556,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 		list.Tasks[1].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
 		t.Fatalf("task list status filter and sort = %+v, want running then queued", list.Tasks)
 	}
+	pageLimit := 1
 	pageRequest := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
@@ -505,7 +565,7 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 			serverapi.WorkflowTaskStatusKindRunning,
 		},
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		PageSize:    1,
+		Limit:       &pageLimit,
 	}
 	firstPage, err := fixture.tasks.List(fixture.ctx, pageRequest)
 	if err != nil {
@@ -513,17 +573,17 @@ func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) 
 	}
 	if len(firstPage.Tasks) != 1 ||
 		firstPage.Tasks[0].TaskID != string(running.task.ID) ||
-		firstPage.NextPageToken == nil {
+		firstPage.NextOffset == nil {
 		t.Fatalf("first status cursor page = %+v, want running and a cursor", firstPage)
 	}
-	pageRequest.PageToken = *firstPage.NextPageToken
+	pageRequest.Offset = firstPage.NextOffset
 	secondPage, err := fixture.tasks.List(fixture.ctx, pageRequest)
 	if err != nil {
 		t.Fatalf("TaskList.List second cursor page: %v", err)
 	}
 	if len(secondPage.Tasks) != 1 ||
 		secondPage.Tasks[0].TaskID != string(queued.task.ID) ||
-		secondPage.NextPageToken != nil {
+		secondPage.NextOffset != nil {
 		t.Fatalf("second status cursor page = %+v, want queued and no cursor", secondPage)
 	}
 }

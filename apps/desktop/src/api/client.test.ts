@@ -59,7 +59,7 @@ describe("ApiClient", () => {
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
     });
-    await expect(client.startTask("task-1")).resolves.toMatchObject({
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
       outcome: "applied",
       applied: {
         currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }],
@@ -79,9 +79,8 @@ describe("ApiClient", () => {
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
   });
 
-  it("preserves optional board workflow selectors and normalizes empty slices", async () => {
+  it("preserves absent board workflow selectors and normalizes empty slices", async () => {
     const transport = new FakeRpcTransport([
-      { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
     ]);
@@ -94,35 +93,24 @@ describe("ApiClient", () => {
       groups: [],
       columns: [],
     });
-    await expect(client.getBoard("project-1", " ", { kind: "unlabeled" })).resolves.toMatchObject({
-      selectedWorkflow: null,
-    });
-    expect(transport.calls.slice(0, 2)).toEqual([
+    expect(transport.calls).toEqual([
       {
         method: "workflow.board.get",
         params: { project_id: "project-1", label_filter: { kind: "none" } },
-      },
-      {
-        method: "workflow.board.get",
-        params: {
-          project_id: "project-1",
-          workflow_id: " ",
-          label_filter: { kind: "unlabeled" },
-        },
       },
     ]);
     const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
     await expect(
       client.listBoardNodeCards({
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         nodeID: "node-1",
         labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] },
         pageToken: null,
       }),
     ).resolves.toMatchObject({
       projectID: "project-1",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
       nodeID: "node-1",
       cards: [],
       previousPageToken: null,
@@ -132,7 +120,7 @@ describe("ApiClient", () => {
       method: "workflow.board.nodeCards.list",
       params: {
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } },
         page_size: 25,
@@ -141,12 +129,31 @@ describe("ApiClient", () => {
     });
   });
 
+  it("rejects malformed Workflow IDs before direct client RPCs or subscriptions", async () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const prefixedID = "workflow-11111111-1111-4111-8111-111111111111";
+
+    await expect(client.getWorkflow(prefixedID)).rejects.toThrow();
+    await expect(client.previewWorkflowDelete("not-a-workflow-id")).rejects.toThrow();
+    expect(() =>
+      client.subscribeWorkflow(prefixedID, {
+        onEvent: () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      }),
+    ).toThrow();
+
+    expect(transport.calls).toEqual([]);
+    expect(transport.subscriptions).toEqual([]);
+  });
+
   it("hides workflow join nodes from board columns and groups", async () => {
     const client = new ApiClient(
       new FakeRpcTransport([{ method: "workflow.board.get", result: boardWithJoinResponse }]),
     );
 
-    await expect(client.getBoard("project-1", "workflow-1", { kind: "none" })).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" })).resolves.toMatchObject({
       groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
       columns: [{ id: "node-agent", kind: "agent" }],
     });
@@ -222,13 +229,13 @@ describe("ApiClient", () => {
         method: "workflow.task.comment.list",
         result: {
           comments: [commentResponse],
-          next_page_token: "cursor-2",
+          next_offset: 40,
         },
       },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.listTaskComments("task-1", "cursor-1")).resolves.toMatchObject({
+    await expect(client.listTaskComments("task-1", 0)).resolves.toMatchObject({
       comments: [
         {
           id: "comment-1",
@@ -237,12 +244,26 @@ describe("ApiClient", () => {
           authorID: "Nek-12",
         },
       ],
-      nextPageToken: "cursor-2",
+      nextOffset: 40,
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.task.comment.list",
-      params: { task_id: "task-1", page_size: 40, page_token: "cursor-1" },
+      params: { task_id: "task-1", offset: 0, limit: 40 },
     });
+  });
+
+  it("rejects zero continuation offsets before feature code receives a page", async () => {
+    const workflowClient = new ApiClient(
+      new FakeRpcTransport([{ method: "workflow.list", result: { workflows: [], next_offset: 0 } }]),
+    );
+    const commentClient = new ApiClient(
+      new FakeRpcTransport([
+        { method: "workflow.task.comment.list", result: { comments: [], next_offset: 0 } },
+      ]),
+    );
+
+    await expect(workflowClient.listWorkflows()).rejects.toBeInstanceOf(ContractError);
+    await expect(commentClient.listTaskComments("task-1", 0)).rejects.toBeInstanceOf(ContractError);
   });
 
   it("uses project edit workspace pagination and mutation RPC contracts", async () => {
@@ -265,7 +286,6 @@ describe("ApiClient", () => {
         result: {
           project_id: "project-1",
           workspace_id: "workspace-1",
-          unlinked: false,
           blockers: [{ code: "default_workspace", message: "Default workspace cannot be unlinked." }],
         },
       },
@@ -280,7 +300,6 @@ describe("ApiClient", () => {
     await client.updateProject("project-1", "Renamed", "ABC");
     await client.setDefaultWorkspace("project-1", "workspace-1");
     await expect(client.unlinkWorkspace("project-1", "workspace-1")).resolves.toMatchObject({
-      unlinked: false,
       blockers: [{ code: "default_workspace", count: 0 }],
     });
 
@@ -314,7 +333,7 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    const definition = await client.getWorkflow("workflow-1");
+    const definition = await client.getWorkflow("11111111-1111-4111-8111-111111111111");
     expect(definition).toMatchObject({
       derivedWiring: {
         edges: [
@@ -325,7 +344,7 @@ describe("ApiClient", () => {
           },
         ],
       },
-      workflow: { id: "workflow-1", name: "Delivery", version: 9 },
+      workflow: { id: "11111111-1111-4111-8111-111111111111", name: "Delivery", version: 9 },
       nodeGroups: [{ id: "group-1", key: "core", name: "Core", nodeIDs: [] }],
       transitionGroups: [
         {
@@ -351,12 +370,12 @@ describe("ApiClient", () => {
         expect.objectContaining({ id: "node-1", name: "Implement", subagentRole: "coder" }),
       ]),
     );
-    await expect(client.validateWorkflow("workflow-1", "execution")).resolves.toMatchObject({
+    await expect(client.validateWorkflow("11111111-1111-4111-8111-111111111111", "execution")).resolves.toMatchObject({
       valid: false,
       errors: [
         {
           code: "workflow.validation.invalid",
-          workflowID: "workflow-1",
+          workflowID: "11111111-1111-4111-8111-111111111111",
           nodeID: "node-1",
           transitionGroupID: "tg-1",
           edgeID: "edge-1",
@@ -375,18 +394,18 @@ describe("ApiClient", () => {
       {
         id: "link-1",
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         isDefault: true,
       },
     ]);
 
     expect(transport.calls).toContainEqual({
       method: "workflow.get",
-      params: { workflow_id: "workflow-1" },
+      params: { workflow_id: "11111111-1111-4111-8111-111111111111" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.validate",
-      params: { workflow_id: "workflow-1", mode: "execution" },
+      params: { workflow_id: "11111111-1111-4111-8111-111111111111", mode: "execution" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.listProjectLinks",
@@ -407,7 +426,7 @@ describe("ApiClient", () => {
     const transport = new FakeRpcTransport([{ method: "workflow.get", result: response }]);
     const client = new ApiClient(transport);
 
-    await expect(client.getWorkflow("workflow-1")).resolves.toMatchObject({
+    await expect(client.getWorkflow("11111111-1111-4111-8111-111111111111")).resolves.toMatchObject({
       edges: [
         {
           contextSource: { kind: "previous_target_or_new", nodeKey: "" },
@@ -425,7 +444,7 @@ describe("ApiClient", () => {
           project_id: "project-1",
           workflows: [
             {
-              id: "workflow-1",
+              id: "11111111-1111-4111-8111-111111111111",
               name: "Delivery",
               description: "Ship",
               version: 4,
@@ -433,14 +452,14 @@ describe("ApiClient", () => {
               project_link: { default: true },
             },
           ],
-          next_page_token: "cursor-2",
+          next_offset: 10,
         },
       },
       {
         method: "workflow.create",
         result: {
           workflow: {
-            id: "workflow-2",
+            id: "22222222-2222-4222-8222-222222222222",
             name: "Ops",
             description: "",
             version: 1,
@@ -452,31 +471,29 @@ describe("ApiClient", () => {
         method: "workflow.createAndLinkProject",
         result: {
           workflow: {
-            id: "workflow-3",
+            id: "33333333-3333-4333-8333-333333333333",
             name: "Project workflow",
             description: "",
             version: 1,
             execution_target_policy: { mode: "none" },
           },
-          link: { id: "link-3", project_id: "project-1", workflow_id: "workflow-3", default: true },
+          link: { id: "link-3", project_id: "project-1", workflow_id: "33333333-3333-4333-8333-333333333333", default: true },
         },
       },
       {
         method: "workflow.linkProject",
         result: {
-          link: { id: "link-1", project_id: "project-1", workflow_id: "workflow-1", default: false },
+          link: { id: "link-1", project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", default: false },
         },
       },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(
-      client.listWorkflows({ pageSize: 10, pageToken: "cursor-1", query: "ship" }),
-    ).resolves.toMatchObject({
-      nextPageToken: "cursor-2",
+    await expect(client.listWorkflows({ offset: 0, limit: 10, query: "ship" })).resolves.toMatchObject({
+      nextOffset: 10,
       workflows: [
         {
-          id: "workflow-1",
+          id: "11111111-1111-4111-8111-111111111111",
           name: "Delivery",
           version: 4,
           executionTargetPolicy: { mode: "custom_ref", customRef: "release/v1" },
@@ -484,7 +501,7 @@ describe("ApiClient", () => {
       ],
     });
     await expect(client.createWorkflow({ name: "Ops", description: "" })).resolves.toMatchObject({
-      id: "workflow-2",
+      id: "22222222-2222-4222-8222-222222222222",
       name: "Ops",
       executionTargetPolicy: { mode: "ask_on_first_execution", customRef: null },
     });
@@ -495,11 +512,11 @@ describe("ApiClient", () => {
         description: "",
       }),
     ).resolves.toMatchObject({
-      link: { isDefault: true, projectID: "project-1", workflowID: "workflow-3" },
-      workflow: { id: "workflow-3" },
+      link: { isDefault: true, projectID: "project-1", workflowID: "33333333-3333-4333-8333-333333333333" },
+      workflow: { id: "33333333-3333-4333-8333-333333333333" },
     });
     await expect(
-      client.linkWorkflowToProject({ projectID: "project-1", workflowID: "workflow-1" }),
+      client.linkWorkflowToProject({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111" }),
     ).resolves.toMatchObject({
       id: "link-1",
       isDefault: false,
@@ -507,7 +524,7 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "workflow.list",
-      params: { page_size: 10, page_token: "cursor-1", query: "ship" },
+      params: { offset: 0, limit: 10, query: "ship" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.createAndLinkProject",
@@ -522,7 +539,7 @@ describe("ApiClient", () => {
       method: "workflow.linkProject",
       params: {
         project_id: "project-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         default_policy: "if_project_has_none",
       },
     });
@@ -535,8 +552,8 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.previewWorkflowDelete("workflow-1")).resolves.toMatchObject({
-      workflowID: "workflow-1",
+    await expect(client.previewWorkflowDelete("11111111-1111-4111-8111-111111111111")).resolves.toMatchObject({
+      workflowID: "11111111-1111-4111-8111-111111111111",
       version: 7,
       projectCount: 1,
       linkCount: 1,
@@ -548,7 +565,7 @@ describe("ApiClient", () => {
     });
     await expect(
       client.deleteWorkflow({
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         confirmed: true,
         expectedVersion: 7,
         expectedProjectCount: 1,
@@ -563,12 +580,12 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "workflow.deletePreview",
-      params: { workflow_id: "workflow-1" },
+      params: { workflow_id: "11111111-1111-4111-8111-111111111111" },
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.delete",
       params: {
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         confirmed: true,
         expected_version: 7,
         expected_project_count: 1,
@@ -629,7 +646,7 @@ describe("ApiClient", () => {
 
     await expect(
       client.validateWorkflowGraphDraft({
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         metadata: {
           name: "Draft Workflow",
           description: "Draft description",
@@ -653,7 +670,7 @@ describe("ApiClient", () => {
     });
     await expect(
       client.previewWorkflowGraphSave({
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         expectedVersion: 11,
         metadata: {
           name: "Preview Workflow",
@@ -670,7 +687,7 @@ describe("ApiClient", () => {
     });
     await expect(
       client.saveWorkflowGraph({
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         expectedVersion: 11,
         metadata: {
           name: "Saved Workflow",
@@ -689,14 +706,14 @@ describe("ApiClient", () => {
     ).resolves.toMatchObject({
       saved: true,
       currentVersion: 12,
-      definition: { workflow: { id: "workflow-1" } },
+      definition: { workflow: { id: "11111111-1111-4111-8111-111111111111" } },
       blockers: [],
     });
 
     expect(transport.calls[0]).toEqual({
       method: "workflow.graph.validateDraft",
       params: {
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         metadata: {
           name: "Draft Workflow",
           description: "Draft description",
@@ -777,7 +794,7 @@ const boardWithJoinResponse = {
   board: {
     ...emptyBoardResponse.board,
     selected_workflow: {
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       display_name: "Workflow",
       description: "",
       version: 1,
@@ -826,7 +843,7 @@ function boardColumnResponse(nodeID: string, kind: string) {
 
 const emptyBoardNodeCardsResponse = {
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   node_id: "node-1",
   cards: null,
   previous_page_token: null,
@@ -848,7 +865,7 @@ const projectSummaryResponse = {
   project_key: "PROJ",
   display_name: "Project",
   primary_workspace: workspaceResponse,
-  default_workflow_id: "workflow-1",
+  default_workflow_id: "11111111-1111-4111-8111-111111111111",
   default_workflow_name: "Delivery",
   default_workflow_valid: true,
   updated_at_unix_ms: 1,
@@ -872,7 +889,7 @@ const emptyTaskDetailResponse = {
     summary: {
       id: "task-1",
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       short_id: "PROJ-1",
       title: "Task",
       created_at_unix_ms: 1,
@@ -883,7 +900,7 @@ const emptyTaskDetailResponse = {
       display_name: "Project",
     },
     workflow: {
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       display_name: "Delivery",
       description: "",
       version: 1,
@@ -908,6 +925,26 @@ const emptyTaskDetailResponse = {
     },
     label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
     attention_count: 0,
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
     worktree_path: null,
     current_nodes: [],
     live_session_ids: [],
@@ -919,7 +956,7 @@ const emptyTaskDetailResponse = {
 const workflowDefinitionResponse = {
   definition: {
     workflow: {
-      id: "workflow-1",
+      id: "11111111-1111-4111-8111-111111111111",
       name: "Delivery",
       description: "Delivery workflow",
       version: 9,
@@ -928,7 +965,7 @@ const workflowDefinitionResponse = {
     node_groups: [
       {
         group_id: "group-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         group_key: "core",
         display_name: "Core",
         sort_order: 1,
@@ -937,7 +974,7 @@ const workflowDefinitionResponse = {
     nodes: [
       {
         id: "node-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         key: "implement",
         kind: "agent",
         display_name: "Implement",
@@ -948,7 +985,7 @@ const workflowDefinitionResponse = {
       },
       {
         id: "done",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         key: "done",
         kind: "terminal",
         display_name: "Done",
@@ -957,7 +994,7 @@ const workflowDefinitionResponse = {
     transition_groups: [
       {
         id: "tg-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         source_node_id: "node-1",
         transition_id: "done",
         display_name: "Done",
@@ -967,7 +1004,7 @@ const workflowDefinitionResponse = {
     edges: [
       {
         id: "edge-1",
-        workflow_id: "workflow-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
         transition_group_id: "tg-1",
         key: "done",
         target_node_id: "done",
@@ -1013,7 +1050,7 @@ const workflowValidationResponse = {
     {
       code: "workflow.validation.invalid",
       message: "Invalid edge",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       node_id: "node-1",
       transition_group_id: "tg-1",
       edge_id: "edge-1",
@@ -1032,14 +1069,14 @@ const workflowLinksResponse = {
     {
       id: "link-1",
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       default: true,
     },
   ],
 };
 
 const workflowDeleteImpactResponse = {
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   version: 7,
   project_count: 1,
   link_count: 1,

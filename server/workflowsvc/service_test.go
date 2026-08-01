@@ -23,6 +23,7 @@ import (
 	"core/server/workflowview"
 	"core/server/worktree"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -194,6 +195,79 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 		}
 	}
 	waitWorkflowProjectActions(t, sub, "task", "comment_added", "comment_updated", "comment_deleted")
+}
+
+func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	for _, body := range []string{"first", "second", "third"} {
+		if _, err := service.AddWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentAddRequest{
+			TaskID: taskID,
+			Body:   body,
+			Author: "user",
+		}); err != nil {
+			t.Fatalf("AddWorkflowTaskComment %q: %v", body, err)
+		}
+	}
+	offset := 0
+	limit := 2
+	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: &offset,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments first page: %v", err)
+	}
+	if len(first.Comments) != 2 || first.NextOffset == nil || *first.NextOffset != 2 {
+		t.Fatalf("first comment page = %+v", first)
+	}
+	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: first.NextOffset,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments continued page: %v", err)
+	}
+	if len(second.Comments) != 1 || second.NextOffset != nil {
+		t.Fatalf("continued comment page = %+v", second)
+	}
+	beyondEnd := 3
+	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+		TaskID: taskID,
+		Offset: &beyondEnd,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskComments beyond end: %v", err)
+	}
+	if len(empty.Comments) != 0 || empty.NextOffset != nil {
+		t.Fatalf("beyond-end comment page = %+v", empty)
+	}
+	negativeOffset := -1
+	zeroLimit := 0
+	aboveLimit := serverapi.WorkflowPaginationMaxLimit + 1
+	for _, tt := range []struct {
+		name   string
+		offset *int
+		limit  *int
+		field  string
+	}{
+		{name: "negative offset", offset: &negativeOffset, limit: &limit, field: "offset"},
+		{name: "zero limit", offset: &offset, limit: &zeroLimit, field: "limit"},
+		{name: "limit above maximum", offset: &offset, limit: &aboveLimit, field: "limit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+				TaskID: taskID,
+				Offset: tt.offset,
+				Limit:  tt.limit,
+			})
+			if !isWorkflowServiceRequestFieldError(err, tt.field) {
+				t.Fatalf("ListWorkflowTaskComments error = %T %v, want %s validation", err, err, tt.field)
+			}
+		})
+	}
 }
 
 func TestServiceTaskStartValidatesCurrentGraph(t *testing.T) {
@@ -438,140 +512,55 @@ func TestServiceManualMoveRejectsInvalidExecutableBeforeTargetSelection(t *testi
 	}
 }
 
-func TestServiceFineGrainedGraphMutationsRevalidateWorkflowTasksAtCommit(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+func TestServiceGraphMutationsUseStoreEditPolicyInsteadOfTaskWideQuiescence(t *testing.T) {
+	service, binding, _ := newWorkflowServiceTestServiceWithRoleResolver(t, testsetup.QuestionsEnabled("coder", "explorer"))
+	ctx := context.Background()
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+
 	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	startID := workflowServiceNodeIDByKind(t, definition.Definition, "start")
 	agentID := workflowServiceNodeIDByKey(t, definition.Definition, "agent")
-	terminalID := workflowServiceNodeIDByKind(t, definition.Definition, "terminal")
-	startGroupID := "group-start-" + workflowID
-	startEdgeID := "edge-start-" + workflowID
-	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
-		WorkflowID:  workflowID,
-		GroupID:     "group-existing-" + workflowID,
-		GroupKey:    "existing",
-		DisplayName: "Existing",
-	}); err != nil {
-		t.Fatalf("AddWorkflowNodeGroup setup: %v", err)
-	}
-
 	execution := newManualMoveExecutionStub(service)
 	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
 	service.currentNodeExecution = execution
-	tests := []struct {
-		name string
-		run  func() error
-	}{
-		{
-			name: "add node",
-			run: func() error {
-				_, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
-					WorkflowID: workflowID, NodeID: "node-blocked-" + workflowID, Key: "blocked", Kind: "agent", DisplayName: "Blocked", SubagentRole: "coder",
-				})
-				return err
-			},
-		},
-		{
-			name: "update node",
-			run: func() error {
-				_, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
-					WorkflowID: workflowID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Changed", SubagentRole: "coder", PromptTemplate: "Do work.",
-				})
-				return err
-			},
-		},
-		{
-			name: "add node group",
-			run: func() error {
-				_, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
-					WorkflowID: workflowID, GroupID: "group-blocked-" + workflowID, GroupKey: "blocked", DisplayName: "Blocked",
-				})
-				return err
-			},
-		},
-		{
-			name: "update node group",
-			run: func() error {
-				_, err := service.UpdateWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupUpdateRequest{
-					WorkflowID: workflowID, GroupID: "group-existing-" + workflowID, GroupKey: "existing", DisplayName: "Changed",
-				})
-				return err
-			},
-		},
-		{
-			name: "delete node group",
-			run: func() error {
-				return service.DeleteWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupDeleteRequest{
-					WorkflowID: workflowID, GroupID: "group-existing-" + workflowID,
-				})
-			},
-		},
-		{
-			name: "add transition group",
-			run: func() error {
-				_, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-					WorkflowID: workflowID, GroupID: "group-blocked-" + workflowID, SourceNodeID: startID, TransitionID: "blocked", DisplayName: "Blocked",
-				})
-				return err
-			},
-		},
-		{
-			name: "update transition group",
-			run: func() error {
-				_, err := service.UpdateWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupUpdateRequest{
-					WorkflowID: workflowID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Changed",
-				})
-				return err
-			},
-		},
-		{
-			name: "add edge",
-			run: func() error {
-				_, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-					WorkflowID: workflowID, EdgeID: "edge-blocked-" + workflowID, TransitionGroupID: startGroupID, Key: "blocked", TargetNodeID: terminalID, ContextMode: "new_session",
-				})
-				return err
-			},
-		},
-		{
-			name: "update edge",
-			run: func() error {
-				_, err := service.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{
-					WorkflowID: workflowID, EdgeID: startEdgeID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Changed.",
-				})
-				return err
-			},
-		},
+	if _, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
+		WorkflowID: workflowID, NodeID: agentID, Key: "agent", Kind: "agent",
+		DisplayName: "Agent", SubagentRole: "explorer", PromptTemplate: "Do work.",
+	}); err != nil {
+		t.Fatalf("UpdateWorkflowNode role during active Task: %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if err := test.run(); !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-				t.Fatalf("%s error = %v, want %v", test.name, err, workflowexecution.ErrTaskExecutionNotQuiescent)
-			}
-		})
+	updated, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow after role update: %v", err)
 	}
-	if len(execution.quiescentTaskIDs) != len(tests) {
-		t.Fatalf("quiescence checks = %v, want one per graph mutation", execution.quiescentTaskIDs)
-	}
-	for _, taskID := range execution.quiescentTaskIDs {
-		if taskID != workflow.TaskID(task.Task.ID) {
-			t.Fatalf("quiescence task id = %q, want %q", taskID, task.Task.ID)
+	for index := range updated.Definition.Nodes {
+		if updated.Definition.Nodes[index].ID == agentID {
+			updated.Definition.Nodes[index].SubagentRole = "coder"
 		}
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: updated.Definition.Workflow.Version,
+		Graph:           workflowGraphDraftFromDefinition(updated.Definition),
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph role during active Task: %v", err)
+	}
+	if !saved.Saved {
+		t.Fatalf("SaveWorkflowGraph response = %+v, want saved role change", saved)
+	}
+	if len(execution.quiescentTaskIDs) != 0 {
+		t.Fatalf("graph mutations checked Task-wide Quiescence: %v", execution.quiescentTaskIDs)
 	}
 }
 
-func TestServiceGraphSaveAndWorkflowDeleteRevalidateWorkflowTasksAtCommit(t *testing.T) {
+func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 	if err != nil {
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
@@ -580,14 +569,6 @@ func TestServiceGraphSaveAndWorkflowDeleteRevalidateWorkflowTasksAtCommit(t *tes
 	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
 	service.currentNodeExecution = execution
 
-	_, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
-		WorkflowID:      workflowID,
-		ExpectedVersion: definition.Definition.Workflow.Version,
-		Graph:           workflowGraphDraftFromDefinition(definition.Definition),
-	})
-	if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("SaveWorkflowGraph error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
-	}
 	_, err = service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
 		WorkflowID:           workflowID,
 		Confirmed:            true,
@@ -599,8 +580,8 @@ func TestServiceGraphSaveAndWorkflowDeleteRevalidateWorkflowTasksAtCommit(t *tes
 	if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("DeleteWorkflow error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
 	}
-	if len(execution.quiescentTaskIDs) != 2 || execution.quiescentTaskIDs[0] != workflow.TaskID(taskID) || execution.quiescentTaskIDs[1] != workflow.TaskID(taskID) {
-		t.Fatalf("quiescence checks = %v, want task %s before graph save and workflow delete", execution.quiescentTaskIDs, taskID)
+	if len(execution.quiescentTaskIDs) != 1 || execution.quiescentTaskIDs[0] != workflow.TaskID(taskID) {
+		t.Fatalf("quiescence checks = %v, want task %s before workflow delete", execution.quiescentTaskIDs, taskID)
 	}
 	if _, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID}); err != nil {
 		t.Fatalf("GetWorkflow after rejected mutations: %v", err)
@@ -1104,7 +1085,7 @@ func TestServiceGetsAndUpdatesTaskLabels(t *testing.T) {
 	}
 	event := nextWorkflowProjectEvent(t, sub)
 	if !stringPointerEquals(event.ProjectID, binding.ProjectID) ||
-		!stringPointerEquals(event.WorkflowID, workflowID) ||
+		!workflowIDPointerEquals(event.WorkflowID, workflowID) ||
 		event.Resource != serverapi.WorkflowProjectEventResourceTask ||
 		event.Action != serverapi.WorkflowProjectEventActionLabelsChanged ||
 		event.PrimaryEntityID != task.Task.ID ||
@@ -1426,19 +1407,36 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 			t.Fatalf("CreateWorkflow %q: %v", name, err)
 		}
 	}
-	page1, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 2})
+	defaultPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkflows defaults: %v", err)
+	}
+	if len(defaultPage.Workflows) != 3 || defaultPage.NextOffset != nil {
+		t.Fatalf("default page = %+v", defaultPage)
+	}
+	zeroOffset := 0
+	limit := 2
+	page1, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: &zeroOffset, Limit: &limit})
 	if err != nil {
 		t.Fatalf("ListWorkflows page1: %v", err)
 	}
-	if len(page1.Workflows) != 2 || page1.NextPageToken == "" {
+	if len(page1.Workflows) != 2 || page1.NextOffset == nil || *page1.NextOffset != 2 {
 		t.Fatalf("page1 = %+v", page1)
 	}
-	page2, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 2, PageToken: page1.NextPageToken})
+	page2, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: page1.NextOffset, Limit: &limit})
 	if err != nil {
 		t.Fatalf("ListWorkflows page2: %v", err)
 	}
-	if len(page2.Workflows) != 1 || page2.NextPageToken != "" {
+	if len(page2.Workflows) != 1 || page2.NextOffset != nil {
 		t.Fatalf("page2 = %+v", page2)
+	}
+	beyondEnd := 3
+	beyondEndPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Offset: &beyondEnd, Limit: &limit})
+	if err != nil {
+		t.Fatalf("ListWorkflows beyond end: %v", err)
+	}
+	if len(beyondEndPage.Workflows) != 0 || beyondEndPage.NextOffset != nil {
+		t.Fatalf("beyond end page = %+v", beyondEndPage)
 	}
 	seen := map[string]bool{}
 	for _, record := range append(page1.Workflows, page2.Workflows...) {
@@ -1457,11 +1455,12 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
 	}
-	if created.Workflow.ID == "" || created.Link.WorkflowID != created.Workflow.ID || !created.Link.Default {
+	if created.Workflow.ID.IsZero() || created.Link.WorkflowID != created.Workflow.ID || !created.Link.Default {
 		t.Fatalf("created = %+v, want first default link", created)
 	}
 	projectID := binding.ProjectID
-	projectPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID, PageSize: 10})
+	projectLimit := 10
+	projectPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID, Limit: &projectLimit})
 	if err != nil {
 		t.Fatalf("project ListWorkflows: %v", err)
 	}
@@ -1472,7 +1471,7 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 		t.Fatalf("project workflow = %+v, want default project metadata", projectPage.Workflows[0])
 	}
 	exactWorkflowID := created.Workflow.ID
-	exactPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{WorkflowID: &exactWorkflowID, PageSize: 10})
+	exactPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{WorkflowID: &exactWorkflowID, Limit: &projectLimit})
 	if err != nil {
 		t.Fatalf("exact ListWorkflows: %v", err)
 	}
@@ -1486,7 +1485,7 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	}); err == nil {
 		t.Fatalf("expected invalid project create-and-link to fail")
 	}
-	filtered, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{PageSize: 10, Query: "Broken"})
+	filtered, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{Limit: &projectLimit, Query: "Broken"})
 	if err != nil {
 		t.Fatalf("ListWorkflows filtered: %v", err)
 	}
@@ -1538,7 +1537,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 		t.Fatalf("confirmed delete = %+v, want deleted without blockers", deleted)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if !stringPointerEquals(event.ProjectID, projectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "workflow" || event.Action != "deleted" || event.PrimaryEntityID != workflowID || len(event.RelatedIDs) != 0 {
+	if !stringPointerEquals(event.ProjectID, projectID) || !workflowIDPointerEquals(event.WorkflowID, workflowID) || event.Resource != "workflow" || event.Action != "deleted" || event.PrimaryEntityID != workflowID.String() || len(event.RelatedIDs) != 0 {
 		t.Fatalf("event = %+v, want workflow deleted event", event)
 	}
 	eventCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -1547,7 +1546,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription delete next: %v", err)
 	}
-	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || workflowEvent.PrimaryEntityID != workflowID || len(workflowEvent.RelatedIDs) != 0 {
+	if workflowEvent.ProjectID != nil || !workflowIDPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || workflowEvent.PrimaryEntityID != workflowID.String() || len(workflowEvent.RelatedIDs) != 0 {
 		t.Fatalf("workflow-scoped delete event = %+v, want projectless workflow delete event", workflowEvent)
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
@@ -1598,10 +1597,10 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 		t.Fatalf("derived wiring edges = %+v, want one summary per draft edge", validated.DerivedWiring.Edges)
 	}
 
-	renamedGraph := renameWorkflowGraphDraftNode(graph, "node-agent-"+workflowID, "Preview Agent")
-	renamedGraph = setWorkflowGraphDraftNodeCompletionMode(renamedGraph, "node-agent-"+workflowID, "tool")
-	renamedGraph = setWorkflowGraphDraftEdgePrompt(renamedGraph, "edge-start-"+workflowID, "Saved edge prompt.")
-	renamedGraph = setWorkflowGraphDraftTransitionDescription(renamedGraph, "group-start-"+workflowID, "Start implementation from the backlog.")
+	renamedGraph := renameWorkflowGraphDraftNode(graph, "node-agent-"+workflowID.String(), "Preview Agent")
+	renamedGraph = setWorkflowGraphDraftNodeCompletionMode(renamedGraph, "node-agent-"+workflowID.String(), "tool")
+	renamedGraph = setWorkflowGraphDraftEdgePrompt(renamedGraph, "edge-start-"+workflowID.String(), "Saved edge prompt.")
+	renamedGraph = setWorkflowGraphDraftTransitionDescription(renamedGraph, "group-start-"+workflowID.String(), "Start implementation from the backlog.")
 	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: source.Definition.Workflow.Version,
@@ -1618,7 +1617,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflow after preview: %v", err)
 	}
-	if afterPreview.Definition.Workflow.Version != source.Definition.Workflow.Version || afterPreview.Definition.Workflow.Name == "Preview Workflow" || workflowServiceNodeByID(t, afterPreview.Definition, "node-agent-"+workflowID).DisplayName == "Preview Agent" {
+	if afterPreview.Definition.Workflow.Version != source.Definition.Workflow.Version || afterPreview.Definition.Workflow.Name == "Preview Workflow" || workflowServiceNodeByID(t, afterPreview.Definition, "node-agent-"+workflowID.String()).DisplayName == "Preview Agent" {
 		t.Fatalf("preview mutated workflow definition = %+v", afterPreview.Definition)
 	}
 
@@ -1632,7 +1631,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 		t.Fatalf("SubscribeWorkflow: %v", err)
 	}
 	defer func() { _ = workflowSub.Close() }()
-	if _, err := service.SubscribeWorkflow(ctx, serverapi.WorkflowSubscribeRequest{WorkflowID: "workflow-missing"}); err == nil {
+	if _, err := service.SubscribeWorkflow(ctx, serverapi.WorkflowSubscribeRequest{WorkflowID: runtimeids.NewWorkflowID()}); err == nil {
 		t.Fatal("SubscribeWorkflow accepted missing workflow")
 	}
 	customRef := "refs/tags/v1"
@@ -1663,17 +1662,17 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 		*saved.Definition.Workflow.ExecutionTargetPolicy.CustomRef != customRef {
 		t.Fatalf("saved workflow target policy = %+v, want custom ref", saved.Definition.Workflow.ExecutionTargetPolicy)
 	}
-	if workflowServiceEdgeByID(t, *saved.Definition, "edge-start-"+workflowID).PromptTemplate != "Saved edge prompt." {
-		t.Fatalf("saved response edge prompt = %q, want edited edge prompt", workflowServiceEdgeByID(t, *saved.Definition, "edge-start-"+workflowID).PromptTemplate)
+	if workflowServiceEdgeByID(t, *saved.Definition, "edge-start-"+workflowID.String()).PromptTemplate != "Saved edge prompt." {
+		t.Fatalf("saved response edge prompt = %q, want edited edge prompt", workflowServiceEdgeByID(t, *saved.Definition, "edge-start-"+workflowID.String()).PromptTemplate)
 	}
-	if workflowServiceNodeByID(t, *saved.Definition, "node-agent-"+workflowID).CompletionMode != "tool" {
-		t.Fatalf("saved response node completion mode = %q, want tool", workflowServiceNodeByID(t, *saved.Definition, "node-agent-"+workflowID).CompletionMode)
+	if workflowServiceNodeByID(t, *saved.Definition, "node-agent-"+workflowID.String()).CompletionMode != "tool" {
+		t.Fatalf("saved response node completion mode = %q, want tool", workflowServiceNodeByID(t, *saved.Definition, "node-agent-"+workflowID.String()).CompletionMode)
 	}
-	if workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID).Description != "Start implementation from the backlog." {
-		t.Fatalf("saved response transition description = %q, want edited transition description", workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID).Description)
+	if workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID.String()).Description != "Start implementation from the backlog." {
+		t.Fatalf("saved response transition description = %q, want edited transition description", workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID.String()).Description)
 	}
 	for _, event := range waitWorkflowProjectActions(t, sub, "workflow", "graph_saved") {
-		if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !stringPointerEquals(event.WorkflowID, workflowID) {
+		if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !workflowIDPointerEquals(event.WorkflowID, workflowID) {
 			t.Fatalf("event = %+v, want linked workflow event", event)
 		}
 	}
@@ -1683,7 +1682,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription next: %v", err)
 	}
-	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
+	if workflowEvent.ProjectID != nil || !workflowIDPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
 		t.Fatalf("workflow-scoped event = %+v, want graph_saved workflow event without project scope", workflowEvent)
 	}
 	canonical, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -1704,7 +1703,7 @@ func TestServiceWorkflowGraphSaveAllowsEmptyPromptButTaskStartRejects(t *testing
 		t.Fatalf("GetWorkflow source: %v", err)
 	}
 	graph := workflowGraphDraftFromDefinition(source.Definition)
-	graph = setWorkflowGraphDraftEdgePrompt(graph, "edge-start-"+workflowID, "")
+	graph = setWorkflowGraphDraftEdgePrompt(graph, "edge-start-"+workflowID.String(), "")
 
 	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID:      workflowID,
@@ -1761,9 +1760,9 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 		t.Fatalf("GetWorkflow source: %v", err)
 	}
 	graph := workflowGraphDraftFromDefinition(source.Definition)
-	scriptID := "node-script-" + workflowID
-	scriptTransitionID := "group-agent-script-" + workflowID
-	scriptDoneTransitionID := "group-script-done-" + workflowID
+	scriptID := "node-script-" + workflowID.String()
+	scriptTransitionID := "group-agent-script-" + workflowID.String()
+	scriptDoneTransitionID := "group-script-done-" + workflowID.String()
 	doneID := workflowServiceNodeIDByKind(t, source.Definition, "terminal")
 	agentID := workflowServiceNodeIDByKey(t, source.Definition, "agent")
 	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
@@ -1777,8 +1776,8 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptDoneTransitionID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID, TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, ContextMode: "new_session"},
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-script-done-" + workflowID, TransitionGroupID: scriptDoneTransitionID, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID.String(), TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-script-done-" + workflowID.String(), TransitionGroupID: scriptDoneTransitionID, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"},
 	)
 	savedScript, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
@@ -1881,7 +1880,7 @@ func TestWorkflowGraphStoreSaveSerializesSameWorkflowWithoutBlockingDifferentWor
 	firstRequest := serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version,
-		Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "First"),
+		Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID.String(), "First"),
 	}
 	type saveResult struct {
 		result workflowstore.WorkflowGraphSaveResult
@@ -1905,7 +1904,7 @@ func TestWorkflowGraphStoreSaveSerializesSameWorkflowWithoutBlockingDifferentWor
 		request := serverapi.WorkflowGraphSaveRequest{
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "Second"),
+			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID.String(), "Second"),
 		}
 		result, err := service.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(
 			request.WorkflowID,
@@ -1921,7 +1920,7 @@ func TestWorkflowGraphStoreSaveSerializesSameWorkflowWithoutBlockingDifferentWor
 		request := serverapi.WorkflowGraphSaveRequest{
 			WorkflowID:      otherWorkflowID,
 			ExpectedVersion: other.Definition.Workflow.Version,
-			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(other.Definition), "node-agent-"+otherWorkflowID, "Independent"),
+			Graph:           renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(other.Definition), "node-agent-"+otherWorkflowID.String(), "Independent"),
 		}
 		result, err := service.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(
 			request.WorkflowID,
@@ -1965,7 +1964,7 @@ func TestServiceWorkflowGraphSaveReturnsExactCommittedResponseWhenNextSaveWinsRa
 	}
 	publisher := &blockingWorkflowGraphEventPublisher{started: make(chan struct{}), release: make(chan struct{})}
 	service.store.SetWorkflowEventPublisher(publisher)
-	firstGraph := renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID, "First response")
+	firstGraph := renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(current.Definition), "node-agent-"+workflowID.String(), "First response")
 	type saveResult struct {
 		response serverapi.WorkflowGraphSaveResponse
 		err      error
@@ -1981,7 +1980,7 @@ func TestServiceWorkflowGraphSaveReturnsExactCommittedResponseWhenNextSaveWinsRa
 	}()
 	<-publisher.started
 
-	secondGraph := renameWorkflowGraphDraftNode(firstGraph, "node-agent-"+workflowID, "Second response")
+	secondGraph := renameWorkflowGraphDraftNode(firstGraph, "node-agent-"+workflowID.String(), "Second response")
 	second, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version + 1,
@@ -1991,14 +1990,14 @@ func TestServiceWorkflowGraphSaveReturnsExactCommittedResponseWhenNextSaveWinsRa
 		t.Fatalf("second SaveWorkflowGraph: %v", err)
 	}
 	if !second.Saved || second.Definition == nil || second.CurrentVersion != current.Definition.Workflow.Version+2 ||
-		workflowServiceNodeByID(t, *second.Definition, "node-agent-"+workflowID).DisplayName != "Second response" {
+		workflowServiceNodeByID(t, *second.Definition, "node-agent-"+workflowID.String()).DisplayName != "Second response" {
 		t.Fatalf("second save = %+v, want exact second committed definition", second)
 	}
 	close(publisher.release)
 	first := <-firstDone
 	if first.err != nil || !first.response.Saved || first.response.Definition == nil ||
 		first.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
-		workflowServiceNodeByID(t, *first.response.Definition, "node-agent-"+workflowID).DisplayName != "First response" {
+		workflowServiceNodeByID(t, *first.response.Definition, "node-agent-"+workflowID.String()).DisplayName != "First response" {
 		t.Fatalf("first delayed response = %+v error=%v, want exact first committed definition", first.response, first.err)
 	}
 }
@@ -2086,7 +2085,7 @@ func newWorkflowServiceTestContext(t *testing.T) (context.Context, *Service, met
 	return context.Background(), service, binding
 }
 
-func newWorkflowServiceOrdinaryTaskFixture(t *testing.T) (context.Context, *Service, string, string, string) {
+func newWorkflowServiceOrdinaryTaskFixture(t *testing.T) (context.Context, *Service, string, runtimeids.WorkflowID, string) {
 	t.Helper()
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -2108,12 +2107,13 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 		name       string
 		readModels ReadModels
 	}{
-		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
-		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
+		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task search", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
+		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2190,7 +2190,15 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskSearch: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projector, authority)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDependencies: %v", err)
+	}
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -2203,12 +2211,14 @@ func newWorkflowServiceReadModels(
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}
 	return ReadModels{
-		Definitions: definitions,
-		Board:       board,
-		TaskList:    taskList,
-		TaskDetail:  taskDetail,
-		Activity:    activity,
-		Attention:   attention,
+		Definitions:      definitions,
+		Board:            board,
+		TaskList:         taskList,
+		TaskSearch:       taskSearch,
+		TaskDetail:       taskDetail,
+		TaskDependencies: dependencies,
+		Activity:         activity,
+		Attention:        attention,
 	}
 }
 
@@ -2236,6 +2246,10 @@ func stringPointerEquals(value *string, expected string) bool {
 	return value != nil && *value == expected
 }
 
+func workflowIDPointerEquals(value *runtimeids.WorkflowID, expected runtimeids.WorkflowID) bool {
+	return value != nil && *value == expected
+}
+
 func workflowLabelErrorHasReason(err error, reason serverapi.WorkflowLabelErrorReason) bool {
 	var labelErr *serverapi.WorkflowLabelError
 	return errors.As(err, &labelErr) && labelErr.Reason == reason
@@ -2250,7 +2264,7 @@ func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Serv
 	return link
 }
 
-func linkDefaultWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, projectID, workflowID string) {
+func linkDefaultWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, projectID string, workflowID runtimeids.WorkflowID) {
 	t.Helper()
 	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
 		ProjectID:     projectID,
@@ -2268,7 +2282,7 @@ func createWorkflowServiceTask(t *testing.T, ctx context.Context, service *Servi
 	return task
 }
 
-func setWorkflowServiceExecutionTargetPolicy(t *testing.T, ctx context.Context, service *Service, workflowID string, policy serverapi.WorkflowExecutionTargetConfiguration) {
+func setWorkflowServiceExecutionTargetPolicy(t *testing.T, ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, policy serverapi.WorkflowExecutionTargetConfiguration) {
 	t.Helper()
 	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
 	if err != nil {
@@ -2312,7 +2326,7 @@ func startWorkflowServiceTask(t *testing.T, ctx context.Context, service *Servic
 	return *started.Applied
 }
 
-func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, service *Service) string {
+func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, service *Service) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Workflow"})
 	if err != nil {
@@ -2324,26 +2338,26 @@ func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, servi
 	}
 	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
 	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
-	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-agent-" + created.Workflow.ID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-agent-" + created.Workflow.ID.String(), Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."}); err != nil {
 		t.Fatalf("AddWorkflowNode: %v", err)
 	}
-	agentID := "node-agent-" + created.Workflow.ID
-	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start-" + created.Workflow.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	agentID := "node-agent-" + created.Workflow.ID.String()
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start-" + created.Workflow.ID.String(), SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID, TransitionGroupID: "group-start-" + created.Workflow.ID, Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: "group-start-" + created.Workflow.ID.String(), Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
 		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
-	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done-" + created.Workflow.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done-" + created.Workflow.ID.String(), SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID, TransitionGroupID: "group-done-" + created.Workflow.ID, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: "group-done-" + created.Workflow.ID.String(), Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	return created.Workflow.ID
 }
 
-func createWorkflowServiceWorkflowWithScriptNode(t *testing.T, ctx context.Context, service *Service, nodeID string, scriptPath string) string {
+func createWorkflowServiceWorkflowWithScriptNode(t *testing.T, ctx context.Context, service *Service, nodeID string, scriptPath string) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Script Workflow"})
 	if err != nil {
@@ -2362,7 +2376,7 @@ func createWorkflowServiceWorkflowWithScriptNode(t *testing.T, ctx context.Conte
 	return created.Workflow.ID
 }
 
-func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, service *Service) string {
+func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, service *Service) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Chained Workflow"})
 	if err != nil {
@@ -2374,17 +2388,17 @@ func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, ser
 	}
 	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
 	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
-	planID := "node-plan-" + created.Workflow.ID
-	implementID := "node-implement-" + created.Workflow.ID
+	planID := "node-plan-" + created.Workflow.ID.String()
+	implementID := "node-implement-" + created.Workflow.ID.String()
 	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: planID, Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"}); err != nil {
 		t.Fatalf("AddWorkflowNode plan: %v", err)
 	}
 	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: implementID, Key: "implement", Kind: "agent", DisplayName: "Implement", SubagentRole: "coder"}); err != nil {
 		t.Fatalf("AddWorkflowNode implement: %v", err)
 	}
-	startGroup := "group-start-" + created.Workflow.ID
-	nextGroup := "group-next-" + created.Workflow.ID
-	doneGroup := "group-done-" + created.Workflow.ID
+	startGroup := "group-start-" + created.Workflow.ID.String()
+	nextGroup := "group-next-" + created.Workflow.ID.String()
+	doneGroup := "group-done-" + created.Workflow.ID.String()
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: startGroup, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
 	}
@@ -2394,13 +2408,13 @@ func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, ser
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: doneGroup, SourceNodeID: implementID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: "new_session", PromptTemplate: "Plan work."}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: "new_session", PromptTemplate: "Plan work."}); err != nil {
 		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implementID, ContextMode: "new_session", PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []serverapi.WorkflowParameter{{Key: "prior_summary", Description: "Prior summary."}}}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID.String(), TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implementID, ContextMode: "new_session", PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []serverapi.WorkflowParameter{{Key: "prior_summary", Description: "Prior summary."}}}); err != nil {
 		t.Fatalf("AddWorkflowEdge next: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	return created.Workflow.ID
@@ -2508,7 +2522,7 @@ func setWorkflowGraphDraftEdgePrompt(graph serverapi.WorkflowGraphDraft, edgeID 
 	return updated
 }
 
-func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID string, edgeKey string) {
+func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, edgeKey string) {
 	t.Helper()
 	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
 	if err != nil {

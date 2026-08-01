@@ -12,11 +12,11 @@ import { useNativeDialogFallback } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { NativeDialogWindow } from "@/shared/native-dialog";
-import { Button, Dialog } from "@/ui";
+import { Button, compactDialogWidth, Dialog } from "@/ui";
 import { useProjectDelete } from "./useProjectEditData";
 
 const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
-const projectDeleteDialogWidth = 420;
+const projectDeleteDialogWidth = compactDialogWidth;
 
 type ProjectDeleteTarget = Readonly<{
   projectID: string;
@@ -202,8 +202,8 @@ function ProjectDeleteConfirmationFallbackDialog({
       closeLabel={t("app.close")}
       onClose={onClose}
       open
-      style={{ width: `min(${projectDeleteDialogWidth.toString()}px, calc(100vw - 32px))` }}
       title={t("projectEdit.deleteTitle")}
+      width={projectDeleteDialogWidth}
     >
       <ProjectDeleteConfirmationContent disabled={disabled} onCancel={onClose} onConfirm={onConfirm} />
     </Dialog>

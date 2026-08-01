@@ -5,6 +5,8 @@ export type {
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskStartInput,
+  TaskDependencyCreateIntent,
   TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
@@ -37,17 +39,21 @@ export {
   ProtocolMismatchError,
   RpcError,
   WorkflowLabelError,
+  WorkflowTaskDependencyError,
   decodeWorkflowLabelError,
+  decodeWorkflowTaskDependencyError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,
   errorMessage,
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";
+export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
+export { workflowIDSchema } from "./schemas/workflowID";
 export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
@@ -81,6 +87,15 @@ export type {
   TaskAttention,
   TaskCommentAuthorKind,
   TaskDetail,
+  TaskDependencies,
+  TaskDependencyAddAvailability,
+  TaskDependencyDirection,
+  TaskDependencyDirectionProjection,
+  TaskDependencyItem,
+  TaskDependencyListResponse,
+  TaskDependencyMutationResponse,
+  TaskDependencyProgress,
+  TaskDependencySatisfaction,
   TaskApproveApplied,
   TaskApproveResponse,
   TaskMoveApplied,

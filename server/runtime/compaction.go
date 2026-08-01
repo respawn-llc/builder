@@ -27,15 +27,15 @@ const (
 	compactionModeHandoff compactionMode = "handoff"
 	compactionModeManual  compactionMode = "manual"
 
-	defaultContextWindowTokens         = 200_000
-	autoCompactNearLimitMargin         = 8_000
-	compactionSoonReminderPercent      = 85
-	manualCompactionCarryoverMaxChars  = 4_000
-	preciseTokenCountSupportDiagnostic = "precise_token_count_support_failure"
-	preciseTokenCountFailureDiagnostic = "precise_token_count_failure"
+	defaultContextWindowTokens             = 200_000
+	autoCompactNearLimitMargin             = 8_000
+	compactionSoonReminderPercent          = 85
+	compactionPreservedUserMessageMaxChars = 4_000
+	preciseTokenCountSupportDiagnostic     = "precise_token_count_support_failure"
+	preciseTokenCountFailureDiagnostic     = "precise_token_count_failure"
 
 	additionalCompactionInstructionsHeader = "# Additional user instructions or commentary for this task:"
-	manualCompactionCarryoverHeader        = "# Last user message before handoff (work may have been done after it was sent):"
+	compactionPreservedUserMessageHeader   = "# Last user message before handoff (work may have been done after it was sent):"
 	handoffDisabledByUserMessage           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later."
 	handoffTooEarlyMessage                 = "It's too early to handoff right now. Don't worry, you still have plenty of time and memory to finish your work, so continue the current task for now. Only retry trigger_handoff after an explicit developer message says handoff is enabled."
 	handoffCompactionToolsDisabledMessage  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
@@ -60,7 +60,6 @@ type compactionResult struct {
 	trimmedItemsCount *int
 	overflowRepair    compactionOverflowRepairStats
 	provider          string
-	summary           string
 }
 
 type defaultContextCompactor struct {
@@ -149,10 +148,10 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includeManualCarryover bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
-	if includeManualCarryover {
+	if includePreservedUserMessage {
 		activeKind = ActiveKindCompaction
 	}
 	e.pauseQueuedUserAutoDrain()
@@ -165,7 +164,7 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}
-		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, instructions, includeManualCarryover)
+		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, instructions, includePreservedUserMessage)
 		receipt = compactReceipt
 		if err == nil || receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
@@ -596,7 +595,7 @@ func (e *Engine) currentTokenUsage() int {
 	return e.estimatedCurrentTokenUsage()
 }
 
-func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includeManualCarryover bool) (compactionResult, session.CommitReceipt, error) {
+func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
 	if planner.mode(planningSnapshot.compactionMode) == "none" {
@@ -627,9 +626,9 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	instructions := compactionInstructions(instructionsInput)
-	manualCarryover := ""
-	if mode == compactionModeManual && includeManualCarryover {
-		manualCarryover = lastVisibleUserMessageSinceLatestCompaction(input)
+	preservedUserMessageText := ""
+	if mode == compactionModeManual && includePreservedUserMessage {
+		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
 	}
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot, caps)
@@ -653,10 +652,6 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	result.items = withCompactionSummaryLabel(
-		result.items,
-		fmt.Sprintf("Context compacted for the %s time.", ordinal(compactionNumber)),
-	)
 	postReplacementMeta, err := e.compactionReinjectedMetaMessages(ctx)
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
@@ -668,8 +663,8 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	// transcript order.
 	replacementItems := append(llm.CloneResponseItems(result.items), llm.ItemsFromMessages(postReplacementMeta)...)
 	if mode == compactionModeManual {
-		if carryover, ok := manualCompactionCarryoverMessage(manualCarryover); ok {
-			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{carryover})...)
+		if preservedMessage, ok := compactionPreservedUserMessage(preservedUserMessageText); ok {
+			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
 		}
 	}
 	replacementReceipt, replacementErr := newCompactionPersistence(e).replaceHistory(stepID, result.engine, mode, replacementItems)
@@ -681,12 +676,6 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
 	}
 	finalizationErr := replacementErr
-	if strings.TrimSpace(result.summary) != "" && result.engine != "local" {
-		summary := strings.TrimSpace(result.summary)
-		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: summary})); err != nil {
-			finalizationErr = errors.Join(finalizationErr, err)
-		}
-	}
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
 			"Context compaction succeeded after collapsing tool payloads: %d shell outputs, %d patch inputs, ~%d tokens omitted. Full original tool payloads remain in pre-compaction transcript history but are omitted from the compacted model context.",
@@ -698,7 +687,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		}
 	}
 	if mode == compactionModeHandoff {
-		if err := newCompactionCarryoverCoordinator(e).appendHandoffFutureMessage(stepID); err != nil {
+		if err := newCompactionPreservedContextCoordinator(e).appendHandoffFutureMessage(stepID); err != nil {
 			finalizationErr = errors.Join(finalizationErr, err)
 		}
 	}
@@ -809,23 +798,6 @@ func (e *Engine) applyPendingHandoffIfNeeded(ctx context.Context, stepID string)
 	}
 	e.handoffRuntimeState().ClearRequest()
 	return true, nil
-}
-
-func withCompactionSummaryLabel(items []llm.ResponseItem, label string) []llm.ResponseItem {
-	label = strings.TrimSpace(label)
-	if label == "" || len(items) == 0 {
-		return llm.CloneResponseItems(items)
-	}
-	out := llm.CloneResponseItems(items)
-	for idx := range out {
-		if out[idx].MessageType == nil ||
-			*out[idx].MessageType != llm.MessageTypeCompactionSummary {
-			continue
-		}
-		out[idx].CompactContent = textutil.Value(label)
-		return out
-	}
-	return out
 }
 
 func (e *Engine) compactionPlannerState() *compactionPlanner {

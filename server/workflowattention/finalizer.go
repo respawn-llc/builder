@@ -12,6 +12,7 @@ import (
 	"core/server/attentionnotify"
 	"core/server/workflow"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 type Resolution struct {
@@ -23,11 +24,10 @@ type ApprovalProjection struct {
 	ApprovalID       workflow.ApprovalID
 	Source           workflow.CurrentNodeReference
 	ProjectID        string
-	WorkflowID       string
+	WorkflowID       runtimeids.WorkflowID
 	TaskShortID      string
 	TaskTitle        string
 	SessionID        string
-	Message          string
 	OccurredAtUnixMs int64
 }
 
@@ -38,11 +38,10 @@ type PendingApprovalProjectionProvider interface {
 type InterruptedCurrentNodeProjection struct {
 	CurrentNode      workflow.CurrentNodeReference
 	ProjectID        string
-	WorkflowID       string
+	WorkflowID       runtimeids.WorkflowID
 	TaskShortID      string
 	TaskTitle        string
 	SessionID        string
-	Message          string
 	Reason           string
 	DetailJSON       string
 	OccurredAtUnixMs int64
@@ -250,6 +249,9 @@ func validateApprovalOccurrence(projection ApprovalProjection) error {
 	if err := projection.Source.Validate(); err != nil {
 		return err
 	}
+	if projection.WorkflowID.IsZero() {
+		return errors.New("workflow approval workflow id is required")
+	}
 	if projection.OccurredAtUnixMs <= 0 {
 		return fmt.Errorf("workflow approval occurrence time is required")
 	}
@@ -259,6 +261,9 @@ func validateApprovalOccurrence(projection ApprovalProjection) error {
 func validateInterruptedCurrentNodeOccurrence(projection InterruptedCurrentNodeProjection) error {
 	if err := projection.CurrentNode.Validate(); err != nil {
 		return err
+	}
+	if projection.WorkflowID.IsZero() {
+		return errors.New("interrupted current node workflow id is required")
 	}
 	if projection.OccurredAtUnixMs <= 0 {
 		return fmt.Errorf("interrupted current node occurrence time is required")
@@ -274,7 +279,6 @@ func approvalNotification(projection ApprovalProjection) clientui.AttentionNotif
 		Revision:   1,
 		WorkflowApproval: &clientui.AttentionNotificationWorkflowApprovalState{
 			ApprovalID: projection.ApprovalID.String(),
-			Message:    strings.TrimSpace(projection.Message),
 		},
 		Target: workflowTaskTarget(projection.ProjectID, projection.WorkflowID, projection.Source, projection.TaskShortID, projection.TaskTitle, projection.SessionID, clientui.AttentionNotificationFocusApproval, projection.ApprovalID.String()),
 	}
@@ -287,7 +291,6 @@ func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProject
 		OccurredAt: time.UnixMilli(projection.OccurredAtUnixMs).UTC(),
 		Revision:   1,
 		InterruptedCurrentNode: &clientui.AttentionNotificationInterruptedCurrentNodeState{
-			Message:    strings.TrimSpace(projection.Message),
 			Reason:     strings.TrimSpace(projection.Reason),
 			DetailJSON: strings.TrimSpace(projection.DetailJSON),
 		},
@@ -295,12 +298,12 @@ func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProject
 	}
 }
 
-func workflowTaskTarget(projectID, workflowID string, reference workflow.CurrentNodeReference, shortID, title, sessionID string, focusKind clientui.AttentionNotificationFocusKind, approvalID string) clientui.AttentionNotificationTarget {
+func workflowTaskTarget(projectID string, workflowID runtimeids.WorkflowID, reference workflow.CurrentNodeReference, shortID, title, sessionID string, focusKind clientui.AttentionNotificationFocusKind, approvalID string) clientui.AttentionNotificationTarget {
 	nodeID := string(reference.NodeID)
 	target := clientui.AttentionNotificationTarget{
 		Kind:          clientui.AttentionNotificationTargetWorkflowTask,
 		ProjectID:     strings.TrimSpace(projectID),
-		WorkflowID:    strings.TrimSpace(workflowID),
+		WorkflowID:    &workflowID,
 		TaskID:        string(reference.TaskID),
 		TaskShortID:   strings.TrimSpace(shortID),
 		TaskTitle:     strings.TrimSpace(title),
@@ -319,7 +322,7 @@ func approvalRoutingScope(projection ApprovalProjection) attentionnotify.Routing
 	return attentionnotify.RoutingScope{
 		Kind:       attentionnotify.RoutingWorkflowTask,
 		ProjectID:  strings.TrimSpace(projection.ProjectID),
-		WorkflowID: strings.TrimSpace(projection.WorkflowID),
+		WorkflowID: &projection.WorkflowID,
 		TaskID:     string(projection.Source.TaskID),
 		SessionID:  strings.TrimSpace(projection.SessionID),
 	}
@@ -329,7 +332,7 @@ func interruptedCurrentNodeRoutingScope(projection InterruptedCurrentNodeProject
 	return attentionnotify.RoutingScope{
 		Kind:       attentionnotify.RoutingWorkflowTask,
 		ProjectID:  strings.TrimSpace(projection.ProjectID),
-		WorkflowID: strings.TrimSpace(projection.WorkflowID),
+		WorkflowID: &projection.WorkflowID,
 		TaskID:     string(projection.CurrentNode.TaskID),
 		SessionID:  strings.TrimSpace(projection.SessionID),
 	}

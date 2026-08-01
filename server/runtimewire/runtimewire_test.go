@@ -428,8 +428,9 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 		t.Fatalf("new local tool registry binding: %v", err)
 	}
 	events := make(chan shelltool.Event, 6)
-	manager.SetEventHandler(func(event shelltool.Event) {
+	manager.SetEventHandler(func(event shelltool.Event) bool {
 		events <- event
+		return true
 	})
 	nextEvent := func() shelltool.Event {
 		t.Helper()

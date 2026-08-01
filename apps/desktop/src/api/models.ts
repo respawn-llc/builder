@@ -64,7 +64,7 @@ export type ProjectSummary = Readonly<{
   key: string;
   name: string;
   primaryWorkspace: WorkspaceSummary;
-  defaultWorkflowID: string;
+  defaultWorkflowID: string | null;
   defaultWorkflowName: string;
   defaultWorkflowValid: boolean;
   updatedAt: number;
@@ -108,7 +108,6 @@ export type WorkspaceUnlinkBlocker = Readonly<{
 export type WorkspaceUnlinkResponse = Readonly<{
   projectID: string;
   workspaceID: string;
-  unlinked: boolean;
   blockers: readonly WorkspaceUnlinkBlocker[];
   project: ProjectSummary | null;
 }>;
@@ -168,7 +167,7 @@ export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionP
 export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
-  workflowID: string;
+  workflowID: string | null;
   nodeID: string;
   transitionGroupID: string;
   edgeID: string;
@@ -216,7 +215,7 @@ export type WorkflowRecord = Readonly<{
 
 export type WorkflowPage = Readonly<{
   workflows: readonly WorkflowRecord[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
 export type WorkflowNodeGroup = Readonly<{
@@ -522,7 +521,61 @@ export type BoardCard = Readonly<{
   status: TaskStatus;
   actions: TaskActions;
   labelIDs: readonly string[];
+  dependencyProgress: TaskDependencyProgress | null;
   updatedAt: number;
+}>;
+
+export type TaskDependencyProgress = Readonly<{
+  satisfiedCount: number;
+  totalCount: number;
+}>;
+
+export type TaskDependencyDirection = "blocked-by" | "blocks";
+export type TaskDependencySatisfaction = "satisfied" | "unsatisfied";
+
+export type TaskDependencyAddAvailability =
+  Readonly<{ kind: "available"; remainingCapacity: number }> | Readonly<{ kind: "limit_reached" }>;
+
+export type TaskDependencyItem = Readonly<{
+  taskID: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
+  status: TaskStatus;
+  satisfaction: TaskDependencySatisfaction | null;
+}>;
+
+export type TaskDependencyDirectionProjection = Readonly<{
+  direction: TaskDependencyDirection;
+  totalCount: number;
+  unsatisfiedCount: number | null;
+  items: readonly TaskDependencyItem[];
+  addAvailability: TaskDependencyAddAvailability;
+}>;
+
+export type TaskDependencies = Readonly<{
+  blockerCount: number;
+  unsatisfiedBlockerCount: number;
+  directlyBlockedTaskCount: number;
+  directions: readonly TaskDependencyDirectionProjection[];
+}>;
+
+export type TaskDependencyMutationOutcome = "added" | "already_present" | "removed" | "already_absent";
+
+export type TaskDependencyMutationResponse = Readonly<{
+  outcome: TaskDependencyMutationOutcome;
+  blockerTaskID: string;
+  blockerShortID: string;
+  blockedTaskID: string;
+  blockedShortID: string;
+}>;
+
+export type TaskDependencyListDirection = Omit<TaskDependencyDirectionProjection, "addAvailability">;
+
+export type TaskDependencyListResponse = Readonly<{
+  taskID: string;
+  shortID: string;
+  directions: readonly TaskDependencyListDirection[];
 }>;
 
 export type BoardColumn = Readonly<{
@@ -611,7 +664,7 @@ export type TaskComment = Readonly<{
 
 export type CommentPage = Readonly<{
   comments: readonly TaskComment[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
 export type TaskCurrentNode = Readonly<{
@@ -642,6 +695,7 @@ export type TaskDetail = Readonly<{
   actions: TaskActions;
   labelIDs: readonly string[];
   attentionCount: number;
+  dependencies: TaskDependencies;
   executionTarget: WorkflowExecutionTarget | null;
   worktreePath: string | null;
   currentNodes: readonly TaskCurrentNode[];

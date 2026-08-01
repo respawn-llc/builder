@@ -294,7 +294,7 @@ The CLI manages the same Project catalog with `kent task label create`, `list`, 
 
 ### CLI Workflow And Task Scope
 
-CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.
+CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`.
 
 ```bash
 kent workflow list --project .
@@ -321,6 +321,52 @@ Task listing is always project-scoped. Omitting `--workflow` lists tasks across 
 ```bash
 kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
+```
+
+### Task Dependencies
+
+Task dependencies connect a Blocker Task to a Blocked Task within one Project.
+
+```bash
+kent task dep add --project . --blocker <blocker-task> --blocked <blocked-task>
+kent task dep remove --project . --blocker <blocker-task> --blocked <blocked-task>
+kent task dep list --project . <task>
+kent task dep list --project . <task> --direction blocks
+```
+
+Dependency lists include both direct directions unless `--direction blocks` or
+`--direction blocked-by` selects one. Add and remove are idempotent; plain
+mutation output is `done`, and `--json` returns the typed outcome and both Task
+identities.
+
+Starting a Task or moving it into executable work reports unsatisfied direct
+Blocker Tasks before execution-target selection. Rerun the same command with
+`--ignore-dependencies` to acknowledge that one operation:
+
+```bash
+kent task start <task> --ignore-dependencies
+kent task move <task> <target-node-id> --ignore-dependencies
+```
+
+### Search Tasks
+
+Task search spans every Project unless `--project` narrows it. Project selectors accept a Project ID or registered workspace path and can repeat. `--status` accepts repeatable or comma-separated primary Task-status filters.
+
+```bash
+kent task search "retry policy"
+kent task search "retry policy" --project . --status backlog,running
+```
+
+Literal search is the default. It ignores search operators and requires at least one searchable trigram. `--case-sensitive` requires exact original case and diacritics. `--include-comments` adds Task Comments.
+
+```bash
+kent task search "RetryPolicy" --case-sensitive --include-comments
+```
+
+`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget. Continue a breadth-first result stream with the reported zero-based `--offset`; index changes between requests can repeat or skip hits. `--json` returns grouped structured results.
+
+```bash
+kent task search 'title:"retry policy"' --fts5 --page-size 20 --json
 ```
 
 ### Complete Work From The CLI
@@ -355,8 +401,8 @@ Target selection occurs on the first executable start, manual move, or approval.
 Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
 ```bash
-kent workflow update <workflow> --execution-target ask-on-first-execution
-kent workflow update <workflow> --execution-target none|head|default-branch|ref:<revision>
+kent workflow update <uuid> --execution-target ask-on-first-execution
+kent workflow update <uuid> --execution-target none|head|default-branch|ref:<revision>
 
 kent task start <task> --execution-target none|head|default-branch|ref:<revision>
 kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>

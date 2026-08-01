@@ -353,7 +353,7 @@ UPDATE workflow_nodes
 SET node_key = 'finished'
 WHERE id = 'node-done';
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json)
-VALUES ('node-terminal-alternate', 'workflow-1', 'alternate', 'terminal', 'Alternate', '[]')`)
+VALUES ('node-terminal-alternate', 'workflow-550e8400-e29b-41d4-a716-446655440001', 'alternate', 'terminal', 'Alternate', '[]')`)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-ambiguous-terminal-migration", "link-1", 1, "CAN-6", now, now)
 	execSeed(t, db, "canceled task", `
 UPDATE tasks

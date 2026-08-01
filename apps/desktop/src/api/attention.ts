@@ -7,7 +7,6 @@ type AttentionItemBase = Readonly<{
   taskID: string;
   taskShortID: string;
   taskTitle: string;
-  message: string;
   occurredAt: number;
 }>;
 
@@ -17,6 +16,7 @@ export type QuestionAttentionItem = AttentionItemBase &
     currentNode: TaskCurrentNode;
     sessionID: string | null;
     questionID: string;
+    message: string;
     suggestions: readonly string[];
     recommendedOptionIndex: number | null;
     question: AttentionQuestionPrompt | null;
@@ -27,6 +27,7 @@ export type ApprovalAttentionItem = AttentionItemBase &
     kind: "approval";
     approvalID: string;
     approvalSnapshot: ApprovalSnapshot;
+    message: string | null;
   }>;
 
 export type InterruptedCurrentNodeAttentionItem = AttentionItemBase &
@@ -35,6 +36,7 @@ export type InterruptedCurrentNodeAttentionItem = AttentionItemBase &
     currentNode: TaskCurrentNode;
     sessionID: string | null;
     detailJSON: string | null;
+    message: string | null;
   }>;
 
 export type AttentionItem = QuestionAttentionItem | ApprovalAttentionItem | InterruptedCurrentNodeAttentionItem;

@@ -6,10 +6,11 @@ import type {
   ProjectDeleteResponse,
   ProjectMutationResponse,
   ProjectPage,
+  ProjectSummary,
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "../models";
-import { projectBindingSchema, workspaceSummarySchema } from "./common";
+import { projectBindingSchema, workflowIDSchema, workspaceSummarySchema } from "./common";
 
 export const projectSummarySchema = z
   .object({
@@ -17,7 +18,7 @@ export const projectSummarySchema = z
     project_key: z.string(),
     display_name: z.string(),
     primary_workspace: workspaceSummarySchema,
-    default_workflow_id: z.string().optional().default(""),
+    default_workflow_id: workflowIDSchema.nullable(),
     default_workflow_name: z.string().optional().default(""),
     default_workflow_valid: z.boolean(),
     updated_at_unix_ms: z.number(),
@@ -25,7 +26,7 @@ export const projectSummarySchema = z
     attention_count: z.number(),
     workflow_count: z.number(),
   })
-  .transform((value) => ({
+  .transform((value): ProjectSummary => ({
     id: value.project_id,
     key: value.project_key,
     name: value.display_name,
@@ -95,7 +96,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .object({
     project_id: z.string(),
     workspace_id: z.string(),
-    unlinked: z.boolean(),
     blockers: z
       .array(
         z.object({
@@ -111,7 +111,6 @@ export const workspaceUnlinkResponseSchema: z.ZodType<WorkspaceUnlinkResponse> =
   .transform((value) => ({
     projectID: value.project_id,
     workspaceID: value.workspace_id,
-    unlinked: value.unlinked,
     blockers: value.blockers,
     project: value.project ?? null,
   }));

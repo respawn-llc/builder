@@ -202,6 +202,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowsvc.New",
+		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
 		"core/server/workflowsvc.WithCurrentNodeExecution",
 		"core/server/workflowexecution.Recover",
@@ -262,6 +263,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	for _, key := range []string{
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowexecution.NewCurrentNodeController",
+		"core/server/workflowview.NewTaskSearch",
 	} {
 		if !callReferencesExactly(calls[key][0], authorityType, authorityObject) {
 			findings = append(findings, currentNodeStructureFinding{
@@ -503,7 +505,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	}
 	sort.Strings(serializedShapes)
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "f97d89ab7818fcd5018c6368b9a17a0e5aa777b257de53f3ce6935ebae005061"
+	const expectedWorkflowCurrentNodeWireDigest = "018f63f90118fb1c3a4f315ab1888791e5d36e8d64a792491f4d9750ce80add2"
 	if digest != expectedWorkflowCurrentNodeWireDigest {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,

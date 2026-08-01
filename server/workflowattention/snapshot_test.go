@@ -7,6 +7,7 @@ import (
 
 	"core/server/workflow"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestFinalizerMaterializesCurrentDurableNotificationsWithoutLivePublication(t *testing.T) {
@@ -22,14 +23,13 @@ func TestFinalizerMaterializesCurrentDurableNotificationsWithoutLivePublication(
 		ApprovalID:       approvalID,
 		Source:           currentNode,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		OccurredAtUnixMs: 1,
 	}
 	interrupted := InterruptedCurrentNodeProjection{
 		CurrentNode:      currentNode,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
-		Message:          "Current Node interrupted",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		Reason:           "server_restart",
 		OccurredAtUnixMs: 2,
 	}
@@ -83,7 +83,7 @@ func TestFinalizerEnqueuesSnapshotBeforeConcurrentResolution(t *testing.T) {
 		ApprovalID:       approvalID,
 		Source:           currentNode,
 		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
 		OccurredAtUnixMs: 1,
 	}
 	publisher := &blockingPendingPublisher{

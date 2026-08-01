@@ -14,6 +14,7 @@ import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useProjectLabelEffects } from "@/shared/labels";
+import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useRetainedQueryData } from "./useRetainedQueryData";
 
@@ -225,17 +226,10 @@ export function shouldRefreshBoardFromProjectEvent(
   boardQueryWorkflowID: string | undefined,
   selectedWorkflowID: string | undefined,
 ): boolean {
-  if (event.resource === "workflow_link") {
-    return true;
-  }
-  if (event.resource === "workflow" || event.resource === "task") {
-    return (
-      event.workflowID === null ||
-      event.workflowID === boardQueryWorkflowID ||
-      event.workflowID === selectedWorkflowID
-    );
-  }
-  return false;
+  return (
+    workflowProjectEventAffectsDependencyBoard(event, boardQueryWorkflowID) ||
+    workflowProjectEventAffectsDependencyBoard(event, selectedWorkflowID)
+  );
 }
 
 export function useBoardTaskActions() {
@@ -260,7 +254,7 @@ export function useBoardTaskActions() {
   }
   const interruptMutation = useMutation({
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
-    onSuccess: refresh,
+    onSettled: refresh,
   });
   const resumeMutation = useMutation({
     mutationFn: async (taskID: string) => api.resumeTask(taskID),

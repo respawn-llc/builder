@@ -91,12 +91,10 @@ func (t *QuestionBatchTracker) MarkMaterialized(batchID string, askID string) er
 	if batch.resolved {
 		return nil
 	}
-	changed := false
 	if batch.status[askID] == questionAskPending {
 		batch.status[askID] = questionAskMaterialized
-		changed = true
 	}
-	if batch.emitted && !changed {
+	if batch.emitted || batch.status[askID] != questionAskMaterialized {
 		return nil
 	}
 	return t.publishBatch(batch)

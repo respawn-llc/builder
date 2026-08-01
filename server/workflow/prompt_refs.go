@@ -22,17 +22,10 @@ type PromptInputReference struct {
 	Placeholder string
 }
 
-type PromptPriorNodeReference struct {
-	NodeKey     ModelKey
-	OutputName  string
-	Placeholder string
-}
-
 type PromptTemplateReferences struct {
 	Params      []PromptParameterReference
 	PriorParams []PromptPriorParameterReference
 	Inputs      []PromptInputReference
-	PriorNodes  []PromptPriorNodeReference
 	Invalid     []PromptReferenceIssue
 }
 
@@ -113,11 +106,7 @@ func indexCommandTouchesPromptNamespace(args []parse.Node) bool {
 		return false
 	}
 	if _, ok := args[0].(*parse.DotNode); ok {
-		for _, arg := range args[1:] {
-			if typed, ok := arg.(*parse.StringNode); ok && promptNamespace(typed.Text) {
-				return true
-			}
-		}
+		return true
 	}
 	for _, arg := range args {
 		switch typed := arg.(type) {
@@ -147,7 +136,7 @@ func indexCommandTouchesPromptNamespace(args []parse.Node) bool {
 
 func variableTouchesPromptNamespace(ident []string) bool {
 	for _, part := range ident {
-		if part == "$Inputs" || part == "$Nodes" || part == "$Params" || promptNamespace(part) {
+		if part == "$Inputs" || part == "$Params" || promptNamespace(part) {
 			return true
 		}
 	}
@@ -175,16 +164,6 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 			return
 		}
 		refs.Inputs = append(refs.Inputs, PromptInputReference{Name: ident[1], Placeholder: placeholder})
-	case "Nodes":
-		if len(ident) != 3 {
-			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Nodes references must use .Nodes.<node_key>.<output_name>"})
-			return
-		}
-		refs.PriorNodes = append(refs.PriorNodes, PromptPriorNodeReference{
-			NodeKey:     ModelKey(ident[1]),
-			OutputName:  ident[2],
-			Placeholder: placeholder,
-		})
 	case "Params":
 		switch len(ident) {
 		case 2:
@@ -206,7 +185,7 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 }
 
 func promptNamespace(value string) bool {
-	return value == "Inputs" || value == "Nodes" || value == "Params"
+	return value == "Inputs" || value == "Params"
 }
 
 func promptBuiltin(value string) bool {

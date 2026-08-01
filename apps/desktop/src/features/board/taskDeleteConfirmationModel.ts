@@ -1,6 +1,8 @@
+import { compactDialogWidth } from "@/ui";
+
 export const taskDeleteNativeDialogPath = "/native-dialog/task-delete";
 
-export const taskDeleteDialogWidth = 420;
+export const taskDeleteDialogWidth = compactDialogWidth;
 
 export type TaskDeleteTarget = Readonly<{
   taskID: string;

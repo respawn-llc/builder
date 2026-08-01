@@ -4,11 +4,12 @@ import (
 	"reflect"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 )
 
 func TestDeriveWiringPropagatesTransitionParametersAcrossNormalEdge(t *testing.T) {
-	def := parameterWorkflow()
+	def := parameterWorkflow(t)
 
 	derived := workflow.DeriveWiring(def)
 
@@ -30,7 +31,7 @@ func TestDeriveWiringPropagatesTransitionParametersAcrossNormalEdge(t *testing.T
 }
 
 func TestDeriveWiringUnionsFanoutBranchParametersPerTransitionGroup(t *testing.T) {
-	def := fanoutParameterWorkflow()
+	def := fanoutParameterWorkflow(t)
 
 	derived := workflow.DeriveWiring(def)
 
@@ -54,7 +55,7 @@ func TestDeriveWiringUnionsFanoutBranchParametersPerTransitionGroup(t *testing.T
 }
 
 func TestDeriveWiringReportsFanoutParameterDescriptionConflict(t *testing.T) {
-	def := fanoutParameterWorkflow()
+	def := fanoutParameterWorkflow(t)
 	edgeByIDForDerivedTest(t, &def, "edge_split_b").Parameters = []workflow.Parameter{
 		{Key: "plan", Description: "Plan review criteria."},
 	}
@@ -66,7 +67,7 @@ func TestDeriveWiringReportsFanoutParameterDescriptionConflict(t *testing.T) {
 }
 
 func TestDeriveWiringReportsSiblingTransitionParameterDescriptionConflict(t *testing.T) {
-	def := parameterWorkflow()
+	def := parameterWorkflow(t)
 	def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_plan_block", SourceNodeID: "node_plan", TransitionID: "block", DisplayName: "Block"})
 	def.Edges = append(def.Edges, workflow.Edge{
 		WorkflowID:        def.ID,
@@ -85,7 +86,7 @@ func TestDeriveWiringReportsSiblingTransitionParameterDescriptionConflict(t *tes
 }
 
 func TestDeriveWiringAggregatesJoinIncomingParameters(t *testing.T) {
-	def := joinParameterWorkflow()
+	def := joinParameterWorkflow(t)
 
 	derived := workflow.DeriveWiring(def)
 
@@ -111,7 +112,7 @@ func TestDeriveWiringAggregatesJoinIncomingParameters(t *testing.T) {
 }
 
 func TestTransitionOutputFieldsForTargetNodeUsesJoinAggregate(t *testing.T) {
-	def := joinParameterWorkflow()
+	def := joinParameterWorkflow(t)
 	derived := workflow.DeriveWiring(def)
 
 	assertOutputFields(t, workflow.TransitionOutputFieldsForTargetNode(def, derived, "node_consume"), []workflow.OutputField{
@@ -121,7 +122,7 @@ func TestTransitionOutputFieldsForTargetNodeUsesJoinAggregate(t *testing.T) {
 }
 
 func TestDeriveWiringReportsJoinAggregateCollisionsAcrossProducingTransitions(t *testing.T) {
-	def := joinParameterWorkflow()
+	def := joinParameterWorkflow(t)
 	edgeByIDForDerivedTest(t, &def, "edge_branch_b_join").Parameters = []workflow.Parameter{
 		{Key: "plan", Description: "Implementation plan."},
 	}
@@ -133,7 +134,7 @@ func TestDeriveWiringReportsJoinAggregateCollisionsAcrossProducingTransitions(t 
 }
 
 func TestDeriveWiringSkipsNonAgentSourceParameters(t *testing.T) {
-	def := joinParameterWorkflow()
+	def := joinParameterWorkflow(t)
 	edgeByIDForDerivedTest(t, &def, "edge_start_split").Parameters = []workflow.Parameter{
 		{Key: "task_context", Description: "Task context."},
 	}
@@ -147,25 +148,25 @@ func TestDeriveWiringSkipsNonAgentSourceParameters(t *testing.T) {
 	assertOutputFields(t, derived.RequiredProvisionFieldsForTransitionGroup("group_join_consume"), nil)
 }
 
-func parameterWorkflow() workflow.Definition {
+func parameterWorkflow(t *testing.T) workflow.Definition {
 	return workflow.Definition{
-		ID:          "workflow_parameters",
+		ID:          testsetup.WorkflowID(t, "workflow_parameters"),
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_parameters", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_parameters", "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
-			testAgentNode("workflow_parameters", "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
-			testTerminalNode("workflow_parameters", "node_done", "done", "Done"),
+			testStartNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
+			testTerminalNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_parameters", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_parameters", ID: "group_plan_implement", SourceNodeID: "node_plan", TransitionID: "implement", DisplayName: "Implement"},
-			{WorkflowID: "workflow_parameters", ID: "group_implement_done", SourceNodeID: "node_implement", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_parameters"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_parameters"), ID: "group_plan_implement", SourceNodeID: "node_plan", TransitionID: "implement", DisplayName: "Implement"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_parameters"), ID: "group_implement_done", SourceNodeID: "node_implement", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_parameters", ID: "edge_start_plan", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_parameters"), ID: "edge_start_plan", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
 			{
-				WorkflowID:        "workflow_parameters",
+				WorkflowID:        testsetup.WorkflowID(t, "workflow_parameters"),
 				ID:                "edge_plan_implement",
 				Key:               "implement",
 				TransitionGroupID: "group_plan_implement",
@@ -178,7 +179,7 @@ func parameterWorkflow() workflow.Definition {
 				},
 			},
 			{
-				WorkflowID:        "workflow_parameters",
+				WorkflowID:        testsetup.WorkflowID(t, "workflow_parameters"),
 				ID:                "edge_implement_done",
 				Key:               "done",
 				TransitionGroupID: "group_implement_done",
@@ -190,9 +191,9 @@ func parameterWorkflow() workflow.Definition {
 	}
 }
 
-func fanoutParameterWorkflow() workflow.Definition {
-	def := parameterWorkflow()
-	def.Nodes = append(def.Nodes, testAgentNode("workflow_parameters", "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
+func fanoutParameterWorkflow(t *testing.T) workflow.Definition {
+	def := parameterWorkflow(t)
+	def.Nodes = append(def.Nodes, testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
 	def.TransitionGroups[1] = workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_plan_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"}
 	def.Edges[1] = workflow.Edge{
 		WorkflowID:        def.ID,

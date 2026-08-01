@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"core/internal/testharness/filemode"
+	testsetup "core/internal/testharness/testsetup"
 	"core/server/tools"
+	patchtool "core/server/tools/patch"
 	"core/shared/toolspec"
 )
 
@@ -31,7 +33,7 @@ func TestCreateMissingFileReturnsJSONString(t *testing.T) {
 	}
 }
 
-func TestSuccessfulAbsoluteForeignManagedWorktreeEditWarns(t *testing.T) {
+func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
@@ -57,14 +59,13 @@ func TestSuccessfulAbsoluteForeignManagedWorktreeEditWarns(t *testing.T) {
 		"new_string": "after",
 	})
 
-	requireEditSuccess(t, result)
-	if len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
-		t.Fatalf("managed worktree warning = %+v", result.ModelWarnings)
+	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
+		t.Fatalf("foreign worktree edit result = %+v", result)
 	}
-	assertEditTestFileContent(t, foreignFile, "after\n")
+	assertEditTestFileContent(t, foreignFile, "before\n")
 }
 
-func TestEditManagedWorktreeWarningSkipsNonForeignOrFailedTargets(t *testing.T) {
+func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
@@ -78,10 +79,8 @@ func TestEditManagedWorktreeWarningSkipsNonForeignOrFailedTargets(t *testing.T) 
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
 	currentFile := filepath.Join(currentRoot, "current.txt")
-	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
 	outsideFile := filepath.Join(outsideRoot, "outside.txt")
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
-	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
 	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
 	if err != nil {
@@ -99,7 +98,6 @@ func TestEditManagedWorktreeWarningSkipsNonForeignOrFailedTargets(t *testing.T) 
 		{name: "relative current", path: filepath.Join("..", "current.txt"), old: "before", new: "after"},
 		{name: "absolute current", path: currentFile, old: "after", new: "again"},
 		{name: "absolute outside managed base", path: outsideFile, old: "before", new: "after"},
-		{name: "failed foreign", path: foreignFile, old: "missing", new: "after", isError: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -423,19 +421,11 @@ func requireEditSuccess(t *testing.T, result tools.Result) {
 
 func newNonTemporaryOutsideDir(t *testing.T) string {
 	t.Helper()
-	outside, err := os.MkdirTemp(".", "edit-outside-approval-")
-	if err != nil {
-		t.Fatalf("create outside dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(outside) })
-	outside, err = filepath.Abs(outside)
-	if err != nil {
-		t.Fatalf("resolve outside dir: %v", err)
-	}
-	if filepath.IsAbs(outside) && strings.Contains(outside, string(filepath.Separator)+"tmp"+string(filepath.Separator)) {
-		t.Skip("test outside dir is under temporary editable root")
-	}
-	return outside
+	return testsetup.NonTemporaryDirectory(
+		t,
+		"kent-edit-outside-",
+		patchtool.IsPathInTemporaryDir,
+	)
 }
 
 func newTestTool(t *testing.T, dir string, opts ...Option) *Tool {

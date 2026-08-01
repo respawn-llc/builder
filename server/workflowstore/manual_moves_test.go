@@ -72,6 +72,63 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 }
 
+func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		OutputValues: map[string]string{"unknown": "value"},
+	})
+	var validationErr CompletionValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("PrepareManualMove error = %T %v, want CompletionValidationError", err, err)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(started.Reference) {
+		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
+	}
+}
+
+func TestPrepareManualMoveDryRunsTargetValueAndContextMaterialization(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+
+	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		OutputValues: map[string]string{"prior_summary": "manual plan"},
+	}); err == nil {
+		t.Fatal("PrepareManualMove accepted a target whose required continuation context could not be materialized")
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
+	}
+}
+
 func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")

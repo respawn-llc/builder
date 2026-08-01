@@ -1,17 +1,11 @@
 package sqlitegen
 
 import (
-	"database/sql"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestSessionPageQueriesUseNormalizedCategoryRecencyIndex(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE sessions (

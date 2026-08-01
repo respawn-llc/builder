@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -18,7 +19,7 @@ const (
 func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	projectID := "project-1"
 	taskID := "task-1"
-	workflowID := "workflow-1"
+	workflowID := runtimeids.NewWorkflowID()
 	nodeID := "node-1"
 
 	catalog := WorkflowProjectLabelCatalog{
@@ -152,6 +153,19 @@ func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
+	projectID := "project-1"
+	workflowID := runtimeids.WorkflowID{}
+	request := WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if !hasWorkflowRequestError(request.Validate(), "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("Validate error = %v, want workflow_id required", request.Validate())
+	}
+}
+
 func TestWorkflowTaskNamedLabelFilterExclusionsValidateAndMarshalAdditively(t *testing.T) {
 	mixed := WorkflowTaskLabelFilter{
 		Kind: WorkflowTaskLabelFilterKindNamed,
@@ -220,7 +234,7 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "task assignment", request: assignment},
 		{name: "task label get response", request: WorkflowTaskLabelsGetResponse{Assignment: assignment}},
 		{name: "task label update response", request: WorkflowTaskLabelsUpdateResponse{Assignment: assignment}},
-		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}}},
+		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}, Dependencies: emptyWorkflowTaskDependenciesForTest()}},
 		{name: "task list projection", request: WorkflowTaskListItem{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
 		{name: "task list projection response", request: WorkflowTaskListResponse{Tasks: []WorkflowTaskListItem{{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}}}},
 		{name: "board card projection", request: WorkflowBoardTaskCard{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
@@ -426,7 +440,7 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 		},
 		{
 			name:    "board cards require a tagged filter",
-			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: "workflow-1", NodeID: "node-1"},
+			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: runtimeids.NewWorkflowID(), NodeID: "node-1"},
 			field:   "label_filter.kind",
 			code:    WorkflowRequestErrorRequired,
 		},
@@ -436,9 +450,9 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
 	labelIDs := []string{workflowLabelIDAlpha, workflowLabelIDBeta}
 	for _, value := range []any{
-		WorkflowTaskDetail{LabelIDs: labelIDs},
-		WorkflowTaskListItem{LabelIDs: labelIDs},
-		WorkflowBoardTaskCard{LabelIDs: labelIDs},
+		WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, LabelIDs: labelIDs, Dependencies: emptyWorkflowTaskDependenciesForTest()},
+		WorkflowTaskListItem{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
+		WorkflowBoardTaskCard{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 	} {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -588,6 +602,7 @@ func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
 
 func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *testing.T) {
 	projectID := "project-1"
+	negativeOffset := -1
 	tests := []struct {
 		name       string
 		request    interface{ ValidateRPC() error }
@@ -609,8 +624,8 @@ func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *te
 		},
 		{
 			name:      "task list non-label field remains generic",
-			request:   WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone(), PageSize: -1},
-			wantField: "page_size",
+			request:   WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone(), Offset: &negativeOffset},
+			wantField: "offset",
 		},
 		{
 			name:       "task list malformed filter is typed",
@@ -628,7 +643,7 @@ func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *te
 			name: "board cards malformed filter is typed",
 			request: WorkflowBoardNodeCardsListRequest{
 				ProjectID:  projectID,
-				WorkflowID: "workflow-1",
+				WorkflowID: runtimeids.NewWorkflowID(),
 				NodeID:     "node-1",
 			},
 			wantField:  "label_filter.kind",

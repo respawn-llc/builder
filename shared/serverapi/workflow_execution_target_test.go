@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 )
 
 func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
@@ -17,6 +18,7 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 
 	for _, request := range []interface{ Validate() error }{
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
+		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &valid},
 	} {
 		if err := request.Validate(); err != nil {
 			t.Fatalf("%T valid selection rejected: %v", request, err)
@@ -33,13 +35,16 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("selection %#v validated", selection)
 		}
+		if err := (WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &selection}).Validate(); err == nil {
+			t.Fatalf("move selection %#v validated", selection)
+		}
 	}
 }
 
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{
-		WorkflowID:      "workflow",
+		WorkflowID:      runtimeids.NewWorkflowID(),
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
@@ -49,7 +54,7 @@ func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 		t.Fatalf("custom target policy metadata rejected: %v", err)
 	}
 	if err := (WorkflowGraphSavePreviewRequest{
-		WorkflowID:      "workflow",
+		WorkflowID:      runtimeids.NewWorkflowID(),
 		ExpectedVersion: 1,
 		Metadata: &WorkflowGraphMetadata{
 			Name:                  "Workflow",
@@ -132,6 +137,22 @@ func TestWorkflowTaskMoveRequestHasNoCompatibilityFields(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskActionResponseValidatesDependencyConfirmationOutcome(t *testing.T) {
+	count := 2
+	response := WorkflowTaskStartResponse{
+		Outcome:                    WorkflowTaskActionOutcomeDependencyConfirmationRequired,
+		UnsatisfiedDependencyCount: &count,
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("dependency confirmation response Validate: %v", err)
+	}
+	invalid := response
+	invalid.UnsatisfiedDependencyCount = nil
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("dependency confirmation response accepted missing count")
+	}
+}
+
 func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) {
 	target := WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeCustomRef,
@@ -148,7 +169,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy-observed target invalid: %v", err)
 	}
-	data, err := json.Marshal(WorkflowTaskDetail{ExecutionTarget: &target})
+	data, err := json.Marshal(WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, ExecutionTarget: &target})
 	if err != nil {
 		t.Fatalf("marshal detail: %v", err)
 	}
@@ -224,7 +245,7 @@ func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
 		}
 	}
 
-	data, err := json.Marshal(WorkflowTaskDetail{})
+	data, err := json.Marshal(WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}})
 	if err != nil {
 		t.Fatalf("marshal empty detail: %v", err)
 	}
@@ -278,6 +299,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
 		LiveSessionIDs: []string{},
 		CurrentScripts: []WorkflowTaskCurrentScript{},
+		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 		ExecutionTarget: &WorkflowExecutionTarget{
 			Mode:       WorkflowExecutionTargetModeNone,
 			Provenance: WorkflowExecutionTargetProvenanceResolved,
@@ -323,6 +345,7 @@ func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T)
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
 		LiveSessionIDs: liveSessionIDs,
 		CurrentScripts: currentScripts,
+		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 	}}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("all current execution targets rejected: %v", err)

@@ -3,9 +3,10 @@ package workflow
 import (
 	"fmt"
 	"strings"
+
+	"core/shared/runtimeids"
 )
 
-type WorkflowID string
 type NodeID string
 type TransitionGroupID string
 type EdgeID string
@@ -82,7 +83,7 @@ const (
 const RuntimePromptParameterCommentary = "commentary"
 
 type Definition struct {
-	ID                    WorkflowID
+	ID                    runtimeids.WorkflowID
 	DisplayName           string
 	ExecutionTargetPolicy ExecutionTargetPolicy
 	NodeGroups            []NodeGroup
@@ -92,7 +93,7 @@ type Definition struct {
 }
 
 type NodeGroup struct {
-	WorkflowID    WorkflowID
+	WorkflowID    runtimeids.WorkflowID
 	ID            string
 	Key           ModelKey
 	DisplayName   string
@@ -107,7 +108,7 @@ type Node interface {
 }
 
 type NodeIdentity struct {
-	WorkflowID  WorkflowID
+	WorkflowID  runtimeids.WorkflowID
 	ID          NodeID
 	Key         ModelKey
 	DisplayName string
@@ -222,11 +223,15 @@ func (TerminalNode) Kind() NodeKind {
 	return NodeKindTerminal
 }
 
-func NodeWorkflowID(node Node) WorkflowID {
+func WorkflowIDPointer(workflowID runtimeids.WorkflowID) *runtimeids.WorkflowID {
+	return &workflowID
+}
+
+func NodeWorkflowID(node Node) *runtimeids.WorkflowID {
 	if node == nil {
-		return ""
+		return nil
 	}
-	return node.Identity().WorkflowID
+	return WorkflowIDPointer(node.Identity().WorkflowID)
 }
 
 func NodeIDOf(node Node) NodeID {
@@ -364,7 +369,7 @@ func NewNode(identity NodeIdentity, kind NodeKind, fields NodeFields) (Node, err
 }
 
 type TransitionGroup struct {
-	WorkflowID   WorkflowID
+	WorkflowID   runtimeids.WorkflowID
 	ID           TransitionGroupID
 	SourceNodeID NodeID
 	TransitionID TransitionID
@@ -373,7 +378,7 @@ type TransitionGroup struct {
 }
 
 type Edge struct {
-	WorkflowID         WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	ID                 EdgeID
 	Key                ModelKey
 	TransitionGroupID  TransitionGroupID

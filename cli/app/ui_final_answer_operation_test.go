@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/textutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -134,21 +136,23 @@ func TestBackFinalAnswerOperationOpensParentWithExactPrefill(t *testing.T) {
 
 	next, cmd := m.Update(latestFinalAnswerDoneMsg{token: op.token, purpose: op.purpose, sessionID: op.sessionID, parentSessionID: op.parentSessionID, answer: &answer})
 	m = next.(*uiModel)
-	if cmd == nil || m.exitAction != UIActionOpenSession || m.nextSessionID != "parent-1" || m.nextSessionInitialInput != answer {
+	if cmd == nil || m.exitAction != UIActionOpenSession || m.nextSessionID != "parent-1" ||
+		m.nextSessionInitialInput == nil || *m.nextSessionInitialInput != answer {
 		t.Fatalf("transition = %+v", m.Transition())
 	}
 }
 
-func TestBackFinalAnswerOperationAbsenceOpensParentWithEmptyPrefill(t *testing.T) {
+func TestBackFinalAnswerOperationAbsenceOpensParentWithoutPrefill(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUISessionID("child-1"))
 	m.statusConfig.SessionViews = &countingSessionViewClient{}
-	m.nextSessionInitialInput = "must not survive"
+	m.nextSessionInitialInput = textutil.Value("must not survive")
 	_ = m.startFinalAnswerOperation(uiFinalAnswerOperationBack, "parent-1")
 	op := *m.finalAnswerOperation
 
 	next, cmd := m.Update(latestFinalAnswerDoneMsg{token: op.token, purpose: op.purpose, sessionID: op.sessionID, parentSessionID: op.parentSessionID})
 	m = next.(*uiModel)
-	if cmd == nil || m.finalAnswerOperation != nil || m.exitAction != UIActionOpenSession || m.nextSessionID != "parent-1" || m.nextSessionInitialInput != "" {
+	if cmd == nil || m.finalAnswerOperation != nil || m.exitAction != UIActionOpenSession ||
+		m.nextSessionID != "parent-1" || m.nextSessionInitialInput != nil {
 		t.Fatalf("absence transition = %+v", m.Transition())
 	}
 }

@@ -35,19 +35,11 @@ type exclusiveStepLifecycle interface {
 
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
-	HandleBackgroundShellUpdateWithOrderedTurn(evt BackgroundShellEvent, queueNotice bool, turn OrderedMutationTurn) error
 	QueueDeveloperNotice(msg llm.Message)
-	ClaimPendingNotices(backgroundNoticeClaim) backgroundNoticeBatch
+	flushPendingNotices(stepID string) (int, error)
 	HasPendingNotices() bool
-	SuppressPendingBackgroundNotice(processID string) backgroundNoticeSuppressionResult
-	CancelPendingBackgroundNotices()
+	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()
-}
-
-type backgroundNoticeSuppressionResult struct {
-	disposition     backgroundNoticeDisposition
-	matched         bool
-	alreadyApplying bool
 }
 
 type contextCompactor interface {
@@ -120,6 +112,8 @@ type messageLifecycle interface {
 	RestoreMessages() error
 	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
+	DrainPendingUserInjections() []QueuedUserMessage
+	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	FailPendingUserInjections(reason QueuedUserMessageFailureReason) []QueuedUserMessage
 	FailPendingUserInjectionsByID(ids map[string]struct{}, reason QueuedUserMessageFailureReason) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage

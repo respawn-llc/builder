@@ -1,8 +1,16 @@
-export { ExecutionTargetContinuationDialog } from "./ExecutionTargetContinuationDialog";
 export {
-  executeExecutionTargetAction,
-  moveExecutionTargetAction,
-  startExecutionTargetAction,
-  type ExecutionTargetContinuationAction,
+  TaskInitiatingActionDialogs,
+  type TaskInitiatingActionDialogResult,
+} from "./ExecutionTargetContinuationDialog";
+export {
+  executeTaskInitiatingAction,
+  moveTaskInitiatingAction,
+  proceedWithTaskInitiatingAction,
+  startTaskInitiatingAction,
+  taskInitiatingActionTaskID,
+  type TaskInitiatingAction,
 } from "./executionTargetContinuation";
-export { useExecutionTargetContinuation } from "./useExecutionTargetContinuation";
+export {
+  useTaskInitiatingActionController,
+  type TaskInitiatingActionController,
+} from "./useExecutionTargetContinuation";

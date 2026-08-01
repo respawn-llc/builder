@@ -186,6 +186,7 @@ describe("questionPresentation", () => {
 
     renderQuestionForm(attention, presentation, selection, answerQuestion);
 
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox"), "freeform");
     await user.click(screen.getByRole("button"));
     await waitFor(() => {
@@ -547,7 +548,7 @@ function ordinaryAttention(
     taskID: "task-1",
     taskShortID: "TASK-1",
     taskTitle: "Task",
-    workflowID: "workflow-1",
+    workflowID: "11111111-1111-4111-8111-111111111111",
   };
 }
 

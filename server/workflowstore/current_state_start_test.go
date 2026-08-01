@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *testing.T) {
@@ -14,7 +16,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 		store      *Store
 		ctx        context.Context
 		task       TaskRecord
-		workflowID workflow.WorkflowID
+		workflowID runtimeids.WorkflowID
 		targetID   workflow.NodeID
 	}
 
@@ -33,7 +35,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 					ctx:        ctx,
 					task:       createDefaultTask(t, ctx, store, binding.ProjectID),
 					workflowID: workflowID,
-					targetID:   workflow.NodeID("node-agent-" + string(workflowID)),
+					targetID:   workflow.NodeID("node-agent-" + workflowID.String()),
 				}
 			},
 		},
@@ -208,7 +210,7 @@ func TestCurrentNodeStartContextDerivesContinuationFromOutgoingEdges(t *testing.
 	workflowID := createValidWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		for index := range req.Edges {
-			if req.Edges[index].TransitionGroupID == workflow.TransitionGroupID("group-done-"+string(workflowID)) {
+			if req.Edges[index].TransitionGroupID == workflow.TransitionGroupID("group-done-"+workflowID.String()) {
 				req.Edges[index].ContextMode = workflow.ContextModeContinueSession
 			}
 		}
@@ -227,4 +229,76 @@ func TestCurrentNodeStartContextDerivesContinuationFromOutgoingEdges(t *testing.
 	if !input.HasContinueSessionOutgoingEdge {
 		t.Fatal("current-node start context did not derive its continuation fact from outgoing edges")
 	}
+}
+
+func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t *testing.T) {
+	t.Run("missing prior target session starts new", func(t *testing.T) {
+		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
+
+		start, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference)
+		if err != nil {
+			t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+		}
+		if start.EnteringEdge.ContextMode != workflow.ContextModeContinueSession ||
+			workflow.CanonicalContextSource(start.EnteringEdge.ContextSource).Kind != workflow.ContextSourcePreviousTargetOrNew {
+			t.Fatalf("configured entering context = %+v, want previous_target_or_new continuation", start.EnteringEdge)
+		}
+		if start.ContextMode != workflow.ContextModeNewSession || start.SourceSessionID != nil {
+			t.Fatalf("effective start context = mode %q session %v, want new_session without source", start.ContextMode, start.SourceSessionID)
+		}
+	})
+
+	t.Run("retained prior target session continues", func(t *testing.T) {
+		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+		sessionID := associateTaskSessionForTest(
+			t,
+			fixture.ctx,
+			fixture.store,
+			fixture.binding,
+			fixture.cfg,
+			fixture.review.Reference,
+			time.UnixMilli(1_700_000_000_000).UTC(),
+		)
+		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
+
+		start, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference)
+		if err != nil {
+			t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+		}
+		if start.ContextMode != workflow.ContextModeContinueSession ||
+			start.SourceSessionID == nil ||
+			*start.SourceSessionID != sessionID {
+			t.Fatalf("effective start context = mode %q session %v, want continuation from %q", start.ContextMode, start.SourceSessionID, sessionID)
+		}
+	})
+
+	t.Run("other continuation source still requires retained session", func(t *testing.T) {
+		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
+		saveWorkflowGraphFixture(t, fixture.ctx, fixture.store, fixture.workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+			edge := workflowGraphSaveEdgeRecord(t, req.Edges, *target.EnteredByEdgeID)
+			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
+		})
+
+		if _, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference); err == nil {
+			t.Fatal("ResolveCurrentNodeStartContext accepted continuation without a retained session")
+		}
+	})
+}
+
+func completeReworkCurrentNodeForStartContextTest(t *testing.T, fixture reworkContextCompletionFixture) workflow.CurrentNode {
+	t.Helper()
+	result, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.audit.Reference,
+		TransitionID: "rework",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode audit: %v", err)
+	}
+	if len(result.Mutation.Created) != 1 {
+		t.Fatalf("CompleteCurrentNode created = %+v, want one rework target", result.Mutation.Created)
+	}
+	return result.Mutation.Created[0]
 }

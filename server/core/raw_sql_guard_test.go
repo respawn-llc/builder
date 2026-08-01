@@ -264,6 +264,11 @@ func hasStandaloneSQLiteStatementStart(tokens []antlr.Token) bool {
 		return isUppercaseSQLiteKeyword(first)
 	case sqliteparser.SQLiteParserSELECT_:
 		return isUppercaseSQLiteKeyword(first) || hasSQLValueSyntax(tokens)
+	case sqliteparser.SQLiteParserINSERT_,
+		sqliteparser.SQLiteParserUPDATE_,
+		sqliteparser.SQLiteParserDELETE_,
+		sqliteparser.SQLiteParserREPLACE_:
+		return hasNonProseRelationTarget(tokens)
 	case sqliteparser.SQLiteParserPRAGMA_:
 		return len(tokens) > 1
 	case sqliteparser.SQLiteParserCREATE_,

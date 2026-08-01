@@ -169,7 +169,7 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, join_input_providers_json, output_fields_json
 ) VALUES (
     'node-join',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'join',
     'join',
     'Join',
@@ -337,7 +337,7 @@ SELECT
     json_extract(branch.target_snapshot_json, '$.transition_branch_key'),
     json_extract(branch.target_snapshot_json, '$.entered_by_edge_id'),
     json_extract(branch.target_snapshot_json, '$.current_input_values'),
-    json_extract(branch.target_snapshot_json, '$.prior_node_values')
+    json_extract(branch.target_snapshot_json, '$.prior_values')
 FROM task_pending_approval_branches branch
 JOIN task_pending_approvals approval ON approval.id = branch.approval_id
 WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
@@ -351,7 +351,7 @@ WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
 	if targetBranchKey != "split_a" ||
 		targetEnteredByEdgeID != "edge-branch-a-done" ||
 		targetInputs != `{"summary":"approved branch"}` ||
-		targetPriorValues != `{"agent":{"summary":"parallel source"}}` {
+		targetPriorValues != `{"transition_parameters":{}}` {
 		t.Fatalf(
 			"migrated parallel approval target = branch=%q entered_by=%q inputs=%q prior=%q",
 			targetBranchKey,
@@ -493,7 +493,7 @@ INSERT INTO workflow_nodes (
     id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, output_fields_json
 ) VALUES (
     'node-branch-a',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'branch_a',
     'agent',
     'Branch A',
@@ -502,7 +502,7 @@ INSERT INTO workflow_nodes (
     '[]'
 ), (
     'node-branch-b',
-    'workflow-1',
+    'workflow-550e8400-e29b-41d4-a716-446655440001',
     'branch_b',
     'agent',
     'Branch B',
@@ -522,7 +522,7 @@ INSERT INTO workflow_edges (
     'split_a',
     'node-branch-a',
     'new_session',
-    'Use {{.Inputs.summary}} and {{.Nodes.agent.summary}}.',
+    'Use {{.Params.summary}}.',
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]'
 ), (
@@ -531,7 +531,7 @@ INSERT INTO workflow_edges (
     'split_b',
     'node-branch-b',
     'new_session',
-    'Use {{.Inputs.summary}} and {{.Nodes.agent.summary}}.',
+    'Use {{.Params.summary}}.',
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]'
 )`)

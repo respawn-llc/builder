@@ -14,7 +14,9 @@ Commands:
   task        Create and operate workflow tasks.
   project     Find, list, or create projects.
   attach      Attach another workspace to a project.
+  detach      Detach one workspace from one project.
   rebind      Move a session to another workspace.
+  worktree    Create, manage git worktrees and teleport into them.
 
 Examples:
   kent

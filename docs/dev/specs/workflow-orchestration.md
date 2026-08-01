@@ -39,7 +39,83 @@
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.
 - `No labels` matches Tasks with zero Label assignments and is mutually exclusive with named Label conditions. No named Label conditions means no Label restriction.
-- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and cursor behavior. A client never loads the complete board or Task list to apply filters.
+- Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and pagination behavior. A client never loads the complete board or Task list to apply filters.
+
+## Task Dependencies
+
+- A Task Dependency is one directed relationship from a Blocker Task to a
+  Blocked Task.
+- The ordered Blocker Task and Blocked Task identities identify the
+  relationship. A Task Dependency has no separate product identifier.
+- Both Tasks in a Task Dependency must belong to the same Project. They may
+  belong to different linked Workflows or source workspaces in that Project.
+- Kent stores one relationship direction. It derives `Blocked by` and `Blocks`
+  views and never stores a reverse copy.
+- A Task may have at most 50 direct Blocker Tasks.
+- A Task may directly block at most 50 Tasks.
+- Kent returns each complete direct relationship direction without pagination.
+- A Task cannot depend on itself.
+- Kent rejects a relationship when the reverse direct relationship already
+  exists.
+- Kent permits directed dependency cycles of three or more Tasks.
+- Kent never traverses transitive dependencies for attachment, display, start
+  confirmation, or agent context.
+- Task Dependencies are advisory planning metadata. They never pause, move,
+  resume, interrupt, or otherwise mutate work already underway.
+- Users may add or remove Task Dependencies in every Task state.
+- Adding an existing relationship succeeds without changing state.
+- Removing an absent relationship succeeds without changing state.
+- An actual relationship addition or removal changes the update time of both
+  affected Tasks.
+- An idempotent no-op does not change either Task's update time.
+- A change in dependency satisfaction updates authoritative dependency
+  projections without changing the Blocked Task's update time.
+- Kent validates Task existence, Project scope, self-dependency, reciprocal
+  dependency, and both cardinality limits before it adds a relationship.
+- Kent validates and applies one relationship mutation atomically.
+- A relationship validation failure changes neither Task nor relationship
+  state.
+- Concurrent relationship additions cannot exceed either cardinality limit.
+- Typed relationship errors identify the violated rule and the affected Tasks.
+- A Task Dependency is satisfied if and only if its Blocker Task has
+  authoritative `done` status.
+- Every Terminal Node satisfies a Task Dependency, including a Terminal Node
+  reached through Manual Move.
+- Reopening a done Blocker Task makes its Task Dependencies unsatisfied again.
+- Task title changes and Project Key changes preserve Task Dependencies and
+  immediately change their displayed Task metadata.
+- Task Delete atomically removes every incoming and outgoing Task Dependency.
+- Deleting a Workflow or Project removes every Task Dependency that touches a
+  deleted Task.
+- Deletion-induced relationship removal changes each surviving related Task's
+  update time once.
+- Task Delete confirmation does not add dependency-specific copy or another
+  confirmation step.
+- `Blocked by` and `Blocks` lists put Tasks whose status is not `done` first,
+  then order each group by Task Short ID.
+- Task detail exposes both complete directions, canonical related-Task status,
+  Blocker satisfaction, and direct aggregate counts from one authoritative
+  server projection.
+- Task Start and human Manual Move to an executable Node check the Blocked
+  Task's current direct unsatisfied dependencies.
+- Kent performs the dependency check after it validates that the requested
+  action is otherwise available and before Execution Target selection or
+  another continuation dialog.
+- When unsatisfied dependencies exist and the request has no explicit proceed
+  intent, Kent returns a typed dependency-confirmation-required outcome with the
+  unsatisfied count and changes nothing.
+- Proceeding despite dependencies acknowledges one initiating operation. Kent
+  does not retain that acknowledgement on the Task.
+- Proceeding despite dependencies does not acknowledge a relationship snapshot.
+  A concurrent dependency change does not require another confirmation within
+  that same initiating operation.
+- If a later continuation is dismissed, Kent leaves the Task unchanged and
+  discards the proceed intent.
+- A later independent Start or Manual Move checks dependencies again.
+- Resume, Approval, and automatic Workflow transitions do not request
+  dependency acknowledgement.
+- Dependencies never become a scheduler gate. An explicitly acknowledged Start
+  or Manual Move remains allowed.
 
 ## Workflow Definitions
 
@@ -108,8 +184,11 @@
 - Completion modes are `structured_output`, dynamic `complete_node` tool, `shell_command`, and `unstructured_output`. Global `[workflow].completion_mode` selects `auto`, `structured_output`, `tool`, `shell_command`, or `unstructured_output`; agent nodes can override it with the same values or inherit the global default.
 - Start, join, and terminal nodes reject non-empty completion-mode overrides.
 - A completion-mode override belongs to the source Agent Node, not to a Transition Branch. Transitions define the possible branches and Parameter Requirements.
-- `auto` resolves when an executable current Node starts or resumes after Session planning and tool availability are known: shell-unavailable agent execution uses `unstructured_output`; Workflows with any literal `continue_session` branch use `shell_command`; all other agent execution uses structured output when provider capabilities support it and dynamic tool mode otherwise. `compact_and_continue_session` does not trigger shell fallback. A Node-level `auto` override applies this policy even when the global config is a fixed mode.
-- Resume resolves the latest completion mode and Runtime Parameter Contract from the current Workflow definition. A live Exact Execution Scope keeps the completion contract already advertised for that scope until it stops.
+- `auto` resolves when a Session Contract generation prepares its first model request after Session planning and tool availability are known: shell-unavailable agent execution uses `unstructured_output`; Workflows with any literal `continue_session` branch use `shell_command`; all other agent execution uses structured output when provider capabilities support it and dynamic tool mode otherwise. `compact_and_continue_session` does not trigger shell fallback. A Node-level `auto` override applies this policy even when the global config is a fixed mode.
+- The first model request snapshots the effective completion mode into the Session Contract generation.
+- Resume and `continue_session` reuse the retained Session Contract generation's effective completion mode even when the latest global setting or Agent Node override would select another mode. Full-history fan-out clones inherit the same effective completion mode.
+- `new_session` creates a new Session, and `compact_and_continue_session` creates a new Session Contract generation. Only these Context-Preservation Modes may select a different effective completion mode for the target Agent Node.
+- Resume resolves the latest Runtime Parameter Contract from the current Workflow definition. A live Exact Execution Scope keeps the completion contract already advertised for that scope until it stops.
 - Forced `structured_output` fails fast with an actionable error when unsupported. Forced `tool` always uses dynamic tool mode. Forced `shell_command` fails execution start when the resolved runtime shell tool is unavailable.
 - `[workflow].use_required_tool_calls` defaults to `true`. When enabled, each model response in `shell_command` and `tool` modes must call at least one available tool. This requirement does not add, remove, or reorder tools.
 - When `[workflow].use_required_tool_calls` is `false`, model requests in `shell_command` and `tool` modes use automatic tool selection. The selected completion mode still rejects ordinary assistant final answers.
@@ -117,7 +196,7 @@
 - Manual interruption releases the specialized Exact Execution Scope.
 - If the retained Workflow Session still belongs to the interrupted Current Node, a later ordinary interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
 - Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same Current Node. The interactive activation does not create a second Transition authority.
-- Resume starts a fresh Exact Execution Scope and resolves the latest Workflow completion policy.
+- Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
 - Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
@@ -142,7 +221,9 @@
 - Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
 - A Script Node can omit its script path in a Workflow Draft. A missing path, nonexistent path, directory, or non-executable file blocks execution, not draft editing.
 - Relative script paths resolve against the task execution root. Absolute paths resolve on the Kent server host.
-- Kent launches the resolved executable directly with the Execution Root as its working directory. It does not use a shell wrapper, retry the script, or impose a timeout.
+- Kent launches the resolved executable directly with the Execution Root as its working directory. It does not use a shell wrapper, retry the script, or impose a timeout, CPU quota, or memory quota.
+- Kent bounds captured stdout and stderr independently.
+- When interruption stops a Script Node process, Kent requests graceful termination and force-kills the process after a bounded grace period if it remains running.
 - Script input is one JSON object on standard input. Incoming Workflow Parameters are top-level properties. `_kent` is reserved for Task, Node, and parallel Transition Branch identity.
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
 - Invalid stdout, invalid script path, interruption, and execution errors leave the script's current Node interrupted with bounded structured details.
@@ -152,6 +233,10 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
+- Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
+- Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
+- When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
+- Resume must not steer or append a Current Node assignment.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -164,6 +249,13 @@
 - Workflow Task Sessions reject user `/goal` control; the current workflow Node is the Task objective driver. Agents may set themselves Goals and complete them, per the agent Goal rules in core-runtime-tools.
 - Client input accepted by Runtime Command before the Completion Fence supersedes pending completion. Input that reaches the server after the fence is rejected with a typed retryable result, remains unapplied, and is never transferred to a successor current Node or Session execution.
 - Task Comment bodies are not added automatically to agent context. New Workflow instructions include the current visible Comment count and `kent task comment list <task>` when Comments exist. Kent never rewrites older model-visible instructions to update that count.
+- Unsatisfied Task Dependencies use the same instruction lifecycle as Task
+  Comment awareness.
+- When one or more direct unsatisfied dependencies exist, new Workflow
+  instructions include the current count and `kent task show <task-short-id>`.
+- Workflow instructions do not embed related Task bodies or relationship lists.
+- Kent never rewrites older model-visible instructions when relationships or
+  dependency satisfaction changes.
 
 ## Questions And Approvals
 
@@ -205,16 +297,14 @@
 - During parallel work, each Context Source selection stays within the source Current Node's Transition Branch Key.
 - Manual movement through a concrete Transition Branch supports `previous_target` and `previous_target_or_new`. Kent resolves the Context Source when it applies the move and freezes that choice before pending Approval. Manual movement does not support a selected prior-Node Context Source.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
-- Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
+- `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Agent Node's normalized Assignee identity. Workflow validation rejects statically known source/target identity mismatches, runtime rejects retained-Session mismatches, and a valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
+- `compact_and_continue_session` compacts the reused Session and establishes the target Agent Node's Assignee in a fresh contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
-- Prompt templates may reference guaranteed-prior agent node outputs through `.Nodes.<node_key>.<output_name>`.
-- `.Nodes` references use stable node keys and declared source-node output fields. The referenced source node must dominate the consuming node in the workflow graph, the source node must not be the consuming node, and unsupported dynamic template access to `.Inputs` or `.Nodes` is invalid.
 - Applying a Transition gives each target Current Node every value that it needs. Prompt rendering uses those values and never searches discarded execution history.
 - A Workflow edit that makes an executable current Node require input that was never materialized blocks Start or Resume with a typed validation error; Kent does not reconstruct discarded workflow history.
 - The first executable node reached from `start` cannot declare upstream inputs and should use task fields such as `.TaskTitle` and `.TaskBody`.
-- Source-Node output fields declare values that the Workflow graph can propagate into later current-Node inputs through `.Nodes.<node_key>.<output_name>`.
 - Kent derives Parameter flow and completion requirements from required inputs, prompt references, Workflow structure, and Join sources.
 
 ## Parallelism And Joins
@@ -237,8 +327,10 @@
 
 - Workflow Execution is the single authority for Workflow lifecycle changes. It sequences conflicting operations and reports authoritative live state.
 - Requests to start eligible work automatically are temporary. Kent loses them on restart and does not reconstruct them from saved Task state.
-- Automatic starts use available capacity and prefer to continue related work on the same Task. `[workflow].concurrency` limits automatic starts only.
-- Explicit Start, Resume, approval, and executable manual move may exceed the automatic concurrency limit without preempting existing work.
+- Workflow automation starts Agent Nodes within available agent capacity and prefers to continue related work on the same Task. `[workflow].concurrency` limits these agent runs only.
+- Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
+- When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
+- Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
@@ -283,7 +375,7 @@
 - CLI `--status` filters typed Task status and `--attention` filters attention kinds across project-wide results. Created, updated, status, and title sorting are Workflow-neutral.
 - `--column` and column sorting require an explicit workflow because node keys and column positions are workflow-relative.
 - Project-wide human Task rows omit column output, and project-wide JSON Task items omit `column_keys`. Workflow-narrowed lists expose all Current Node keys in board order.
-- The first Project-wide Task-list page decides whether rows need Workflow names. The continuation token preserves that display decision. Task membership remains live, so later pages can retain a stale name-visibility decision after concurrent changes.
+- Each Project-wide Task-list request decides whether rows need Workflow names from the complete current filtered result set. Workflow-name visibility may change between offset requests when the matching set changes.
 - Human task-list rows include workflow names only when the filtered query can return tasks from multiple workflows. JSON task items always include their bare workflow UUID.
 - A project with no linked workflows, an explicitly selected workflow that is not linked to the project, and workflow-relative operations without a workflow selector return distinct typed actionable errors.
 - No-linked-workflow recovery directs the operator to create and link a workflow or list and link an existing workflow before retrying.
@@ -293,32 +385,8 @@
 
 ## Task Search
 
-- Task search covers every Task in one persistence root. With no Project filter, search is global. Repeated Project selectors search the union of those Projects.
-- Task titles and complete bodies are searchable. Comments are excluded by default and `--include-comments` adds them.
-- Search includes every Task lifecycle status by default. Repeatable/comma-separated typed `--status` filters use the same primary Task-status values as task listing.
-- The default positional query is one literal substring. Search operators and punctuation have no special meaning in this mode. Literal hits are non-overlapping occurrences ordered from left to right in their source.
-- Default literal matching ignores case and removable diacritics according to the FTS5 trigram search contract. It does not promise universal Unicode case folding or universal diacritic equivalence. `--case-sensitive` requires exact original case and diacritics.
-- `--fts5` interprets the positional query as a raw FTS5 expression with public `title`, `body`, and `comment` columns. One raw-mode hit represents one matching title, Task-body, or Comment-body source document with one selected snippet, not one phrase occurrence. `--case-sensitive` is invalid with `--fts5`.
-- Raw boolean terms must match within one source document; terms split between a Task title and body do not jointly satisfy one expression.
-- Literal search requires at least one trigram after search normalization. Kent provides no one-character or two-character fallback.
-- `--context` defaults to `20` and accepts `1..64`. Literal mode returns that many Unicode grapheme clusters on each side of an occurrence. Raw FTS5 mode uses it as the snippet token budget.
-- Literal results separate original `before`, `match`, and `after` text and identify truncation on each side. Clients add one `…` on each side where text was omitted.
-- A normalized literal match includes every complete original grapheme cluster that contributed to the match, including removed combining marks. `match` never splits an original grapheme. Case-sensitive mode requires exact original code points and does not equate NFC and NFD spellings.
-- A successful Task or Comment creation, edit, or deletion is reflected in search immediately. If Kent cannot update search, the source change fails and remains unapplied.
-- Search ranks each Task by its strongest matching title, body, or Comment under the requested mode. A case-insensitive candidate without a case-sensitive occurrence cannot retain or rank a Task in case-sensitive mode.
-- Ranking weights title, body, and Comment sources. A strong body match can outrank another Task's weaker title match. Title-before-body-before-Comment is absolute only for hit order within one Task.
-- Within one Task, title occurrences precede body occurrences. Task title and body results precede Comment results. Remaining ties are deterministic.
-- Search pagination is breadth-first by per-Task hit ordinal: every matching Task's first hit precedes any Task's second hit, and so on. Later pages may repeat a Task with later hits.
-- Each page selects hits in that breadth-first order and then groups the selected hits by Task. Task groups follow the order of their first selected hit. Hits inside a group retain their absolute per-Task order.
-- `--page-size` defaults to `100` and cannot exceed `100` hits. `--page-token` is an opaque cursor tied to every search choice and to the matching, status, source, and ranking contracts.
-- Plain output renders `SHORT-ID: title`, unlabeled title/body hit lines, a lowercase `comments:` heading only when the page contains Comment hits for that Task, Comment hit lines, and `[N more hits]` when later hits remain. It exposes no line numbers, persistent Comment IDs, status, workflow, score, author, or date.
-- Plain literal hits use `…` only on a side with omitted source text. Plain output folds a hit to one physical terminal line; structured output preserves the original segments.
-- A valid empty search prints `No matches.` and succeeds.
-- JSON output is grouped by Task and distinguishes literal mode from raw FTS5 mode. It includes Project, Task, and Workflow identity, title, canonical Task status, total hit count, absolute per-Task hit positions, title/body/Comment source identity, complete Comment ID for Comment hits, mode-specific context or snippet data, and an optional continuation token. Empty results use `groups: []`; an absent continuation token is omitted. It does not expose ranking scores.
-- Query validation trims one positional argument and limits it to `4096` Unicode code points. A literal query must contain at least one searchable trigram after search normalization. A raw expression follows FTS5 behavior for shorter terms. Kent reports distinct too-short, malformed-expression, and invalid-cursor errors.
-- Search uses the same authoritative Task status as Task lists and Task detail.
-- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata, and combines that data with one current view of live Task activity. A concurrent change appears wholly before or after the response, never as mixed state.
-- Search does not retain all matching Tasks, sources, or occurrences in memory.
+- Task search reuses the authoritative Task status defined above.
+- [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
 
 ## Execution Targets And Worktrees
 
@@ -402,6 +470,8 @@
 - Confirmed Workflow deletion removes the Workflow, its Project Workflow Links, its Tasks, and its graph as one atomic change.
 - Workflow deletion preserves Sessions, worktrees, and other external artifacts. It does not perform individual Task Delete cleanup.
 - Task Delete requires Quiescence. It safely removes reconstructible managed artifacts, preserves Session artifacts, and removes the Task only after cleanup succeeds.
+- Task Delete removes Task Dependencies according to the Task Dependencies
+  contract.
 - Repeating Task cleanup for an artifact that is already absent succeeds.
 - Saving a Workflow checks the expected Workflow Version, validates the Workflow Draft, reports active blockers, and requires confirmation for destructive removals.
 - A successful Workflow save applies details and graph changes as one atomic change.
@@ -421,6 +491,8 @@
 - Task Short ID remains durable product data.
 - Context Source selection uses retained Sessions and does not depend on discarded execution records.
 - Pending Approval retains the exact Transition facts that the operator is approving. Ordinary work uses current inputs and the latest Workflow definition.
+- When legacy serial state contains a persisted pending Approval and a conflicting serial current position, Kent retains the Approval source as the Task's only Current Node.
+- When legacy serial state has no pending Approval and contains several active Start or Terminal Nodes, Kent retains the placement with the latest update time, then latest creation time, then greatest identifier.
 - Task Comments retain their author identity when available.
 - Session listings retain the first prompt preview.
 - Sessions retain unsent input drafts for recovery.
@@ -431,6 +503,17 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
+- Task Search pagination is defined exclusively by the owning Task Search specification.
+- Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
+- An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
+- `--limit` defaults to `100` and accepts values from `1` through `100`.
+- Callers may change the limit between requests. An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
+- When more results exist, `next_offset` equals the request offset plus the number of results returned.
+- Human output writes ``Next offset: `<n>` `` to stderr only when more results exist. Machine-readable request contracts use `offset` and `limit`; responses use optional `next_offset`. An absent next offset is omitted or null and is never zero.
+- Affected shared API requests may omit both `offset` and `limit`. An omitted offset starts at the beginning, an explicit offset of zero is valid, and an omitted limit defaults to `100`. Supplied limits must be from `1` through `100`. The API represents omitted numeric values as absent or null rather than as zero.
+- Each request applies its offset to the current results for that request's Project, Workflow, selectors, filters, and sorting. Callers repeat those query choices when continuing. Kent does not bind an offset to a previous query.
+- If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
+- The server keeps pagination memory bounded by the requested limit. It does not retain page contents or pagination state between requests and does not persist pagination state.
 - `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.
@@ -451,3 +534,71 @@
 - `kent task edit <task>` changes a Task's title, body, or source workspace. It requires at least one of `--title`, `--body`, `--body-file`, or `--source-workspace`. It preserves the current title when `--title` is absent. Agents can use it. `--json` prints the result.
 - `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.
 - Workflow/task CLI commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.
+- Task dependency commands use canonical group `kent task dep`.
+- `kent task deps`, `kent task dependency`, and `kent task dependencies` invoke
+  the same command group but are not shown in help or documentation.
+- `kent task dep add --blocker <task> --blocked <task>` adds one directed
+  relationship.
+- `kent task dep remove --blocker <task> --blocked <task>` removes one directed
+  relationship.
+- `kent task dep list <task>` inspects both direct relationship directions.
+- `kent task dep list <task> --direction blocks|blocked-by` inspects one
+  direction.
+- Every dependency command accepts `--project` for Task Short ID resolution and
+  `--json` for machine-readable output.
+- Dependency add and remove resolve both Task selectors before mutation.
+- Plain dependency add and remove output is exactly `done`.
+- Dependency add JSON returns Blocker Task ID and Short ID, Blocked Task ID and
+  Short ID, and typed outcome `added` or `already_present`.
+- Dependency remove JSON returns the same identities and typed outcome `removed`
+  or `already_absent`.
+- Dependency mutation JSON uses `outcome`, `blocker_task_id`,
+  `blocker_short_id`, `blocked_task_id`, and `blocked_short_id`.
+- Dependency list JSON uses top-level `task_id`, `short_id`, and `directions`.
+- Each dependency direction object uses `direction`, `total_count`, and
+  `items`.
+- A compact dependency Task item uses `task_id`, `short_id`, `title`,
+  `workflow_id`, and canonical typed `status`.
+- A `blocked-by` direction also uses `unsatisfied_count`.
+- Each `blocked-by` item also uses typed `satisfaction`.
+- Empty directions are omitted. A Task with no relationships returns
+  `directions: []`.
+- The cardinality limit makes every returned direction complete. Dependency
+  list output has no continuation token and the command accepts no page token.
+- Human dependency-list output omits empty directions and uses this shape:
+
+  ```text
+  Blocks <count> tasks:
+  <short-id>: <title> (<status>)
+  ...
+  Blocked by:
+  <short-id>: <title> (<status>)
+  ...
+  ```
+
+- Human `kent task show` uses the same dependency sections and shows every
+  relationship permitted by the cardinality limits.
+- Human dependency sections order unfinished related Tasks first and then Task
+  Short ID.
+- Human `kent task show` omits dependency output when both directions are empty.
+- `kent task show --json` never embeds dependency Task items.
+- When at least one relationship exists, `kent task show --json` includes only
+  direct Blocker Task count, direct unsatisfied Blocker Task count, and directly
+  blocked Task count.
+- The JSON field is `dependencies` with `blocker_count`,
+  `unsatisfied_blocker_count`, and `blocked_task_count`.
+- `kent task show --json` omits dependency summary when all three counts are
+  zero.
+- `kent task start` and `kent task move` accept `--ignore-dependencies`.
+- Without that flag, an otherwise valid Start or executable Manual Move with
+  unsatisfied dependencies returns a typed `dependency_confirmation_required`
+  outcome containing only the unsatisfied count.
+- Dependency-confirmation JSON uses `outcome` and
+  `unsatisfied_dependency_count`.
+- Human dependency-confirmation output identifies the count, directs the
+  operator to `kent task show <task>`, and gives the
+  `--ignore-dependencies` rerun.
+- Human and JSON dependency-confirmation outcomes exit nonzero because the
+  requested action was not applied.
+- `--ignore-dependencies` applies only to that command invocation and does not
+  remove relationships or suppress later Workflow dependency awareness.

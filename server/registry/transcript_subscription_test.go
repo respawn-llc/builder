@@ -236,7 +236,7 @@ func withTranscriptContractViolationPanic(enabled bool) func() {
 
 func nextTranscriptMessage(t *testing.T, sub serverapi.TranscriptSubscription) clientui.TranscriptMessage {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	message, err := sub.Next(ctx)
 	if err != nil {

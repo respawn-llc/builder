@@ -201,11 +201,16 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 - Idle Send starts a user turn. Busy Send steers the active turn at the next safe boundary. Queue remains a separate explicit action for a later turn.
 - `Enter` sends, `Ctrl+Enter` queues, and `Shift+Enter` inserts a newline. `Tab` remains focus navigation.
+- `/compact` preserves the TUI command flow. Optional text after the command is manual-compaction guidance.
+- Idle `/compact` requests compaction immediately. During an Agent Step it is an ordinary typed Steer item that executes after that step and before the next; it never waits for turn completion or reaches the model.
 - Active `@` autocomplete is the sole Tab exception: Tab or Enter accepts the visible path; otherwise Tab navigates focus.
 - Queue has no visible button. The busy empty-input placeholder says `Ctrl+Enter to queue`.
 - Idle `Ctrl+Enter` queues and starts immediately because no active turn precedes it.
 - Active work shows a separate icon-only Stop button while Send continues to steer.
-- Stop has no keyboard shortcut.
+- Ctrl+C is explicitly never Stop.
+- macOS uses immediate Command-period for Stop.
+- Windows/Linux gives temporary surfaces first Escape priority; the first otherwise-unhandled Escape silently arms Stop for two seconds and the second stops. Timeout, non-Escape input, pointer action, route/focus change, disconnect, or work completion resets the arm.
+- Visual feedback for the Windows/Linux armed state is an optional follow-up and is not required for Desktop Chat parity acceptance.
 - The multiline input grows up to one-third of available Chat height, then scrolls internally.
 - Prompt history matches the TUI boundary behavior: Up/Down recalls only at whole-buffer edges, restores the pre-navigation draft below newest, and detaches a recalled entry when edited.
 - Workspace `@` autocomplete is a derived picker above the composer. It matches TUI scope/matching/insertion, shows at most seven file/folder rows, and uses a server-owned bounded search over the effective working directory.
@@ -234,12 +239,41 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 8. Questions And Approvals
 
-- Inline placement versus dedicated prompt tray.
-- Multiple-prompt navigation.
-- Whether answered prompts remain in the transcript or collapse.
-- Commentary and denial behavior.
-- Cross-client resolution.
-- Ordinary-session attention and notifications.
+- Active prompts replace the editor area inside the composer island while preserving the hidden ordinary draft and leaving Settings, Context, and Stop available.
+- The normal status line and bottom action row remain visible, including Stop.
+- Questions and Approvals share one picker architecture.
+- One prompt appears at a time: Markdown question, previous/current/next navigation line, Markdown radio answers, then always-visible per-prompt freeform/commentary.
+- Navigation shows only `Question X of Y`; no aggregate answered-progress count.
+- A trailing error-colored `×` is `Decline to answer`; its tooltip includes Ctrl+D.
+- No tabs, synthesized titles, or duplicated previews.
+- Question Markdown, navigation, and all options share one scroll region. Freeform/commentary stays pinned below it, grows from three through seven lines, then scrolls internally.
+- Selected answer text is primary. Recommended uses an inline success-outline badge.
+- Recommended starts selected but unconfirmed.
+- Without a server recommendation, nothing is preselected.
+- Answered/unanswered state is intentionally invisible.
+- No Confirm/Answer button. Pointer option activation confirms immediately; keyboard selection confirms only on Enter.
+- Tab and Shift+Tab switch only between the answer-picker area and freeform. They do not traverse navigation or bottom-row controls.
+- Outside freeform, Left/Right wraps through prompts and Up/Down changes radio selection; inside freeform, arrows edit text.
+- In freeform, Enter confirms only a valid current answer and otherwise does nothing; Shift+Enter inserts a newline.
+- Navigation may skip between prompts and preserves each prompt's local draft.
+- Provisional pending browser acceptance: editing an answered option/commentary makes it unanswered until reconfirmed.
+- Confirm moves to the next unresolved prompt circularly.
+- Decline is immediate, terminal, read-only on revisit, has no confirmation/undo, and is distinct from `Neither`/Approval `Deny`. Ctrl+D activates it from the answer-picker area; Escape does not decline. Windows/Linux Escape may instead arm or confirm whole-Session Stop.
+- Decline uses the shared TUI prompt-cancellation transcript outcome: an error/canceled Ask Question row rather than a completed answer, no synthetic user message, and no separate Approval decision row.
+- The complete batch submits only after every prompt is answered or declined.
+- `Neither` is available only when the Question has at least one suggested answer. A Question without suggestions uses freeform as its sole response path.
+- `Neither` requires nonblank freeform; blank confirmation focuses the field without answering.
+- Pointer or Enter on nonblank `Neither` confirms; blank `Neither` only selects and focuses the freeform field.
+- Stop cancels the whole prompt batch and restores the hidden ordinary draft.
+- One typed batch-answer endpoint is in scope; parallel prompt/tool-call runtime architecture is not redesigned.
+- A batch is the server-ordered pending prompts sharing one Step ID; no new batch identity.
+- Prompt answer drafts survive only navigation within the open picker. Route changes, disconnect, refresh, and relaunch discard them.
+- Per-prompt resolved broadcasts silently discard local draft and remove that prompt from the picker as though it was never present, without Sonner, answer, disabled item, or placeholder presentation. All externally resolved closes the picker.
+- Stale IDs reported by batch submission are removed; valid pending answers remain applied, and all-stale closes without retry.
+- The owning implementation task requires a developer-only browser fixture that continuously generates synthetic prompt batches until the tab closes.
+- Agent QA runs the fixture first. Final acceptance requires opening it for the user and asking for explicit Approve/Reject feedback with concrete findings; rejection requires another implementation and QA loop.
+- Completed Questions remain one expanded Ask Question row; Approvals create no separate decision row.
+- Ordinary-Session prompts reuse the existing Task-attention surface policy, persistence, notification grouping, native sound behavior, and resolution dismissal. Activation opens the owning Session and picker. The duplicate in-app notification is suppressed only while that exact Session Chat and picker are already focused.
 
 ## 9. Session Controls And Slash Replacements
 
@@ -263,7 +297,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Thinking previews locally while dragging or stepping by keyboard and sends one change on interaction commit.
 - Fast mode, Questions, and Auto-compaction are toggles. Unsupported Fast mode is omitted. Workflow-required Auto-compaction is visible, on, disabled, and explained by tooltip.
 - Questions stays visible, off, and disabled with `Unavailable for this Agent` when the selected Agent lacks that capability.
-- Under Manual-only compaction, Auto-compaction remains visible and disabled while truthfully displaying the server's stored on/off value; its tooltip explains that the mode prevents automatic compaction.
+- When Session policy disables compaction, Auto-compaction remains visible and disabled while truthfully displaying the server's stored on/off value; its tooltip explains that compaction is disabled.
 - Workspace/worktree/branch and compaction mode/count are omitted from this popover.
 - A subtle divider after Auto-compaction separates settings from session facts/actions.
 - Session facts/actions are ordered `To parent chat`, Task, Session ID.
@@ -279,7 +313,27 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The unsent message and complete settings draft persist as one aggregate across navigation, detach, and app/server restart.
 - Kent has no Advanced disclosure or advanced/non-advanced settings grouping.
 - Before first Send, every setting updates the lazy draft immediately. After launch, Supervisor applies immediately and Agent is locked. Agent/Supervisor selection never closes either level.
-- Compaction action and status.
+- Context remains a separate meter below the editor and remains available while a prompt picker replaces the editor. Its normal trigger shows used percentage plus a 20px circular used-context meter.
+- Untouched lazy New Chat shows a 0%-used empty ring and draft-configured window, threshold, Auto-compaction, and zero-compaction facts. The server-owned draft updates them when effective Agent/settings change.
+- Compact is unavailable before the first Agent Step. Pre-Session `/compact` remains recognized, creates no Session, and surfaces the typed unavailable/too-soon failure.
+- Click/tap opens the compact usage pop-up. Enter/Space opens it only through ordinary browser button behavior while the meter has focus; neither is a global shortcut. Escape/click-away closes it.
+- The pop-up matches the TUI Context summary: remaining percentage/tokens against the window, automatic-compaction threshold tokens/percentage, Auto-compaction on/off, and completed compaction count.
+- It omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown. It does not add cache-hit, compaction-mode, debug, cost, or token-category rows.
+- Present those facts as four plain-text lines. Bold primary text emphasizes important labels and numeric values; supporting text stays muted.
+- Do not introduce chips, badges, stat cards, inset rows, or nested detail containers.
+- The bottom row is one wide animated used-context progress bar plus `Compact`. Its fixed 0–100% fill gradient runs Success → Warning → Error; usage clips the revealed portion and the unused track stays muted. It never recolors the whole fill at thresholds. Reduced motion updates immediately.
+- The pop-up has no guidance input. Guided manual compaction remains `/compact <guidance>`; its button is equivalent to bare `/compact`.
+- Compact closes the initiating pop-up and follows the same immediate-or-Steer path. Other transient surfaces also close after they accept a manual-compaction action.
+- Busy manual compaction appears in Pending Work as its exact slash form. Repeated requests remain separate Steer items; do not deduplicate them before execution.
+- Discard or Stop restores the exact command to the initiating composer for both slash and button origins; a button-origin item restores `/compact`. Other clients only observe removal.
+- While compaction is active, replace the compact meter's percentage/ring with a secondary-tone spinner and `Compacting` in the same footprint. Keep the trigger clickable; the pop-up retains the last authoritative usage values and disables Compact. Automatic compaction leaves an already-open pop-up open.
+- An active compaction blocks every second compaction. Raced button/command requests use the server's typed rejection.
+- On drain, each queued compaction is admitted independently. The first eligible one may run; later active/too-soon requests fail and are removed from Pending Work.
+- Use Sonner for a typed rejection unless the server explicitly reports an authoritative durable transcript error as that failure's owner. Never synthesize a transcript row.
+- Keep no client cooldown or Agent-Step counter. The server rejects manual compaction until an Agent Step boundary has occurred since Session creation or the latest successful compaction.
+- Successful user-requested compaction is silent in a focused Desktop window. An unfocused window sends a system notification after the following Pending Work drain is idle; activation opens the owning Session at latest.
+- Automatic, pre-submit, and handoff compaction send no completion notification.
+- Under disabled compaction policy, replace threshold/Auto-compaction status with disabled/unavailable text, disable Compact, and keep `/compact` recognized so its typed policy failure reaches Sonner.
 - Goal management.
 - Process inspection and control.
 - Worktree inspection and control.
@@ -328,6 +382,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Prompts and attention.
 - Capability sub-surfaces.
 - Browser QA and native QA.
+- Questions/Approvals cannot pass through generic browser QA alone: their dedicated looping fixture requires explicit user approval after agent QA.
 - Protocol/version and migration effects.
 - Dependencies on in-flight Kent tasks.
 - One compile-time gate excludes the complete initiative from production until full parity acceptance passes.

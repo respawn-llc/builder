@@ -17,6 +17,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
 )
 
 const (
@@ -29,13 +30,13 @@ const (
 var ErrStructuredOutputUnsupported = errors.New("workflow structured output completion requires provider responses API support")
 var ErrShellCompletionUnavailable = errors.New("workflow shell-command completion requires exec_command")
 
-type CompletionMode string
+type CompletionMode = sessioncontract.WorkflowCompletionMode
 
 const (
-	CompletionModeStructuredOutput   CompletionMode = "structured_output"
-	CompletionModeTool               CompletionMode = "tool"
-	CompletionModeShellCommand       CompletionMode = "shell_command"
-	CompletionModeUnstructuredOutput CompletionMode = "unstructured_output"
+	CompletionModeStructuredOutput   = sessioncontract.WorkflowCompletionModeStructuredOutput
+	CompletionModeTool               = sessioncontract.WorkflowCompletionModeTool
+	CompletionModeShellCommand       = sessioncontract.WorkflowCompletionModeShellCommand
+	CompletionModeUnstructuredOutput = sessioncontract.WorkflowCompletionModeUnstructuredOutput
 )
 
 type CompletionModeSelection struct {
@@ -56,16 +57,26 @@ type CompletionTransition struct {
 	Parameters  []workflow.Parameter
 }
 
+// TaskPromptDelivery identifies whether the first turn in one process-local
+// execution delivers a new Node assignment or resumes the current assignment.
+type TaskPromptDelivery uint8
+
+const (
+	TaskPromptDeliveryAssignment TaskPromptDelivery = iota
+	TaskPromptDeliveryResume
+)
+
 // CurrentNodeExecutionConfig is the live, process-local control contract for
 // one admitted Current Node.
 type CurrentNodeExecutionConfig struct {
 	ScopeID                      runtimeids.ExecutionScopeID
+	TaskPromptDelivery           TaskPromptDelivery
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
 	MaxInvalidCompletionAttempts int
 	UseAutomaticToolChoice       bool
 	Controller                   Controller
-	TaskCommentCounter           TaskCommentCounter
+	TaskAwarenessSource          TaskAwarenessSource
 	Instructions                 TaskInstructions
 }
 
@@ -78,11 +89,16 @@ type PromptContract struct {
 	UseAutomaticToolChoice bool
 	Instructions           TaskInstructions
 	Transitions            []CompletionTransition
-	TaskCommentCount       int64
+	TaskAwareness          TaskAwareness
 }
 
-type TaskCommentCounter interface {
-	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
+type TaskAwareness struct {
+	CommentCount               int64
+	UnsatisfiedDependencyCount int64
+}
+
+type TaskAwarenessSource interface {
+	TaskAwareness(context.Context, workflow.TaskID) (TaskAwareness, error)
 }
 
 type TaskInstructions struct {
@@ -90,8 +106,7 @@ type TaskInstructions struct {
 	TaskShortID     string
 	TaskTitle       string
 	TaskBody        string
-	WorkflowID      string
-	WorkflowShortID string
+	WorkflowID      runtimeids.WorkflowID
 	WorkflowName    string
 	NodeKey         string
 	NodeDisplayName string
@@ -123,6 +138,7 @@ type TransitionInstruction struct {
 
 type CompletionRequest struct {
 	ScopeID      runtimeids.ExecutionScopeID
+	SessionID    *runtimeids.SessionID
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
@@ -160,14 +176,16 @@ type Controller interface {
 }
 
 type ViolationRequest struct {
-	ScopeID  runtimeids.ExecutionScopeID
-	Kind     ViolationKind
-	MaxCount int
-	Detail   string
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
+	Kind      ViolationKind
+	MaxCount  int
+	Detail    string
 }
 
 type ViolationResetRequest struct {
-	ScopeID runtimeids.ExecutionScopeID
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {
@@ -207,15 +225,7 @@ func ProviderSupportsStructuredOutput(caps llm.ProviderCapabilities) bool {
 }
 
 func ParseCompletionMode(raw string) (CompletionMode, error) {
-	mode := CompletionMode(strings.TrimSpace(raw))
-	switch mode {
-	case CompletionModeStructuredOutput, CompletionModeTool, CompletionModeShellCommand, CompletionModeUnstructuredOutput:
-		return mode, nil
-	case "":
-		return "", errors.New("workflow effective completion mode is required")
-	default:
-		return "", fmt.Errorf("invalid workflow effective completion mode %q", raw)
-	}
+	return sessioncontract.ParseWorkflowCompletionMode(raw)
 }
 
 func StructuredOutput(contract CompletionContract) (*llm.StructuredOutput, error) {

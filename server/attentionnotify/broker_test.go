@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -137,7 +138,7 @@ func TestBrokerInitialEnqueueOverflowReturnsStreamGap(t *testing.T) {
 	fixture.requireStreamGap("Next", err)
 }
 
-func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(t *testing.T) {
+func TestQuestionBatchTrackerPublishesOncePerBatchAndResolvesAfterClears(t *testing.T) {
 	fixture := newBrokerFixture(t)
 	sub := fixture.subscribeDesktop()
 	tracker, batch := fixture.questionBatch()
@@ -153,13 +154,7 @@ func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(
 	batch.Preview = "later question from agent"
 	fixture.noError("Prepare emitted batch update", tracker.Prepare(batch))
 	fixture.noError("MarkMaterialized ask-2", tracker.MarkMaterialized(batch.ID, "ask-2"))
-	second := fixture.next(sub)
-	if second.Type != clientui.AttentionNotificationEventPending || second.Pending.Question.MaterializedCount != 2 || len(second.Pending.Question.CurrentUnresolvedAskIDs) != 2 {
-		t.Fatalf("second materialized update = %+v", second)
-	}
-	if second.Pending.Revision <= first.Pending.Revision {
-		t.Fatalf("second revision = %d, want > %d", second.Pending.Revision, first.Pending.Revision)
-	}
+	fixture.requireNoEvent(sub, "second materialized ask redelivered batch attention")
 	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.ID, "ask-1"))
 	fixture.noError("MarkDurablyCleared ask-2", tracker.MarkDurablyCleared(batch.ID, "ask-2"))
 	resolved := fixture.next(sub)
@@ -327,8 +322,10 @@ func testSessionPromptNotification(id string) clientui.AttentionNotification {
 }
 
 func testQuestionTarget() clientui.AttentionNotificationTarget {
+	workflowID := runtimeids.NewWorkflowID()
 	return clientui.AttentionNotificationTarget{
 		Kind:        clientui.AttentionNotificationTargetWorkflowTask,
+		WorkflowID:  &workflowID,
 		TaskID:      "task-1",
 		TaskShortID: "KT-1",
 		Focus: &clientui.AttentionNotificationTaskDetailFocus{

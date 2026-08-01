@@ -150,6 +150,7 @@ func (p *forkReplayCountingPersistence) childSequences() []int64 {
 
 func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	parent := newSessionTestStore(t)
+	markSessionTestLocked(t, parent, sessionTestLockedContract())
 	parentLog := materializedForkEventLog(t, parent)
 	appendForkTestRecords(t, parentLog, 6, 4)
 	if _, _, err := parentLog.AppendRecord(forkStringPointer("step"), MessageRecord{
@@ -179,6 +180,11 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	}
 	if !child.Meta().HeadlessActive {
 		t.Fatal("expected cloned child to inherit headless-active state derived from replay")
+	}
+	if locked := child.Meta().Locked; locked == nil ||
+		locked.WorkflowCompletionMode == nil ||
+		*locked.WorkflowCompletionMode != sessioncontract.WorkflowCompletionModeTool {
+		t.Fatalf("cloned workflow completion mode = %+v, want inherited tool mode", locked)
 	}
 }
 

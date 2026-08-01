@@ -92,11 +92,19 @@ func newBacklogCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (work
 }
 
 func newNonExecutableCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.CurrentNode, error) {
+	return newNonExecutableCurrentNodeWithPriorValues(taskID, nodeID, workflow.MaterializedPriorValues{})
+}
+
+func newNonExecutableCurrentNodeWithPriorValues(
+	taskID workflow.TaskID,
+	nodeID workflow.NodeID,
+	priorValues workflow.MaterializedPriorValues,
+) (workflow.CurrentNode, error) {
 	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNode(reference, nil, nil)
+	return workflow.NewCurrentNodeWithMaterializedValues(reference, nil, priorValues, nil, nil)
 }
 
 func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, enteredByEdgeID workflow.EdgeID) (workflow.CurrentNode, error) {
@@ -104,7 +112,7 @@ func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, entered
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, nil, nil, nil, &workflow.CurrentNodeScheduling{
+	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, nil, workflow.MaterializedPriorValues{}, nil, &workflow.CurrentNodeScheduling{
 		State: workflow.CurrentNodeSchedulingReady,
 	})
 }
@@ -140,11 +148,11 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	priorNodeValues, err := priorNodeValuesFromJSON(row.PriorNodeValuesJson)
+	priorValues, err := priorValuesFromJSON(row.PriorNodeValuesJson)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithEntry(reference, enteredByEdgeID, currentInputValues, priorNodeValues, sessionID, scheduling)
+	currentNode, err := workflow.NewCurrentNodeWithEntry(reference, enteredByEdgeID, currentInputValues, priorValues, sessionID, scheduling)
 	if err != nil {
 		return workflow.CurrentNode{}, fmt.Errorf("decode current node: %w", err)
 	}
@@ -162,13 +170,20 @@ func currentNodeInputValuesFromJSON(raw string) (map[string]string, error) {
 	return values, nil
 }
 
-func priorNodeValuesFromJSON(raw string) (map[string]map[string]string, error) {
-	values := map[string]map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil, fmt.Errorf("decode current node prior node values: %w", err)
+func priorValuesFromJSON(raw string) (workflow.MaterializedPriorValues, error) {
+	object := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
 	}
-	if values == nil {
-		return nil, fmt.Errorf("decode current node prior node values: expected object")
+	if len(object) != 1 || object["transition_parameters"] == nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected exactly one transition_parameters object")
+	}
+	values := workflow.MaterializedPriorValues{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
+	}
+	if values.TransitionParameters == nil {
+		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected transition_parameters object")
 	}
 	return values, nil
 }
@@ -263,6 +278,22 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	var branchValue any
+	if branchScoped {
+		branchValue = string(branchKey)
+	}
+	locked, err := q.AcquireCurrentNodeResumeWriteLock(ctx, sqlitegen.AcquireCurrentNodeResumeWriteLockParams{
+		TaskID:              string(reference.TaskID),
+		NodeID:              string(reference.NodeID),
+		TransitionBranchKey: branchValue,
+	})
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	if locked != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
 	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
@@ -271,7 +302,7 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 		resumed   int64
 		resumeErr error
 	)
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+	if branchScoped {
 		resumed, resumeErr = q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
 			TaskID:              string(reference.TaskID),
 			NodeID:              string(reference.NodeID),
@@ -306,7 +337,7 @@ func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID wo
 	if err != nil {
 		return nil, err
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return nil, err
 	}
@@ -479,9 +510,9 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 	if err != nil {
 		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node input values: %w", err)
 	}
-	priorNodeValuesJSON, err := json.Marshal(currentNode.PriorNodeValues)
+	priorValuesJSON, err := json.Marshal(currentNode.PriorValues)
 	if err != nil {
-		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node prior node values: %w", err)
+		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node prior values: %w", err)
 	}
 	params := sqlitegen.InsertTaskCurrentNodeParams{
 		TaskID:                 string(currentNode.Reference.TaskID),
@@ -489,7 +520,7 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		TransitionBranchKey:    sql.NullString{},
 		EnteredByEdgeID:        sql.NullString{},
 		CurrentInputValuesJson: string(currentInputValuesJSON),
-		PriorNodeValuesJson:    string(priorNodeValuesJSON),
+		PriorNodeValuesJson:    string(priorValuesJSON),
 		SessionID:              sql.NullString{},
 		SchedulingState:        sql.NullString{},
 		InterruptionReason:     sql.NullString{},

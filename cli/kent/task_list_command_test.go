@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -19,12 +21,23 @@ const (
 	taskListCommandBangID        = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 )
 
+func taskListCommandWorkflowID(t *testing.T, raw string) runtimeids.WorkflowID {
+	t.Helper()
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse workflow ID %q: %v", raw, err)
+	}
+	return workflowID
+}
+
 type taskListCommandRemote struct {
 	apicontract.WorkflowService
 
 	catalogResponse serverapi.WorkflowProjectLabelCatalogResponse
 	catalogRequests []serverapi.WorkflowProjectLabelCatalogRequest
 	listRequests    []serverapi.WorkflowTaskListRequest
+	listResponse    serverapi.WorkflowTaskListResponse
+	listErr         error
 }
 
 func (r *taskListCommandRemote) ListWorkflowProjectLabels(_ context.Context, req serverapi.WorkflowProjectLabelCatalogRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
@@ -34,13 +47,13 @@ func (r *taskListCommandRemote) ListWorkflowProjectLabels(_ context.Context, req
 
 func (r *taskListCommandRemote) ListWorkflowTasks(_ context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	r.listRequests = append(r.listRequests, req)
-	return serverapi.WorkflowTaskListResponse{
-		Scope: serverapi.WorkflowTaskListScope{
-			ProjectID: taskListCommandTestProjectID,
-		},
-		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
-		Tasks:                       []serverapi.WorkflowTaskListItem{},
-	}, nil
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	if r.listErr != nil {
+		return serverapi.WorkflowTaskListResponse{}, r.listErr
+	}
+	return r.listResponse, nil
 }
 
 func (r *taskListCommandRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
@@ -63,6 +76,127 @@ func newTaskListCommandRemote() *taskListCommandRemote {
 				},
 			},
 		},
+		listResponse: serverapi.WorkflowTaskListResponse{
+			Scope: serverapi.WorkflowTaskListScope{
+				ProjectID: taskListCommandTestProjectID,
+			},
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
+			Tasks:                       []serverapi.WorkflowTaskListItem{},
+		},
+	}
+}
+
+func TestTaskListUsesNumericOffsetsAndWritesStructuredContinuation(t *testing.T) {
+	nextOffset := 7
+	remote := newTaskListCommandRemote()
+	remote.listResponse = serverapi.WorkflowTaskListResponse{
+		Scope:                       serverapi.WorkflowTaskListScope{ProjectID: taskListCommandTestProjectID},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		NextOffset:                  &nextOffset,
+		Tasks: []serverapi.WorkflowTaskListItem{{
+			TaskID:     "task-1",
+			ShortID:    "KENT-1",
+			WorkflowID: taskListCommandWorkflowID(t, taskListCommandAlphaID),
+			Title:      "Task",
+			Status: serverapi.WorkflowTaskStatus{
+				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
+				NativeState: serverapi.WorkflowTaskNativeStateActive,
+			},
+		}},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"list", "--project", taskListCommandTestProjectID, "--offset", "5", "--limit", "2", "--json"},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.listRequests) != 1 ||
+		remote.listRequests[0].Offset == nil || *remote.listRequests[0].Offset != 5 ||
+		remote.listRequests[0].Limit == nil || *remote.listRequests[0].Limit != 2 {
+		t.Fatalf("list requests = %+v", remote.listRequests)
+	}
+	var output struct {
+		NextOffset *int `json:"next_offset"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if output.NextOffset == nil || *output.NextOffset != nextOffset {
+		t.Fatalf("JSON output = %+v", output)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("JSON stderr = %q, want no human continuation", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = taskSubcommand(
+		[]string{"list", "--project", taskListCommandTestProjectID, "--offset", "5", "--limit", "2"},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("human-readable exit code = %d; stderr=%q", exitCode, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("continuation was not written to stderr")
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("task rows were not written to stdout")
+	}
+}
+
+func TestTaskListReturnsFailureForInvalidOffsetWindow(t *testing.T) {
+	for _, args := range [][]string{
+		{"list", "--project", taskListCommandTestProjectID, "--offset", "-1"},
+		{"list", "--project", taskListCommandTestProjectID, "--limit", "0"},
+		{"list", "--project", taskListCommandTestProjectID, "--limit", "101"},
+	} {
+		t.Run(args[len(args)-2], func(t *testing.T) {
+			remote := newTaskListCommandRemote()
+			installWorkflowCommandRemote(t, remote)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := taskSubcommand(args, &stdout, &stderr)
+
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+			}
+			if stdout.Len() != 0 || stderr.Len() == 0 || len(remote.listRequests) != 1 {
+				t.Fatalf("stdout=%q stderr=%q requests=%+v", stdout.String(), stderr.String(), remote.listRequests)
+			}
+		})
+	}
+}
+
+func TestTaskListRejectsRemovedPaginationFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"list", "--page-token", "legacy"},
+		{"list", "--page-size", "1"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			remote := newTaskListCommandRemote()
+			installWorkflowCommandRemote(t, remote)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := taskSubcommand(args, &stdout, &stderr)
+
+			if exitCode != 2 {
+				t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+			}
+			if len(remote.listRequests) != 0 || stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("requests=%+v stdout=%q stderr=%q", remote.listRequests, stdout.String(), stderr.String())
+			}
+		})
 	}
 }
 
@@ -236,15 +370,30 @@ func TestTaskListRetryCommandRetainsBothSelectorPolarities(t *testing.T) {
 		LabelSelectors:         []string{"Alpha"},
 		ExcludedLabelSelectors: []string{"Beta", "!literal"},
 		LabelMatch:             &mode,
-		PageSize:               100,
-	}, nil, false)
+		Limit:                  100,
+	}, nil)
 	want := []string{
 		config.Command, "task", "list", "--project", "project-ref",
 		"--label", "Alpha",
 		"--not-label", "Beta",
 		"--not-label", "!literal",
 		"--label-match", "all",
-		"--page-size", "100",
+		"--limit", "100",
+	}
+	if !slices.Equal(args, want) {
+		t.Fatalf("retry args = %v, want %v", args, want)
+	}
+}
+
+func TestTaskListRetryCommandRendersWorkflowPlaceholderAtSelectorBoundary(t *testing.T) {
+	args := taskListRetryCommandArgsForSelector(
+		taskListCommandContext{ProjectRef: "project-ref", Limit: 100},
+		taskWorkflowRetryWorkflowPlaceholder{},
+	)
+	want := []string{
+		config.Command, "task", "list", "--project", "project-ref",
+		"--workflow", "<uuid>",
+		"--limit", "100",
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("retry args = %v, want %v", args, want)

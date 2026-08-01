@@ -103,7 +103,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
-	runtimeCommandAuthority := runtimecommand.NewProcessAuthority()
 	var workflowController *workflowexecution.CurrentNodeController
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
@@ -112,33 +111,31 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
 		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event)
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+				if cfg.Settings.Debug {
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+				}
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
+			}
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		CommandLifecycle:  runtimeCommandAuthority,
-		OrderedMutation: func(ctx context.Context, ref runtimeids.SessionResourceRef, apply func(runtime.OrderedMutationTurn) error) error {
-			return runtimeCommandAuthority.Dispatch(ctx, ref, func(turn runtime.OrderedMutationTurn) error {
-				return apply(turn)
-			})
-		},
-		AgentOrderedMutation: func(ctx context.Context, scope sessionruntime.ExecutionScope, apply func(runtime.OrderedMutationTurn) error) error {
-			return runtimeCommandAuthority.DispatchAgent(ctx, scope, func(turn runtime.OrderedMutationTurn) error {
-				return apply(turn)
-			})
-		},
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			if workflowController != nil {
 				workflowController.ExecutionFinalized(scope)
 			}
 		}),
 	})
-	runtimeCommandAuthority.WithExecutionScopeAuthority(runtimeAuthority)
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
-		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
+		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
 			Error: err.Error(),
-		})
+		}); publishErr != nil {
+			if cfg.Settings.Debug {
+				panic(fmt.Sprintf("publish sleep-guard runtime event: %v", publishErr))
+			}
+			fmt.Fprintf(os.Stderr, "publish sleep-guard runtime event: %v\n", publishErr)
+		}
 	})
 	if sleepErr != nil {
 		fmt.Fprintf(os.Stderr, "sleepguard: always-mode acquire failed at startup: %v\n", sleepErr)
@@ -180,10 +177,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority).WithCommandAuthority(runtimeCommandAuthority)
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
-		WithRuntimeCommandAuthority(runtimeCommandAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
@@ -245,6 +241,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
 	}
+	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, runtimeAuthority)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
+	}
 	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowTaskProjector)
 	if err != nil {
 		cleanupNewFailure()
@@ -265,8 +266,19 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
+	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskProjector, runtimeAuthority)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
+	}
+	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
+		RuntimeClientFactory: opts.RuntimeClientFactory,
+		RuntimeAuthority:     runtimeAuthority,
+		MutationPermit:       workflowMutationPermit,
+		TaskDependencies:     workflowTaskDependencies,
+	})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -277,23 +289,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		runtimeAuthority,
 		workflowMutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
-			Attention:            workflowAttentionFinalizer,
-			CompletionFence: workflowexecution.CompletionFenceBeginFunc(func(ctx context.Context, scope sessionruntime.ExecutionScope) (workflowexecution.CompletionFenceLease, error) {
-				resource, ok := scope.Resource()
-				if !ok {
-					return nil, sessionruntime.ErrExecutionNoLongerLive
-				}
-				attempt, err := runtimeCommandAuthority.BeginCompletionAttempt(ctx, resource)
-				if err != nil {
-					return nil, err
-				}
-				lease, err := attempt.Acquire()
-				if err != nil {
-					return nil, err
-				}
-				return &lease, nil
-			}),
+			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
+			Attention:         workflowAttentionFinalizer,
+			AssignmentSteerer: workflowRuntimeStarter,
 		},
 	)
 	if err != nil {
@@ -309,19 +307,21 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: board: %w", err)
 	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController)
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController, workflowTaskDependencies)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
 	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
-		Definitions: workflowDefinitions,
-		Board:       workflowBoard,
-		TaskList:    workflowTaskList,
-		TaskDetail:  workflowTaskDetail,
-		Activity:    workflowActivity,
-		Attention:   workflowAttention,
+		Definitions:      workflowDefinitions,
+		Board:            workflowBoard,
+		TaskList:         workflowTaskList,
+		TaskSearch:       workflowTaskSearch,
+		TaskDetail:       workflowTaskDetail,
+		TaskDependencies: workflowTaskDependencies,
+		Activity:         workflowActivity,
+		Attention:        workflowAttention,
 	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()

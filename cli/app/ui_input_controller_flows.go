@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/textutil"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -19,19 +21,10 @@ func (c uiInputController) stopRollbackSelectionFlowCmd() tea.Cmd {
 	return sequenceCmds(cancelCmd, overlayCmd)
 }
 
-func (c uiInputController) beginRollbackEditingFlowCmd() tea.Cmd {
-	c.model.beginRollbackEditing()
-	return nil
-}
-
-func (c uiInputController) cancelRollbackEditingToSelectionFlowCmd() tea.Cmd {
-	c.model.cancelRollbackEditingBackToSelection()
-	return nil
-}
-
-func (c uiInputController) startRollbackFork(text string) (tea.Model, tea.Cmd) {
+func (c uiInputController) startRollbackFork() (tea.Model, tea.Cmd) {
 	m := c.model
-	if m.rollback.editingCandidate == nil {
+	candidate, _, ok := m.selectedRollbackCandidate()
+	if !ok {
 		return m, m.sendTransientStatusWithNoticeID(
 			"Rollback target is unavailable",
 			uiStatusNoticeError,
@@ -40,11 +33,14 @@ func (c uiInputController) startRollbackFork(text string) (tea.Model, tea.Cmd) {
 			"",
 		)
 	}
-	m.nextForkRollbackTargetID = m.rollback.editingCandidate.RollbackTargetID
-	m.nextSessionInitialPrompt = text
+	m.nextForkRollbackTargetID = candidate.RollbackTargetID
+	m.nextSessionInitialPrompt = ""
+	m.nextSessionInitialPromptHistoryRecorded = false
+	m.nextSessionInitialInput = textutil.Value(candidate.Text)
 	m.clearInput()
 	m.exitAction = UIActionForkRollback
 	m.resetRollbackState()
+	m.restorePrimaryInputMode()
 	return m, tea.Quit
 }
 

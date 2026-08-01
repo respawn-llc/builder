@@ -20,6 +20,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -990,7 +991,7 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1025,7 +1026,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 	})
 	grace := 50 * time.Millisecond
-	start := func(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
+	start := func(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) ExecutionHandle {
 		t.Helper()
 		ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID(uuid.NewString()), nil)
 		ref.ProjectID, ref.WorkflowID = projectID, workflowID
@@ -1038,16 +1039,16 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		}
 		return handle
 	}
-	selected := start("project-a", "workflow-a", "task-a")
-	unrelatedWorkflow := start("project-a", "workflow-b", "task-b")
-	unrelatedProject := start("project-b", "workflow-a", "task-c")
+	selected := start("project-a", authorityWorkflowID(t, "a"), "task-a")
+	unrelatedWorkflow := start("project-a", authorityWorkflowID(t, "b"), "task-b")
+	unrelatedProject := start("project-b", authorityWorkflowID(t, "a"), "task-c")
 	t.Cleanup(func() {
 		for _, handle := range []ExecutionHandle{selected, unrelatedWorkflow, unrelatedProject} {
 			_ = handle.Stop(context.Background())
 		}
 	})
 
-	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("scoped snapshot: %v", err)
 	}
@@ -1055,7 +1056,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 		t.Fatalf("scoped snapshot included unrelated execution: %+v", snapshot)
 	}
 	snapshot.Executions[0].Script.Path = "mutated"
-	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", "workflow-a", "task-a")
+	again, err := authority.CurrentScopedTaskExecutionSnapshot("project-a", authorityWorkflowID(t, "a"), "task-a")
 	if err != nil {
 		t.Fatalf("repeat scoped snapshot: %v", err)
 	}
@@ -1100,7 +1101,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1239,7 +1240,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 	})
 	<-finalizeStarted
 
-	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", "workflow-test", taskID)
+	targets, err := authority.CurrentScopedTaskExecutionSnapshot("project-test", authorityWorkflowID(t, "test"), taskID)
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
@@ -1390,6 +1391,71 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 }
 
+func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	authority := fixture.authority
+	currentStarted := make(chan struct{})
+	releaseCurrent := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseCurrent)
+		}
+	}()
+	current, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(currentStarted)
+			<-releaseCurrent
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start current execution: %v", err)
+	}
+	<-currentStarted
+
+	type replacementResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	replaced := make(chan replacementResult, 1)
+	go func() {
+		handle, replaceErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   ReplaceAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		replaced <- replacementResult{handle: handle, err: replaceErr}
+	}()
+	select {
+	case outcome := <-replaced:
+		t.Fatalf("replacement returned before current execution finished: %v", outcome.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseCurrent)
+	released = true
+	if _, err := current.Wait(context.Background()); err != nil {
+		t.Fatalf("wait current execution: %v", err)
+	}
+	outcome := <-replaced
+	if outcome.err != nil {
+		t.Fatalf("replace after current execution finished: %v", outcome.err)
+	}
+	if _, err := outcome.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait replacement execution: %v", err)
+	}
+}
+
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
@@ -1522,7 +1588,87 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
+func TestExecutionCleanupAlwaysReleasesWorkflowBinding(t *testing.T) {
+	tests := []struct {
+		name             string
+		resourceMismatch bool
+	}{
+		{name: "missing resource"},
+		{name: "resource mismatch", resourceMismatch: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+			if err != nil {
+				t.Fatalf("parse session id: %v", err)
+			}
+			workflowRef := workflowExecutionRefForTest(t, "task-cleanup-binding", "node-cleanup-binding", nil)
+			executionConfig := &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID: runtimeids.NewExecutionScopeID(),
+				Instructions: workflowruntime.TaskInstructions{
+					CurrentNode: workflowRef.CurrentNode,
+				},
+			}
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			plan.options.CurrentNodeExecution = executionConfig
+			attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+				SessionID: sessionID,
+				OwnerID:   "workflow-cleanup-test",
+				Runtime:   &plan,
+			})
+			if err != nil {
+				t.Fatalf("open workflow runtime: %v", err)
+			}
+			t.Cleanup(func() {
+				if _, releaseErr := attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
+					t.Errorf("release workflow runtime: %v", releaseErr)
+				}
+			})
+
+			var engine *runtime.Engine
+			if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+				engine = current
+				return nil
+			}); err != nil {
+				t.Fatalf("resolve workflow runtime engine: %v", err)
+			}
+			binding, err := engine.BindCurrentNodeExecution(executionConfig)
+			if err != nil {
+				t.Fatalf("bind workflow execution: %v", err)
+			}
+			finalizing := &execution{
+				scope: newAgentExecutionScope(
+					executionConfig.ScopeID,
+					ExecutionGeneration(1),
+					attachment.Resource(),
+					nil,
+				),
+				workflow: binding,
+			}
+			if test.resourceMismatch {
+				finalizing.resource = &agentResource{
+					ref:     attachment.Resource(),
+					current: &execution{},
+				}
+			}
+			cleanupErr := finalizing.cleanup()
+			if test.resourceMismatch != (cleanupErr != nil) {
+				t.Fatalf("cleanup error = %v, resource mismatch = %t", cleanupErr, test.resourceMismatch)
+			}
+
+			rebound, err := engine.BindCurrentNodeExecution(executionConfig)
+			if err != nil {
+				t.Fatalf("workflow execution binding remained owned after cleanup: %v", err)
+			}
+			if err := rebound.Close(); err != nil {
+				t.Fatalf("close rebound workflow execution: %v", err)
+			}
+		})
+	}
+}
+
+func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	updates := make(chan runtime.BackgroundShellEvent, 1)
@@ -1541,7 +1687,7 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 
 	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
 	event.NoticeSuppressed = true
-	route := func(generation runtimeids.ResourceGeneration) {
+	route := func(event shelltool.Event, generation runtimeids.ResourceGeneration) {
 		correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), generation)
 		if err != nil {
 			t.Fatalf("new execution correlation: %v", err)
@@ -1549,21 +1695,147 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 		event.Snapshot.ExecutionCorrelation = &correlation
 		authority.routeBackgroundEvent(event)
 	}
-	route(predecessor.Resource().Generation())
+	route(event, predecessor.Resource().Generation())
 	select {
 	case update := <-updates:
-		t.Fatalf("stale predecessor generation routed background update: %+v", update)
+		if update.Type != runtime.BackgroundShellEventCompleted || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("predecessor terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("predecessor terminal event did not route to current runtime")
+	}
+
+	backgrounded := event
+	backgrounded.Type = shelltool.EventBackgrounded
+	route(backgrounded, predecessor.Resource().Generation())
+	select {
+	case update := <-updates:
+		t.Fatalf("stale predecessor registration routed background update: %+v", update)
 	default:
 	}
 
-	route(successor.Resource().Generation())
+	route(backgrounded, successor.Resource().Generation())
 	select {
 	case update := <-updates:
-		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
-			t.Fatalf("current generation background update = %+v", update)
+		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("current generation registration update = %+v", update)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("current resource generation did not receive background update")
+		t.Fatal("current resource generation did not receive background registration")
+	}
+}
+
+func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	client := make(lifecycleRequestCaptureClient, 1)
+	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(50 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("new background shell manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close background shell manager: %v", err)
+		}
+	})
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		Background:      manager,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &client, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+
+	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		predecessor.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	releasePath := filepath.Join(t.TempDir(), "release")
+	started, err := manager.Start(context.Background(), shelltool.ExecRequest{
+		Command:              []string{"/bin/sh", "-c", fmt.Sprintf("while [ ! -f %q ]; do sleep 0.01; done; printf done", releasePath)},
+		DisplayCommand:       "wait for release",
+		OwnerSessionID:       sessionID.String(),
+		ExecutionCorrelation: &correlation,
+		Workdir:              t.TempDir(),
+		YieldTime:            50 * time.Millisecond,
+		MaxOutputChars:       16_000,
+	})
+	if err != nil {
+		t.Fatalf("start background shell: %v", err)
+	}
+	if !started.Backgrounded {
+		t.Fatalf("shell must transition to background, got %+v", started)
+	}
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != started.SessionID {
+			t.Fatalf("background registration update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background registration did not reach predecessor runtime")
+	}
+	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release predecessor runtime: %v", err)
+	}
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatalf("release background shell: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var terminal shelltool.Snapshot
+	for {
+		terminal, err = manager.Snapshot(started.SessionID)
+		if err != nil {
+			t.Fatalf("snapshot background shell: %v", err)
+		}
+		if !terminal.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for background shell completion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventCompleted ||
+			update.ID != terminal.ID ||
+			update.ActivityID != terminal.ActivityID {
+			t.Fatalf("retried terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("undelivered terminal event did not reach the next runtime")
+	}
+
+	request := client.await(t)
+	foundNotice := false
+	for _, message := range llm.MessagesFromItems(request.Items) {
+		if message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeBackgroundNotice &&
+			message.BackgroundActivityID != nil &&
+			*message.BackgroundActivityID == terminal.ActivityID.String() {
+			foundNotice = true
+			break
+		}
+	}
+	if !foundNotice {
+		t.Fatal("retried terminal event did not steer a developer background notice")
 	}
 }
 
@@ -2200,6 +2472,23 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	}
 }
 
+func authorityWorkflowID(t *testing.T, name string) runtimeids.WorkflowID {
+	t.Helper()
+	raw, found := map[string]string{
+		"test": "550e8400-e29b-41d4-a716-446655440101",
+		"a":    "550e8400-e29b-41d4-a716-446655440102",
+		"b":    "550e8400-e29b-41d4-a716-446655440103",
+	}[name]
+	if !found {
+		t.Fatalf("unknown authority Workflow fixture %q", name)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID(raw)
+	if err != nil {
+		t.Fatalf("parse authority Workflow fixture %q: %v", raw, err)
+	}
+	return workflowID
+}
+
 func workflowExecutionRefForTest(
 	t *testing.T,
 	taskID workflow.TaskID,
@@ -2211,7 +2500,7 @@ func workflowExecutionRefForTest(
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: "workflow-test", CurrentNode: reference}
+	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"), CurrentNode: reference}
 }
 
 func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref WorkflowExecutionRef) *WorkflowExecutionLease {

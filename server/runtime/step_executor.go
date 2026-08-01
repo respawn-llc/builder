@@ -258,7 +258,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				continue
 			}
-			if e.currentNodeExecutionActive() && e.cfg.CurrentNodeExecution.Controller != nil {
+			if execution, active := e.currentNodeExecutionConfig(); active && execution.Controller != nil {
 				content := ""
 				if assistantMsg.Content != nil {
 					content = strings.TrimSpace(*assistantMsg.Content)
@@ -672,7 +672,8 @@ func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.Too
 
 func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Context, stepID string, content string) (bool, bool, error) {
 	e := s.engine
-	if !e.currentNodeExecutionActive() || e.cfg.CurrentNodeExecution.Controller == nil {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
 		return false, false, nil
 	}
 	mode, err := e.workflowCompletionMode(ctx)
@@ -686,10 +687,10 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	)
 	switch mode {
 	case workflowruntime.CompletionModeStructuredOutput:
-		parsed, err = workflowruntime.DecodeCompletion([]byte(content), e.cfg.CurrentNodeExecution.Contract)
+		parsed, err = workflowruntime.DecodeCompletion([]byte(content), execution.Contract)
 		source = WorkflowCompletionSourceStructuredOutput
 	case workflowruntime.CompletionModeUnstructuredOutput:
-		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, e.cfg.CurrentNodeExecution.Contract)
+		parsed, err = workflowruntime.DecodeUnstructuredCompletion(content, execution.Contract)
 		source = WorkflowCompletionSourceUnstructured
 	case workflowruntime.CompletionModeShellCommand:
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, errors.New("normal final answers do not complete shell-command workflow nodes"))
@@ -722,13 +723,7 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 }
 
 func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
-	e := s.engine
-	_, completeErr := e.cfg.CurrentNodeExecution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      e.cfg.CurrentNodeExecution.ScopeID,
-		TransitionID: parsed.TransitionID,
-		OutputValues: parsed.OutputValues,
-		Commentary:   parsed.Commentary,
-	})
+	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, parsed)
 	return completeErr
 }
 
@@ -759,18 +754,15 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 }
 
 func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (string, error) {
-	if !e.currentNodeExecutionActive() {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active {
 		return "", nil
 	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
 		return "", err
 	}
-	workflowShortID := ""
-	if e.cfg.CurrentNodeExecution != nil {
-		workflowShortID = e.cfg.CurrentNodeExecution.Instructions.WorkflowShortID
-	}
-	return workflowCompletionInstructionsFragment(mode, workflowShortID, e.cfg.CurrentNodeExecution.Contract)
+	return workflowCompletionInstructionsFragment(mode, execution.Instructions.WorkflowID, execution.Contract)
 }
 
 func customToolCallIDs(calls []llm.ToolCall) map[string]bool {

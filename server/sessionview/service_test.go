@@ -307,7 +307,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 		Role:       "compaction_summary",
 		Text:       "condensed summary",
 	})
-	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeManualCompactionCarryover))
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeCompactionPreservedUserMessage))
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
@@ -321,7 +321,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 		t.Fatalf("expected persisted compaction summary entry, got %+v", entries[0])
 	}
 	if entries[1].Role != "manual_compaction_carryover" {
-		t.Fatalf("expected manual carryover entry, got %+v", entries[1])
+		t.Fatalf("expected legacy compaction-preserved user entry, got %+v", entries[1])
 	}
 }
 

@@ -8,10 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/testsetup"
 )
 
 func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	path := filepath.Join(repoRoot, "server", "registry", "runtime_registry.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
@@ -35,7 +37,7 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 }
 
 func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	registryFiles, err := filepath.Glob(filepath.Join(repoRoot, "server", "registry", "*.go"))
 	if err != nil {
 		t.Fatalf("list registry files: %v", err)
@@ -84,7 +86,7 @@ func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 }
 
 func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	forbidden := map[string]bool{
 		"TranscriptSegmentPage":             true,
 		"TranscriptSegmentPageForward":      true,
@@ -120,7 +122,7 @@ func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *tes
 }
 
 func TestTranscriptRuntimeViewProjectionDoesNotUseLegacyChatEntryShape(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	rel := filepath.Join("server", "runtimeview", "transcript_subscription.go")
 	path := filepath.Join(repoRoot, rel)
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
@@ -147,7 +149,7 @@ func TestTranscriptRuntimeViewProjectionDoesNotUseLegacyChatEntryShape(t *testin
 }
 
 func TestLegacyUntypedNoticeIsOnlyProducedByFossilProjectionPath(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	allowedFunctions := map[string]bool{
 		"legacyUntypedNoticeFactFromLocalEntry": true,
 	}
@@ -189,13 +191,4 @@ func basicStringLiteralValue(lit *ast.BasicLit) string {
 		return ""
 	}
 	return value
-}
-
-func findRegistryRepoRoot(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
-	return root
 }

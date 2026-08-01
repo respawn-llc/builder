@@ -15,6 +15,7 @@ import (
 	"core/server/core"
 	"core/server/llm"
 	"core/server/metadata"
+	serverruntime "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
 	serverstartup "core/server/startup"
@@ -140,7 +141,7 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 		return "", fmt.Errorf("materialize seed session event log: %w", err)
 	}
 	for idx, entry := range r.ScriptFile.SeedTranscript {
-		if err := appendSeedTranscriptEntry(eventLog, workspaceRoot, idx, entry); err != nil {
+		if err := appendSeedTranscriptEntry(sessionStore, eventLog, workspaceRoot, idx, entry); err != nil {
 			return "", err
 		}
 	}
@@ -289,13 +290,23 @@ func assistantDeltas(values []string) []llm.AssistantDelta {
 	return deltas
 }
 
-func appendSeedTranscriptEntry(log session.MaterializedEventLog, workspaceRoot string, idx int, entry SeedTranscriptEntryFile) error {
+func appendSeedTranscriptEntry(
+	store *session.Store,
+	log session.MaterializedEventLog,
+	workspaceRoot string,
+	idx int,
+	entry SeedTranscriptEntryFile,
+) error {
 	stepID := uuid.NewString()
 	switch strings.TrimSpace(entry.Kind) {
 	case "", "message":
 		msg := seedMessage(entry)
-		if _, _, err := log.AppendRecord(&stepID, msg); err != nil {
+		receipt, err := serverruntime.SteerPersistedMessage(store, stepID, msg)
+		if err != nil {
 			return fmt.Errorf("append seed message %d: %w", idx, err)
+		}
+		if !receipt.Committed {
+			return fmt.Errorf("append seed message %d: message was not committed", idx)
 		}
 	case "local_entry":
 		if _, _, err := log.AppendRecord(&stepID, seedLocalEntry(entry)); err != nil {
@@ -306,8 +317,12 @@ func appendSeedTranscriptEntry(log session.MaterializedEventLog, workspaceRoot s
 		if _, _, err := log.AppendRecord(&stepID, result); err != nil {
 			return fmt.Errorf("append seed tool completion %d: %w", idx, err)
 		}
-		if _, _, err := log.AppendRecord(&stepID, message); err != nil {
+		receipt, err := serverruntime.SteerPersistedMessage(store, stepID, message)
+		if err != nil {
 			return fmt.Errorf("append seed tool message %d: %w", idx, err)
+		}
+		if !receipt.Committed {
+			return fmt.Errorf("append seed tool message %d: message was not committed", idx)
 		}
 	default:
 		return fmt.Errorf("seed transcript entry %d has unknown kind %q", idx, entry.Kind)
@@ -315,14 +330,14 @@ func appendSeedTranscriptEntry(log session.MaterializedEventLog, workspaceRoot s
 	return nil
 }
 
-func seedMessage(entry SeedTranscriptEntryFile) session.MessageRecord {
-	role := session.MessageRole(strings.TrimSpace(entry.Role))
+func seedMessage(entry SeedTranscriptEntryFile) llm.Message {
+	role := llm.Role(strings.TrimSpace(entry.Role))
 	if role == "" {
-		role = session.MessageRoleDeveloper
+		role = llm.RoleDeveloper
 	}
-	return session.MessageRecord{
+	return llm.Message{
 		Role:           role,
-		MessageType:    optionalSessionMessageType(entry.MessageType),
+		MessageType:    optionalLLMMessageType(entry.MessageType),
 		SourcePath:     optionalTrimmedText(entry.SourcePath),
 		Content:        optionalText(entry.Text),
 		CompactContent: optionalTrimmedText(entry.CondensedText),
@@ -366,16 +381,16 @@ func optionalTrimmedText(value string) *string {
 	return optionalText(strings.TrimSpace(value))
 }
 
-func optionalSessionMessageType(value string) *session.MessageType {
+func optionalLLMMessageType(value string) *llm.MessageType {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil
 	}
-	messageType := session.MessageType(value)
+	messageType := llm.MessageType(value)
 	return &messageType
 }
 
-func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (session.ToolCompletionRecord, session.MessageRecord) {
+func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (session.ToolCompletionRecord, llm.Message) {
 	toolName := strings.TrimSpace(entry.ToolName)
 	if toolName == "" {
 		toolName = strings.TrimSpace(entry.Role)
@@ -416,8 +431,8 @@ func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (sessio
 	if entry.ToolCustom {
 		completion.OutputKind = session.ToolOutputKindCustom
 	}
-	return completion, session.MessageRecord{
-		Role:           session.MessageRoleTool,
+	return completion, llm.Message{
+		Role:           llm.RoleTool,
 		Name:           optionalText(toolName),
 		ToolCallID:     optionalText(callID),
 		Content:        optionalText(string(output)),
@@ -426,11 +441,11 @@ func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (sessio
 	}
 }
 
-func seedToolMessageType(custom bool) *session.MessageType {
+func seedToolMessageType(custom bool) *llm.MessageType {
 	if !custom {
 		return nil
 	}
-	return optionalSessionMessageType(string(session.MessageTypeCustomToolCallOutput))
+	return optionalLLMMessageType(string(llm.MessageTypeCustomToolCallOutput))
 }
 
 type Observation struct {

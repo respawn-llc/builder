@@ -12,7 +12,7 @@ describe("ApiClient workflow script path validation", () => {
             {
               code: "workflow.validation.script_path_missing",
               message: "script_path is required",
-              workflow_id: "workflow-1",
+              workflow_id: "11111111-1111-4111-8111-111111111111",
               node_id: "node-script",
               blocks_context: true,
             },
@@ -24,7 +24,7 @@ describe("ApiClient workflow script path validation", () => {
 
     await expect(
       client.validateWorkflowScriptPath({
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         nodeID: "node-script",
         scriptPath: "scripts/run",
       }),
@@ -32,7 +32,7 @@ describe("ApiClient workflow script path validation", () => {
 
     expect(transport.calls).toContainEqual({
       method: "workflow.scriptPath.validate",
-      params: { workflow_id: "workflow-1", node_id: "node-script", script_path: "scripts/run" },
+      params: { workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-script", script_path: "scripts/run" },
     });
   });
 });

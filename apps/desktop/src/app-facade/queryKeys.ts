@@ -104,6 +104,7 @@ export const queryKeys = {
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
   task: (taskID: string) => ["task", taskID],
+  taskDependencies: (taskID: string, direction?: string) => ["task-dependencies", taskID, direction ?? null],
   taskAttention: (taskID: string) => ["task-attention", taskID],
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],

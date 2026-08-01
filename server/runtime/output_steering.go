@@ -48,11 +48,13 @@ const (
 
 type steeringIntent struct {
 	priority steeringPriority
+	turn     OrderedMutationTurn
 	items    []steeringItem
 }
 
 type steeringItem struct {
 	message                     *steeringMessage
+	goalNoticeAndStatus         *steeringGoalNoticeAndStatus
 	committedAssistant          *steeringCommittedAssistantMessage
 	completedResponseResolution *steeringCompletedResponseResolution
 	localEntry                  *steeringLocalEntry
@@ -72,6 +74,11 @@ type steeringMessage struct {
 	message     llm.Message
 	eventPolicy steeringMessageEventPolicy
 	persist     bool
+}
+
+type steeringGoalNoticeAndStatus struct {
+	message llm.Message
+	update  GoalStatusUpdate
 }
 
 type steeringLocalEntry struct {
@@ -208,7 +215,7 @@ func steerHistoryReplacementIntent(engine string, mode compactionMode, compactio
 		priority: steeringPriorityNormal,
 		items: []steeringItem{{historyReplace: &steeringHistoryReplacement{
 			payload:          payload,
-			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items),
+			projectedEntries: transcriptEntriesFromHistoryReplacement(payload.Items, payload.CompactionNumber),
 		}}},
 	}
 }
@@ -247,6 +254,16 @@ func steerEventIntent(evt Event) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items:    []steeringItem{{event: &copyEvent}},
+	}
+}
+
+func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeContext,
+		items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{
+			message: message,
+			update:  update,
+		}}},
 	}
 }
 
@@ -362,14 +379,14 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	return e.steerOrdered(stepID, intents...)
+	return e.steerAndTurn(nil, stepID, intents...)
 }
 
 func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
 	if e == nil {
 		return nil
 	}
-	return e.steerOrdered(stepID, intents...)
+	return e.steerAndTurn(nil, stepID, intents...)
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
@@ -390,46 +407,41 @@ func (e *Engine) steerWithCommitReceiptAndTurn(turn OrderedMutationTurn, stepID 
 }
 
 func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
-	return e.steerAndTurn(nil, stepID, intents...)
-}
-
-func (e *Engine) steerAndTurn(turn OrderedMutationTurn, stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
-		if len(intent.items) == 0 {
-			continue
+		if len(intent.items) > 0 {
+			ordered = append(ordered, intent)
 		}
-		ordered = append(ordered, intent)
 	}
 	if len(ordered) == 0 {
 		return nil
 	}
-	if turn != nil {
-		return turn.Apply(func() error {
-			return e.applySteeringIntents(stepID, ordered, turn)
-		})
-	}
-	if mutation := e.executionMutationSnapshot(); mutation != nil {
-		return mutation(context.Background(), func(turn OrderedMutationTurn) error {
-			return turn.Apply(func() error {
-				return e.applySteeringIntents(stepID, ordered, turn)
-			})
-		})
-	}
-	if e.cfg.OrderedMutation != nil {
-		return e.cfg.OrderedMutation(func(turn OrderedMutationTurn) error {
-			if turn == nil {
-				return errors.New("ordered mutation turn is required")
+	remaining := make([]steeringIntent, 0, len(ordered))
+	for _, intent := range ordered {
+		plain := intent
+		plain.items = make([]steeringItem, 0, len(intent.items))
+		for _, item := range intent.items {
+			if item.pendingUserClaim != nil {
+				if item.pendingUserClaim.result == nil {
+					return errors.New("pending user injection claim requires a result destination")
+				}
+				result, err := e.commitPendingUserInjectionsInTurn(stepID, item.pendingUserClaim.selection, intent.turn)
+				*item.pendingUserClaim.result = result
+				if err != nil {
+					return err
+				}
+				continue
 			}
-			return turn.Apply(func() error {
-				return e.applySteeringIntents(stepID, ordered, turn)
-			})
-		})
+			plain.items = append(plain.items, item)
+		}
+		if len(plain.items) > 0 {
+			remaining = append(remaining, plain)
+		}
 	}
-	return e.applySteeringIntents(stepID, ordered, nil)
-}
-
-func (e *Engine) applySteeringIntents(stepID string, ordered []steeringIntent, turn OrderedMutationTurn) error {
+	ordered = remaining
+	if len(ordered) == 0 {
+		return nil
+	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -437,7 +449,7 @@ func (e *Engine) applySteeringIntents(stepID string, ordered []steeringIntent, t
 	})
 	for _, intent := range ordered {
 		for _, item := range intent.items {
-			if err := e.applySteeringItem(stepID, item, turn); err != nil {
+			if err := e.applySteeringItem(stepID, item, intent.turn); err != nil {
 				return err
 			}
 		}
@@ -445,13 +457,40 @@ func (e *Engine) applySteeringIntents(stepID string, ordered []steeringIntent, t
 	return nil
 }
 
-func (e *Engine) applySteeringIntentInline(stepID string, intent steeringIntent) error {
-	for _, item := range intent.items {
-		if err := e.applySteeringItem(stepID, item, nil); err != nil {
-			return err
+func (e *Engine) steerAndTurn(turn OrderedMutationTurn, stepID string, intents ...steeringIntent) error {
+	ordered := make([]steeringIntent, 0, len(intents))
+	for _, intent := range intents {
+		if len(intent.items) > 0 {
+			intent.turn = turn
+			ordered = append(ordered, intent)
 		}
 	}
-	return nil
+	if len(ordered) == 0 {
+		return nil
+	}
+	if turn != nil {
+		return turn.Apply(func() error { return e.steerOrdered(stepID, ordered...) })
+	}
+	if mutation := e.executionMutationSnapshot(); mutation != nil {
+		return mutation(context.Background(), func(ownedTurn OrderedMutationTurn) error {
+			for index := range ordered {
+				ordered[index].turn = ownedTurn
+			}
+			return ownedTurn.Apply(func() error { return e.steerOrdered(stepID, ordered...) })
+		})
+	}
+	if e.cfg.OrderedMutation != nil {
+		return e.cfg.OrderedMutation(func(ownedTurn OrderedMutationTurn) error {
+			if ownedTurn == nil {
+				return errors.New("ordered mutation turn is required")
+			}
+			for index := range ordered {
+				ordered[index].turn = ownedTurn
+			}
+			return ownedTurn.Apply(func() error { return e.steerOrdered(stepID, ordered...) })
+		})
+	}
+	return e.steerOrdered(stepID, ordered...)
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -470,6 +509,25 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem, turn Ordere
 		receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 		item.recordCommitReceipt(receipt)
 		return err
+	}
+	if item.goalNoticeAndStatus != nil {
+		notice := item.goalNoticeAndStatus
+		receipt, noticeErr := e.appendMessageRaw(
+			stepID,
+			notice.message,
+			steeringMessageEventDefault,
+			true,
+		)
+		item.recordCommitReceipt(receipt)
+		if !receipt.Committed {
+			return noticeErr
+		}
+		statusErr := e.emitRaw(Event{
+			Kind:       EventGoalStatusUpdated,
+			StepID:     stepID,
+			GoalStatus: &notice.update,
+		})
+		return errors.Join(noticeErr, statusErr)
 	}
 	if item.committedAssistant != nil {
 		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
@@ -688,7 +746,12 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	}
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
-	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, preparedItems, &projectedStart)
+	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+		stepID,
+		preparedItems,
+		&projectedStart,
+		replacement.projectedEntries,
+	)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,

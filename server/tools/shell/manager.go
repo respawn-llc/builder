@@ -24,7 +24,7 @@ type Manager struct {
 	nextID               int
 	entries              map[string]*processEntry
 	tempDir              string
-	onEvent              func(Event)
+	onEvent              func(Event) bool
 	minimumExecToBgTime  time.Duration
 	closeGracePeriod     time.Duration
 	closeWaitTimeout     time.Duration
@@ -98,18 +98,10 @@ func (m *Manager) TempDir() string {
 	return m.tempDir
 }
 
-func (m *Manager) SetEventHandler(handler func(Event)) {
+func (m *Manager) SetEventHandler(handler func(Event) bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if handler == nil {
-		m.onEvent = nil
-		return
-	}
-	m.onEvent = func(event Event) {
-		if m.awaitTerminalPublication(event) {
-			handler(event)
-		}
-	}
+	m.onEvent = handler
 }
 
 func (m *Manager) SetMinimumExecToBgTime(value time.Duration) {
@@ -305,6 +297,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult
 	entry.mu.Lock()
 	entry.backgroundTransition = backgroundTransition.state
 	entry.mu.Unlock()
+	m.emitEvent(newBackgroundedEvent(snapshot))
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
 		return ExecResult{}, err
@@ -321,50 +314,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult
 	return result, nil
 }
 
-func (m *Manager) awaitTerminalPublication(event Event) bool {
-	switch event.Type {
-	case EventCompleted, EventKilled:
-	default:
-		return true
-	}
-
-	m.mu.Lock()
-	entry := m.entries[event.Snapshot.ID]
-	closed := m.closed
-	m.mu.Unlock()
-	if entry == nil {
-		panic(fmt.Sprintf("publish terminal background event: process %q is not retained", event.Snapshot.ID))
-	}
-	entry.mu.Lock()
-	transition := entry.backgroundTransition
-	entry.mu.Unlock()
-	if transition == nil {
-		panic(fmt.Sprintf("publish terminal background event: process %q has no transition", event.Snapshot.ID))
-	}
-	if closed {
-		select {
-		case <-transition.done:
-			return transition.terminalPublicationAllowed()
-		default:
-			return false
-		}
-	}
-	for {
-		select {
-		case <-transition.done:
-			return transition.terminalPublicationAllowed()
-		case <-time.After(10 * time.Millisecond):
-			m.mu.Lock()
-			closed = m.closed
-			m.mu.Unlock()
-			if closed {
-				return false
-			}
-		}
-	}
-}
-
-func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult, error) {
+func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (result ExecResult, err error) {
 	id := strings.TrimSpace(req.SessionID)
 	if id == "" {
 		return ExecResult{}, errors.New("session_id is required")
@@ -374,7 +324,16 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		return ExecResult{}, err
 	}
 	entry.interactMu.Lock()
-	defer entry.interactMu.Unlock()
+	awaitTerminalDelivery := false
+	defer func() {
+		entry.interactMu.Unlock()
+		if awaitTerminalDelivery {
+			if deliveryErr := waitForTerminalDelivery(ctx, entry); deliveryErr != nil {
+				result = ExecResult{}
+				err = deliveryErr
+			}
+		}
+	}()
 
 	yieldTime := normalizeWriteYieldTime(req.YieldTime, defaultWriteYieldTime)
 	maxOutputChars := req.MaxOutputChars
@@ -408,7 +367,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 	}
 	snapshot := entry.snapshot()
 	consumedCompletion := false
-	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil && !entry.completionNoticeConsumed()
+	harvestingCompletion := snapshot.Backgrounded && snapshot.ExitCode != nil
 	var warning postprocess.Warning
 	var warningErr error
 	sourceTruncated := false
@@ -440,9 +399,6 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 			}
 		}
 	}
-	if consumedCompletion {
-		entry.markCompletionNoticeConsumed()
-	}
 	if !consumedCompletion {
 		processed, err = m.applyPostprocessing(ctx, entry, string(output), snapshot.ExitCode, snapshot.Backgrounded, maxOutputChars)
 		if err != nil {
@@ -450,6 +406,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		}
 	}
 	display, displayTruncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, backgroundTruncationBannerTemplate)
+	awaitTerminalDelivery = harvestingCompletion
 	return ExecResult{
 		SessionID:          id,
 		WallTime:           time.Since(start),
@@ -463,6 +420,23 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
 	}, nil
+}
+
+func waitForTerminalDelivery(ctx context.Context, entry *processEntry) error {
+	select {
+	case <-entry.done:
+		return nil
+	default:
+	}
+	select {
+	case <-entry.done:
+		return nil
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return &PollingCanceledError{SessionID: entry.id, Active: entry.snapshot().Running}
+		}
+		return ctx.Err()
+	}
 }
 
 func (m *Manager) Kill(id string) error {

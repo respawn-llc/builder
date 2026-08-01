@@ -1,13 +1,21 @@
 import { z } from "zod";
 import { createElement } from "react";
 import { render } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
+import { SidebarContext } from "@/app-facade";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
+import { createTestSidebarController } from "../sidebar";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -19,7 +27,7 @@ export const taskUpdateParamsSchema = jsonObjectSchema.and(
 );
 
 const workflow = {
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   display_name: "Delivery",
   version: 1,
 };
@@ -42,7 +50,7 @@ const taskActions = {
 
 const attentionBase = {
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "T-1",
   task_title: "Resolve blocker",
@@ -54,7 +62,7 @@ export const taskDetailResponse = {
     summary: {
       id: "task-1",
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       short_id: "T-1",
       title: "Resolve blocker",
       created_at_unix_ms: 1,
@@ -92,6 +100,26 @@ export const taskDetailResponse = {
     actions: taskActions,
     label_ids: [],
     attention_count: 2,
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
   },
 };
 
@@ -108,14 +136,13 @@ export const taskAttentionResponse = {
       },
       session_id: "session-1",
       question_id: "ask-1",
-      message: "",
+      message: "Approve protected path?",
     },
     {
       ...attentionBase,
       id: "attention-approval",
       kind: "approval",
       approval_id: "approval-1",
-      message: "Approve transition",
       approval_snapshot: {
         source_node_display_name: "Implement",
         targets: [{ display_name: "Ship" }],
@@ -185,7 +212,6 @@ export const interruptedTaskAttentionResponse = {
       kind: "interrupted_current_node",
       current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
       session_id: null,
-      message: "Script failed",
       detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
     },
   ],
@@ -216,7 +242,7 @@ export const taskQuestionWaitingEvent = {
     primary_entity_id: "task-1",
     project_id: "project-1",
     related_ids: ["session-1", "ask-1"],
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 
@@ -227,7 +253,7 @@ export const taskUpdatedEvent = {
     occurred_at_unix_ms: 1,
     primary_entity_id: "task-1",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 
@@ -374,10 +400,20 @@ export function mountTaskDetailSurface(
   options: TaskDetailFixtureOptions = {},
 ): TestAppServices {
   const services = createTaskDetailTestServices(task, options);
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
+    routeTree: createRootRoute(),
+  });
   render(
-    createElement(TestAppProviders, {
-      children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
-      services,
+    createElement(RouterContextProvider, {
+      router,
+      children: createElement(SidebarContext.Provider, {
+        value: createTestSidebarController(),
+        children: createElement(TestAppProviders, {
+          children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
+          services,
+        }),
+      }),
     }),
   );
   return services;

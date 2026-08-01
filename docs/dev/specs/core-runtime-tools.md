@@ -38,6 +38,7 @@
 
 - `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
+- Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
 - A non-zero command exit is recoverable and does not abort the model turn. Launch failures are not retried automatically. Interruption sends `SIGINT`, then `SIGKILL` after 10 seconds.
 - `[shell].postprocessing_mode` accepts only `none`, `builtin`, `user`, or `all`; omission selects the built-in default, while an empty or unknown value is an error. `[shell].postprocess_hook` is optional; absence is `null`, and a present empty or whitespace-only value is invalid.
@@ -127,7 +128,13 @@
 - A resumed non-Workflow Session carries its active Goal verbatim into new model context with the ordinary Goal work and completion guidance, without referring to compaction.
 - If a later notification fails, compaction remains complete, Kent reports the failure, and does not repeat compaction.
 - Kent may compact before a queued user prompt when configured context usage indicates that prompt would likely require it. The trigger is `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`. Normal and pre-submit compaction thresholds must be at least 50% of `model_context_window`; invalid settings fail startup.
-- `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface. `/compact` works while idle or running; during a run it takes effect before the next model step.
+- `compaction_mode=none` disables manual and automatic compaction and lets provider context-overflow errors surface.
+- A manual compact request starts immediately when no Agent Step is active and server admission succeeds.
+- A manual compact request made during an Agent Step becomes typed Steer work. It executes after that Agent Step reaches its boundary and before any later Agent Step. It never waits for the turn to finish and never becomes model-visible user text.
+- Repeated manual compact requests remain distinct pending Steer items. Clients do not coalesce them. The server admits or rejects each request independently when it reaches the execution boundary.
+- Only one compaction may run at a time. Manual, automatic, pre-submit, and handoff compaction must never overlap. A manual compact request that reaches admission while compaction is active fails with a typed rejection.
+- Manual compaction requires at least one Agent Step boundary since Session creation or the latest successful compaction. The active Agent Step satisfies this requirement when its boundary is reached. A rejected request starts no provider call and commits no history replacement.
+- Disabled-policy, active-compaction, and too-soon manual-compaction failures are typed server-owned outcomes shared by every client.
 - Human-facing text calls this operation `compact`; model-facing context calls it `handoff`. Manual compaction carries the last visible user prompt. Agent handoff may carry a future-agent message visible only in detail.
 - Main-agent provider session identity remains the Kent Session ID across compactions. Prompt-cache lineage is `<session_id>`, then `<session_id>/compact-N`; reviewer lineage is `<session_id>/supervisor` with the same generation counter.
 - The compaction request uses the pre-compaction locked contract. After compaction completes, the next model request refreshes and locks effective model/provider settings, enabled tools, and system/reviewer prompts for the new cache generation. This preserves cache continuity even if a repeat compaction occurs before refresh.

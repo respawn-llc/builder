@@ -91,8 +91,8 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 		}, true
 	case llm.MessageTypeHandoffFutureMessage:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
-	case llm.MessageTypeManualCompactionCarryover:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleManualCompactionCarryover), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
+	case llm.MessageTypeCompactionPreservedUserMessage:
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleCompactionPreservedUserMessage), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	default:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	}
@@ -115,7 +115,7 @@ func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
 		llm.MessageTypeReviewerFeedback,
 		llm.MessageTypeBackgroundNotice,
 		llm.MessageTypeCustomToolCallOutput,
-		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeCompactionPreservedUserMessage,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit,
 		llm.MessageTypeWorkflowMode,
@@ -130,7 +130,7 @@ func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
 }
 
 func compactionSummaryChatEntry(msg llm.Message) ChatEntry {
-	label := compactLabelForMessage(msg)
+	label, _ := textutil.OptionalTrimmed(msg.CompactContent)
 	text := ""
 	if msg.Content != nil {
 		text = *msg.Content
@@ -159,7 +159,7 @@ func messageTypeTranscriptVisibility(messageType *llm.MessageType) transcript.En
 		llm.MessageTypeSubagents,
 		llm.MessageTypeCompactionSoonReminder,
 		llm.MessageTypeHandoffFutureMessage,
-		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeCompactionPreservedUserMessage,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit:
 		return transcript.EntryVisibilityDetail
@@ -232,7 +232,7 @@ func compactLabelForMessage(msg llm.Message) string {
 	case llm.MessageTypeWorktreeModeExit:
 		return ""
 	case llm.MessageTypeCompactionSummary:
-		return "Context compacted"
+		return ""
 	case llm.MessageTypeInterruption:
 		return "You interrupted"
 	case llm.MessageTypeErrorFeedback:
@@ -243,7 +243,7 @@ func compactLabelForMessage(msg llm.Message) string {
 		return "Compaction reminder"
 	case llm.MessageTypeHandoffFutureMessage:
 		return "Future-agent context"
-	case llm.MessageTypeManualCompactionCarryover:
+	case llm.MessageTypeCompactionPreservedUserMessage:
 		return "Last user message preserved for compaction"
 	default:
 		if msg.Role == llm.RoleDeveloper && strings.TrimSpace(string(messageType)) != "" {

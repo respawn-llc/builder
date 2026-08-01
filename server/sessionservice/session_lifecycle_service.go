@@ -176,7 +176,7 @@ func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionT
 		a.Transition.Action == b.Transition.Action &&
 		a.Transition.InitialPrompt == b.Transition.InitialPrompt &&
 		a.Transition.InitialPromptHistoryRecorded == b.Transition.InitialPromptHistoryRecorded &&
-		a.Transition.InitialInput == b.Transition.InitialInput &&
+		textutil.EqualOptional(a.Transition.InitialInput, b.Transition.InitialInput) &&
 		a.Transition.TargetSessionID == b.Transition.TargetSessionID &&
 		a.Transition.ForkRollbackTargetID == b.Transition.ForkRollbackTargetID &&
 		textutil.EqualOptional(a.Transition.PreviousSessionID, b.Transition.PreviousSessionID)
@@ -231,7 +231,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			Action:                       req.Transition.Action,
 			InitialPrompt:                req.Transition.InitialPrompt,
 			InitialPromptHistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
-			InitialInput:                 req.Transition.InitialInput,
+			InitialInput:                 textutil.Pointer(req.Transition.InitialInput),
 			TargetSessionID:              req.Transition.TargetSessionID,
 			PreviousSessionID:            req.Transition.PreviousSessionID,
 		},
@@ -247,7 +247,7 @@ func (s *SessionLifecycleService) resolveStoreTransition(
 		Action:                       req.Transition.Action,
 		InitialPrompt:                req.Transition.InitialPrompt,
 		InitialPromptHistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
-		InitialInput:                 req.Transition.InitialInput,
+		InitialInput:                 textutil.Pointer(req.Transition.InitialInput),
 		TargetSessionID:              req.Transition.TargetSessionID,
 		PreviousSessionID:            req.Transition.PreviousSessionID,
 	}

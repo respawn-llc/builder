@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+// The readiness-gated background/reviewer tests below intentionally run
+// serially. Their channels establish the product event under test; allowing
+// package-level contention to delay the engine goroutine makes the short
+// readiness deadline report a false timeout.
+
 func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -49,11 +54,11 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	}}
 	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(dir, 16_000, manager, "")})
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
-	manager.SetEventHandler(func(evt shelltool.Event) {
+	manager.SetEventHandler(func(evt shelltool.Event) bool {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
 		if summaryErr != nil {
 			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
-			return
+			return false
 		}
 		preview, previewRemoved := summary.RuntimePreview()
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
@@ -73,6 +78,7 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 				return &out
 			}(),
 		}, true)
+		return true
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run fast command")
@@ -97,7 +103,6 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 }
 
 func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -213,7 +218,6 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 }
 
 func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
-	t.Parallel()
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -314,7 +318,6 @@ func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 }
 
 func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEvent(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -484,7 +487,6 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 }
 
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 

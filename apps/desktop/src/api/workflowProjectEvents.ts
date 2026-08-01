@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ContractError } from "./errors";
+import { workflowIDSchema } from "./schemas/common";
 import type { RpcEventHandler } from "./transport";
 
 export const workflowProjectEventResources = ["workflow", "workflow_link", "task", "label"] as const;
@@ -37,6 +38,7 @@ export const workflowProjectEventActions = [
   "question_cleared",
   "question_answered",
   "labels_changed",
+  "dependencies_changed",
 ] as const;
 export type WorkflowProjectEventAction = (typeof workflowProjectEventActions)[number];
 
@@ -83,6 +85,7 @@ const allowedActions: Readonly<
     "question_cleared",
     "question_answered",
     "labels_changed",
+    "dependencies_changed",
   ]),
   workflow: new Set([
     "updated",
@@ -109,7 +112,7 @@ const workflowProjectEventWireSchema = z
     project_id: z.string().min(1).optional(),
     related_ids: z.array(z.string().min(1)).optional().default([]),
     resource: workflowProjectEventResourceSchema,
-    workflow_id: z.string().min(1).optional(),
+    workflow_id: workflowIDSchema.optional(),
   })
   .superRefine((event, ctx) => {
     if (!allowedActions[event.resource].has(event.action)) {

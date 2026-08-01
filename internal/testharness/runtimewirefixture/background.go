@@ -30,10 +30,11 @@ func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root 
 	defer func() { _ = manager.Close() }()
 
 	events := make(chan shelltool.Event, 1)
-	manager.SetEventHandler(func(event shelltool.Event) {
+	manager.SetEventHandler(func(event shelltool.Event) bool {
 		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
 			events <- event
 		}
+		return true
 	})
 	result, err := manager.Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-c", fmt.Sprintf("sleep 0.02; cat %q; exit %d", sourcePath, exitCode)},

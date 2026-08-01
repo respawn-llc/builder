@@ -218,13 +218,13 @@ WHERE task_id = 'task-completed-session-migration'
 	}
 }
 
-func TestOpenProjectsMigratesLegacySerialPendingApprovalAfterGraphDeletion(t *testing.T) {
+func TestOpenProjectsPrefersCompletedSerialPendingApprovalSourceOverActiveTerminal(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 59)
 	if err != nil {
-		t.Fatalf("open version 58 db: %v", err)
+		t.Fatalf("open version 59 db: %v", err)
 	}
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, db, "project", `
@@ -240,14 +240,14 @@ VALUES ('project-pending-approval-migration', 'Project', ?, ?, '{}')`, now, now)
 	)
 	seedWorkflowGraph(t, db, "project-pending-approval-migration", now)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-pending-approval-migration", "link-1", 1, "APR-1", now, now)
-	execSeed(t, db, "waiting approval placement", `
+	execSeed(t, db, "completed approval source placement", `
 INSERT INTO task_node_placements (
     id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
 ) VALUES (
     'placement-pending-approval-migration',
     'task-pending-approval-migration',
     'node-agent',
-    'waiting_approval',
+    'completed',
     ?,
     ?
 )`, now, now+1)
@@ -302,14 +302,21 @@ INSERT INTO task_transition_edges (
     1,
     '[{"name":"summary","source":"transition_output","field":"summary"}]',
     '[]',
-    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"node_output_values":{"plan":{"summary":"frozen plan"}}}'
+    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true,"source_session_id":"550e8400-e29b-41d4-a716-446655440002","node_output_values":{"plan":{"summary":"frozen plan"}}}'
 )`)
+	execSeed(t, db, "conflicting active terminal placement", workflowSeedPlacementSQL,
+		"placement-pending-approval-terminal",
+		"task-pending-approval-migration",
+		"node-done",
+		now+4,
+		now+4,
+	)
 	execSeed(t, db, "delete mutable approval graph", `
 DELETE FROM workflow_transition_groups
 WHERE id = 'group-done'`)
 	seedLegacyExecutableCurrentNodeEnteringEdge(t, db, "task-pending-approval-migration", "placement-pending-approval-migration", now)
 	if err := db.Close(); err != nil {
-		t.Fatalf("close version 58 db: %v", err)
+		t.Fatalf("close version 59 db: %v", err)
 	}
 
 	store, err := Open(root)
@@ -372,7 +379,7 @@ SELECT
     json_extract(branch.target_snapshot_json, '$.entered_by_edge_id'),
     json_extract(branch.target_snapshot_json, '$.display_name'),
     json_extract(branch.target_snapshot_json, '$.current_input_values'),
-    json_extract(branch.target_snapshot_json, '$.prior_node_values'),
+    json_extract(branch.target_snapshot_json, '$.prior_values'),
     COALESCE(json_extract(branch.target_snapshot_json, '$.session_id'), ''),
     COALESCE(json_extract(branch.target_snapshot_json, '$.scheduling_state'), ''),
     json_extract(branch.effective_edge_configuration_json, '$.id'),
@@ -425,7 +432,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		workflowVersion != 1 ||
 		materializedValues != `{"summary":"done"}` ||
 		createdAt != now+3 ||
-		transitionWorkflowID != "workflow-1" ||
+		transitionWorkflowID != workflowTestID(t, "1").String() ||
 		transitionGroupID != "transition-pending-approval-migration" ||
 		transitionSourceNodeID != "node-agent" ||
 		transitionID != "done" ||
@@ -436,7 +443,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		targetEnteredByEdgeID != "transition-edge-pending-approval-migration" ||
 		targetDisplayName != "Done" ||
 		targetInputs != `{"summary":"done"}` ||
-		targetPriorValues != `{"plan":{"summary":"frozen plan"}}` ||
+		targetPriorValues != `{"transition_parameters":{}}` ||
 		targetSessionID != "" ||
 		targetSchedulingState != "" ||
 		edgeID != "transition-edge-pending-approval-migration" ||

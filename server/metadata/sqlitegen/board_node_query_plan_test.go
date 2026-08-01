@@ -1,17 +1,11 @@
 package sqlitegen
 
 import (
-	"database/sql"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestListBoardNodeTasksUsesIndexedOrderingInBothDirections(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE tasks (
@@ -43,6 +37,17 @@ CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
 	node_id TEXT NOT NULL
 );
+CREATE TABLE task_dependencies (
+	blocker_task_id TEXT NOT NULL,
+	blocked_task_id TEXT NOT NULL,
+	PRIMARY KEY (blocker_task_id, blocked_task_id)
+);
+CREATE INDEX task_dependencies_reverse_idx
+	ON task_dependencies(blocked_task_id, blocker_task_id);
+CREATE TABLE workflow_task_status_records (
+	task_id TEXT PRIMARY KEY,
+	is_done INTEGER NOT NULL
+);
 CREATE TABLE task_label_assignments (
 	task_id TEXT NOT NULL,
 	label_id TEXT NOT NULL,
@@ -55,7 +60,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 
 	for _, direction := range []string{"older", "newer"} {
 		t.Run(direction, func(t *testing.T) {
-			requireQueryUsesIndexWithoutSort(
+			requireQueryUsesIndexWithoutSorter(
 				t,
 				db,
 				listBoardNodeTasks,

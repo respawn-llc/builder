@@ -22,10 +22,12 @@ export function SidebarDestinationView({
       <NewTaskForm
         boardQueryWorkflowID={destination.boardQueryWorkflowID}
         className="w-full"
+        initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
         onSubmitted={() => {
           resolveSidebar({ destination: "newTask", status: "submitted" });
         }}
         projectID={destination.projectID}
+        pendingRelationship={destination.pendingRelationship}
         workflowID={destination.workflowID}
       />
     );
@@ -104,7 +106,7 @@ function LinkWorkflowDestinationView({
       }}
       creating={destination.creating === true}
       projectID={destination.projectID}
-      selectedWorkflowID={destination.selectedWorkflowID ?? ""}
+      selectedWorkflowID={destination.selectedWorkflowID}
     />
   );
 }

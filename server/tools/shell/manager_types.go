@@ -71,8 +71,7 @@ func (t *PendingBackgroundTransition) Snapshot() Snapshot {
 }
 
 // Commit transfers the retained process to the manager's normal background
-// lifecycle. Calling Commit after any terminal resolution is a programming
-// error: the runtime must commit only after its transition/result stage did.
+// lifecycle.
 func (t *PendingBackgroundTransition) Commit() error {
 	if t == nil || t.state == nil {
 		return errors.New("commit pending background transition: transition is required")
@@ -91,7 +90,7 @@ func (t *PendingBackgroundTransition) Reserve() error {
 // removes it once its process owner has joined.
 func (t *PendingBackgroundTransition) Abort() error {
 	if t == nil || t.manager == nil || t.entry == nil || t.state == nil {
-		return fmt.Errorf("abort pending background transition: transition is required")
+		return errors.New("abort pending background transition: transition is required")
 	}
 	if !t.state.abort() {
 		return nil
@@ -101,15 +100,15 @@ func (t *PendingBackgroundTransition) Abort() error {
 	process := t.entry.cmd.Process
 	t.entry.mu.Unlock()
 
-	var abortErr error
-	if err := killManagedProcess(process); err != nil {
-		abortErr = errors.Join(abortErr, err)
-	}
 	gracePeriod := t.manager.closeGracePeriod
 	if gracePeriod <= 0 {
 		gracePeriod = closeGracePeriod
 	}
-	if !waitForEntryDone(t.entry, gracePeriod) {
+	var abortErr error
+	if !waitForEntryDone(t.entry, gracePeriod+time.Second) {
+		if err := killManagedProcess(process); err != nil {
+			abortErr = errors.Join(abortErr, err)
+		}
 		if err := forceKillManagedProcess(process); err != nil {
 			abortErr = errors.Join(abortErr, err)
 		}
@@ -182,9 +181,7 @@ func (s *backgroundTransitionState) abort() bool {
 		s.status = backgroundTransitionAborted
 		close(s.done)
 		return true
-	case backgroundTransitionAborted:
-		return false
-	case backgroundTransitionCommitted:
+	case backgroundTransitionAborted, backgroundTransitionCommitted:
 		return false
 	default:
 		return false
@@ -204,16 +201,7 @@ func (s *backgroundTransitionState) abortIfPending() {
 func (s *backgroundTransitionState) terminalPublicationAllowed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch s.status {
-	case backgroundTransitionCommitted:
-		return true
-	case backgroundTransitionAborted:
-		return false
-	case backgroundTransitionPending:
-		return false
-	default:
-		return false
-	}
+	return s.status == backgroundTransitionCommitted
 }
 
 type completionOutputSource uint8
@@ -227,6 +215,21 @@ type completionOutput struct {
 	source  completionOutputSource
 	output  visibleShellOutput
 	removed int
+}
+
+type terminalEventCache struct {
+	eventType        EventType
+	snapshot         Snapshot
+	noticeSuppressed bool
+	completion       *terminalCompletionCache
+	err              error
+}
+
+type terminalCompletionCache struct {
+	source     completionOutputSource
+	outputPath *string
+	warning    postprocess.Warning
+	removed    int
 }
 
 func newBackgroundedEvent(snapshot Snapshot) Event {
@@ -422,6 +425,8 @@ type processEntry struct {
 	killRequested        bool
 	noticeConsumed       bool
 	backgroundTransition *backgroundTransitionState
+	terminalEvent        *terminalEventCache
+	terminalDelivered    bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }
@@ -570,7 +575,7 @@ func (p *processEntry) finalizeClosedExit() {
 func (p *processEntry) markCompletionNoticeConsumed() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.backgrounded || p.exitCode == nil {
+	if p.noticeConsumed {
 		return
 	}
 	p.noticeConsumed = true

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -95,10 +96,7 @@ func (m *uiModel) handleLatestFinalAnswerDone(msg latestFinalAnswerDoneMsg) tea.
 	switch msg.purpose {
 	case uiFinalAnswerOperationBack:
 		m.finalAnswerOperation = nil
-		m.nextSessionInitialInput = ""
-		if msg.answer != nil {
-			m.nextSessionInitialInput = *msg.answer
-		}
+		m.nextSessionInitialInput = textutil.Pointer(msg.answer)
 		m.nextSessionID = msg.parentSessionID
 		m.exitAction = UIActionOpenSession
 		return tea.Quit

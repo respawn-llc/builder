@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/launch"
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -59,13 +60,18 @@ func TestCurrentNodeSessionIntentReusesDirectRetainedSession(t *testing.T) {
 	}
 	starter := &Starter{}
 
-	intent, disposable, err := starter.currentNodeSessionIntent(workflowstore.CurrentNodeStartContext{
+	input := workflowstore.CurrentNodeStartContext{
 		CurrentNode: workflow.CurrentNode{
 			Reference: reference,
 			SessionID: &sessionID,
 		},
 		ContextMode: workflow.ContextModeContinueSession,
-	}, t.TempDir())
+	}
+	policy, err := resolveCurrentNodeSessionPolicy(input)
+	if err != nil {
+		t.Fatalf("resolveCurrentNodeSessionPolicy: %v", err)
+	}
+	intent, disposable, err := starter.currentNodeSessionIntent(input, t.TempDir(), policy)
 	if err != nil {
 		t.Fatalf("currentNodeSessionIntent: %v", err)
 	}
@@ -81,7 +87,28 @@ func TestCurrentNodeSessionIntentReusesDirectRetainedSession(t *testing.T) {
 	}
 }
 
-func TestPlanCurrentNodeCompactAndContinueSessionRestoresDirectRetainedSession(t *testing.T) {
+func TestCurrentNodeSessionPolicyReusesTargetOwnedFanoutSession(t *testing.T) {
+	policy, err := resolveCurrentNodeSessionPolicy(workflowstore.CurrentNodeStartContext{
+		ContextMode:    workflow.ContextModeContinueSession,
+		IsFanoutBranch: true,
+		EnteringEdge: workflow.Edge{
+			ContextSource: workflow.ContextSource{
+				Kind: workflow.ContextSourcePreviousTargetOrNew,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveCurrentNodeSessionPolicy: %v", err)
+	}
+	if policy.cloneRetainedSession {
+		t.Fatal("previous-target fan-out continuation must reuse its target-owned Session")
+	}
+	if policy.assignee != currentNodeSessionAssigneePreserve {
+		t.Fatalf("previous-target assignee policy = %v, want preserve", policy.assignee)
+	}
+}
+
+func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	ctx := context.Background()
 	persistenceRoot := t.TempDir()
 	workspace := t.TempDir()
@@ -115,17 +142,40 @@ func TestPlanCurrentNodeCompactAndContinueSessionRestoresDirectRetainedSession(t
 	if err != nil {
 		t.Fatalf("create retained workflow session: %v", err)
 	}
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("coder")}); err != nil {
+		t.Fatalf("set retained workflow role: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+		t.Fatalf("lock retained workflow session: %v", err)
+	}
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse retained session id: %v", err)
 	}
-	settings := config.Settings{
-		Model:              "gpt-5",
-		ModelContextWindow: 200_000,
-		OpenAIBaseURL:      "http://workflow-planning.example/v1",
-		Reviewer:           config.ReviewerSettings{Frequency: "off"},
-		Shell: config.ShellSettings{
-			PostprocessingMode: config.ShellPostprocessingModeNone,
+	t.Setenv("HOME", t.TempDir())
+	loaded, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("load workflow planning config: %v", err)
+	}
+	settings := loaded.Settings
+	settings.Model = "gpt-5"
+	settings.OpenAIBaseURL = "http://workflow-planning.example/v1"
+	settings.Reviewer.Frequency = "off"
+	settings.Shell.PostprocessingMode = config.ShellPostprocessingModeNone
+	coderSettings := settings
+	coderSettings.Model = "gpt-5"
+	coderSettings.Subagents = nil
+	reviewerSettings := settings
+	reviewerSettings.Model = "gpt-5-reviewer"
+	reviewerSettings.Subagents = nil
+	settings.Subagents = map[string]config.SubagentRole{
+		"coder": {
+			Settings: coderSettings,
+			Sources:  map[string]string{"model": "test"},
+		},
+		"reviewer": {
+			Settings: reviewerSettings,
+			Sources:  map[string]string{"model": "test"},
 		},
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -158,7 +208,7 @@ func TestPlanCurrentNodeCompactAndContinueSessionRestoresDirectRetainedSession(t
 		},
 		Node: workflowstore.NodeRecord{
 			ID:           reference.NodeID,
-			SubagentRole: workflow.DefaultAgentRole,
+			SubagentRole: "reviewer",
 		},
 		CurrentNode: workflow.CurrentNode{
 			Reference: reference,
@@ -184,7 +234,7 @@ func TestPlanCurrentNodeCompactAndContinueSessionRestoresDirectRetainedSession(t
 	}
 	planned := make(chan planResult, 1)
 	go func() {
-		plan, disposable, planErr := starter.planCurrentNodeSession(ctx, input, root)
+		plan, disposable, planErr := starter.planCurrentNodeSession(ctx, input, root, false)
 		result := planResult{disposable: disposable, err: planErr}
 		if planErr == nil {
 			result.sessionID = plan.Descriptor.SessionID()
@@ -213,6 +263,72 @@ func TestPlanCurrentNodeCompactAndContinueSessionRestoresDirectRetainedSession(t
 			plannedResult.sessionID,
 			plannedResult.disposable,
 			sessionID,
+		)
+	}
+	record, err := metadataStore.ResolvePersistedSession(ctx, sessionID.String())
+	if err != nil {
+		t.Fatalf("resolve compacted workflow session: %v", err)
+	}
+	if record.Meta == nil || record.Meta.Continuation == nil || record.Meta.Continuation.AgentRole == nil || *record.Meta.Continuation.AgentRole != "reviewer" {
+		t.Fatalf("compacted workflow Session continuation = %+v, want reviewer", record.Meta)
+	}
+	if record.Meta.Locked != nil || record.Meta.PromptCacheLineageGeneration != 1 {
+		t.Fatalf("compacted workflow Session contract = locked %+v lineage %d, want unlocked lineage 1", record.Meta.Locked, record.Meta.PromptCacheLineageGeneration)
+	}
+
+	continuedStore, err := session.Create(
+		containerDir,
+		"sessions",
+		workspace,
+		sessioncontract.SessionCategoryMain,
+		storeOptions...,
+	)
+	if err != nil {
+		t.Fatalf("create direct continuation workflow session: %v", err)
+	}
+	if err := continuedStore.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("coder")}); err != nil {
+		t.Fatalf("set direct continuation role: %v", err)
+	}
+	if err := continuedStore.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+		t.Fatalf("lock direct continuation Session: %v", err)
+	}
+	continuedSessionID, err := runtimeids.ParseSessionID(continuedStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse direct continuation session id: %v", err)
+	}
+	input.CurrentNode.SessionID = &continuedSessionID
+	input.ContextMode = workflow.ContextModeContinueSession
+
+	_, directDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("plan cross-role direct continuation error = %v, want %v", err, launch.ErrLockedAgentRoleChange)
+	}
+	if directDisposable {
+		t.Fatal("cross-role direct continuation unexpectedly marked retained Session disposable")
+	}
+
+	input.IsFanoutBranch = true
+	input.EnteringEdge.ContextSource = workflow.ContextSource{
+		Kind: workflow.ContextSourcePreviousTargetOrNew,
+	}
+	_, targetOwnedDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("plan cross-role target-owned continuation error = %v, want %v", err, launch.ErrLockedAgentRoleChange)
+	}
+	if targetOwnedDisposable {
+		t.Fatal("cross-role target-owned continuation unexpectedly marked retained Session disposable")
+	}
+	targetOwnedRecord, err := metadataStore.ResolvePersistedSession(ctx, continuedSessionID.String())
+	if err != nil {
+		t.Fatalf("resolve target-owned continuation Session: %v", err)
+	}
+	if targetOwnedRecord.Meta == nil ||
+		targetOwnedRecord.Meta.Continuation == nil ||
+		targetOwnedRecord.Meta.Continuation.AgentRole == nil ||
+		*targetOwnedRecord.Meta.Continuation.AgentRole != "coder" {
+		t.Fatalf(
+			"target-owned continuation role = %+v, want preserved coder",
+			targetOwnedRecord.Meta,
 		)
 	}
 }

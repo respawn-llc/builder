@@ -8,6 +8,24 @@ Use these terms consistently in specs and product surfaces. These terms extend c
 
 A durable user-facing unit of work. A task owns its current workflow Nodes, task metadata, unresolved workflow interactions, comments, and Session associations. A Task may have several current Nodes while parallel work is active. Completed Node execution and workflow movement are not retained as separate history.
 
+### Task Dependency
+
+A Project-scoped directed planning relationship from one Blocker Task to one
+Blocked Task. The ordered Blocker Task and Blocked Task identities identify the
+relationship. A Task Dependency has no separate product identity. It is
+satisfied when its Blocker Task is done and is unsatisfied otherwise.
+
+### Blocker Task
+
+The source Task in a Task Dependency. A Blocker Task must be done for that
+dependency to be satisfied.
+
+### Blocked Task
+
+The target Task in a Task Dependency. Unsatisfied Task Dependencies warn before
+Kent starts or manually moves the Blocked Task into executable work, but they do
+not prohibit that work.
+
 ### Task Short ID
 
 A human-facing, project-scoped task identifier formed from the project key plus a project-local sequence, e.g. `KNT-123`. Assigned at task creation and immutable thereafter.
@@ -231,6 +249,10 @@ The primary long-running TUI transcript mode. Ongoing Mode writes committed hist
 ### Detail Mode
 
 The TUI mode for inspecting a bounded transcript page with selection, expansion, and line scrolling. The page changes when Detail Mode opens, when the selected Session changes, or when the user loads an adjacent page. Live events do not change the open page.
+
+### Compaction-Preserved User Message
+
+A user message retained in the model working set across a compaction boundary. Kent projects each preserved message into the transcript in provider order with detail-only visibility.
 
 ### Transcript Mode
 

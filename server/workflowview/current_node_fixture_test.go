@@ -11,12 +11,15 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+
+	"github.com/google/uuid"
 )
 
 type currentNodeViewFixture struct {
@@ -25,7 +28,7 @@ type currentNodeViewFixture struct {
 	store       *workflowstore.Store
 	binding     metadata.Binding
 	cfg         config.App
-	workflowID  workflow.WorkflowID
+	workflowID  runtimeids.WorkflowID
 	agentNodeID workflow.NodeID
 	authority   *sessionruntime.Authority
 	quiescence  *currentNodeViewQuiescence
@@ -38,6 +41,13 @@ type currentNodeViewFixture struct {
 type startedCurrentNodeViewTask struct {
 	task        workflowstore.TaskRecord
 	currentNode workflow.CurrentNodeReference
+}
+
+type currentNodeViewQuestion struct {
+	authority *sessionruntime.Authority
+	sessionID runtimeids.SessionID
+	request   tools.AskQuestionRequest
+	handle    sessionruntime.ExecutionHandle
 }
 
 func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeViewFixture {
@@ -85,11 +95,15 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		}
 	})
 	projector := NewTaskProjector()
+	dependencies, err := NewTaskDependencies(metadataStore, projector, authority)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
 	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, authority, quiescence)
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
+	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -191,10 +205,12 @@ func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started sta
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  started.currentNode,
-		AssociatedAt: time.Now().UTC(),
+	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  started.currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
 	}); err != nil {
 		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
@@ -298,6 +314,78 @@ func (f currentNodeViewFixture) newAgentAuthority(t *testing.T) (*sessionruntime
 	return authority, f.newAgentRuntimePlan(t)
 }
 
+func (f currentNodeViewFixture) startCurrentNodeQuestion(t *testing.T, started startedCurrentNodeViewTask) currentNodeViewQuestion {
+	t.Helper()
+	authority, plan := f.newAgentAuthority(t)
+	return f.startCurrentNodeQuestionOnAuthority(t, started, authority, plan)
+}
+
+func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
+	t *testing.T,
+	started startedCurrentNodeViewTask,
+	authority *sessionruntime.Authority,
+	plan sessionruntime.AgentRuntimePlan,
+) currentNodeViewQuestion {
+	t.Helper()
+	sessionID := f.bindCurrentNodeSession(t, started)
+	request := tools.AskQuestionRequest{
+		ID:                     uuid.NewString(),
+		StepID:                 uuid.NewString(),
+		Question:               "Proceed?",
+		Suggestions:            []string{"Yes", "No"},
+		RecommendedOptionIndex: 1,
+	}
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   f.binding.ProjectID,
+		WorkflowID:  f.workflowID,
+		CurrentNode: started.currentNode,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	handle, err := authority.StartAgentExecution(f.ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &lease,
+		Resource:   sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			return awaitErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		snapshots, snapshotErr := authority.CurrentWorkflowTaskExecutionSnapshots()
+		if snapshotErr != nil {
+			return false
+		}
+		executions := snapshots[started.task.ID].Executions
+		return len(executions) == 1 && executions[0].WaitingQuestion
+	}, "timed out waiting for live workflow Question")
+	return currentNodeViewQuestion{
+		authority: authority,
+		sessionID: sessionID,
+		request:   request,
+		handle:    handle,
+	}
+}
+
+func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {
+	t.Helper()
+	if err := q.authority.SubmitPromptResponse(q.sessionID, tools.AskQuestionResponse{
+		RequestID: q.request.ID,
+		Answer:    "Yes",
+	}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse: %v", err)
+	}
+	if _, err := q.handle.Wait(ctx); err != nil {
+		t.Fatalf("wait Question execution: %v", err)
+	}
+}
+
 func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime.AgentRuntimePlan {
 	t.Helper()
 	settings := f.cfg.Settings
@@ -324,7 +412,7 @@ func (f currentNodeViewFixture) attention(t *testing.T) *Attention {
 	return attention
 }
 
-func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresApproval bool) workflow.WorkflowID {
+func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresApproval bool) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(t.Context(), workflowstore.CreateWorkflowRequest{Name: "Current Node workflow"})
 	if err != nil {

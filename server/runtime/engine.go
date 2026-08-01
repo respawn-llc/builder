@@ -158,9 +158,6 @@ type OrderedMutationLease interface {
 	Release() error
 }
 
-// ExecutionMutation is the retained ordering continuation for one live Agent
-// execution. It lets synchronous and child-owned runtime effects reuse the
-// execution's command-stage permit instead of acquiring a nested permit.
 type ExecutionMutation func(context.Context, func(OrderedMutationTurn) error) error
 
 type ExecutionMutationBinding struct {
@@ -173,9 +170,6 @@ type LifecycleTaskMutation interface {
 	OrderedMutation(context.Context, func(OrderedMutationTurn) error) error
 }
 
-// LifecycleTaskLease gates a resource-owned lifecycle task. The task owner
-// remains responsible for retaining any Session resource capacity until the
-// task returns.
 type LifecycleTaskLease interface {
 	Wait(context.Context) error
 	Commit() error
@@ -183,9 +177,7 @@ type LifecycleTaskLease interface {
 	Release() error
 }
 
-type LifecycleTaskOwner interface {
-	AcquireLifecycleTask(context.Context) (LifecycleTaskLease, error)
-}
+type LifecycleTaskOwner interface{}
 
 type ReviewerConfig struct {
 	Frequency         string
@@ -226,13 +218,13 @@ type Engine struct {
 	// persist transcript feedback before applying in-memory runtime state.
 	controlMutationMu sync.Mutex
 	// outputMutationMu keeps durable transcript writes, runtime projections, and
-	// event emission atomic within one applied queue turn. Session-level
-	// ordering is supplied by OrderedMutation; this mutex remains the leaf
-	// integrity guard for direct/test engines and nested appliers.
-	outputMutationMu    sync.Mutex
-	executionMutationMu sync.RWMutex
-	executionMutation   ExecutionMutation
-	executionBinding    *ExecutionMutationBinding
+	// event emission in one order for concurrent steering producers.
+	outputMutationMu           sync.Mutex
+	executionMutationMu        sync.RWMutex
+	executionMutation          ExecutionMutation
+	executionBinding           *ExecutionMutationBinding
+	workflowAssignmentMu       sync.Mutex
+	pendingWorkflowAssignments []queuedWorkflowAssignment
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -247,17 +239,18 @@ type Engine struct {
 	diagnostics                *diagnosticDedupeStore
 	toolCallStarts             *pendingToolCallStartStore
 
-	usageState         *usageTrackingState
-	goalLoop           *goalLoopState
-	compactionState    *compactionRuntimeState
-	handoffState       *handoffRuntimeState
-	phaseState         *phaseProtocolState
-	reviewerState      *reviewerRuntimeState
-	transcriptState    *transcriptRuntimeState
-	lockedState        *lockedContractState
-	modelRequestsState *modelRequestRuntimeState
-	compactionPlanner  *compactionPlanner
-	collaboratorsOnce  sync.Once
+	usageState           *usageTrackingState
+	goalLoop             *goalLoopState
+	compactionState      *compactionRuntimeState
+	handoffState         *handoffRuntimeState
+	phaseState           *phaseProtocolState
+	reviewerState        *reviewerRuntimeState
+	transcriptState      *transcriptRuntimeState
+	lockedState          *lockedContractState
+	modelRequestsState   *modelRequestRuntimeState
+	currentNodeExecution *currentNodeExecutionState
+	compactionPlanner    *compactionPlanner
+	collaboratorsOnce    sync.Once
 
 	phaseProtocol  phaseProtocolEnforcer
 	stepLifecycle  exclusiveStepLifecycle
@@ -294,8 +287,6 @@ func (e *Engine) BindExecutionMutation(mutation ExecutionMutation) *ExecutionMut
 	return binding
 }
 
-// ClearExecutionMutation removes the continuation after the owning Agent
-// execution reaches its terminal cleanup.
 func (e *Engine) ClearExecutionMutation() {
 	if e == nil {
 		return
@@ -343,9 +334,6 @@ func (e *Engine) executionMutationSnapshot() ExecutionMutation {
 	return e.executionMutation
 }
 
-// ApplyExecutionMutation applies one synchronous Agent-owned mutation through
-// the retained execution continuation when one exists. The callback receives
-// the continuation's lexical turn and must not retain it beyond the call.
 func (e *Engine) ApplyExecutionMutation(ctx context.Context, apply func(OrderedMutationTurn) error) error {
 	if apply == nil {
 		return errors.New("execution mutation is required")
@@ -356,8 +344,6 @@ func (e *Engine) ApplyExecutionMutation(ctx context.Context, apply func(OrderedM
 	return apply(directOrderedMutationTurn{})
 }
 
-// ApplyRetainedExecutionMutation is the strict Agent-scope variant. It never
-// falls back to an unscoped direct mutation after execution retirement.
 func (e *Engine) ApplyRetainedExecutionMutation(ctx context.Context, apply func(OrderedMutationTurn) error) error {
 	if apply == nil {
 		return errors.New("execution mutation is required")
@@ -425,27 +411,33 @@ func New(
 			cfg.ContextWindowTokens = meta.ContextWindowTokens
 		}
 	}
+	if cfg.CurrentNodeExecution != nil {
+		if err := validateCurrentNodeExecutionConfig(cfg.CurrentNodeExecution); err != nil {
+			return nil, fmt.Errorf("runtime current node execution: %w", err)
+		}
+	}
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
 	eng := &Engine{
-		store:              store,
-		eventLog:           eventLog,
-		llm:                client,
-		registry:           registry,
-		cfg:                cfg,
-		diagnostics:        newDiagnosticDedupeStore(),
-		toolCallStarts:     newPendingToolCallStartStore(),
-		usageState:         newUsageTrackingState(),
-		goalLoop:           newGoalLoopState(),
-		compactionState:    newCompactionRuntimeState(),
-		handoffState:       newHandoffRuntimeState(),
-		phaseState:         newPhaseProtocolState(),
-		reviewerState:      newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
-		lockedState:        newLockedContractState(),
-		modelRequestsState: newModelRequestRuntimeState(),
-		compactionPlanner:  newCompactionPlanner(),
+		store:                store,
+		eventLog:             eventLog,
+		llm:                  client,
+		registry:             registry,
+		cfg:                  cfg,
+		diagnostics:          newDiagnosticDedupeStore(),
+		toolCallStarts:       newPendingToolCallStartStore(),
+		usageState:           newUsageTrackingState(),
+		goalLoop:             newGoalLoopState(),
+		compactionState:      newCompactionRuntimeState(),
+		handoffState:         newHandoffRuntimeState(),
+		phaseState:           newPhaseProtocolState(),
+		reviewerState:        newReviewerRuntimeState(cfg.Reviewer.Client),
+		transcriptState:      newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
+		lockedState:          newLockedContractState(),
+		modelRequestsState:   newModelRequestRuntimeState(),
+		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
+		compactionPlanner:    newCompactionPlanner(),
 	}
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
@@ -618,14 +610,11 @@ func (e *Engine) Close() error {
 	}
 	e.lifecycleClosed = true
 	e.closed.Store(true)
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-	e.ensureOrchestrationCollaborators()
-	if e.backgroundFlow != nil {
-		e.backgroundFlow.CancelPendingBackgroundNotices()
 	}
 	e.lifecycleWG.Wait()
 	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
@@ -647,9 +636,11 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	}
 	e.ensureLifecycle()
 	var lease LifecycleTaskLease
-	if e.cfg.LifecycleTaskOwner != nil {
+	if owner, ok := e.cfg.LifecycleTaskOwner.(interface {
+		AcquireLifecycleTask(context.Context) (LifecycleTaskLease, error)
+	}); ok {
 		var err error
-		lease, err = e.cfg.LifecycleTaskOwner.AcquireLifecycleTask(e.lifecycleCtx)
+		lease, err = owner.AcquireLifecycleTask(e.lifecycleCtx)
 		if err != nil {
 			return false
 		}
@@ -1043,6 +1034,13 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 			enabled := !e.cfg.HeadlessMode && e.cfg.ToolPreambles
 			return &enabled
 		}(),
+	}
+	if prompt, configured := e.workflowPrompt(); configured {
+		mode, err := workflowruntime.ParseCompletionMode(string(prompt.CompletionMode))
+		if err != nil {
+			return session.LockedContract{}, err
+		}
+		lock.WorkflowCompletionMode = &mode
 	}
 	if hasProviderContract {
 		lock.ProviderContract = llm.LockedProviderCapabilitiesFromContract(providerContract)

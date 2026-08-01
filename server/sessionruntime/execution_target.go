@@ -245,10 +245,10 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	return active, nil
 }
 
-func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
+func (a *Authority) routeBackgroundEvent(event shelltool.Event) bool {
 	correlation := event.Snapshot.ExecutionCorrelation
 	if correlation == nil {
-		return
+		return false
 	}
 	if err := correlation.Validate(); err != nil {
 		panic(fmt.Sprintf("route background event with invalid execution correlation: process_id=%q error=%v", event.Snapshot.ID, err))
@@ -260,81 +260,111 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	if err != nil {
 		panic(fmt.Sprintf("route background event with invalid owner session: process_id=%q session_id=%q error=%v", event.Snapshot.ID, event.Snapshot.OwnerSessionID, err))
 	}
+	if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
+		return a.routeTerminalBackgroundEvent(sessionID, event)
+	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource == nil || resource.ref.Generation() != correlation.ResourceGeneration() {
-		return
+		return false
 	}
-	apply := func(turn runtime.OrderedMutationTurn) error {
-		return resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-			summary := shelltool.BackgroundNoticeSummary{}
-			if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
-				var summaryErr error
-				summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
-					MaxChars:          resource.backgroundLimit,
-					SuccessOutputMode: resource.backgroundMode,
-				})
-				if summaryErr != nil {
-					if resource.logger != nil {
-						resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
-					}
-					summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
-				}
-			}
-			eventType := runtime.BackgroundShellEventBackgrounded
-			switch event.Type {
-			case shelltool.EventCompleted:
-				eventType = runtime.BackgroundShellEventCompleted
-			case shelltool.EventKilled:
-				eventType = runtime.BackgroundShellEventKilled
-			}
-			preview, previewRemoved := summary.RuntimePreview()
-			future, err := engine.HandleBackgroundShellUpdateWithOrderedTurnResult(turn, runtime.BackgroundShellEvent{
-				Type:              eventType,
-				ID:                event.Snapshot.ID,
-				ActivityID:        event.Snapshot.ActivityID,
-				OwnerRunID:        event.Snapshot.OwnerRunID,
-				OwnerStepID:       event.Snapshot.OwnerStepID,
-				State:             event.Snapshot.State,
-				Command:           event.Snapshot.Command,
-				Workdir:           event.Snapshot.Workdir,
-				LogPath:           event.Snapshot.LogPath,
-				NoticeText:        summary.DetailText,
-				CompactText:       summary.CondensedText,
-				Preview:           preview,
-				PreviewRemoved:    previewRemoved,
-				ExitCode:          event.Snapshot.ExitCode,
-				UserRequestedKill: event.Snapshot.KillRequested,
-				NoticeSuppressed:  event.NoticeSuppressed,
-			}, !event.NoticeSuppressed)
-			if err != nil {
-				return err
-			}
-			if future != nil && resource.logger != nil {
-				future.Observe(func(result runtime.BackgroundNoticeResult) {
-					if result.Err != nil {
-						resource.logger.Logf("runtime.background.notice.failed process_id=%s disposition=%s error=%q", event.Snapshot.ID, result.Disposition, result.Err.Error())
-					}
-				})
-			}
-			return nil
-		})
-	}
-	var routeErr error
-	if a.options.orderedMutation != nil {
-		routeErr = a.options.orderedMutation(context.Background(), resource.ref, func(turn runtime.OrderedMutationTurn) error {
-			return turn.Apply(func() error { return apply(turn) })
-		})
-	} else {
-		routeErr = apply(nil)
-	}
-	if routeErr == nil {
-		resource.engine.ScheduleBackgroundNoticesIfIdle()
-	}
+	delivered, routeErr := a.deliverBackgroundEvent(resource, event)
 	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
 		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
 	}
+	return delivered
+}
+
+func (a *Authority) routeTerminalBackgroundEvent(sessionID runtimeids.SessionID, event shelltool.Event) bool {
+	for {
+		a.mu.Lock()
+		if a.closed {
+			a.mu.Unlock()
+			return false
+		}
+		resource := a.resources[sessionID]
+		if resource == nil {
+			a.mu.Unlock()
+			return false
+		}
+		a.mu.Unlock()
+
+		delivered, routeErr := a.deliverBackgroundEvent(resource, event)
+		if delivered {
+			if routeErr != nil && resource.logger != nil {
+				resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+			}
+			return true
+		}
+		if !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) {
+			if resource.logger != nil {
+				resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+			}
+			return false
+		}
+
+		a.mu.Lock()
+		if a.closed {
+			a.mu.Unlock()
+			return false
+		}
+		if a.resources[sessionID] != resource {
+			a.mu.Unlock()
+			continue
+		}
+		a.mu.Unlock()
+		return false
+	}
+}
+
+func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shelltool.Event) (bool, error) {
+	delivered := false
+	err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+		summary := shelltool.BackgroundNoticeSummary{}
+		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
+			var summaryErr error
+			summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
+				MaxChars:          resource.backgroundLimit,
+				SuccessOutputMode: resource.backgroundMode,
+			})
+			if summaryErr != nil {
+				if resource.logger != nil {
+					resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
+				}
+				summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
+			}
+		}
+		eventType := runtime.BackgroundShellEventBackgrounded
+		switch event.Type {
+		case shelltool.EventCompleted:
+			eventType = runtime.BackgroundShellEventCompleted
+		case shelltool.EventKilled:
+			eventType = runtime.BackgroundShellEventKilled
+		}
+		preview, previewRemoved := summary.RuntimePreview()
+		engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
+			Type:              eventType,
+			ID:                event.Snapshot.ID,
+			ActivityID:        event.Snapshot.ActivityID,
+			OwnerRunID:        event.Snapshot.OwnerRunID,
+			OwnerStepID:       event.Snapshot.OwnerStepID,
+			State:             event.Snapshot.State,
+			Command:           event.Snapshot.Command,
+			Workdir:           event.Snapshot.Workdir,
+			LogPath:           event.Snapshot.LogPath,
+			NoticeText:        summary.DetailText,
+			CompactText:       summary.CondensedText,
+			Preview:           preview,
+			PreviewRemoved:    previewRemoved,
+			ExitCode:          event.Snapshot.ExitCode,
+			UserRequestedKill: event.Snapshot.KillRequested,
+			NoticeSuppressed:  event.NoticeSuppressed,
+		}, !event.NoticeSuppressed)
+		delivered = true
+		return nil
+	})
+	return delivered, err
 }
 
 func ParseSessionIDs(raw []string) ([]runtimeids.SessionID, error) {

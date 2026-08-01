@@ -1,22 +1,19 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type {
-  ActivityItem,
-  AttentionItem,
-  TaskComment,
-  TaskDetail,
-} from "@/api";
+import type { ActivityItem, AttentionItem, TaskComment, TaskDetail, TaskDependencyDirection } from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
+import type { TaskDependencyPair } from "@/shared/task-dependencies";
 import { ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskInbox } from "./TaskDetailInbox";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
+import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type {
   useTaskActivity,
@@ -28,6 +25,7 @@ import type {
 type TaskDetailListItem =
   | Readonly<{ kind: "header" }>
   | Readonly<{ kind: "body" }>
+  | Readonly<{ kind: "dependencies" }>
   | Readonly<{ kind: "inbox" }>
   | Readonly<{ kind: "tabs" }>
   | Readonly<{ kind: "comment-composer" }>
@@ -54,6 +52,9 @@ export function TaskDetailList({
   newCommentBody,
   onDraftChange,
   onDescriptionPresentationChange,
+  onAddDependency,
+  onRemoveDependency,
+  onSelectDependencyTask,
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
@@ -78,6 +79,9 @@ export function TaskDetailList({
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onAddDependency: (direction: TaskDependencyDirection) => void;
+  onRemoveDependency: (pair: TaskDependencyPair) => void;
+  onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -103,7 +107,8 @@ export function TaskDetailList({
   const attentionItems = useMemo(
     () =>
       sourceAttentionItems.filter(
-        (item) => item.kind !== "question" || questionSelections.get(item.questionID)?.submission !== "accepted",
+        (item) =>
+          item.kind !== "question" || questionSelections.get(item.questionID)?.submission !== "accepted",
       ),
     [questionSelections, sourceAttentionItems],
   );
@@ -138,10 +143,18 @@ export function TaskDetailList({
       selectedTab,
     ],
   );
-  const pinnedItemKeys = useMemo(
-    () => (attention.isPending || initialFocus !== undefined ? new Set(["inbox"]) : undefined),
-    [attention.isPending, initialFocus],
-  );
+  const initialScrollKey =
+    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? undefined : "inbox";
+  const pinnedItemKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (attention.isPending || (initialFocus !== undefined && initialFocus.kind !== "dependencies")) {
+      keys.add("inbox");
+    }
+    if (initialFocus?.kind === "dependencies") {
+      keys.add("dependencies");
+    }
+    return keys.size === 0 ? undefined : keys;
+  }, [attention.isPending, initialFocus]);
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
 
   return (
@@ -151,11 +164,9 @@ export function TaskDetailList({
       estimateSize={() => 160}
       getItemKey={taskDetailListItemKey}
       hasNextPage={paging.hasNextPage}
-      initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
+      initialScrollKey={initialScrollKey}
       initialScrollRequestKey={
-        initialFocus !== undefined
-          ? taskDetailInitialFocusRequestKey(detail.id, initialFocus)
-          : undefined
+        initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
@@ -187,6 +198,9 @@ export function TaskDetailList({
           noCommentsTitle={t("task.noCommentsTitle")}
           onDraftChange={onDraftChange}
           onDescriptionPresentationChange={onDescriptionPresentationChange}
+          onAddDependency={onAddDependency}
+          onRemoveDependency={onRemoveDependency}
+          onSelectDependencyTask={onSelectDependencyTask}
           onNewCommentBodyChange={onNewCommentBodyChange}
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
@@ -224,6 +238,9 @@ type TaskDetailListRowProps = Readonly<{
   noCommentsTitle: string;
   onDraftChange: (draft: TaskDraft) => void;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onAddDependency: (direction: TaskDependencyDirection) => void;
+  onRemoveDependency: (pair: TaskDependencyPair) => void;
+  onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
@@ -239,6 +256,7 @@ type TaskDetailListRowProps = Readonly<{
 const rowRenderers: Record<TaskDetailListItem["kind"], (props: TaskDetailListRowProps) => ReactNode> = {
   header: HeaderRow,
   body: BodyRow,
+  dependencies: DependenciesRow,
   inbox: InboxRow,
   tabs: TabsRow,
   "comment-composer": CommentComposerRow,
@@ -309,6 +327,25 @@ function BodyRow({
       />
       <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
     </div>
+  );
+}
+
+function DependenciesRow({
+  detail,
+  disabled,
+  onAddDependency,
+  onRemoveDependency,
+  onSelectDependencyTask,
+}: TaskDetailListRowProps): ReactNode {
+  return (
+    <TaskDependenciesArea
+      dependencies={detail.dependencies}
+      disabled={disabled}
+      onAdd={onAddDependency}
+      onRemove={onRemoveDependency}
+      onSelectTask={onSelectDependencyTask}
+      taskID={detail.id}
+    />
   );
 }
 
@@ -446,12 +483,12 @@ function taskDetailListItems({
   initialFocus?: TaskDetailInitialFocus | undefined;
   tab: DetailTab;
 }>): readonly TaskDetailListItem[] {
-  const staticItems: TaskDetailListItem[] = [{ kind: "header" }, { kind: "body" }];
+  const staticItems: TaskDetailListItem[] = [{ kind: "header" }, { kind: "body" }, { kind: "dependencies" }];
   if (
     !attentionFailed &&
     (detail.attentionCount > 0 ||
       attentionItems.length > 0 ||
-      (attentionPending && initialFocus !== undefined))
+      (attentionPending && initialFocus !== undefined && initialFocus.kind !== "dependencies"))
   ) {
     staticItems.push({ kind: "inbox" });
   }
@@ -529,7 +566,13 @@ function taskDetailListItemKey(item: TaskDetailListItem): string {
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {
-  return item.kind !== "header" && item.kind !== "body" && item.kind !== "inbox" && item.kind !== "tabs";
+  return (
+    item.kind !== "header" &&
+    item.kind !== "body" &&
+    item.kind !== "dependencies" &&
+    item.kind !== "inbox" &&
+    item.kind !== "tabs"
+  );
 }
 
 function taskDetailPaging({
@@ -549,11 +592,12 @@ function taskDetailPaging({
   loadMore: () => void;
 }> {
   if (selectedTab === "comments") {
-    const nextPageToken = comments.data?.pages.at(-1)?.nextPageToken ?? "";
+    const nextOffset = comments.data?.pages.at(-1)?.nextOffset;
+    const nextOffsetKey = nextOffset === undefined || nextOffset === null ? "none" : nextOffset.toString();
     return {
       hasNextPage: comments.hasNextPage,
       isFetchingNextPage: comments.isFetchingNextPage,
-      loadMoreKey: `${detailID}:comments:${nextPageToken}:${comments.dataUpdatedAt.toString()}`,
+      loadMoreKey: `${detailID}:comments:${nextOffsetKey}:${comments.dataUpdatedAt.toString()}`,
       loadMore: () => {
         void comments.fetchNextPage();
       },

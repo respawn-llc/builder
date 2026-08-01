@@ -18,6 +18,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -59,7 +60,7 @@ type metaContextBuildOptions struct {
 	IncludeWorkflow           bool
 	WorkflowCompletionMode    workflowruntime.CompletionMode
 	WorkflowPrompt            *workflowruntime.PromptContract
-	WorkflowTaskCommentCount  int64
+	WorkflowTaskAwareness     workflowruntime.TaskAwareness
 	WorkflowTaskPromptKind    prompts.WorkflowTaskPromptKind
 	WorktreeReminder          *session.WorktreeReminderState
 	IncludeSkillWarnings      bool
@@ -233,7 +234,7 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 			opts.WorkflowTaskPromptKind,
 			opts.WorkflowCompletionMode,
 			opts.WorkflowPrompt,
-			opts.WorkflowTaskCommentCount,
+			opts.WorkflowTaskAwareness,
 		)
 		if err != nil {
 			return metaContextBuildResult{}, err
@@ -438,9 +439,9 @@ func headlessModeExitMetaMessage() (llm.Message, bool) {
 	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value(content)}, true
 }
 
-func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (llm.Message, bool, error) {
+func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, awareness workflowruntime.TaskAwareness) (llm.Message, bool, error) {
 	if cfg != nil {
-		content, err := workflowTaskInstructionsContent(kind, mode, cfg, taskCommentCount)
+		content, err := workflowTaskInstructionsContent(kind, mode, cfg, awareness)
 		if err != nil {
 			return llm.Message{}, false, err
 		}
@@ -449,21 +450,38 @@ func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowr
 		}
 		return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 	}
-	content := ""
-	var err error
-	content, err = workflowCompletionInstructionsFragment(mode, "", workflowruntime.CompletionContract{})
-	if err != nil {
-		return llm.Message{}, false, err
-	}
-	if content == "" {
-		return llm.Message{}, false, nil
-	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
+	return llm.Message{}, false, nil
 }
 
-func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, taskCommentCount int64) (string, error) {
+func buildWorkflowAssignmentMessage(assignment WorkflowAssignment) (llm.Message, error) {
+	var kind prompts.WorkflowTaskPromptKind
+	switch assignment.ContextMode {
+	case workflow.ContextModeNewSession:
+		kind = prompts.WorkflowTaskPromptInitialAssignment
+	case workflow.ContextModeContinueSession, workflow.ContextModeCompactAndContinueSession:
+		kind = prompts.WorkflowTaskPromptReassignment
+	default:
+		return llm.Message{}, fmt.Errorf("unsupported workflow assignment context mode %q", assignment.ContextMode)
+	}
+	message, ok, err := workflowModeMetaMessage(
+		kind,
+		assignment.CompletionMode,
+		&assignment.Prompt,
+		assignment.Prompt.TaskAwareness,
+	)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	if !ok {
+		return llm.Message{}, errors.New("workflow assignment message is empty")
+	}
+	message.SourcePath = textutil.OptionalTrimmedString(assignment.Prompt.Identity)
+	return message, nil
+}
+
+func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, awareness workflowruntime.TaskAwareness) (string, error) {
 	instructions := cfg.Instructions
-	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})
+	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})
 	if err != nil {
 		return "", err
 	}
@@ -471,42 +489,43 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		return "", nil
 	}
 	return prompts.RenderWorkflowTaskInstructions(kind, prompts.WorkflowNodeContextArgs{
-		TaskId:               string(instructions.CurrentNode.TaskID),
-		TaskShortId:          instructions.TaskShortID,
-		TaskTitle:            instructions.TaskTitle,
-		TaskBody:             instructions.TaskBody,
-		WorkflowId:           instructions.WorkflowID,
-		WorkflowName:         instructions.WorkflowName,
-		NodeId:               string(instructions.CurrentNode.NodeID),
-		NodeKey:              instructions.NodeKey,
-		NodeDisplayName:      instructions.NodeDisplayName,
-		ContextMode:          instructions.ContextMode,
-		SourceSessionID:      instructions.SourceSessionID,
-		CompletionMode:       string(mode),
-		TaskNumberOfComments: taskCommentCount,
-		Transitions:          workflowInstructionTransitions(instructions.Transitions),
-		NodePrompt:           instructions.NodePrompt,
+		TaskId:                         string(instructions.CurrentNode.TaskID),
+		TaskShortId:                    instructions.TaskShortID,
+		TaskTitle:                      instructions.TaskTitle,
+		TaskBody:                       instructions.TaskBody,
+		WorkflowID:                     instructions.WorkflowID,
+		WorkflowName:                   instructions.WorkflowName,
+		NodeId:                         string(instructions.CurrentNode.NodeID),
+		NodeKey:                        instructions.NodeKey,
+		NodeDisplayName:                instructions.NodeDisplayName,
+		ContextMode:                    instructions.ContextMode,
+		SourceSessionID:                instructions.SourceSessionID,
+		CompletionMode:                 string(mode),
+		TaskNumberOfComments:           awareness.CommentCount,
+		TaskUnsatisfiedDependencyCount: awareness.UnsatisfiedDependencyCount,
+		Transitions:                    workflowInstructionTransitions(instructions.Transitions),
+		NodePrompt:                     instructions.NodePrompt,
 	}, completionInstructions)
 }
 
-func workflowCompletionInstructionsFragment(mode workflowruntime.CompletionMode, workflowShortID string, contract workflowruntime.CompletionContract) (string, error) {
+func workflowCompletionInstructionsFragment(mode workflowruntime.CompletionMode, workflowID runtimeids.WorkflowID, contract workflowruntime.CompletionContract) (string, error) {
 	switch mode {
 	case workflowruntime.CompletionModeTool:
-		return prompts.RenderWorkflowToolCompletionInstructions(workflowShortID)
+		return prompts.RenderWorkflowToolCompletionInstructions(workflowID)
 	case workflowruntime.CompletionModeStructuredOutput:
-		return prompts.RenderWorkflowStructuredCompletionInstructions(workflowShortID)
+		return prompts.RenderWorkflowStructuredCompletionInstructions(workflowID)
 	case workflowruntime.CompletionModeShellCommand:
-		return prompts.RenderWorkflowShellCompletionInstructions(workflowCompletionPromptArgs(workflowShortID, contract))
+		return prompts.RenderWorkflowShellCompletionInstructions(workflowCompletionPromptArgs(workflowID, contract))
 	case workflowruntime.CompletionModeUnstructuredOutput:
-		return prompts.RenderWorkflowUnstructuredCompletionInstructions(workflowCompletionPromptArgs(workflowShortID, contract))
+		return prompts.RenderWorkflowUnstructuredCompletionInstructions(workflowCompletionPromptArgs(workflowID, contract))
 	default:
 		return "", nil
 	}
 }
 
-func workflowCompletionPromptArgs(workflowShortID string, contract workflowruntime.CompletionContract) prompts.WorkflowCompletionInstructionsArgs {
+func workflowCompletionPromptArgs(workflowID runtimeids.WorkflowID, contract workflowruntime.CompletionContract) prompts.WorkflowCompletionInstructionsArgs {
 	return prompts.WorkflowCompletionInstructionsArgs{
-		WorkflowShortID: strings.TrimSpace(workflowShortID),
+		WorkflowID: workflowID,
 		Contract: prompts.WorkflowCompletionContract{
 			Transitions: workflowCompletionPromptTransitions(contract.Transitions),
 		},

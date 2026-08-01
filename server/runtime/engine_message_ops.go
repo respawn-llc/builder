@@ -123,7 +123,13 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
-		e.backgroundFlow.SuppressPendingBackgroundNotice(backgroundSessionID)
+		if suppressor, ok := e.backgroundFlow.(interface {
+			SuppressPendingBackgroundNotice(string)
+		}); ok {
+			suppressor.SuppressPendingBackgroundNotice(backgroundSessionID)
+		} else {
+			e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
+		}
 	}
 }
 

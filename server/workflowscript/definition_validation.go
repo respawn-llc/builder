@@ -30,7 +30,7 @@ func definitionScriptPathErrors(def workflow.Definition, rootPath *string) []wor
 			errors = append(errors, workflow.ValidationError{
 				Code:          workflow.ValidationErrorCode(diagnostic.Code),
 				Message:       diagnostic.Message,
-				WorkflowID:    def.ID,
+				WorkflowID:    workflow.WorkflowIDPointer(def.ID),
 				NodeID:        workflow.NodeIDOf(node),
 				BlocksContext: diagnostic.Blocking,
 			})

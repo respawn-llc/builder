@@ -300,7 +300,14 @@ func (c *Remote) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateR
 }
 
 func (c *Remote) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](c, ctx, protocol.MethodProjectSetDefaultWorkspace, req)
+	response, err := callUnscopedRPC[serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](c, ctx, protocol.MethodProjectSetDefaultWorkspace, req)
+	if err != nil {
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, fmt.Errorf("validate default workspace response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
@@ -308,7 +315,14 @@ func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.Projec
 }
 
 func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](c, ctx, protocol.MethodProjectUnlinkWorkspace, req)
+	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](c, ctx, protocol.MethodProjectUnlinkWorkspace, req)
+	if err != nil {
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, fmt.Errorf("validate workspace unlink response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
@@ -490,6 +504,21 @@ func (c *Remote) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	return callUnscopedRPC[serverapi.WorkflowTaskCreateRequest, serverapi.WorkflowTaskCreateResponse](c, ctx, protocol.MethodWorkflowTaskCreate, req)
 }
 
+func (c *Remote) AddWorkflowTaskDependency(ctx context.Context, req serverapi.WorkflowTaskDependencyAddRequest) (serverapi.WorkflowTaskDependencyAddResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskDependencyAddRequest, serverapi.WorkflowTaskDependencyAddResponse](c, ctx, protocol.MethodWorkflowTaskDependencyAdd, req)
+	return validateWorkflowResponse("add workflow task dependency", response, err)
+}
+
+func (c *Remote) RemoveWorkflowTaskDependency(ctx context.Context, req serverapi.WorkflowTaskDependencyRemoveRequest) (serverapi.WorkflowTaskDependencyRemoveResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskDependencyRemoveRequest, serverapi.WorkflowTaskDependencyRemoveResponse](c, ctx, protocol.MethodWorkflowTaskDependencyRemove, req)
+	return validateWorkflowResponse("remove workflow task dependency", response, err)
+}
+
+func (c *Remote) ListWorkflowTaskDependencies(ctx context.Context, req serverapi.WorkflowTaskDependencyListRequest) (serverapi.WorkflowTaskDependencyListResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskDependencyListRequest, serverapi.WorkflowTaskDependencyListResponse](c, ctx, protocol.MethodWorkflowTaskDependencyList, req)
+	return validateWorkflowResponse("list workflow task dependencies", response, err)
+}
+
 func (c *Remote) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowTaskUpdateRequest, serverapi.WorkflowTaskUpdateResponse](c, ctx, protocol.MethodWorkflowTaskUpdate, req)
 }
@@ -563,6 +592,28 @@ func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wor
 func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](c, ctx, protocol.MethodWorkflowTaskList, req)
 	return validateWorkflowResponse("list workflow tasks", response, err)
+}
+
+func (c *Remote) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+	response, err := callDedicatedRPC[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](
+		c,
+		ctx,
+		apicontract.TaskSearchDedicatedRequestID,
+		protocol.MethodWorkflowTaskSearch,
+		req,
+	)
+	response, err = validateWorkflowResponse("search workflow tasks", response, err)
+	if err != nil {
+		return response, err
+	}
+	if response.Mode != req.Mode {
+		return serverapi.TaskSearchResponse{}, fmt.Errorf(
+			"search workflow tasks returned mode %q for request mode %q",
+			response.Mode,
+			req.Mode,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) GetWorkflowBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {

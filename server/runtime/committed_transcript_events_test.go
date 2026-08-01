@@ -574,7 +574,7 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 	}
 }
 
-func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t *testing.T) {
+func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEntry(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
@@ -583,9 +583,9 @@ func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t 
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	carryover, ok := manualCompactionCarryoverMessage("keep the active requirement")
+	carryover, ok := compactionPreservedUserMessage("keep the active requirement")
 	if !ok {
-		t.Fatal("expected non-empty manual compaction carryover")
+		t.Fatal("expected non-empty compaction-preserved user message")
 	}
 	receipt, err := newCompactionPersistence(eng).replaceHistory(
 		"compact-step",
@@ -612,8 +612,8 @@ func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t 
 	if !events[0].CommittedEntryStartSet || events[0].CommittedEntryStart != 0 || events[0].CommittedEntryCount != 1 {
 		t.Fatalf("first event range = start_set:%t start:%d count:%d, want start 0 count 1", events[0].CommittedEntryStartSet, events[0].CommittedEntryStart, events[0].CommittedEntryCount)
 	}
-	if entries := TranscriptEntriesFromEvent(events[1]); events[1].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleManualCompactionCarryover) {
-		t.Fatalf("second replacement event = %+v, want manual compaction carryover", events[1])
+	if entries := TranscriptEntriesFromEvent(events[1]); events[1].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleCompactionPreservedUserMessage) {
+		t.Fatalf("second replacement event = %+v, want compaction-preserved user message", events[1])
 	}
 	if !events[1].CommittedEntryStartSet || events[1].CommittedEntryStart != 1 || events[1].CommittedEntryCount != 2 {
 		t.Fatalf("second event range = start_set:%t start:%d count:%d, want start 1 count 2", events[1].CommittedEntryStartSet, events[1].CommittedEntryStart, events[1].CommittedEntryCount)

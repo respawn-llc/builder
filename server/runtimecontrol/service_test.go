@@ -20,6 +20,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -37,6 +38,15 @@ func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.C
 }
 
 var runtimeControlPromptHistoryStores sync.Map
+
+func runtimeControlCurrentNodeInstructions() workflowruntime.TaskInstructions {
+	return workflowruntime.TaskInstructions{
+		CurrentNode: workflow.CurrentNodeReference{
+			TaskID: "task-1",
+			NodeID: "node-1",
+		},
+	}
+}
 
 type runtimeControlPromptHistoryStore struct {
 	mu             sync.Mutex
@@ -157,6 +167,26 @@ type blockingRuntimeControlClient struct {
 func (c *blockingRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()
+}
+
+type blockingCompactionRuntimeControlClient struct {
+	runtimeControlFakeClient
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingCompactionRuntimeControlClient) Compact(ctx context.Context, req llm.CompactionRequest) (llm.CompactionResponse, error) {
+	select {
+	case <-c.started:
+	default:
+		close(c.started)
+	}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return llm.CompactionResponse{}, context.Cause(ctx)
+	}
+	return c.runtimeControlFakeClient.Compact(ctx, req)
 }
 
 type cancelObservingRuntimeControlClient struct {
@@ -370,6 +400,20 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return store, engine
+}
+
+func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExecutionConfig {
+	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference("runtime-control-test-task", "runtime-control-test-node", nil)
+	if err != nil {
+		t.Fatalf("create runtime-control Current Node reference: %v", err)
+	}
+	return &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: reference,
+		},
+	}
 }
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
@@ -988,10 +1032,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	engine.SetQuestionsEnabled(false)
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1013,10 +1055,8 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
 	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1036,10 +1076,8 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
@@ -1058,10 +1096,8 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 
 func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
 	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set-user-goal", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
@@ -1084,11 +1120,8 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:  runtimeids.NewExecutionScopeID(),
-			Contract: workflowruntime.CompletionContract{},
-		},
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	sessionID := store.Meta().SessionID
 	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
@@ -1820,6 +1853,108 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 		}
 	}
 	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testing.T) {
+	trimmed := 1
+	client := &blockingCompactionRuntimeControlClient{
+		runtimeControlFakeClient: runtimeControlFakeClient{
+			responses: []llm.Response{
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				},
+				{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued message handled"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				},
+			},
+			compactionResponses: []llm.CompactionResponse{{
+				OutputItems: []llm.ResponseItem{
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+					{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
+				},
+				Usage:             llm.Usage{WindowTokens: 200000},
+				TrimmedItemsCount: &trimmed,
+			}},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		Model:                        "gpt-5",
+		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "seed compaction"); err != nil {
+		t.Fatalf("seed runtime transcript: %v", err)
+	}
+
+	compactDone := make(chan error, 1)
+	compactRef := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
+	go func() {
+		compactDone <- service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
+			ClientRequestID: compactRef.ClientRequestID.String(),
+			SessionID:       store.Meta().SessionID,
+			Args:            "compact",
+			OperationRef:    compactRef,
+		})
+	}()
+	select {
+	case <-client.started:
+	case err := <-compactDone:
+		t.Fatalf("compaction ended before provider call: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("compaction did not start")
+	}
+
+	queuedText := "queue after compaction"
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "queue-while-compacting", queuedText))
+	if err != nil {
+		t.Fatalf("SubmitUserTurn while compacting: %v", err)
+	}
+	if !resp.Steered || resp.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued response", resp)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("queued turn was not retained while compaction was active")
+	}
+
+	close(client.release)
+	if err := <-compactDone; err != nil {
+		t.Fatalf("CompactContext: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for engine.HasQueuedUserWork() {
+		if time.Now().After(deadline) {
+			t.Fatal("queued turn did not drain after compaction completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := countUserMessagesWithContent(t, store, queuedText); got != 1 {
+		t.Fatalf("queued user message count = %d, want 1", got)
+	}
+}
+
+func TestActiveExecutionAllowsUserTurnAutoDrainOnlyForCompaction(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		snapshot *runtimeactivity.ActiveStepSnapshot
+		want     bool
+	}{
+		{name: "no active step"},
+		{name: "user turn", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindUserTurn}},
+		{name: "workflow turn", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn}},
+		{name: "goal loop", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop}},
+		{name: "runtime maintenance", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindRuntimeMaintenance}},
+		{name: "compaction", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindCompaction}, want: true},
+		{name: "pre-submit compaction", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindPreSubmitCompaction}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := activeExecutionAllowsUserTurnAutoDrain(test.snapshot); got != test.want {
+				t.Fatalf("activeExecutionAllowsUserTurnAutoDrain(%+v) = %t, want %t", test.snapshot, got, test.want)
+			}
+		})
+	}
 }
 
 func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {

@@ -15,18 +15,20 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type TaskDetail struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	projector   *TaskProjector
-	authority   *sessionruntime.Authority
-	quiescence  TaskQuiescenceSource
+	queries      *sqlitegen.Queries
+	definitions  *DefinitionProjection
+	projector    *TaskProjector
+	authority    *sessionruntime.Authority
+	quiescence   TaskQuiescenceSource
+	dependencies *TaskDependencies
 }
 
-func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource) (*TaskDetail, error) {
+func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource, dependencies *TaskDependencies) (*TaskDetail, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -42,12 +44,16 @@ func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProject
 	if quiescence == nil {
 		return nil, errors.New("task quiescence source is required")
 	}
+	if dependencies == nil {
+		return nil, errors.New("task dependencies read model is required")
+	}
 	return &TaskDetail{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		projector:   projector,
-		authority:   authority,
-		quiescence:  quiescence,
+		queries:      metadataStore.Queries(),
+		definitions:  definitions,
+		projector:    projector,
+		authority:    authority,
+		quiescence:   quiescence,
+		dependencies: dependencies,
 	}, nil
 }
 
@@ -138,7 +144,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	snapshot, err := d.authority.CurrentScopedTaskExecutionSnapshot(task.ProjectID, workflow.WorkflowID(task.WorkflowID), workflow.TaskID(task.ID))
+	snapshot, err := d.authority.CurrentScopedTaskExecutionSnapshot(task.ProjectID, runtimeids.WorkflowID(task.WorkflowID), workflow.TaskID(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
@@ -202,6 +208,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		Actions:              facts.Actions,
 		LabelIDs:             labelIDsByTask[task.ID],
 		AttentionCount:       attentionCount,
+	}
+	detail.Dependencies, err = d.dependencies.GetTaskDependencies(ctx, task.ID)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
 	}
 	for _, execution := range currentExecutions {
 		switch {

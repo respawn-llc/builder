@@ -23,7 +23,6 @@ func TestInputModePrioritizesExclusiveUIFlows(t *testing.T) {
 		},
 		{name: "process list mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeProcessList}}}, want: uiInputModeProcessList},
 		{name: "rollback selection mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackSelection}}}, want: uiInputModeRollbackSelection},
-		{name: "rollback edit mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackEdit}}}, want: uiInputModeRollbackEdit},
 		{name: "ask mode", model: uiModel{uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeAsk}, ask: uiAskState{current: testQuestionAskEventPtr("ask-1", "Proceed?")}}, uiRuntimeFeatureState: uiRuntimeFeatureState{view: detailView}}, want: uiInputModeAsk},
 		{name: "main", model: uiModel{}, want: uiInputModeMain},
 	}
@@ -71,26 +70,5 @@ func TestRestorePrimaryInputModeFollowsAskAndTranscriptMode(t *testing.T) {
 				t.Fatalf("input mode = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestInputModeStateExposesRenderingAndInteractionFlags(t *testing.T) {
-	m := &uiModel{
-		uiConversationFeatureState: uiConversationFeatureState{interaction: uiInteractionState{Mode: uiInputModeRollbackEdit}},
-	}
-	m.setRuntimeActivityBusyForTest(true)
-	state := m.inputModeState()
-
-	if state.Mode != uiInputModeRollbackEdit {
-		t.Fatalf("mode = %q, want %q", state.Mode, uiInputModeRollbackEdit)
-	}
-	if !state.Busy {
-		t.Fatal("expected busy input state")
-	}
-	if !state.ShowsMainInput {
-		t.Fatal("expected rollback edit to keep main input visible")
-	}
-	if state.ShowsAskInput {
-		t.Fatal("did not expect rollback edit to show ask input")
 	}
 }

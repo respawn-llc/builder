@@ -21,6 +21,10 @@ Focus on the new information: what is different about the new task and workspace
 This ticket now has {{.TaskCommentsLabel}}. You can run `{{.TaskCommentListCommand}}` to read the comments if they are relevant or if new ones have surfaced.
 {{- end }}
 
+{{- if .ShowTaskDependenciesReminder }}
+This ticket now has {{.TaskDependenciesLabel}}. You can run `{{.TaskShowCommand}}` to inspect its current dependencies if they are relevant.
+{{- end }}
+
 ## How to mark the new task complete
 {{.NodeCompletionInstructions}}
 

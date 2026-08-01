@@ -6,6 +6,8 @@ package sqlitegen
 
 import (
 	"database/sql"
+
+	"core/shared/runtimeids"
 )
 
 type MigrationCurrentNodeValueEnvironment struct {
@@ -66,10 +68,11 @@ type MigrationPriorValueCandidate struct {
 	ParallelBatchTransitionID sql.NullString
 	TransitionBranchKey       sql.NullString
 	NodeKey                   string
+	TransitionKey             string
 	OutputValuesJson          string
 	AppliedAtUnixMs           int64
 	CreatedAtUnixMs           int64
-	TransitionID              string
+	TransitionRecordID        string
 }
 
 type MigrationSessionMetadataError struct {
@@ -90,10 +93,16 @@ type MigrationUnfinishedCurrentNodeError struct {
 
 type MigrationWorkflowGraphEdge struct {
 	WorkflowID     string
-	SourceNodeID   string
-	TargetNodeID   string
 	EdgeID         string
+	TransitionKey  string
+	SourceNodeID   string
+	SourceNodeKey  string
+	SourceNodeKind string
+	TargetNodeID   string
+	TargetNodeKey  string
+	TargetNodeKind string
 	PromptTemplate string
+	ParametersJson string
 }
 
 type Project struct {
@@ -104,8 +113,14 @@ type Project struct {
 	MetadataJson                 string
 	ProjectKey                   string
 	NextTaskSeq                  int64
-	DefaultProjectWorkflowLinkID string
+	DefaultProjectWorkflowLinkID sql.NullString
 	PrimaryWorkspaceID           string
+}
+
+type ProjectDefaultWorkflowIdentity struct {
+	ProjectID    string
+	WorkflowID   *runtimeids.WorkflowID
+	WorkflowName sql.NullString
 }
 
 type ProjectLabel struct {
@@ -119,7 +134,7 @@ type ProjectLabel struct {
 type ProjectWorkflowLink struct {
 	ID              string
 	ProjectID       string
-	WorkflowID      string
+	WorkflowID      runtimeids.WorkflowID
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
 }
@@ -127,7 +142,7 @@ type ProjectWorkflowLink struct {
 type ProjectWorkflowLinkRecord struct {
 	ID              string
 	ProjectID       string
-	WorkflowID      string
+	WorkflowID      runtimeids.WorkflowID
 	IsDefault       int64
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
@@ -235,6 +250,11 @@ type TaskCurrentNode struct {
 	EnteredByEdgeID        sql.NullString
 }
 
+type TaskDependency struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
 type TaskLabelAssignment struct {
 	TaskID  string
 	LabelID string
@@ -264,7 +284,7 @@ type TaskRecord struct {
 	ID                          string
 	ProjectID                   string
 	ProjectWorkflowLinkID       string
-	WorkflowID                  string
+	WorkflowID                  runtimeids.WorkflowID
 	WorkflowRevisionSeen        int64
 	TaskSeq                     int64
 	ShortID                     string
@@ -283,8 +303,30 @@ type TaskRecord struct {
 	MetadataJson                string
 }
 
+type TaskSearchContent struct {
+	DocumentID int64
+	Title      interface{}
+	Body       interface{}
+	Comment    interface{}
+}
+
+type TaskSearchDocument struct {
+	DocumentID int64
+	SourceKind string
+	TaskID     sql.NullString
+	CommentID  sql.NullString
+}
+
+type TaskSearchFt struct {
+	Title         string
+	Body          string
+	Comment       string
+	Rank          sql.NullFloat64
+	TaskSearchFts sql.NullString
+}
+
 type Workflow struct {
-	ID                       string
+	ID                       runtimeids.WorkflowID
 	Name                     string
 	Description              string
 	Version                  int64
@@ -312,7 +354,7 @@ type WorkflowEdge struct {
 
 type WorkflowNode struct {
 	ID                     string
-	WorkflowID             string
+	WorkflowID             runtimeids.WorkflowID
 	NodeKey                string
 	Kind                   string
 	DisplayName            string
@@ -329,7 +371,7 @@ type WorkflowNode struct {
 
 type WorkflowNodeGroup struct {
 	ID          string
-	WorkflowID  string
+	WorkflowID  runtimeids.WorkflowID
 	GroupKey    string
 	DisplayName string
 	SortOrder   int64

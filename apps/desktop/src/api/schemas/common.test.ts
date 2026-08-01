@@ -1,14 +1,10 @@
-import {
-  attentionItemSchema,
-  taskStatusSchema,
-  validationErrorSchema,
-} from "./common";
+import { attentionItemSchema, taskStatusSchema, validationErrorSchema, workflowIDSchema } from "./common";
 
 const baseAttentionItem = {
   id: "question:node-1:ask-1",
   kind: "question",
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
@@ -31,7 +27,7 @@ const approvalAttentionItem = {
   id: "approval:approval-1",
   kind: "approval",
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
@@ -45,7 +41,7 @@ const interruptedCurrentNodeAttentionItem = {
   id: "interrupted_current_node:node-1",
   kind: "interrupted_current_node",
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
@@ -101,7 +97,10 @@ describe("attentionItemSchema", () => {
       { ...approvalAttentionItem, recommended_option_index: 1 },
       { ...approvalAttentionItem, question: { kind: "ordinary" } },
       { ...approvalAttentionItem, detail_json: "{}" },
-      { ...interruptedCurrentNodeAttentionItem, current_node: { node_id: "", transition_branch_key: null, session_id: null } },
+      {
+        ...interruptedCurrentNodeAttentionItem,
+        current_node: { node_id: "", transition_branch_key: null, session_id: null },
+      },
       { ...interruptedCurrentNodeAttentionItem, question_id: "ask-1" },
       { ...interruptedCurrentNodeAttentionItem, suggestions: [] },
       { ...interruptedCurrentNodeAttentionItem, recommended_option_index: 1 },
@@ -151,6 +150,19 @@ describe("attentionItemSchema", () => {
     expect(item.suggestions).toEqual([]);
   });
 
+  it("accepts omitted client-owned fallback messages", () => {
+    const approval = { ...approvalAttentionItem };
+    const interrupted = { ...interruptedCurrentNodeAttentionItem };
+    Reflect.deleteProperty(approval, "message");
+    Reflect.deleteProperty(interrupted, "message");
+
+    const parsedApproval = attentionItemSchema.parse(approval);
+    const parsedInterrupted = attentionItemSchema.parse(interrupted);
+
+    expect(parsedApproval.message).toBeNull();
+    expect(parsedInterrupted.message).toBeNull();
+  });
+
   it("rejects malformed runtime approval question prompt metadata", () => {
     expect(() =>
       attentionItemSchema.parse({
@@ -185,6 +197,16 @@ describe("attentionItemSchema", () => {
   });
 });
 
+it("rejects legacy prefixed Workflow IDs", () => {
+  expect(() => workflowIDSchema.parse("workflow-11111111-1111-4111-8111-111111111111")).toThrow();
+  expect(() =>
+    attentionItemSchema.parse({
+      ...baseAttentionItem,
+      workflow_id: "workflow-11111111-1111-4111-8111-111111111111",
+    }),
+  ).toThrow();
+});
+
 describe("taskStatusSchema", () => {
   const status = {
     attention_types: [],
@@ -212,7 +234,6 @@ describe("taskStatusSchema", () => {
     expect(() => taskStatusSchema.parse({ ...status, label: "Queued" })).toThrow();
   });
 });
-
 
 describe("validationErrorSchema", () => {
   const base = { code: "code", message: "message", blocks_context: true };

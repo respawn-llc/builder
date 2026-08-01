@@ -18,11 +18,12 @@ import (
 func BuildCurrentNodeRuntimeConfig(
 	input workflowstore.CurrentNodeStartContext,
 	lease sessionruntime.WorkflowExecutionLease,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	completionMode workflowruntime.CompletionMode,
 	maxInvalidCompletionAttempts int,
 	useRequiredToolCalls bool,
 	controller workflowruntime.Controller,
-	taskCommentCounter workflowruntime.TaskCommentCounter,
+	taskAwarenessSource workflowruntime.TaskAwarenessSource,
 ) (*workflowruntime.CurrentNodeExecutionConfig, error) {
 	instructions, err := BuildCurrentSessionTaskInstructions(input)
 	if err != nil {
@@ -30,12 +31,13 @@ func BuildCurrentNodeRuntimeConfig(
 	}
 	return &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID:                      lease.ScopeID(),
+		TaskPromptDelivery:           taskPromptDelivery,
 		Contract:                     workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)},
 		CompletionMode:               completionMode,
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,
 		UseAutomaticToolChoice:       !useRequiredToolCalls,
 		Controller:                   controller,
-		TaskCommentCounter:           taskCommentCounter,
+		TaskAwarenessSource:          taskAwarenessSource,
 		Instructions:                 instructions,
 	}, nil
 }
@@ -52,7 +54,13 @@ type PersistedWorkflowInspection struct {
 // and prompt contract that live execution uses immediately before a model turn. The
 // supplied session store controls persistence, so callers can use a fileless
 // store for read-only inspection.
-func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessionStore *session.Store, store *workflowstore.Store) (PersistedWorkflowInspection, error) {
+func BuildPersistedWorkflowInspection(
+	ctx context.Context,
+	app config.App,
+	sessionStore *session.Store,
+	store *workflowstore.Store,
+	taskAwarenessSource workflowruntime.TaskAwarenessSource,
+) (PersistedWorkflowInspection, error) {
 	if sessionStore == nil {
 		return PersistedWorkflowInspection{}, errors.New("session store is required")
 	}
@@ -72,12 +80,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		return PersistedWorkflowInspection{}, err
 	}
 	app.WorkspaceRoot = executionRoot.SourceWorkspaceRoot
-	overrides := workflowPromptOverrides(input.Node.SubagentRole)
-	plan, err := launch.ResolvePromptFacingSnapshotPlan(app, sessionStore, overrides.HasAny())
-	if err != nil {
-		return PersistedWorkflowInspection{}, err
-	}
-	plan, _, err = applyWorkflowSessionPromptOverridesForRole(plan, input.Node.SubagentRole)
+	plan, err := launch.ResolvePromptFacingSnapshotPlan(app, sessionStore, false)
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}
@@ -89,6 +92,13 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}
+	awareness := workflowruntime.TaskAwareness{}
+	if taskAwarenessSource != nil {
+		awareness, err = taskAwarenessSource.TaskAwareness(ctx, instructions.CurrentNode.TaskID)
+		if err != nil {
+			return PersistedWorkflowInspection{}, fmt.Errorf("load persisted workflow Task awareness: %w", err)
+		}
+	}
 	return PersistedWorkflowInspection{
 		Plan: plan,
 		Prompt: &workflowruntime.PromptContract{
@@ -97,6 +107,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 			UseAutomaticToolChoice: !plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 			Instructions:           instructions,
 			Transitions:            workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
+			TaskAwareness:          awareness,
 		},
 		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil
@@ -114,6 +125,13 @@ func requireCurrentNodeExecutionRoot(input workflowstore.CurrentNodeStartContext
 }
 
 func persistedInspectionCompletionMode(plan launch.SessionPlan, input workflowstore.CurrentNodeStartContext) (workflowruntime.CompletionMode, error) {
+	if plan.Locked != nil && plan.Locked.WorkflowCompletionMode != nil {
+		mode, err := workflowruntime.ParseCompletionMode(string(*plan.Locked.WorkflowCompletionMode))
+		if err != nil {
+			return "", fmt.Errorf("parse retained Session completion mode: %w", err)
+		}
+		return mode, nil
+	}
 	configured := plan.ActiveSettings.Workflow.CompletionMode
 	if input.Node.CompletionMode != "" {
 		configured = config.WorkflowCompletionMode(input.Node.CompletionMode)

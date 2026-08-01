@@ -29,7 +29,7 @@ func TestCurrentNodeTaskListLabelExclusionsFilterTasks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			response, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 				ProjectID:   &projectID,
-				WorkflowID:  stringPointer(string(fixture.workflowID)),
+				WorkflowID:  &fixture.workflowID,
 				LabelFilter: tt.filter,
 			})
 			if err != nil {

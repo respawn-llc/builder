@@ -200,6 +200,42 @@ func TestSystemPromptSnapshotUsesTranscriptWorkingDirForRetargetedSession(t *tes
 	}
 }
 
+func TestEnvironmentContextUsesTranscriptWorkingDirWithoutWorktreeReminder(t *testing.T) {
+	workspace := t.TempDir()
+	worktree := t.TempDir()
+	store := mustCreateTestSession(t, workspace)
+	if store.Meta().WorktreeReminder != nil {
+		t.Fatalf("worktree reminder = %+v, want none", store.Meta().WorktreeReminder)
+	}
+	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
+	eng := mustNewExecTestEngine(t, store, client, Config{
+		Model:                 "gpt-5",
+		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
+		TranscriptWorkingDir:  worktree,
+		AutoCompactTokenLimit: 1_000_000_000,
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	messages := requestMessages(client.calls[0])
+	for _, message := range messages {
+		if message.MessageType == nil ||
+			*message.MessageType != llm.MessageTypeEnvironment ||
+			message.Content == nil {
+			continue
+		}
+		if !strings.Contains(*message.Content, "\nCWD: "+worktree+"\n") {
+			t.Fatalf("environment context = %q, want active runtime CWD %q", *message.Content, worktree)
+		}
+		if strings.Contains(*message.Content, "\nCWD: "+workspace+"\n") {
+			t.Fatalf("environment context leaked persisted workspace CWD %q", workspace)
+		}
+		return
+	}
+	t.Fatalf("environment context missing from request: %+v", messages)
+}
+
 func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

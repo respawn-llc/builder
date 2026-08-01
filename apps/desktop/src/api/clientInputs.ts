@@ -17,10 +17,16 @@ export type TaskMutationInput = Readonly<{
   body: string;
   sourceWorkspaceID: string;
   labelIDs: readonly string[];
+  dependencyIntent?: TaskDependencyCreateIntent | undefined;
+}>;
+
+export type TaskDependencyCreateIntent = Readonly<{
+  relatedTaskID: string;
+  newTaskRole: "blocker" | "blocked";
 }>;
 
 export type TaskListInput = Readonly<{
-  projectID?: string | undefined;
+  projectID: string;
   workflowID?: string | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
@@ -32,8 +38,8 @@ export type TaskListInput = Readonly<{
         direction: "asc" | "desc";
       }>[]
     | undefined;
-  pageSize: number;
-  pageToken?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
 }>;
 
 export type BoardNodeCardsInput = Readonly<{
@@ -45,8 +51,8 @@ export type BoardNodeCardsInput = Readonly<{
 }>;
 
 export type WorkflowListInput = Readonly<{
-  pageSize?: number | undefined;
-  pageToken?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
   query?: string | undefined;
 }>;
 
@@ -118,6 +124,14 @@ export type TaskMoveInput = Readonly<{
   outputValues?: Readonly<Record<string, string>>;
   setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
+}>;
+
+export type TaskStartInput = Readonly<{
+  taskID: string;
+  setupOperationID?: SetupOperationID | undefined;
+  executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
 }>;
 
 export type OrdinaryQuestionAnswerInput = Readonly<{

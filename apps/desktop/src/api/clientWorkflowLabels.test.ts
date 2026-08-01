@@ -1,5 +1,6 @@
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
+import { ContractError } from "./errors";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
@@ -7,6 +8,49 @@ const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
 
 describe("ApiClient workflow labels", () => {
+  it("creates a related task through one atomic relationship intent", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.task.create",
+        result: { task: { id: "task-new" } },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(
+      client.createTask({
+        projectID: "project-1",
+        workflowID: smallID,
+        title: "New blocker",
+        body: "",
+        sourceWorkspaceID: "workspace-origin",
+        labelIDs: [],
+        dependencyIntent: {
+          relatedTaskID: "task-origin",
+          newTaskRole: "blocker",
+        },
+      }),
+    ).resolves.toBe("task-new");
+
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.task.create",
+        params: {
+          project_id: "project-1",
+          workflow_id: smallID,
+          title: "New blocker",
+          body: "",
+          source_workspace_id: "workspace-origin",
+          label_ids: [],
+          dependency_intent: {
+            related_task_id: "task-origin",
+            new_task_role: "blocker",
+          },
+        },
+      },
+    ]);
+  });
+
   it("omits an empty excluded partition from a named filter payload", () => {
     expect(
       taskLabelFilterPayload({
@@ -159,7 +203,7 @@ describe("ApiClient workflow labels", () => {
     await expect(
       client.createTask({
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         title: "Ship labels",
         body: "Wire the desktop API.",
         sourceWorkspaceID: "workspace-1",
@@ -171,7 +215,7 @@ describe("ApiClient workflow labels", () => {
         method: "workflow.task.create",
         params: {
           project_id: "project-1",
-          workflow_id: "workflow-1",
+          workflow_id: "11111111-1111-4111-8111-111111111111",
           title: "Ship labels",
           body: "Wire the desktop API.",
           source_workspace_id: "workspace-1",
@@ -181,20 +225,46 @@ describe("ApiClient workflow labels", () => {
     ]);
   });
 
+  it("rejects malformed and prefixed Workflow IDs before task RPCs", async () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+
+    await expect(
+      client.createTask({
+        projectID: "project-1",
+        workflowID: "not-a-workflow-id",
+        title: "Ship labels",
+        body: "",
+        sourceWorkspaceID: "workspace-1",
+        labelIDs: [],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        workflowID: "workflow-11111111-1111-4111-8111-111111111111",
+        labelFilter: { kind: "none" },
+        limit: 25,
+      }),
+    ).rejects.toThrow();
+
+    expect(transport.calls).toEqual([]);
+  });
+
   it("lists label-filtered task projections with label IDs", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.list",
         result: {
-          scope: { project_id: "project-1", workflow_id: "workflow-1" },
+          scope: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111" },
           matching_workflow_cardinality: "one",
-          next_page_token: null,
+          next_offset: null,
           generated_at_unix_ms: 7,
           tasks: [
             {
               task_id: "task-1",
               short_id: "PROJ-1",
-              workflow_id: "workflow-1",
+              workflow_id: "11111111-1111-4111-8111-111111111111",
               workflow_name: "Delivery",
               title: "Ship labels",
               created_at_unix_ms: 1,
@@ -217,17 +287,17 @@ describe("ApiClient workflow labels", () => {
     await expect(
       client.listTasks({
         projectID: "project-1",
-        workflowID: "workflow-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
         labelFilter: {
           kind: "named",
           mode: "any",
           labelIDs: [priorityID, urgentID],
           excludedLabelIDs: [smallID],
         },
-        pageSize: 25,
+        limit: 25,
       }),
     ).resolves.toMatchObject({
-      scope: { projectID: "project-1", workflowID: "workflow-1" },
+      scope: { projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111" },
       matchingWorkflowCardinality: "one",
       tasks: [{ id: "task-1", labelIDs: [priorityID] }],
     });
@@ -236,7 +306,7 @@ describe("ApiClient workflow labels", () => {
         method: "workflow.task.list",
         params: {
           project_id: "project-1",
-          workflow_id: "workflow-1",
+          workflow_id: "11111111-1111-4111-8111-111111111111",
           column_keys: [],
           status_kinds: [],
           attention_kinds: [],
@@ -249,9 +319,34 @@ describe("ApiClient workflow labels", () => {
             },
           },
           sort: [],
-          page_size: 25,
+          offset: 0,
+          limit: 25,
         },
       },
     ]);
+  });
+
+  it("rejects a zero task-list continuation offset", async () => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.list",
+          result: {
+            scope: { project_id: "project-1" },
+            matching_workflow_cardinality: "none",
+            next_offset: 0,
+            generated_at_unix_ms: 7,
+            tasks: [],
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        labelFilter: { kind: "none" },
+      }),
+    ).rejects.toBeInstanceOf(ContractError);
   });
 });

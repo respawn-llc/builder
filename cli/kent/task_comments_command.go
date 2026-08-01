@@ -14,7 +14,7 @@ import (
 	"core/shared/sessionenv"
 )
 
-const taskCommentListDefaultPageSize = 100
+const taskCommentListDefaultLimit = 100
 
 func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
@@ -56,7 +56,7 @@ func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagWasProvided(fs, "author"))
+		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagExplicit(fs, "author"))
 		if trimmedAuthorID := strings.TrimSpace(*authorID); trimmedAuthorID != "" {
 			commentAuthor.ID = trimmedAuthorID
 		}
@@ -110,8 +110,8 @@ func sessionAgentAuthorID(ctx context.Context, remote workflowCommandRemote, ses
 func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task comment list", stderr, taskCommentListUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	pageSize := fs.Int("page-size", taskCommentListDefaultPageSize, "maximum number of comments to return")
-	pageToken := fs.String("page-token", "", "continue from a previous comment list response")
+	offset := fs.Int("offset", 0, "zero-based comment offset")
+	limit := fs.Int("limit", taskCommentListDefaultLimit, "maximum number of comments to return")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -119,10 +119,6 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 {
 		fmt.Fprintln(stderr, "task comment list requires <short-id-or-task-id>")
-		return 2
-	}
-	if *pageSize < 1 {
-		fmt.Fprintln(stderr, "task comment list requires --page-size to be positive")
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -133,14 +129,16 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{TaskID: taskID, PageSize: *pageSize, PageToken: *pageToken})
+		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{TaskID: taskID, Offset: offset, Limit: limit})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		writeTaskCommentList(stdout, resp.Comments)
-		if strings.TrimSpace(resp.NextPageToken) != "" {
-			fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
+		if resp.NextOffset != nil {
+			if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})

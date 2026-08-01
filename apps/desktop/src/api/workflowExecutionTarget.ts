@@ -73,8 +73,15 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
   | Readonly<{
       outcome: "selection_required";
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
+    }>
+  | Readonly<{
+      outcome: "dependency_confirmation_required";
+      unsatisfiedDependencyCount: number;
     }>;
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
 export type TaskMoveResponse = WorkflowExecutionTargetActionResponse<TaskMoveApplied>;
-export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
+export type TaskApproveResponse = Exclude<
+  WorkflowExecutionTargetActionResponse<TaskApproveApplied>,
+  { outcome: "dependency_confirmation_required" }
+>;

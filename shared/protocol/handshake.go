@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -77,6 +78,9 @@ const (
 	MethodWorkflowTaskMove                              = "workflow.task.move"
 	MethodWorkflowTaskComplete                          = "workflow.task.complete"
 	MethodWorkflowTaskDelete                            = "workflow.task.delete"
+	MethodWorkflowTaskDependencyAdd                     = "workflow.task.dependency.add"
+	MethodWorkflowTaskDependencyRemove                  = "workflow.task.dependency.remove"
+	MethodWorkflowTaskDependencyList                    = "workflow.task.dependency.list"
 	MethodWorkflowAttentionList                         = "workflow.attention.list"
 	MethodWorkflowTaskAttentionList                     = "workflow.task.attention.list"
 	MethodWorkflowTaskQuestionAnswer                    = "workflow.task.question.answer"
@@ -86,6 +90,7 @@ const (
 	MethodWorkflowTaskCommentDelete                     = "workflow.task.comment.delete"
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
+	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
 	MethodWorkflowBoardNodeCardsList                    = "workflow.board.nodeCards.list"
 	MethodWorkflowSubscribe                             = "workflow.subscribe"
@@ -874,11 +879,12 @@ const (
 	WorkflowProjectEventActionQuestionCleared        WorkflowProjectEventAction = "question_cleared"
 	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
+	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
 )
 
 type WorkflowProjectEvent struct {
 	ProjectID        *string                      `json:"project_id,omitempty"`
-	WorkflowID       *string                      `json:"workflow_id,omitempty"`
+	WorkflowID       *runtimeids.WorkflowID       `json:"workflow_id,omitempty"`
 	Resource         WorkflowProjectEventResource `json:"resource"`
 	Action           WorkflowProjectEventAction   `json:"action"`
 	PrimaryEntityID  string                       `json:"primary_entity_id"`

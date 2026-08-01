@@ -100,7 +100,15 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
-			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, replacement.Items, replacement.CommittedEntryStart)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+				stepID,
+				replacement.Items,
+				replacement.CommittedEntryStart,
+				transcriptEntriesFromHistoryReplacement(
+					replacement.Items,
+					replacement.CompactionNumber,
+				),
+			)
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,
@@ -322,19 +330,12 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 	if err != nil || !result.continueCombinedFlush {
 		return result, err
 	}
-	var pendingNotices backgroundNoticeBatch
 	if m.background != nil {
-		pendingNotices = m.background.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
-	}
-	if pendingNotices.Empty() || !pendingNotices.BeginApply() {
-		return result, nil
-	}
-	applied, err := pendingNotices.Apply(func(intent steeringIntent) error {
-		return m.engine.steer(stepID, intent)
-	})
-	result.flushed += applied
-	if err != nil {
-		return result, err
+		flushed, flushErr := m.background.flushPendingNotices(stepID)
+		result.flushed += flushed
+		if flushErr != nil {
+			return result, flushErr
+		}
 	}
 	return result, nil
 }
@@ -345,44 +346,15 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 	return result, err
 }
 
-func (m *defaultMessageLifecycle) commitPendingUserInjectionsInTurn(stepID string, selection userInjectionSelection, turn OrderedMutationTurn) (userInjectionCommitResult, error) {
-	claim := m.claimPendingUserInjections(selection)
-	result, err := m.commitPendingUserInjections(stepID, claim, func(stepID, text string, batch []string, items []QueuedUserMessage) (session.CommitReceipt, error) {
-		return m.engine.appendQueuedUserMessageFlush(stepID, text, batch, items)
-	})
-	if err != nil || !result.continueCombinedFlush || m.background == nil || turn == nil {
-		return result, err
-	}
-	result.continueCombinedFlush = false
-	pendingNotices := m.background.ClaimPendingNotices(backgroundNoticeClaimCombinedFlush)
-	if pendingNotices.Empty() || !pendingNotices.BeginApply() {
-		return result, nil
-	}
-	applied, applyErr := pendingNotices.Apply(func(intent steeringIntent) error {
-		if turn == nil {
-			return m.engine.steer(stepID, intent)
-		}
-		return turn.Apply(func() error {
-			return m.engine.applySteeringIntentInline(stepID, intent)
-		})
-	})
-	result.flushed += applied
-	return result, applyErr
-}
-
 func (m *defaultMessageLifecycle) claimPendingUserInjections(selection userInjectionSelection) queuedUserMessageClaim {
-	var claim queuedUserMessageClaim
 	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
-		claim = m.queue.ClaimAll()
+		return m.queue.ClaimAll()
 	case steerUserInjectionSelection:
-		if len(selected.queueItemIDs) > 0 {
-			claim = m.queue.ClaimByID(selected.queueItemIDs)
-		}
+		return m.queue.ClaimByID(selected.queueItemIDs)
 	default:
 		panic(fmt.Sprintf("unsupported user injection selection %T", selection))
 	}
-	return claim
 }
 
 func (m *defaultMessageLifecycle) commitPendingUserInjections(
@@ -393,10 +365,9 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(
 	e := m.engine
 	result := userInjectionCommitResult{continueCombinedFlush: true}
 	claimed := claim.Items()
-	pending := claimed
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
-	pending = e.dropStoppedLiveRunQueueItems(pending)
+	pending := e.dropStoppedLiveRunQueueItems(claimed)
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
 		queueItems := queuedUserMessagesForFlush(pending)
@@ -450,6 +421,70 @@ func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage)
 	return m.queue.QueueItem(item)
 }
 
+func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	pending := m.queue.Drain()
+	out := make([]QueuedUserMessage, 0, len(pending))
+	for _, item := range pending {
+		out = append(out, item.message)
+	}
+	return out
+}
+
+func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage {
+	if m == nil || m.queue == nil || len(ids) == 0 {
+		return nil
+	}
+	pending := m.queue.DrainByID(ids)
+	out := make([]QueuedUserMessage, 0, len(pending))
+	for _, item := range pending {
+		out = append(out, item.message)
+	}
+	return out
+}
+
+func (m *defaultMessageLifecycle) FailPendingUserInjections(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.failPendingUserInjections(m.queue.Drain(), reason)
+}
+
+func (m *defaultMessageLifecycle) FailPendingUserInjectionsByID(ids map[string]struct{}, reason QueuedUserMessageFailureReason) []QueuedUserMessage {
+	if m == nil || m.queue == nil || len(ids) == 0 {
+		return nil
+	}
+	return m.failPendingUserInjections(m.queue.DrainByID(ids), reason)
+}
+
+func (m *defaultMessageLifecycle) failPendingUserInjections(pending []queuedUserSteeringIntent, _ QueuedUserMessageFailureReason) []QueuedUserMessage {
+	messages := make([]QueuedUserMessage, 0, len(pending))
+	for _, item := range pending {
+		messages = append(messages, item.message)
+	}
+	return messages
+}
+
+func (m *defaultMessageLifecycle) commitPendingUserInjectionsInTurn(stepID string, selection userInjectionSelection, turn OrderedMutationTurn) (userInjectionCommitResult, error) {
+	claim := m.claimPendingUserInjections(selection)
+	return m.commitPendingUserInjections(stepID, claim, func(stepID, text string, batch []string, items []QueuedUserMessage) (session.CommitReceipt, error) {
+		receipt := session.CommitReceipt{}
+		intent := steerQueuedUserMessageFlushIntent(text, batch, items)
+		intent.items[0].commitReceipt = &receipt
+		intent.turn = turn
+		apply := func() error { return m.engine.steerOrdered(stepID, intent) }
+		var err error
+		if turn == nil {
+			err = apply()
+		} else {
+			err = turn.Apply(apply)
+		}
+		return receipt, err
+	})
+}
+
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, false
@@ -457,39 +492,12 @@ func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (
 	return m.queue.DiscardItem(queueItemID)
 }
 
-func (m *defaultMessageLifecycle) FailPendingUserInjections(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.failPendingUserInjections(m.queue.ClaimAll(), reason)
-}
-
-func (m *defaultMessageLifecycle) FailPendingUserInjectionsByID(ids map[string]struct{}, reason QueuedUserMessageFailureReason) []QueuedUserMessage {
-	if m == nil || m.queue == nil || len(ids) == 0 {
-		return nil
-	}
-	return m.failPendingUserInjections(m.queue.ClaimByID(ids), reason)
-}
-
-func (m *defaultMessageLifecycle) failPendingUserInjections(claim queuedUserMessageClaim, _ QueuedUserMessageFailureReason) []QueuedUserMessage {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	pending := claim.Items()
-	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item.message)
-	}
-	claim.Commit(idsFromQueuedUserIntents(pending))
-	return messages
-}
-
 func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
-func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
-	roots := activeMetaContextRootsForMeta(meta)
+func newActiveMetaContextBuilder(meta session.Meta, executionRoot, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
+	roots := activeMetaContextRootsForMeta(meta, executionRoot)
 	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
 		withEnvironmentCWD(roots.environmentCWD).
 		withGlobalConfigDir(globalConfigDir)
@@ -501,9 +509,12 @@ type activeMetaContextRoots struct {
 	environmentCWD string
 }
 
-func activeMetaContextRootsForMeta(meta session.Meta) activeMetaContextRoots {
-	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
-	roots := activeMetaContextRoots{discoveryRoot: workspaceRoot, environmentCWD: workspaceRoot}
+func activeMetaContextRootsForMeta(meta session.Meta, executionRoot string) activeMetaContextRoots {
+	activeRoot := strings.TrimSpace(executionRoot)
+	if activeRoot == "" {
+		activeRoot = strings.TrimSpace(meta.WorkspaceRoot)
+	}
+	roots := activeMetaContextRoots{discoveryRoot: activeRoot, environmentCWD: activeRoot}
 	state := session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if state == nil {
 		return roots

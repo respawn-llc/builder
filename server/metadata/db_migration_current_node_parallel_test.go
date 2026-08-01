@@ -97,7 +97,7 @@ ORDER BY branch.transition_branch_key`)
 			currentNodeID:   "node-branch-a",
 			schedulingState: "interrupted",
 			currentInputs:   `{"summary":"parallel source"}`,
-			priorNodeValues: `{"agent":{"summary":"parallel source"}}`,
+			priorNodeValues: `{"transition_parameters":{}}`,
 			enteredByEdgeID: "edge-split-a",
 		},
 		"split_b": {
@@ -105,7 +105,7 @@ ORDER BY branch.transition_branch_key`)
 			currentNodeID:   "node-branch-b",
 			schedulingState: "interrupted",
 			currentInputs:   `{"summary":"parallel source"}`,
-			priorNodeValues: `{"agent":{"summary":"parallel source"}}`,
+			priorNodeValues: `{"transition_parameters":{}}`,
 			enteredByEdgeID: "edge-split-b",
 		},
 	}

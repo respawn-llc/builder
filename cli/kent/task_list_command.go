@@ -8,17 +8,18 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-const taskListDefaultPageSize = 100
+const taskListDefaultLimit = 100
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
-	workflowID := fs.String("workflow", "", "workflow UUID")
-	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task list response")
+	workflowID := fs.String("workflow", "", "workflow selector `<uuid>`")
+	offset := fs.Int("offset", 0, "zero-based task offset")
+	limit := fs.Int("limit", taskListDefaultLimit, "maximum tasks to print")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
 	var attentionFlags repeatedStringFlag
@@ -41,10 +42,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task list does not accept positional arguments")
 		return 2
 	}
-	if *pageSize < 1 {
-		fmt.Fprintln(stderr, "task list requires --page-size to be positive")
-		return 2
-	}
 	columnKeys, err := parseTaskListFilterValues([]string(columnFlags), "column")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -65,15 +62,14 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	labelMatchExplicit := flagWasProvided(fs, "label-match")
+	labelMatchExplicit := flagExplicit(fs, "label-match")
 	labelMatch, err := parseTaskListLabelMatch(*labelMatchRaw, labelMatchExplicit, len(labelFlags)+len(notLabelFlags), *unlabeled)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	workflowProvided := flagWasProvided(fs, "workflow")
-	var selectedWorkflowID *string
-	var selectedWorkflowSelector *string
+	workflowProvided := flagExplicit(fs, "workflow")
+	var selectedWorkflowID *runtimeids.WorkflowID
 	if workflowProvided {
 		selector, parseErr := parseWorkflowSelector(*workflowID)
 		err = parseErr
@@ -81,10 +77,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		persistedID := selector.PersistedID()
-		selectedWorkflowID = &persistedID
-		selectorValue := selector.String()
-		selectedWorkflowSelector = &selectorValue
+		selectedWorkflowID = &selector
 	}
 	var recoveryLabelMatch *serverapi.WorkflowTaskNamedLabelFilterMode
 	if labelMatchExplicit {
@@ -120,15 +113,15 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			StatusKinds:    statusKinds,
 			AttentionKinds: attentionKinds,
 			Sort:           sortSelectors,
-			PageSize:       *pageSize,
-			PageToken:      *pageToken,
+			Offset:         offset,
+			Limit:          limit,
 		}
 		resp, err := workflowTaskList(context.Background(), remote, request)
 		if err != nil {
 			writeTaskListError(stderr, err, taskListCommandContext{
 				ProjectRef:             *projectRef,
 				ResolvedProjectID:      projectID,
-				SelectedWorkflowID:     selectedWorkflowSelector,
+				SelectedWorkflowID:     selectedWorkflowID,
 				ColumnKeys:             columnKeys,
 				StatusKinds:            statusKinds,
 				AttentionKinds:         attentionKinds,
@@ -137,18 +130,16 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				ExcludedLabelSelectors: append([]string(nil), notLabelFlags...),
 				LabelMatch:             recoveryLabelMatch,
 				Unlabeled:              *unlabeled,
-				PageSize:               *pageSize,
-				PageToken:              *pageToken,
+				Offset:                 *offset,
+				Limit:                  *limit,
 				JSON:                   *jsonOut,
 			})
 			return 1
 		}
 		expectedScope := taskListExpectedScope{
-			ProjectID:  projectID,
-			WorkflowID: selectedWorkflowID,
-		}
-		if selectedWorkflowID == nil && strings.TrimSpace(*pageToken) != "" {
-			expectedScope.WorkflowOwner = taskListExpectedWorkflowFromToken
+			ProjectID:     projectID,
+			WorkflowID:    selectedWorkflowID,
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
 		}
 		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})
@@ -220,8 +211,10 @@ func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writ
 			fmt.Fprintln(stdout)
 		}
 	}
-	if resp.NextPageToken != nil {
-		fmt.Fprintf(stderr, "Next page token: `%s`\n", *resp.NextPageToken)
+	if resp.NextOffset != nil {
+		if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
+			return 1
+		}
 	}
 	return 0
 }

@@ -4,6 +4,7 @@ import type {
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
+  TaskStartInput,
   TaskMutationInput,
   TaskListInput,
   WorkflowCreateAndLinkInput,
@@ -36,6 +37,9 @@ import type {
   TaskApproveResponse,
   TaskComment,
   TaskDetail,
+  TaskDependencyDirection,
+  TaskDependencyListResponse,
+  TaskDependencyMutationResponse,
   TaskMoveResponse,
   TaskStartResponse,
   WorkflowBoard,
@@ -43,7 +47,6 @@ import type {
   WorkflowDeleteImpact,
   WorkflowDeleteResponse,
   WorkflowDerivedWiring,
-  WorkflowExecutionTargetSelection,
   WorkflowGraphSavePreview,
   WorkflowGraphSaveResult,
   WorkflowGraphValidateDraftResult,
@@ -131,13 +134,15 @@ export interface ApiService {
   listAttention(pageToken: string): Promise<AttentionPage>;
   listTaskAttention(taskID: string): Promise<TaskAttention>;
   createTask(input: TaskMutationInput): Promise<string>;
+  addTaskDependency(blockerTaskID: string, blockedTaskID: string): Promise<TaskDependencyMutationResponse>;
+  removeTaskDependency(blockerTaskID: string, blockedTaskID: string): Promise<TaskDependencyMutationResponse>;
+  listTaskDependencies(
+    taskID: string,
+    direction?: TaskDependencyDirection,
+  ): Promise<TaskDependencyListResponse>;
   listTasks(input: TaskListInput): Promise<TaskListPage>;
   updateTask(input: TaskEditInput): Promise<string>;
-  startTask(
-    taskID: string,
-    setupOperationID?: SetupOperationID,
-    executionTarget?: WorkflowExecutionTargetSelection,
-  ): Promise<TaskStartResponse>;
+  startTask(input: TaskStartInput): Promise<TaskStartResponse>;
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;
   interruptTask(taskID: string, sessionID?: string): Promise<void>;
   resumeTask(taskID: string): Promise<void>;
@@ -145,7 +150,7 @@ export interface ApiService {
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;
   listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage>;
-  listTaskComments(taskID: string, pageToken: string): Promise<CommentPage>;
+  listTaskComments(taskID: string, offset: number): Promise<CommentPage>;
   addComment(taskID: string, body: string): Promise<TaskComment>;
   replaceComment(commentID: string, body: string): Promise<void>;
   deleteComment(commentID: string): Promise<void>;
