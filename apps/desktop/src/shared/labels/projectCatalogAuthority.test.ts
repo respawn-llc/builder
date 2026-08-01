@@ -843,6 +843,68 @@ describe("Project catalog authority", () => {
     expect(failures).toEqual([failure]);
   });
 
+  it("clears a stale successful reorder before accepting a later refresh", async () => {
+    const reorder = deferred<ProjectLabelCatalog>();
+    const refreshed = deferred<ProjectLabelCatalog>();
+    const finalRefresh = deferred<ProjectLabelCatalog>();
+    let readCount = 0;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => {
+        readCount += 1;
+        return readCount === 1 ? refreshed.promise : finalRefresh.promise;
+      },
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: async () => reorder.promise,
+    });
+    const key = queryKeys.projectLabels("project-1");
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
+
+    authority.reorder([secondLabelID, labelID]);
+    authority.applyRename({ id: labelID, name: "Renamed" });
+    refreshed.resolve(
+      catalog([
+        [labelID, "Renamed"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
+    await waitFor(() => {
+      expect(readCount).toBe(1);
+    });
+    reorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+      ]),
+    );
+    authority.requestRefresh();
+    await waitFor(() => {
+      expect(readCount).toBe(2);
+    });
+    finalRefresh.resolve(
+      catalog([
+        [labelID, "Renamed"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
+    await waitFor(() => {
+      expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
+        { id: labelID, name: "Renamed" },
+        { id: secondLabelID, name: "Beta" },
+      ]);
+    });
+  });
+
   it("supersedes pending reorder on changed-membership refresh without overwriting it later", async () => {
     const firstReorder = deferred<ProjectLabelCatalog>();
     const changedRefresh = deferred<ProjectLabelCatalog>();

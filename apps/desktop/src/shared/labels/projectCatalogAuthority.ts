@@ -296,6 +296,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
       this.#acceptAuthoritativeCatalog(catalog);
       return;
     }
+    if (failure === null && catalog !== null && this.#latestOrderIntent?.id === intent.id) {
+      this.#latestOrderIntent = null;
+    }
     if (failure !== null) {
       this.#onReorderFailure(failure);
       if (!ownsCurrentState && this.#pendingReorder === null && this.#latestOrderIntent !== null) {

@@ -1788,9 +1788,17 @@ board_node_tasks_scored AS (
     SELECT
         t.*,
         labels.label_ordinals,
-        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled
+        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled,
+        CASE args.sort_field
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
+            WHEN 'short_id' THEN printf('%020d', t.task_seq)
+            ELSE labels.label_ordinals
+        END AS sort_key
     FROM board_node_tasks t
     LEFT JOIN board_node_task_labels labels ON labels.task_id = t.id
+    CROSS JOIN board_sort_args args
 )
 SELECT
     t.id,
@@ -1859,44 +1867,20 @@ WHERE sqlc.narg(cursor_task_seq) IS NULL
             END
         WHEN (sqlc.arg(sort_descending) = 0 AND sqlc.arg(cursor_direction) = 'older')
           OR (sqlc.arg(sort_descending) != 0 AND sqlc.arg(cursor_direction) = 'newer') THEN
-            (CASE sqlc.arg(sort_field)
-                WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-                WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-                WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE NULL
-            END, t.task_seq) > (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
+            (t.sort_key, t.task_seq) > (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
         ELSE
-            (CASE sqlc.arg(sort_field)
-                WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-                WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-                WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE NULL
-            END, t.task_seq) < (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
+            (t.sort_key, t.task_seq) < (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
       END
 ORDER BY
     CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'older' THEN t.labels_unlabeled END ASC,
     CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'newer' THEN t.labels_unlabeled END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN
-        CASE args.sort_field
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-            WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE t.label_ordinals
-        END
+        t.sort_key
     END ASC,
     CASE WHEN (args.sort_descending != 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending = 0 AND args.cursor_direction = 'newer') THEN
-        CASE args.sort_field
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-            WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE t.label_ordinals
-        END
+        t.sort_key
     END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN t.task_seq END ASC,

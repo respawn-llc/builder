@@ -4282,9 +4282,17 @@ board_node_tasks_scored AS (
     SELECT
         t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.execution_target_mode, t.execution_target_requested_ref, t.execution_target_resolved_ref, t.execution_target_commit_oid, t.execution_target_provenance, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json,
         labels.label_ordinals,
-        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled
+        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled,
+        CASE args.sort_field
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
+            WHEN 'short_id' THEN printf('%020d', t.task_seq)
+            ELSE labels.label_ordinals
+        END AS sort_key
     FROM board_node_tasks t
     LEFT JOIN board_node_task_labels labels ON labels.task_id = t.id
+    CROSS JOIN board_sort_args args
 )
 SELECT
     t.id,
@@ -4353,44 +4361,20 @@ WHERE ?1 IS NULL
             END
         WHEN (?5 = 0 AND ?3 = 'older')
           OR (?5 != 0 AND ?3 = 'newer') THEN
-            (CASE ?2
-                WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-                WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-                WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE NULL
-            END, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+            (t.sort_key, t.task_seq) > (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
         ELSE
-            (CASE ?2
-                WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-                WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-                WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-                WHEN 'short_id' THEN printf('%020d', t.task_seq)
-                ELSE NULL
-            END, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
+            (t.sort_key, t.task_seq) < (CAST(?6 AS TEXT), CAST(?1 AS INTEGER))
       END
 ORDER BY
     CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'older' THEN t.labels_unlabeled END ASC,
     CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'newer' THEN t.labels_unlabeled END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN
-        CASE args.sort_field
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-            WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE t.label_ordinals
-        END
+        t.sort_key
     END ASC,
     CASE WHEN (args.sort_descending != 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending = 0 AND args.cursor_direction = 'newer') THEN
-        CASE args.sort_field
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-            WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE t.label_ordinals
-        END
+        t.sort_key
     END DESC,
     CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
               OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN t.task_seq END ASC,
