@@ -13,7 +13,7 @@ export type ChipProps = ChipAppearanceProps & HTMLAttributes<HTMLSpanElement>;
 
 export type InteractiveChipProps = ChipAppearanceProps & ButtonHTMLAttributes<HTMLButtonElement>;
 
-export type InteractiveChipSize = "compact" | "default";
+export type InteractiveChipSize = "compact" | "default" | "label";
 export type InteractiveChipTone = "neutral" | "primary" | "success";
 
 export function Chip({
@@ -72,11 +72,14 @@ export function InteractiveChip({
 const chipBaseClassName =
   "app-region-no-drag inline-flex max-w-full items-center gap-[var(--space-1)] rounded-full border";
 
+export const labelChipHeightClassName = "py-1 text-[0.78rem] leading-4";
+
 const interactiveChipSizeClassNames = {
   compact:
     "min-h-5 px-[var(--space-1)] text-[11px] font-semibold leading-4 [@media(pointer:coarse)]:min-h-9 [@media(pointer:coarse)]:px-[var(--space-2)]",
   default:
     "min-h-7 px-[var(--space-2)] text-sm font-medium [@media(pointer:coarse)]:min-h-9 [@media(pointer:coarse)]:px-[var(--space-3)]",
+  label: `${labelChipHeightClassName} px-[var(--space-2)] font-semibold [@media(pointer:coarse)]:min-h-9 [@media(pointer:coarse)]:px-[var(--space-3)]`,
 } satisfies Record<InteractiveChipSize, string>;
 
 const interactiveChipToneClassNames = {

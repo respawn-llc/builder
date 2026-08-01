@@ -25,7 +25,7 @@ export { HelpHint } from "./HelpHint";
 export type { HelpHintProps } from "./HelpHint";
 export { DisabledInteractionGuard } from "./DisabledInteractionGuard";
 export type { DisabledInteractionGuardProps } from "./DisabledInteractionGuard";
-export { Dialog } from "./Dialog";
+export { compactDialogWidth, Dialog } from "./Dialog";
 export { FieldShell, TextArea, TextInput } from "./Field";
 export { fieldInputClassName, fieldIslandInputClassName } from "./fieldInputStyles";
 export { fieldLabelClassName } from "./fieldStyles";

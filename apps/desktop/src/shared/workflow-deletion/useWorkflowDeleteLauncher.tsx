@@ -100,9 +100,7 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
       try {
         const response = await api.deleteWorkflow(workflowDeleteInputFromImpact(operation.impact));
         if (!response.deleted) {
-          retry(
-            workflowDeleteBlockersMessage(response.blockers, t("workflowEditor.workflowDeleteBlocked")),
-          );
+          retry(workflowDeleteBlockersMessage(response.blockers, t("workflowEditor.workflowDeleteBlocked")));
           return;
         }
       } catch (error) {
@@ -136,7 +134,7 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
             includeSearch: true,
           }) !== false;
         if (routeMatches) {
-          if (await navigation.openWorkflowLibrary() === "failed") {
+          if ((await navigation.openWorkflowLibrary()) === "failed") {
             throw new Error(t("workflowEditor.workflowDeleteNavigationError"));
           }
         }
@@ -214,8 +212,8 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
               closeDisabled={submitting}
               onClose={cancelPending}
               open
-              style={{ width: `min(${workflowDeleteDialogWidth.toString()}px, calc(100vw - 32px))` }}
               title={t("workflowEditor.workflowDeleteTitle")}
+              width={workflowDeleteDialogWidth}
             >
               <WorkflowDeleteConfirmationContent
                 actionError={actionError ?? undefined}

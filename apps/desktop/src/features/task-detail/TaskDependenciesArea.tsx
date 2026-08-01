@@ -41,7 +41,6 @@ export function TaskDependenciesArea({
               total: dependencies.blockerCount,
             })}
             maximum={dependencies.blockerCount}
-            size="compact"
             tone={dependencies.unsatisfiedBlockerCount === 0 ? "success" : "primary"}
             value={dependencies.blockerCount - dependencies.unsatisfiedBlockerCount}
           />

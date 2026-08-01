@@ -4,7 +4,16 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { Button, Dialog, ErrorState, RadioGroup, RadioGroupItem, Spinner, TextInput } from "@/ui";
+import {
+  Button,
+  compactDialogWidth,
+  Dialog,
+  ErrorState,
+  RadioGroup,
+  RadioGroupItem,
+  Spinner,
+  TextInput,
+} from "@/ui";
 import { executionTargetSelectionFromDraft } from "./executionTargetContinuation";
 import type {
   PendingTaskInitiatingAction,
@@ -56,6 +65,7 @@ function DependencyConfirmationDialog({
       onClose={continuation.close}
       open
       title={t("taskDependencyConfirmation.title")}
+      width={compactDialogWidth}
     >
       <div className="grid gap-[var(--space-4)]">
         <p className="m-0 text-[var(--color-muted)]">

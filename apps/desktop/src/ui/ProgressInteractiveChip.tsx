@@ -12,6 +12,7 @@ export type ProgressInteractiveChipProps = Readonly<
 export function ProgressInteractiveChip({
   label,
   maximum,
+  size = "label",
   value,
   ...behavior
 }: ProgressInteractiveChipProps) {
@@ -28,7 +29,7 @@ export function ProgressInteractiveChip({
   const circumference = 2 * Math.PI * 7;
   const completedLength = circumference * (value / maximum);
   return (
-    <InteractiveChip aria-label={label} {...behavior}>
+    <InteractiveChip aria-label={label} size={size} {...behavior}>
       <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]">
         <svg
           aria-label={label}

@@ -28,7 +28,6 @@ export function BoardDependencyProgressChip({
       onPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
         event.stopPropagation();
       }}
-      size="compact"
       tone={complete ? "success" : "primary"}
       value={progress.satisfiedCount}
     />
