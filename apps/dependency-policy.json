@@ -60,7 +60,6 @@
         "@types/react",
         "@types/react-dom",
         "@vitejs/plugin-react",
-        "@vitest/browser-playwright",
         "eslint",
         "eslint-config-prettier",
         "eslint-import-resolver-typescript",
@@ -70,7 +69,6 @@
         "eslint-plugin-react-refresh",
         "eslint-plugin-testing-library",
         "jsdom",
-        "playwright",
         "tailwindcss",
         "typescript",
         "typescript-eslint",
@@ -94,15 +92,11 @@
     "@app/ui-kit": {
       "dependencies": ["@dnd-kit/core", "@dnd-kit/sortable", "react"],
       "devDependencies": [
-        "@testing-library/jest-dom",
-        "@testing-library/react",
-        "@testing-library/user-event",
         "@types/react",
         "jsdom",
         "typescript",
         "typescript7",
-        "vitest",
-        "vitest-browser-react"
+        "vitest"
       ]
     }
   }

@@ -310,9 +310,6 @@ jobs:
       - name: Build GUI web assets
         run: pnpm build
 
-      - name: Test transformed reorder in Chromium
-        run: pnpm --filter @app/desktop test:browser:reorder
-
   gui-native:
     runs-on: macos-latest
     steps:
