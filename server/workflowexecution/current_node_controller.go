@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -37,7 +38,7 @@ type CurrentNodeAssignmentSteerer interface {
 }
 
 type CurrentNodeAssignmentSteer interface {
-	Wait(context.Context) error
+	Wait(context.Context) (session.CommitReceipt, error)
 }
 
 type CurrentNodeControllerConfig struct {
@@ -217,6 +218,11 @@ func NewCurrentNodeController(
 
 func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
 	_, err := c.completeLiveCurrentNode(ctx, req)
+	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) && req.SessionID != nil {
+		_, err = c.CompleteIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
+			SessionID: req.SessionID,
+		}, req.TransitionID, req.OutputValues, req.Commentary)
+	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}
@@ -552,8 +558,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || !completed || interrupted || closed {
 		return
 	}
-	if err := waitCurrentNodeAssignmentSteers(context.Background(), starts); err != nil {
-		c.handleCurrentNodeStartFailures(starts, false, err)
+	committed, err := waitCurrentNodeAssignmentSteers(context.Background(), starts)
+	if err != nil {
+		c.handleCurrentNodeStartFailures(committed, false, err)
 		return
 	}
 	c.enqueueStarts(starts)

@@ -140,7 +140,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		return nil, err
 	}
 	if input.Node.Kind == workflow.NodeKindScript {
-		return runtime.CompletedWorkflowAssignmentSteer(nil), nil
+		return runtime.CompletedWorkflowAssignmentSteer(session.CommitReceipt{Committed: true}, nil), nil
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
@@ -202,9 +202,9 @@ type currentNodeAgentAssignmentSteer struct {
 	prepared   preparedCurrentNodeAgentSession
 }
 
-func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) error {
+func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
 	if s == nil {
-		return errors.New("current node agent assignment steer is required")
+		return session.CommitReceipt{}, errors.New("current node agent assignment steer is required")
 	}
 	return s.completion.Wait(ctx)
 }
@@ -411,8 +411,12 @@ func (s *Starter) currentNodeAgentSessionForStart(
 			input.CurrentNode.Reference,
 		)
 	}
-	if err := assignment.Wait(ctx); err != nil {
+	receipt, err := assignment.Wait(ctx)
+	if err != nil {
 		return preparedCurrentNodeAgentSession{}, nil, err
+	}
+	if !receipt.Committed {
+		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
 	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
 }

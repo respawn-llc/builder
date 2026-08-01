@@ -57,10 +57,12 @@ func TestRuntimeRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
 func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSessionAt(t, t.TempDir())
+	workflowID := runtimeids.NewWorkflowID()
 	execution := &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID: runtimeids.NewExecutionScopeID(),
 		Instructions: workflowruntime.TaskInstructions{
 			CurrentNode: mustTestCurrentNodeReference(t, "task-binding-owner", "node-binding-owner", nil),
+			WorkflowID:  workflowID,
 		},
 	}
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -78,11 +80,28 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("close Current Node execution binding: %v", err)
 	}
-	rebound, err := engine.BindCurrentNodeExecution(execution)
+	retained, err := engine.WorkflowSessionState()
 	if err != nil {
-		t.Fatalf("rebind Current Node execution after owner close: %v", err)
+		t.Fatalf("retained Workflow Session state: %v", err)
+	}
+	if retained == nil || retained.TaskID != execution.Instructions.CurrentNode.TaskID || retained.WorkflowID != workflowID {
+		t.Fatalf("retained Workflow Session state = %+v, want completion eligibility for prior assignment", retained)
+	}
+	successor := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: mustTestCurrentNodeReference(t, "task-binding-owner", "node-binding-successor", nil),
+			WorkflowID:  workflowID,
+		},
+	}
+	rebound, err := engine.BindCurrentNodeExecution(successor)
+	if err != nil {
+		t.Fatalf("bind successor Current Node execution after owner close: %v", err)
 	}
 	if err := rebound.Close(); err != nil {
 		t.Fatalf("close rebound Current Node execution: %v", err)
+	}
+	if !engine.CurrentNodeExecutionConfigured() {
+		t.Fatal("successor completion contract was discarded when exact scope ownership ended")
 	}
 }

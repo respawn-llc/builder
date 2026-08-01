@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -84,6 +86,27 @@ func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, er
 		e.recordWorkflowTerminalState(WorkflowCompletionSourceObserved)
 	}
 	return result.Completed, nil
+}
+
+func (e *Engine) completeWorkflowCurrentNode(
+	ctx context.Context,
+	parsed workflowruntime.ParsedCompletion,
+) (workflowruntime.CompletionResult, error) {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
+		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
+	}
+	sessionID, err := runtimeids.ParseSessionID(e.SessionID())
+	if err != nil {
+		return workflowruntime.CompletionResult{}, fmt.Errorf("parse workflow Session identity: %w", err)
+	}
+	return execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+		ScopeID:      execution.ScopeID,
+		SessionID:    &sessionID,
+		TransitionID: parsed.TransitionID,
+		OutputValues: parsed.OutputValues,
+		Commentary:   parsed.Commentary,
+	})
 }
 
 func workflowCompletionCallCount(calls []llm.ToolCall) int {

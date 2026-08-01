@@ -26,7 +26,11 @@ type currentNodeExecutionState struct {
 	mu       sync.RWMutex
 	config   *workflowruntime.CurrentNodeExecutionConfig
 	delivery *workflowPromptDeliveryState
-	bound    bool
+	owner    *currentNodeExecutionOwner
+}
+
+type currentNodeExecutionOwner struct {
+	scopeID runtimeids.ExecutionScopeID
 }
 
 func newCurrentNodeExecutionState(config *workflowruntime.CurrentNodeExecutionConfig) *currentNodeExecutionState {
@@ -58,8 +62,9 @@ func (e *Engine) BindCurrentNodeExecution(
 	}
 	cloned := cloneCurrentNodeExecutionConfig(config)
 	state.mu.Lock()
-	if state.bound {
+	if state.owner != nil {
 		current := state.config
+		owner := state.owner
 		state.mu.Unlock()
 		if current == nil {
 			return nil, errors.New("current node execution state is bound without an active config")
@@ -68,28 +73,31 @@ func (e *Engine) BindCurrentNodeExecution(
 			"current node execution scope %s for %v cannot bind while scope %s for %v already owns the state",
 			cloned.ScopeID,
 			cloned.Instructions.CurrentNode,
-			current.ScopeID,
+			owner.scopeID,
 			current.Instructions.CurrentNode,
 		)
 	}
 	if state.config != nil {
 		current := state.config
-		if current.ScopeID != cloned.ScopeID ||
+		if current.ScopeID == cloned.ScopeID &&
 			!current.Instructions.CurrentNode.Equal(cloned.Instructions.CurrentNode) {
 			state.mu.Unlock()
 			return nil, fmt.Errorf(
-				"current node execution scope %s for %v cannot bind while scope %s for %v is active",
+				"current node execution scope %s cannot change from %v to %v",
 				cloned.ScopeID,
-				cloned.Instructions.CurrentNode,
-				current.ScopeID,
 				current.Instructions.CurrentNode,
+				cloned.Instructions.CurrentNode,
 			)
+		}
+		if current.ScopeID != cloned.ScopeID {
+			state.config = cloned
+			state.delivery = newWorkflowPromptDeliveryState(cloned)
 		}
 	} else {
 		state.config = cloned
 		state.delivery = newWorkflowPromptDeliveryState(cloned)
 	}
-	state.bound = true
+	state.owner = &currentNodeExecutionOwner{scopeID: cloned.ScopeID}
 	state.mu.Unlock()
 	e.mu.Lock()
 	e.workflowTerminal = WorkflowTerminalState{}
@@ -111,18 +119,16 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 		switch {
 		case state.config == nil:
 			b.err = fmt.Errorf("current node execution scope %s is already unbound", b.scopeID)
-		case !state.bound:
+		case state.owner == nil:
 			b.err = fmt.Errorf("current node execution scope %s has no binding owner", b.scopeID)
-		case state.config.ScopeID != b.scopeID:
+		case state.owner.scopeID != b.scopeID:
 			b.err = fmt.Errorf(
 				"current node execution scope %s cannot unbind active scope %s",
 				b.scopeID,
-				state.config.ScopeID,
+				state.owner.scopeID,
 			)
 		default:
-			state.config = nil
-			state.delivery = newWorkflowPromptDeliveryState(nil)
-			state.bound = false
+			state.owner = nil
 		}
 		state.mu.Unlock()
 		if b.err == nil {

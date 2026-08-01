@@ -55,32 +55,58 @@ func newCurrentNodeControllerWithAttentionForTest(
 type noOpCurrentNodeAssignmentSteerer struct{}
 
 func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
-	return completedCurrentNodeAssignmentSteer{}, nil
+	return completedCurrentNodeAssignmentSteer{
+		receipt: session.CommitReceipt{Committed: true},
+	}, nil
 }
 
 type completedCurrentNodeAssignmentSteer struct {
-	err error
+	receipt session.CommitReceipt
+	err     error
 }
 
-func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) error {
-	return s.err
+func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
+	return s.receipt, s.err
 }
 
 type recordingCurrentNodeAssignmentSteerer struct {
-	mu      sync.Mutex
-	steered []workflow.CurrentNodeReference
-	err     error
-	waitErr error
+	mu          sync.Mutex
+	steered     []workflow.CurrentNodeReference
+	outcomes    []currentNodeAssignmentSteerOutcome
+	err         error
+	waitReceipt session.CommitReceipt
+	waitErr     error
+}
+
+type currentNodeAssignmentSteerOutcome struct {
+	receipt  session.CommitReceipt
+	steerErr error
+	waitErr  error
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ context.Context, reference workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.steered = append(s.steered, reference)
+	index := len(s.steered) - 1
+	if index < len(s.outcomes) {
+		outcome := s.outcomes[index]
+		if outcome.steerErr != nil {
+			return nil, outcome.steerErr
+		}
+		return completedCurrentNodeAssignmentSteer{
+			receipt: outcome.receipt,
+			err:     outcome.waitErr,
+		}, nil
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
-	return completedCurrentNodeAssignmentSteer{err: s.waitErr}, nil
+	receipt := s.waitReceipt
+	if s.waitErr == nil {
+		receipt.Committed = true
+	}
+	return completedCurrentNodeAssignmentSteer{receipt: receipt, err: s.waitErr}, nil
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {

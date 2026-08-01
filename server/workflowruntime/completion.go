@@ -138,6 +138,7 @@ type TransitionInstruction struct {
 
 type CompletionRequest struct {
 	ScopeID      runtimeids.ExecutionScopeID
+	SessionID    *runtimeids.SessionID
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
