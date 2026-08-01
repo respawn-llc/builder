@@ -22,6 +22,12 @@ type steeringPriority int
 
 type directOrderedMutationTurn struct{}
 
+// DirectOrderedMutationTurn returns the runtime's unqueued mutation turn for
+// callers that own the ordering boundary and have no queue to retain.
+func DirectOrderedMutationTurn() OrderedMutationTurn {
+	return directOrderedMutationTurn{}
+}
+
 func (directOrderedMutationTurn) Apply(apply func() error) error {
 	if apply == nil {
 		return errors.New("ordered mutation is required")

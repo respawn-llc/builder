@@ -47,98 +47,14 @@ func Reenter[T any](
 	continuation *Continuation,
 	apply func(Turn) (T, error),
 ) (Future[T], error) {
-	if continuation == nil {
-		return Future[T]{}, errors.New("runtime command continuation is required")
-	}
-	if apply == nil {
-		return Future[T]{}, ErrCommandHandlerNeeded
-	}
-	select {
-	case <-continuation.slot:
-	case <-continuation.done:
-		return Future[T]{}, ErrTurnExpired
-	case <-continuation.resource.closedCh:
-		return Future[T]{}, ErrResourceUnavailable
-	case <-ctx.Done():
-		return Future[T]{}, context.Cause(ctx)
-	}
-
-	continuation.mu.Lock()
-	if continuation.released {
-		continuation.mu.Unlock()
-		continuation.slot <- struct{}{}
-		return Future[T]{}, ErrTurnExpired
-	}
-	continuation.pending = true
-	resource := continuation.resource
-	resource.mu.Lock()
-	if resource.closed {
-		resource.mu.Unlock()
-		continuation.pending = false
-		continuation.mu.Unlock()
-		continuation.slot <- struct{}{}
-		return Future[T]{}, ErrResourceUnavailable
-	}
-	resource.seq++
-	sequence := resource.seq
-	state := &turnState{retain: continuation}
-	state.valid.Store(true)
-	result := make(chan futureResult[T], 1)
-	resource.stages <- &stage{
-		sequence: sequence,
-		target:   continuation.target,
-		state:    state,
-		execute: func(turn Turn) bool {
-			if err := continuation.validateTarget(); err != nil {
-				state.valid.Store(false)
-				result <- futureResult[T]{err: err}
-				continuation.stageFinished(false)
-				return true
-			}
-			value, applyErr := apply(turn)
-			state.valid.Store(false)
-			result <- futureResult[T]{value: value, err: applyErr}
-			continuation.stageFinished(false)
-			return true
-		},
-	}
-	resource.mu.Unlock()
-	continuation.mu.Unlock()
-	return Future[T]{done: result}, nil
+	return enqueueContinuation(ctx, continuation, apply, false)
 }
 
-func (c *Continuation) validateTarget() error {
-	if c == nil || c.resource == nil {
-		return ErrTurnExpired
-	}
-	c.mu.Lock()
-	target := c.target
-	authority := c.resource.scopeAuthority
-	c.mu.Unlock()
-	if target.kind != targetAgent {
-		return nil
-	}
-	if authority == nil {
-		return sessionruntime.ErrExecutionNoLongerLive
-	}
-	scope, ok := authority.CurrentExecutionScope(target.scopeID)
-	if !ok {
-		return sessionruntime.ErrExecutionNoLongerLive
-	}
-	current, err := AgentTarget(scope)
-	if err != nil {
-		return err
-	}
-	if !target.same(current) {
-		return sessionruntime.ErrExecutionNoLongerLive
-	}
-	return nil
-}
-
-func EnqueueTerminal[T any](
+func enqueueContinuation[T any](
 	ctx context.Context,
 	continuation *Continuation,
 	apply func(Turn) (T, error),
+	terminal bool,
 ) (Future[T], error) {
 	if continuation == nil {
 		return Future[T]{}, errors.New("runtime command continuation is required")
@@ -185,19 +101,55 @@ func EnqueueTerminal[T any](
 			if err := continuation.validateTarget(); err != nil {
 				state.valid.Store(false)
 				result <- futureResult[T]{err: err}
-				continuation.stageFinished(true)
-				return false
+				continuation.stageFinished(terminal)
+				return !terminal
 			}
 			value, applyErr := apply(turn)
 			state.valid.Store(false)
 			result <- futureResult[T]{value: value, err: applyErr}
-			continuation.stageFinished(true)
-			return false
+			continuation.stageFinished(terminal)
+			return !terminal
 		},
 	}
 	resource.mu.Unlock()
 	continuation.mu.Unlock()
 	return Future[T]{done: result}, nil
+}
+
+func (c *Continuation) validateTarget() error {
+	if c == nil || c.resource == nil {
+		return ErrTurnExpired
+	}
+	c.mu.Lock()
+	target := c.target
+	authority := c.resource.scopeAuthority
+	c.mu.Unlock()
+	if target.kind != targetAgent {
+		return nil
+	}
+	if authority == nil {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	scope, ok := authority.CurrentExecutionScope(target.scopeID)
+	if !ok {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	current, err := AgentTarget(scope)
+	if err != nil {
+		return err
+	}
+	if !target.same(current) {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	return nil
+}
+
+func EnqueueTerminal[T any](
+	ctx context.Context,
+	continuation *Continuation,
+	apply func(Turn) (T, error),
+) (Future[T], error) {
+	return enqueueContinuation(ctx, continuation, apply, true)
 }
 
 func (c *Continuation) Release() error {

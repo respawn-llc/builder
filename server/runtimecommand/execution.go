@@ -160,7 +160,8 @@ func (a *ExecutionAdapter) runAgentExecutionOrdered(
 		}
 		return nil
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		stopErr := start.handle.Stop(context.Background())
+		return errors.Join(context.Cause(ctx), mapExecutionStartError(stopErr))
 	}
 }
 

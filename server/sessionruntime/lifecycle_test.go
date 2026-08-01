@@ -335,7 +335,7 @@ func (p *lifecycleExecutionLeaseProbe) Release() error {
 
 func (p *lifecycleExecutionLeaseProbe) OrderedMutation(_ context.Context, apply func(runtime.OrderedMutationTurn) error) error {
 	p.ordered.Add(1)
-	return apply(directOrderedMutationTurn{})
+	return apply(runtime.DirectOrderedMutationTurn())
 }
 
 type lifecycleExecutionCommandProbe struct {
@@ -509,7 +509,7 @@ func TestAuthorityOrderedExecutionCapturesExactAgentScope(t *testing.T) {
 		AgentOrderedMutation: func(_ context.Context, scope ExecutionScope, apply func(runtime.OrderedMutationTurn) error) error {
 			captured = scope
 			calls.Add(1)
-			return apply(directOrderedMutationTurn{})
+			return apply(runtime.DirectOrderedMutationTurn())
 		},
 	})
 	t.Cleanup(func() {

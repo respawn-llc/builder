@@ -44,19 +44,6 @@ type AgentRuntimePlanOptions struct {
 	RecoveredWarningProvider            func() (string, bool, error)
 }
 
-type directOrderedMutationTurn struct{}
-
-func (directOrderedMutationTurn) Apply(apply func() error) error {
-	if apply == nil {
-		return errors.New("ordered mutation is required")
-	}
-	return apply()
-}
-
-func (directOrderedMutationTurn) RetainLease() (runtime.OrderedMutationLease, error) {
-	return nil, errors.New("direct ordered mutation turn cannot retain queue capacity")
-}
-
 type AgentRuntimePlan struct {
 	options AgentRuntimePlanOptions
 }
@@ -246,7 +233,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		LifecycleTaskOwner: resource,
 		OrderedMutation: func(apply func(runtime.OrderedMutationTurn) error) error {
 			if a.options.orderedMutation == nil {
-				return apply(directOrderedMutationTurn{})
+				return apply(runtime.DirectOrderedMutationTurn())
 			}
 			return a.options.orderedMutation(context.Background(), resource.ref, apply)
 		},

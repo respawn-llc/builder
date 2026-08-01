@@ -165,6 +165,8 @@ type ExecutionMutation func(context.Context, func(OrderedMutationTurn) error) er
 
 type ExecutionMutationBinding struct {
 	mutation ExecutionMutation
+	previous *ExecutionMutationBinding
+	active   bool
 }
 
 type LifecycleTaskMutation interface {
@@ -281,7 +283,11 @@ func (e *Engine) BindExecutionMutation(mutation ExecutionMutation) *ExecutionMut
 		return nil
 	}
 	e.executionMutationMu.Lock()
-	binding := &ExecutionMutationBinding{mutation: mutation}
+	binding := &ExecutionMutationBinding{
+		mutation: mutation,
+		previous: e.executionBinding,
+		active:   true,
+	}
 	e.executionMutation = mutation
 	e.executionBinding = binding
 	e.executionMutationMu.Unlock()
@@ -295,7 +301,12 @@ func (e *Engine) ClearExecutionMutation() {
 		return
 	}
 	e.executionMutationMu.Lock()
-	e.executionMutation = nil
+	if e.executionBinding != nil {
+		e.executionBinding.active = false
+		e.restoreExecutionMutationBindingLocked(e.executionBinding.previous)
+	} else {
+		e.executionMutation = nil
+	}
 	e.executionMutationMu.Unlock()
 }
 
@@ -304,11 +315,23 @@ func (e *Engine) ClearExecutionMutationIf(binding *ExecutionMutationBinding) {
 		return
 	}
 	e.executionMutationMu.Lock()
+	binding.active = false
 	if e.executionBinding == binding {
-		e.executionMutation = nil
-		e.executionBinding = nil
+		e.restoreExecutionMutationBindingLocked(binding.previous)
 	}
 	e.executionMutationMu.Unlock()
+}
+
+func (e *Engine) restoreExecutionMutationBindingLocked(binding *ExecutionMutationBinding) {
+	for binding != nil && !binding.active {
+		binding = binding.previous
+	}
+	e.executionBinding = binding
+	if binding == nil {
+		e.executionMutation = nil
+		return
+	}
+	e.executionMutation = binding.mutation
 }
 
 func (e *Engine) executionMutationSnapshot() ExecutionMutation {
@@ -660,8 +683,8 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 			}
 		}
 		if mutationLease, ok := lease.(LifecycleTaskMutation); ok {
-			e.BindExecutionMutation(ExecutionMutation(mutationLease.OrderedMutation))
-			defer e.ClearExecutionMutation()
+			binding := e.BindExecutionMutation(ExecutionMutation(mutationLease.OrderedMutation))
+			defer e.ClearExecutionMutationIf(binding)
 		}
 		task(ctx)
 	}(ctx, lease)
@@ -697,8 +720,8 @@ func (e *Engine) launchLifecycleTaskWithLease(task func(context.Context), lease 
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
 			}
 		}()
-		e.BindExecutionMutation(ExecutionMutation(lease.OrderedMutation))
-		defer e.ClearExecutionMutation()
+		binding := e.BindExecutionMutation(ExecutionMutation(lease.OrderedMutation))
+		defer e.ClearExecutionMutationIf(binding)
 		task(ctx)
 	}()
 	return true
