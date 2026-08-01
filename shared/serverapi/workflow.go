@@ -10,10 +10,9 @@ import (
 	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 )
-
-const MaxWorkflowOutputValueBytes = 64 * 1024
 
 const (
 	WorkflowRequestErrorRequired     = "workflow.request.required"
@@ -859,14 +858,13 @@ type WorkflowTaskApproveApplied struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID              string                            `json:"task_id"`
-	TargetNodeID        string                            `json:"target_node_id"`
-	TransitionKey       *string                           `json:"transition_key,omitempty"`
-	TransitionChoiceKey *string                           `json:"transition_choice_key,omitempty"`
-	Values              map[string]map[string]string      `json:"values,omitempty"`
-	Commentary          string                            `json:"commentary,omitempty"`
-	SetupOperationID    WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
-	ExecutionTarget     *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	TaskID           string                            `json:"task_id"`
+	TargetNodeID     string                            `json:"target_node_id"`
+	TransitionKey    *string                           `json:"transition_key,omitempty"`
+	Values           map[string]map[string]string      `json:"values,omitempty"`
+	Commentary       string                            `json:"commentary,omitempty"`
+	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
+	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -2683,9 +2681,6 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	if r.TransitionKey != nil && strings.TrimSpace(*r.TransitionKey) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "transition_key", "transition_key must be non-blank when present")
 	}
-	if r.TransitionChoiceKey != nil && strings.TrimSpace(*r.TransitionChoiceKey) == "" {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "transition_choice_key", "transition_choice_key must be non-blank when present")
-	}
 	for nodeKey, outputs := range r.Values {
 		if strings.TrimSpace(nodeKey) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values node keys must be non-blank")
@@ -2700,7 +2695,7 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 			if strings.TrimSpace(value) == "" {
 				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must be non-blank")
 			}
-			if len(value) > MaxWorkflowOutputValueBytes {
+			if len(value) > workflowcontract.MaxOutputValueBytes {
 				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must not exceed the maximum output value size")
 			}
 		}

@@ -52,7 +52,6 @@ type WorkflowTaskMovePreviewTransition struct {
 }
 
 type WorkflowTaskMovePreviewTransitionChoice struct {
-	ChoiceKey             string                          `json:"choice_key"`
 	TransitionKey         string                          `json:"transition_key"`
 	Label                 string                          `json:"label"`
 	SourceNodeDisplayName string                          `json:"source_node_display_name"`
@@ -158,19 +157,11 @@ func validateWorkflowTaskMovePreviewTransition(transition WorkflowTaskMovePrevie
 			return fmt.Errorf("manual move preview transition choice %d: %w", index, err)
 		}
 	}
-	seen := make(map[string]struct{}, len(transition.Choices))
-	for _, choice := range transition.Choices {
-		if _, exists := seen[choice.ChoiceKey]; exists {
-			return fmt.Errorf("manual move preview transition choice key %q is duplicated", choice.ChoiceKey)
-		}
-		seen[choice.ChoiceKey] = struct{}{}
-	}
 	return nil
 }
 
 func (c WorkflowTaskMovePreviewTransitionChoice) Validate() error {
 	for field, value := range map[string]string{
-		"choice_key":               c.ChoiceKey,
 		"transition_key":           c.TransitionKey,
 		"label":                    c.Label,
 		"source_node_display_name": c.SourceNodeDisplayName,

@@ -4,13 +4,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"core/shared/workflowcontract"
 )
 
 func TestWorkflowTaskMovePreviewResponseValidatesEachOutcome(t *testing.T) {
 	currentNodes := []WorkflowTaskCurrentNode{{NodeID: "current"}}
 	resolved := "plan output"
 	choice := WorkflowTaskMovePreviewTransitionChoice{
-		ChoiceKey:             "group-plan-next",
 		TransitionKey:         "plan-to-implement",
 		Label:                 "Implement",
 		SourceNodeDisplayName: "Plan",
@@ -77,28 +78,6 @@ func TestWorkflowTaskMovePreviewResponseRejectsUnknownOrMixedDiscriminators(t *t
 	}
 }
 
-func TestWorkflowTaskMovePreviewResponseRejectsDuplicateChoiceKeys(t *testing.T) {
-	choice := WorkflowTaskMovePreviewTransitionChoice{
-		ChoiceKey:             "group-next",
-		TransitionKey:         "next",
-		Label:                 "Next",
-		SourceNodeDisplayName: "Plan",
-		RequiredValues:        []WorkflowTaskMoveRequiredValue{},
-	}
-	response := WorkflowTaskMovePreviewResponse{
-		Outcome: WorkflowTaskMovePreviewOutcomeTransition,
-		Transition: &WorkflowTaskMovePreviewTransition{
-			Choices: []WorkflowTaskMovePreviewTransitionChoice{
-				choice,
-				{ChoiceKey: choice.ChoiceKey, TransitionKey: "alternate", Label: "Alternate", SourceNodeDisplayName: "Review", RequiredValues: []WorkflowTaskMoveRequiredValue{}},
-			},
-		},
-	}
-	if err := response.Validate(); err == nil {
-		t.Fatal("duplicate ChoiceKeys validated")
-	}
-}
-
 func TestWorkflowTaskMoveRequestUsesStructuredTransitionValues(t *testing.T) {
 	requestType := reflect.TypeOf(WorkflowTaskMoveRequest{})
 	if _, exists := requestType.FieldByName("OutputValues"); exists {
@@ -106,9 +85,6 @@ func TestWorkflowTaskMoveRequestUsesStructuredTransitionValues(t *testing.T) {
 	}
 	if _, exists := requestType.FieldByName("TransitionKey"); !exists {
 		t.Fatal("manual move request does not expose a transition key")
-	}
-	if _, exists := requestType.FieldByName("TransitionChoiceKey"); !exists {
-		t.Fatal("manual move request does not expose a unique transition choice key")
 	}
 	if _, exists := requestType.FieldByName("Values"); !exists {
 		t.Fatal("manual move request does not expose structured values")
@@ -166,7 +142,7 @@ func TestWorkflowTaskMoveRequestRejectsOversizedStructuredValues(t *testing.T) {
 		TargetNodeID:     "implement",
 		TransitionKey:    &transitionKey,
 		Values: map[string]map[string]string{
-			"plan": {"summary": strings.Repeat("x", MaxWorkflowOutputValueBytes+1)},
+			"plan": {"summary": strings.Repeat("x", workflowcontract.MaxOutputValueBytes+1)},
 		},
 	}
 	if err := request.Validate(); err == nil {
