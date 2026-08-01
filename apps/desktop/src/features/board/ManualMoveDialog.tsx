@@ -15,7 +15,7 @@ import {
 type ManualMoveValues = Readonly<Record<string, Readonly<Record<string, string>>>>;
 
 export type ManualMoveDialogSubmit = Readonly<{
-  transitionKey?: string | undefined;
+  choiceKey?: string | undefined;
   values?: ManualMoveValues | undefined;
 }>;
 
@@ -30,11 +30,11 @@ export function ManualMoveDialog({
 }>) {
   const { t } = useTranslation();
   const choices = manualMoveChoices(preview);
-  const [selectedTransitionKey, setSelectedTransitionKey] = useState<string | null>(
-    choices.length === 1 ? choices[0]?.transitionKey ?? null : null,
+  const [selectedChoiceKey, setSelectedChoiceKey] = useState<string | null>(
+    choices.length === 1 ? choices[0]?.choiceKey ?? null : null,
   );
   const [phase, setPhase] = useState<"choices" | "details">(choices.length > 1 ? "choices" : "details");
-  const selectedChoice = manualMoveSelectedChoice(choices, selectedTransitionKey);
+  const selectedChoice = manualMoveSelectedChoice(choices, selectedChoiceKey);
   const requiredValues = manualMoveRequiredValues(selectedChoice);
   const [values, setValues] = useState<ManualMoveValues>(() => initialValues(requiredValues));
   const canSubmit = manualMoveCanSubmit(requiredValues, values);
@@ -42,7 +42,7 @@ export function ManualMoveDialog({
   const title = t("board.manualMoveTitle");
   const canAdvance = manualMoveCanAdvance(preview, selectedChoice);
   const submit = () => {
-    onSubmit(manualMoveSubmit(selectedChoice?.transitionKey, values));
+    onSubmit(manualMoveSubmit(selectedChoice?.choiceKey, values));
   };
 
   return (
@@ -54,8 +54,8 @@ export function ManualMoveDialog({
           choices={choices}
           onCancel={onCancel}
           onSelect={(value) => {
-            setSelectedTransitionKey(value);
-            const choice = choices.find((item) => item.transitionKey === value);
+            setSelectedChoiceKey(value);
+            const choice = choices.find((item) => item.choiceKey === value);
             setValues(initialValues(choice?.requiredValues ?? []));
           }}
           onSubmit={submit}
@@ -65,7 +65,7 @@ export function ManualMoveDialog({
           phase={phase}
           requiredValues={requiredValues}
           selectedChoice={selectedChoice}
-          selectedTransitionKey={selectedTransitionKey}
+          selectedChoiceKey={selectedChoiceKey}
           setPhase={setPhase}
           values={values}
         />
@@ -85,7 +85,7 @@ function ManualMoveDialogContent({
   phase,
   requiredValues,
   selectedChoice,
-  selectedTransitionKey,
+  selectedChoiceKey,
   setPhase,
   values,
 }: Readonly<{
@@ -107,7 +107,7 @@ function ManualMoveDialogContent({
     label: string;
     sourceNodeDisplayName: string;
   }> | null;
-  selectedTransitionKey: string | null;
+  selectedChoiceKey: string | null;
   setPhase(value: "choices" | "details"): void;
   values: ManualMoveValues;
 }>) {
@@ -135,7 +135,7 @@ function ManualMoveDialogContent({
         <ManualMoveChoicePhase
           choices={choices}
           onSelect={onSelect}
-          selectedTransitionKey={selectedTransitionKey}
+          selectedChoiceKey={selectedChoiceKey}
         />
       ) : (
         <ManualMoveDetailsPhase
@@ -169,9 +169,9 @@ function ManualMoveDialogContent({
   );
 }
 
-function manualMoveSubmit(transitionKey: string | undefined, values: ManualMoveValues): ManualMoveDialogSubmit {
+function manualMoveSubmit(choiceKey: string | undefined, values: ManualMoveValues): ManualMoveDialogSubmit {
   return {
-    ...(transitionKey === undefined ? {} : { transitionKey }),
+    ...(choiceKey === undefined ? {} : { choiceKey }),
     ...(Object.keys(values).length === 0 ? {} : { values }),
   };
 }
@@ -185,9 +185,9 @@ function manualMoveChoices(preview: TaskMovePreviewResponse | null): readonly Ta
 
 function manualMoveSelectedChoice(
   choices: readonly TaskMovePreviewChoice[],
-  transitionKey: string | null,
+  choiceKey: string | null,
 ): TaskMovePreviewChoice | null {
-  return choices.find((choice) => choice.transitionKey === transitionKey) ?? null;
+  return choices.find((choice) => choice.choiceKey === choiceKey) ?? null;
 }
 
 function manualMoveRequiredValues(choice: TaskMovePreviewChoice | null) {
@@ -222,22 +222,22 @@ function initialValues(
 function ManualMoveChoicePhase({
   choices,
   onSelect,
-  selectedTransitionKey,
+  selectedChoiceKey,
 }: Readonly<{
   choices: readonly TaskMovePreviewChoice[];
   onSelect(value: string): void;
-  selectedTransitionKey: string | null;
+  selectedChoiceKey: string | null;
 }>) {
   const { t } = useTranslation();
   return (
     <RadioGroup
       aria-label={t("board.manualMoveTransitionChoices")}
       onValueChange={onSelect}
-      value={selectedTransitionKey}
+      value={selectedChoiceKey}
     >
       {choices.map((choice) => (
-        <label className="flex items-start gap-[var(--space-2)]" key={choice.transitionKey}>
-          <RadioGroupItem value={choice.transitionKey} />
+        <label className="flex items-start gap-[var(--space-2)]" key={choice.choiceKey}>
+          <RadioGroupItem value={choice.choiceKey} />
           <span>
             <strong>{choiceDisplayLabel(choice, choices)}</strong>
           </span>

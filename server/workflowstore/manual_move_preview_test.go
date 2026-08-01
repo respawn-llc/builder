@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
@@ -147,6 +148,23 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 			PromptTemplate:    "Alternate {{.Params.prior_summary}}.",
 			Parameters:        []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}},
 		})
+		duplicateGroupID := workflow.TransitionGroupID("group-next-start-" + string(workflowID))
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           duplicateGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(target),
+			TransitionID: "next",
+			DisplayName:  "Next from Start",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-next-start-" + string(workflowID)),
+			WorkflowID:        workflowID,
+			TransitionGroupID: duplicateGroupID,
+			Key:               "next_start",
+			TargetNodeID:      workflow.NodeIDOf(target),
+			ContextMode:       workflow.ContextModeNewSession,
+			PromptTemplate:    "Next from Start.",
+		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -163,11 +181,22 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	if err != nil {
 		t.Fatalf("PreviewManualMove: %v", err)
 	}
-	if preview.Outcome != ManualMovePreviewOutcomeTransition ||
-		len(preview.Choices) != 2 ||
-		preview.Choices[0].TransitionKey != "alternate" ||
-		preview.Choices[1].TransitionKey != "next" {
+	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 3 {
 		t.Fatalf("preview = %+v, want stable sorted choices", preview)
+	}
+	nextChoices := make([]ManualMoveTransitionChoice, 0, 2)
+	choiceKeys := make(map[workflow.TransitionGroupID]struct{}, len(preview.Choices))
+	for _, choice := range preview.Choices {
+		if _, exists := choiceKeys[choice.ChoiceKey]; exists {
+			t.Fatalf("preview = %+v, duplicate ChoiceKey %q", preview, choice.ChoiceKey)
+		}
+		choiceKeys[choice.ChoiceKey] = struct{}{}
+		if choice.TransitionKey == "next" {
+			nextChoices = append(nextChoices, choice)
+		}
+	}
+	if len(nextChoices) != 2 {
+		t.Fatalf("preview = %+v, want two source-scoped choices with authored Transition next", preview)
 	}
 	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(target)}); !errors.Is(err, ErrManualMoveTransitionSelectionRequired) {
 		t.Fatalf("ambiguous preparation error = %v, want selection-required", err)
@@ -183,6 +212,19 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	}
 	if len(selectedPreview.Choices) != 1 || selectedPreview.Choices[0].TransitionKey != selected {
 		t.Fatalf("selected preview = %+v, want alternate only", selectedPreview)
+	}
+	selectedChoiceKey := nextChoices[0].ChoiceKey
+	selectedNext, err := store.PreviewManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(target),
+		ChoiceKey:     &selectedChoiceKey,
+		TransitionKey: &nextChoices[0].TransitionKey,
+	})
+	if err != nil {
+		t.Fatalf("ChoiceKey-selected PreviewManualMove: %v", err)
+	}
+	if len(selectedNext.Choices) != 1 || selectedNext.Choices[0].ChoiceKey != selectedChoiceKey {
+		t.Fatalf("ChoiceKey-selected preview = %+v, want selected source-scoped choice", selectedNext)
 	}
 	unknown := workflow.TransitionID("missing")
 	if _, err := store.PreviewManualMove(ctx, ManualMoveRequest{
@@ -290,6 +332,82 @@ func TestManualMovePreviewReportsUnavailableImmediateContext(t *testing.T) {
 	if preview.Outcome != ManualMovePreviewOutcomeBlocked ||
 		preview.Blocker != ManualMoveBlockerContextSessionUnavailable {
 		t.Fatalf("preview = %+v, want unavailable-context blocker", preview)
+	}
+}
+
+func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	synthEdge := edgeByKey(t, definition, "synth")
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, synthEdge.ID)
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{
+			Kind:    workflow.ContextSourceSelectedNode,
+			NodeKey: "plan",
+		}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	planSessionID := associateTaskSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		started.Mutation.Created[0].Reference,
+		time.UnixMilli(1_700_000_000_000).UTC(),
+	)
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       started.Mutation.Created[0].Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	target := nodeByKey(t, definition, "synth")
+
+	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+	})
+	if err != nil {
+		t.Fatalf("PreviewManualMove: %v", err)
+	}
+	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 1 {
+		t.Fatalf("preview = %+v, want one transition using retained serial context", preview)
+	}
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"impl_a": {"joined": "joined summary"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID != planSessionID {
+		t.Fatalf("manual move = %+v, want target using unscoped retained plan Session %q", moved, planSessionID)
 	}
 }
 

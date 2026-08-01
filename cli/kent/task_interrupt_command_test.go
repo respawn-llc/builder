@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -72,6 +73,7 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
 			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
 				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					ChoiceKey:             "group-next",
 					TransitionKey:         "next",
 					Label:                 "Next",
 					SourceNodeDisplayName: "Plan",
@@ -102,6 +104,77 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 	}
 	if got := remote.moveRequests[0].Values["plan"]["summary"]; got != "done" {
 		t.Fatalf("structured values = %+v, want plan.summary=done", remote.moveRequests[0].Values)
+	}
+}
+
+func TestTaskMoveRejectsAmbiguousAuthoredTransitionWithChoiceKeys(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{
+					{ChoiceKey: "group-plan-next", TransitionKey: "next", Label: "Next", SourceNodeDisplayName: "Plan", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+					{ChoiceKey: "group-review-next", TransitionKey: "next", Label: "Next", SourceNodeDisplayName: "Review", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+				},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "implement", "--transition", "next"}, &stdout, &stderr)
+	if exitCode != 2 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "group-plan-next") || !strings.Contains(stderr.String(), "group-review-next") {
+		t.Fatalf("stderr = %q, want both actionable ChoiceKeys", stderr.String())
+	}
+}
+
+func TestTaskMoveAcceptsUniqueChoiceKeyAndSendsBothSelectionIdentities(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{
+					{ChoiceKey: "group-plan-next", TransitionKey: "next", Label: "Next", SourceNodeDisplayName: "Plan", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+					{ChoiceKey: "group-review-next", TransitionKey: "next", Label: "Next", SourceNodeDisplayName: "Review", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+				},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "implement", "--transition", "group-review-next"}, &stdout, &stderr)
+	if exitCode != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	request := remote.moveRequests[0]
+	if request.TransitionKey == nil || *request.TransitionKey != "next" ||
+		request.TransitionChoiceKey == nil || *request.TransitionChoiceKey != "group-review-next" {
+		t.Fatalf("move request = %+v, want authored and unique selection identities", request)
+	}
+}
+
+func TestManualMoveBlockerMessagesAreActionableAndDoNotExposeProtocolCodes(t *testing.T) {
+	reasons := []serverapi.WorkflowTaskMovePreviewBlocker{
+		serverapi.WorkflowTaskMovePreviewBlockerInvalidWorkflow,
+		serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition,
+		serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination,
+		serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
+		serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict,
+		serverapi.WorkflowTaskMovePreviewBlockerContextSessionUnavailable,
+		serverapi.WorkflowTaskMovePreviewBlockerNoUsableTransition,
+		serverapi.WorkflowTaskMovePreviewBlockerParallelBranchRequiresFanOut,
+	}
+	for _, reason := range reasons {
+		message := manualMoveBlockerMessage(reason)
+		if strings.TrimSpace(message) == "" || strings.Contains(message, string(reason)) {
+			t.Fatalf("blocker %q message = %q, want actionable CLI-owned copy", reason, message)
+		}
 	}
 }
 

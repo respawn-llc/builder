@@ -288,6 +288,7 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
             choices: z.array(
               z
                 .object({
+                  choice_key: z.string().trim().min(1),
                   transition_key: z.string().trim().min(1),
                   label: z.string().trim().min(1),
                   source_node_display_name: z.string().trim().min(1),
@@ -295,6 +296,7 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
                 })
                 .strict()
                 .transform((value) => ({
+                  choiceKey: value.choice_key,
                   transitionKey: value.transition_key,
                   label: value.label,
                   sourceNodeDisplayName: value.source_node_display_name,

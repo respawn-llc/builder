@@ -12,7 +12,6 @@ import (
 
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/workflowkey"
 )
 
 var (
@@ -636,7 +635,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeBlocked {
-			fmt.Fprintf(stderr, "task move blocked: %s\n", preview.Blocked.Reason)
+			fmt.Fprintf(stderr, "task move blocked: %s\n", manualMoveBlockerMessage(preview.Blocked.Reason))
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
@@ -659,6 +658,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 		}
 		var transitionKey *string
+		var transitionChoiceKey *string
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
 			key := strings.TrimSpace(*transition)
 			if key == "" {
@@ -666,41 +666,55 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
 					return 2
 				}
-				key = preview.Transition.Choices[0].TransitionKey
+				key = preview.Transition.Choices[0].ChoiceKey
 			}
-			found := false
+			var selected *serverapi.WorkflowTaskMovePreviewTransitionChoice
+			var authoredMatches []serverapi.WorkflowTaskMovePreviewTransitionChoice
 			for _, choice := range preview.Transition.Choices {
+				if choice.ChoiceKey == key {
+					value := choice
+					selected = &value
+				}
 				if choice.TransitionKey == key {
-					found = true
-					break
+					authoredMatches = append(authoredMatches, choice)
 				}
 			}
-			if !found {
-				fmt.Fprintf(stderr, "task move Transition %q is not a usable incoming Transition\n", key)
-				return 2
-			}
-			choice := preview.Transition.Choices[0]
-			for _, candidate := range preview.Transition.Choices {
-				if candidate.TransitionKey == key {
-					choice = candidate
-					break
+			if selected == nil {
+				switch len(authoredMatches) {
+				case 1:
+					selected = &authoredMatches[0]
+				case 0:
+					fmt.Fprintf(stderr, "task move selection %q is not a usable incoming Transition or ChoiceKey\n", key)
+					return 2
+				default:
+					keys := make([]string, 0, len(authoredMatches))
+					for _, choice := range authoredMatches {
+						keys = append(keys, choice.ChoiceKey)
+					}
+					fmt.Fprintf(stderr, "task move Transition %q is ambiguous; choose one of these ChoiceKeys: %s\n", key, strings.Join(keys, ", "))
+					return 2
 				}
 			}
+			choice := *selected
 			if err := validateManualMoveCLIValues(choice, values); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 2
 			}
-			transitionKey = &key
+			authoredKey := choice.TransitionKey
+			choiceKey := choice.ChoiceKey
+			transitionKey = &authoredKey
+			transitionChoiceKey = &choiceKey
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-				TaskID:           taskID,
-				TargetNodeID:     positionals[1],
-				TransitionKey:    transitionKey,
-				Values:           values,
-				Commentary:       *commentary,
-				SetupOperationID: setupOperationID,
-				ExecutionTarget:  executionTarget,
+				TaskID:              taskID,
+				TargetNodeID:        positionals[1],
+				TransitionKey:       transitionKey,
+				TransitionChoiceKey: transitionChoiceKey,
+				Values:              values,
+				Commentary:          *commentary,
+				SetupOperationID:    setupOperationID,
+				ExecutionTarget:     executionTarget,
 			})
 		})
 		if err != nil {
@@ -755,6 +769,29 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 }
 
+func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) string {
+	switch reason {
+	case serverapi.WorkflowTaskMovePreviewBlockerInvalidWorkflow:
+		return "the workflow is invalid; fix the workflow definition and try again"
+	case serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition:
+		return "the task has no current workflow position; start the task before moving it"
+	case serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination:
+		return "the destination cannot be entered by Manual Move; choose an executable or terminal node"
+	case serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion:
+		return "the task is waiting for an answer; answer the question before moving it"
+	case serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict:
+		return "the task is changing state; wait for the current operation to finish and try again"
+	case serverapi.WorkflowTaskMovePreviewBlockerContextSessionUnavailable:
+		return "the selected transition needs a retained context session that is unavailable"
+	case serverapi.WorkflowTaskMovePreviewBlockerNoUsableTransition:
+		return "the destination has no usable incoming transition from the task's current position"
+	case serverapi.WorkflowTaskMovePreviewBlockerParallelBranchRequiresFanOut:
+		return "the destination is inside a parallel branch; move to the Fan-Out transition or choose another destination"
+	default:
+		return "the server could not explain why this move is blocked; try again"
+	}
+}
+
 func validateManualMoveCLIValues(
 	choice serverapi.WorkflowTaskMovePreviewTransitionChoice,
 	values map[string]map[string]string,
@@ -776,7 +813,7 @@ func validateManualMoveCLIValues(
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("manual move value %s.%s must be non-blank", nodeKey, outputName)
 			}
-			if len(value) > workflowkey.MaxWorkflowOutputValueBytes {
+			if len(value) > serverapi.MaxWorkflowOutputValueBytes {
 				return fmt.Errorf("manual move value %s.%s exceeds the maximum output value size", nodeKey, outputName)
 			}
 		}

@@ -104,6 +104,7 @@ export type TaskMoveRequiredValue = Readonly<{
 }>;
 
 export type TaskMovePreviewChoice = Readonly<{
+  choiceKey: string;
   transitionKey: string;
   label: string;
   sourceNodeDisplayName: string;

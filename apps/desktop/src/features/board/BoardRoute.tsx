@@ -382,9 +382,13 @@ function BoardContent({
       return;
     }
     if (dropAction.kind === "move") {
+      const requestID = ++manualMoveDropSequence.current;
       void api
         .previewMoveTask(dragPayload.taskID, column.id)
         .then((preview) => {
+          if (requestID !== manualMoveDropSequence.current) {
+            return;
+          }
           if (preview.outcome === "no_op") {
             return;
           }
@@ -392,15 +396,18 @@ function BoardContent({
             reportMovePreviewBlocked(preview.blocked.reason);
             return;
           }
-          manualMoveDropSequence.current += 1;
           setManualMoveDrop({
-            id: manualMoveDropSequence.current,
+            id: requestID,
             taskID: dragPayload.taskID,
             targetNodeID: column.id,
             preview,
           });
         })
-        .catch(reportMoveError);
+        .catch((error: unknown) => {
+          if (requestID === manualMoveDropSequence.current) {
+            reportMoveError(error);
+          }
+        });
       return;
     }
     reportRejectedDrop();
@@ -505,11 +512,12 @@ function BoardContent({
       return;
     }
     const drop = manualMoveDrop;
+    manualMoveDropSequence.current += 1;
     setManualMoveDrop(null);
     const moveInput = {
       taskID: drop.taskID,
       targetNodeID: drop.targetNodeID,
-      ...(input.transitionKey === undefined ? {} : { transitionKey: input.transitionKey }),
+      ...(input.choiceKey === undefined ? {} : { transitionChoiceKey: input.choiceKey }),
       ...(input.values === undefined ? {} : { values: input.values }),
     };
     runCardAction(
@@ -655,6 +663,7 @@ function BoardContent({
       <ManualMoveDialog
         key={manualMoveDrop?.id ?? "closed"}
         onCancel={() => {
+          manualMoveDropSequence.current += 1;
           setManualMoveDrop(null);
         }}
         onSubmit={submitManualMove}

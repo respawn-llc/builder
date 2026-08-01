@@ -33,6 +33,7 @@ describe("task lifecycle client", () => {
           transition: {
             choices: [
               {
+                choice_key: "group-next",
                 transition_key: "next",
                 label: "Next",
                 source_node_display_name: "Plan",
@@ -69,6 +70,7 @@ describe("task lifecycle client", () => {
       transition: {
         choices: [
           {
+            choiceKey: "group-next",
             transitionKey: "next",
             label: "Next",
             sourceNodeDisplayName: "Plan",

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/workflowkey"
+	"core/shared/serverapi"
 )
 
 type NodeID string
@@ -75,7 +75,7 @@ const (
 	MaxInputFieldDescriptionChars  = MaxOutputFieldDescriptionChars
 	MaxParameterKeyChars           = MaxOutputFieldNameChars
 	MaxParameterDescriptionChars   = MaxOutputFieldDescriptionChars
-	MaxOutputValueBytes            = workflowkey.MaxWorkflowOutputValueBytes
+	MaxOutputValueBytes            = serverapi.MaxWorkflowOutputValueBytes
 	MaxCommentaryBytes             = 64 * 1024
 	MaxTaskCommentBytes            = 256 * 1024
 )

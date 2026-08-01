@@ -25,6 +25,7 @@ function transitionPreview(choiceCount: number): TaskMovePreviewResponse {
     outcome: "transition",
     transition: {
       choices: Array.from({ length: choiceCount }, (_, index) => ({
+        choiceKey: `group-${String(index)}`,
         transitionKey: `transition-${String(index)}`,
         label: index === 0 ? "Implement" : "Implement",
         sourceNodeDisplayName: index === 0 ? "Plan" : "Review",
@@ -70,7 +71,7 @@ describe("ManualMoveDialog", () => {
     await user.click(confirmButton);
 
     expect(onSubmit).toHaveBeenCalledWith({
-      transitionKey: "transition-0",
+      choiceKey: "group-0",
       values: { plan: { summary: "A plan" } },
     });
   });
@@ -83,6 +84,7 @@ describe("ManualMoveDialog", () => {
       transition: {
         choices: [
           {
+            choiceKey: "group-0",
             transitionKey: "transition-0",
             label: "Implement",
             sourceNodeDisplayName: "Plan",
@@ -104,7 +106,7 @@ describe("ManualMoveDialog", () => {
     expect(confirmButton).toBeEnabled();
     await user.click(confirmButton);
     expect(onSubmit).toHaveBeenCalledWith({
-      transitionKey: "transition-0",
+      choiceKey: "group-0",
       values: { plan: { summary: "Prefilled" } },
     });
 

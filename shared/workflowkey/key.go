@@ -4,7 +4,6 @@ import "strings"
 
 const (
 	MaxChars                    = 64
-	MaxWorkflowOutputValueBytes = 64 * 1024
 	Description                 = "start with a lowercase letter and contain only lowercase letters, digits, or underscores, up to 64 characters"
 )
 

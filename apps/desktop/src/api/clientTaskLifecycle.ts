@@ -45,6 +45,7 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         task_id: input.taskID,
         target_node_id: input.targetNodeID,
         transition_key: input.transitionKey,
+        transition_choice_key: input.transitionChoiceKey,
         values: input.values,
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
