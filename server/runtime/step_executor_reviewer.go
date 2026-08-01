@@ -137,7 +137,7 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
 	}
 	if err := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion})); err != nil {
-		return outcome, err
+		return outcome, errors.Join(statusErr, err)
 	}
 	return outcome, statusErr
 }
