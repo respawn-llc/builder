@@ -1660,6 +1660,52 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 	}
 }
 
+func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{}, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	authority := fixture.authority
+
+	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
+	event := runtimewirefixture.BackgroundCompletionEvent("1001", sessionID.String(), t.TempDir())
+	event.NoticeSuppressed = true
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		predecessor.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release predecessor runtime: %v", err)
+	}
+
+	authority.routeBackgroundEvent(event)
+	select {
+	case update := <-updates:
+		t.Fatalf("terminal event reached absent runtime: %+v", update)
+	default:
+	}
+
+	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventCompleted ||
+			update.ID != event.Snapshot.ID ||
+			update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("queued terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued terminal event did not reach the next runtime")
+	}
+}
+
 func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
