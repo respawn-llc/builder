@@ -289,9 +289,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		runtimeAuthority,
 		workflowMutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
-			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
-			Attention:            workflowAttentionFinalizer,
-			AssignmentSteerer:    workflowRuntimeStarter,
+			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
+			Attention:         workflowAttentionFinalizer,
+			AssignmentSteerer: workflowRuntimeStarter,
 		},
 	)
 	if err != nil {

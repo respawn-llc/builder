@@ -38,6 +38,7 @@
 
 - `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
+- Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
 - A non-zero command exit is recoverable and does not abort the model turn. Launch failures are not retried automatically. Interruption sends `SIGINT`, then `SIGKILL` after 10 seconds.
 - `[shell].postprocessing_mode` accepts only `none`, `builtin`, `user`, or `all`; omission selects the built-in default, while an empty or unknown value is an error. `[shell].postprocess_hook` is optional; absence is `null`, and a present empty or whitespace-only value is invalid.

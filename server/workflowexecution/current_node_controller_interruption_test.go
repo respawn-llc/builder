@@ -173,7 +173,7 @@ func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t
 			{Reference: finalizing, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
 		},
 		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflow.CurrentNodeReference{successor},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
 		},
 		interruptStarted: make(chan struct{}),
 		interruptRelease: make(chan struct{}),
@@ -498,7 +498,7 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 		t.Fatalf("reserved key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{reference: reserved, automatic: true}
+	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{reference: reserved, policy: currentNodeAdmissionAutomaticAgent}
 	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: live.TaskID}); err != nil {
@@ -512,6 +512,95 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	}
 	if hasAutomaticCurrentNodeIntent(controller.Snapshot(), reserved) {
 		t.Fatalf("drained reservation remains in snapshot: %+v", controller.Snapshot())
+	}
+}
+
+func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	occupyingAgent := currentNodeReferenceForControllerTest(t, "task-interrupted-script-agent", "node-occupying-agent")
+	script := currentNodeReferenceForControllerTest(t, "task-interrupted-script", "node-script")
+	queuedAgent := currentNodeReferenceForControllerTest(t, "task-interrupted-script-queued-agent", "node-queued-agent")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 3),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: occupyingAgent,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case started := <-runner.started:
+		if !started.Equal(occupyingAgent) {
+			t.Fatalf("occupying Agent start = %v, want %v", started, occupyingAgent)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("occupying Agent did not start")
+	}
+	waitForRunningCurrentNode(t, authority, occupyingAgent)
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+		{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
+	})
+	select {
+	case started := <-runner.started:
+		if !started.Equal(script) {
+			t.Fatalf("Script start = %v, want %v", started, script)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Script did not start while Agent capacity was occupied")
+	}
+	waitForRunningCurrentNode(t, authority, script)
+	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
+		t.Fatalf("queued Agent = %+v, want queued while occupying Agent is live", controller.Snapshot().AutomaticIntents)
+	}
+
+	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: script.TaskID}); err != nil {
+		t.Fatalf("interrupt Script: %v", err)
+	}
+	if hasLiveCurrentNode(controller.Snapshot(), script) {
+		t.Fatalf("interrupted Script remains live: %+v", controller.Snapshot().LiveScopes)
+	}
+	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
+		t.Fatalf("queued Agent = %+v, want queued after Script interruption", controller.Snapshot().AutomaticIntents)
+	}
+	occupyingHandle, live := authority.ExecutionByScope(singleLiveScope(t, controller, occupyingAgent))
+	if !live {
+		t.Fatal("occupying Agent is not live")
+	}
+	if err := occupyingHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop occupying Agent: %v", err)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(queuedAgent) {
+			t.Fatalf("queued Agent start = %v, want %v", started, queuedAgent)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued Agent did not start after occupying Agent stopped")
 	}
 }
 
@@ -633,7 +722,7 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, automatic: true}
+	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
 	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, ErrNoInterruptibleExecution) {

@@ -320,7 +320,8 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 			return false
 		}
 	}
-	for _, start := range c.automaticQueue {
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		start := entry.start
 		if start.reference.TaskID == taskID {
 			return false
 		}

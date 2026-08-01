@@ -20,10 +20,18 @@ type CurrentNodeCompletionRequest struct {
 	Commentary   string
 }
 
+// CurrentNodeAutomaticIntent is a volatile successor start produced by a
+// committed completion. The executable Node kind is captured from the same
+// Workflow definition used to materialize the successor.
+type CurrentNodeAutomaticIntent struct {
+	CurrentNode workflow.CurrentNodeReference
+	NodeKind    workflow.NodeKind
+}
+
 type CurrentNodeCompletionResult struct {
 	Mutation         workflow.CurrentNodeMutationResult
 	Handoff          CompletionHandoff
-	AutomaticIntents []workflow.CurrentNodeReference
+	AutomaticIntents []CurrentNodeAutomaticIntent
 	PendingApproval  *workflow.PendingApproval
 }
 
@@ -272,7 +280,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		Handoff: handoff,
 	}
 	if executableNodeKind(target.Node.Kind()) {
-		result.AutomaticIntents = []workflow.CurrentNodeReference{targetCurrentNode.Reference}
+		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
 	return result, nil
 }
@@ -316,6 +328,20 @@ func cloneCurrentNodeOutputValues(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func newCurrentNodeAutomaticIntent(reference workflow.CurrentNodeReference, node workflow.Node) (CurrentNodeAutomaticIntent, error) {
+	if err := reference.Validate(); err != nil {
+		return CurrentNodeAutomaticIntent{}, err
+	}
+	if node == nil {
+		return CurrentNodeAutomaticIntent{}, errors.New("automatic intent target node is required")
+	}
+	kind := node.Kind()
+	if !executableNodeKind(kind) {
+		return CurrentNodeAutomaticIntent{}, fmt.Errorf("automatic intent target node %q has non-executable kind %q", reference.NodeID, kind)
+	}
+	return CurrentNodeAutomaticIntent{CurrentNode: reference, NodeKind: kind}, nil
 }
 
 func sortedStringKeys(values map[string]string) []string {

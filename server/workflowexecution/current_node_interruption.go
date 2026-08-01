@@ -123,8 +123,9 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			}
 			c.explicitQueue = explicitQueue
 
-			automaticQueue := c.automaticQueue[:0]
-			for _, start := range c.automaticQueue {
+			var automaticQueue currentNodeAutomaticQueue
+			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+				start := entry.start
 				if start.reference.TaskID == selector.TaskID {
 					key, keyErr := start.reference.Key()
 					if keyErr != nil {
@@ -134,7 +135,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					references = append(references, start.reference)
 					continue
 				}
-				automaticQueue = append(automaticQueue, start)
+				automaticQueue.append(start)
 			}
 			c.automaticQueue = automaticQueue
 

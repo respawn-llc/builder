@@ -10,6 +10,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/runtimeids"
 )
 
@@ -18,25 +19,245 @@ const (
 	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
 )
 
+type currentNodeAdmissionPolicy uint8
+
+const (
+	currentNodeAdmissionExplicitOverride currentNodeAdmissionPolicy = iota
+	currentNodeAdmissionAutomaticAgent
+	currentNodeAdmissionAutomaticScript
+)
+
+func (p currentNodeAdmissionPolicy) isAutomatic() bool {
+	return p == currentNodeAdmissionAutomaticAgent || p == currentNodeAdmissionAutomaticScript
+}
+
+func (p currentNodeAdmissionPolicy) countsAgentCapacity() bool {
+	return p == currentNodeAdmissionAutomaticAgent
+}
+
+func (p currentNodeAdmissionPolicy) nodeKind() workflow.NodeKind {
+	switch p {
+	case currentNodeAdmissionAutomaticAgent:
+		return workflow.NodeKindAgent
+	case currentNodeAdmissionAutomaticScript:
+		return workflow.NodeKindScript
+	default:
+		panic(fmt.Sprintf("admission policy %d has no executable Node kind", p))
+	}
+}
+
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
-	automatic          bool
+	policy             currentNodeAdmissionPolicy
 	done               chan struct{}
+}
+
+type currentNodeAutomaticQueue struct {
+	first       *currentNodeAutomaticQueueEntry
+	last        *currentNodeAutomaticQueueEntry
+	firstAgent  *currentNodeAutomaticQueueEntry
+	lastAgent   *currentNodeAutomaticQueueEntry
+	firstScript *currentNodeAutomaticQueueEntry
+	lastScript  *currentNodeAutomaticQueueEntry
+	tasks       map[workflow.TaskID]*currentNodeAutomaticTaskQueue
+	nextOrder   uint64
+	size        int
+}
+
+type currentNodeAutomaticTaskQueue struct {
+	firstAgent  *currentNodeAutomaticQueueEntry
+	lastAgent   *currentNodeAutomaticQueueEntry
+	firstScript *currentNodeAutomaticQueueEntry
+	lastScript  *currentNodeAutomaticQueueEntry
+}
+
+type currentNodeAutomaticQueueEntry struct {
+	start      currentNodeQueuedStart
+	order      uint64
+	globalPrev *currentNodeAutomaticQueueEntry
+	globalNext *currentNodeAutomaticQueueEntry
+	policyPrev *currentNodeAutomaticQueueEntry
+	policyNext *currentNodeAutomaticQueueEntry
+	taskPrev   *currentNodeAutomaticQueueEntry
+	taskNext   *currentNodeAutomaticQueueEntry
+}
+
+func (q *currentNodeAutomaticQueue) append(start currentNodeQueuedStart) {
+	if !start.policy.isAutomatic() {
+		panic(fmt.Sprintf("automatic queue received non-automatic policy %d", start.policy))
+	}
+	q.nextOrder++
+	if q.nextOrder == 0 {
+		panic("automatic queue order overflow")
+	}
+	entry := &currentNodeAutomaticQueueEntry{start: start, order: q.nextOrder, globalPrev: q.last}
+	if q.last == nil {
+		q.first = entry
+	} else {
+		q.last.globalNext = entry
+	}
+	q.last = entry
+	if q.tasks == nil {
+		q.tasks = make(map[workflow.TaskID]*currentNodeAutomaticTaskQueue)
+	}
+	taskQueue := q.tasks[start.reference.TaskID]
+	if taskQueue == nil {
+		taskQueue = &currentNodeAutomaticTaskQueue{}
+		q.tasks[start.reference.TaskID] = taskQueue
+	}
+	if start.policy == currentNodeAdmissionAutomaticAgent {
+		entry.policyPrev = q.lastAgent
+		entry.taskPrev = taskQueue.lastAgent
+		if q.lastAgent == nil {
+			q.firstAgent = entry
+		} else {
+			q.lastAgent.policyNext = entry
+		}
+		q.lastAgent = entry
+		if taskQueue.lastAgent == nil {
+			taskQueue.firstAgent = entry
+		} else {
+			taskQueue.lastAgent.taskNext = entry
+		}
+		taskQueue.lastAgent = entry
+	} else {
+		entry.policyPrev = q.lastScript
+		entry.taskPrev = taskQueue.lastScript
+		if q.lastScript == nil {
+			q.firstScript = entry
+		} else {
+			q.lastScript.policyNext = entry
+		}
+		q.lastScript = entry
+		if taskQueue.lastScript == nil {
+			taskQueue.firstScript = entry
+		} else {
+			taskQueue.lastScript.taskNext = entry
+		}
+		taskQueue.lastScript = entry
+	}
+	q.size++
+}
+
+func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry) currentNodeQueuedStart {
+	if entry.globalPrev == nil {
+		q.first = entry.globalNext
+	} else {
+		entry.globalPrev.globalNext = entry.globalNext
+	}
+	if entry.globalNext == nil {
+		q.last = entry.globalPrev
+	} else {
+		entry.globalNext.globalPrev = entry.globalPrev
+	}
+	taskQueue := q.tasks[entry.start.reference.TaskID]
+	if taskQueue == nil {
+		panic("automatic queue task index lost an entry")
+	}
+	if entry.start.policy == currentNodeAdmissionAutomaticAgent {
+		if entry.policyPrev == nil {
+			q.firstAgent = entry.policyNext
+		} else {
+			entry.policyPrev.policyNext = entry.policyNext
+		}
+		if entry.policyNext == nil {
+			q.lastAgent = entry.policyPrev
+		} else {
+			entry.policyNext.policyPrev = entry.policyPrev
+		}
+		if entry.taskPrev == nil {
+			taskQueue.firstAgent = entry.taskNext
+		} else {
+			entry.taskPrev.taskNext = entry.taskNext
+		}
+		if entry.taskNext == nil {
+			taskQueue.lastAgent = entry.taskPrev
+		} else {
+			entry.taskNext.taskPrev = entry.taskPrev
+		}
+	} else {
+		if entry.policyPrev == nil {
+			q.firstScript = entry.policyNext
+		} else {
+			entry.policyPrev.policyNext = entry.policyNext
+		}
+		if entry.policyNext == nil {
+			q.lastScript = entry.policyPrev
+		} else {
+			entry.policyNext.policyPrev = entry.policyPrev
+		}
+		if entry.taskPrev == nil {
+			taskQueue.firstScript = entry.taskNext
+		} else {
+			entry.taskPrev.taskNext = entry.taskNext
+		}
+		if entry.taskNext == nil {
+			taskQueue.lastScript = entry.taskPrev
+		} else {
+			entry.taskNext.taskPrev = entry.taskPrev
+		}
+	}
+	if taskQueue.firstAgent == nil && taskQueue.firstScript == nil {
+		delete(q.tasks, entry.start.reference.TaskID)
+	}
+	q.size--
+	return entry.start
+}
+
+func (q *currentNodeAutomaticQueue) clear() {
+	q.first = nil
+	q.last = nil
+	q.firstAgent = nil
+	q.lastAgent = nil
+	q.firstScript = nil
+	q.lastScript = nil
+	q.tasks = nil
+	q.nextOrder = 0
+	q.size = 0
+}
+
+func (q *currentNodeAutomaticQueue) len() int {
+	return q.size
+}
+
+func (q *currentNodeAutomaticQueue) selectEntry(lastTask *workflow.TaskID, agentAvailable bool) (*currentNodeAutomaticQueueEntry, bool) {
+	if lastTask != nil {
+		if taskQueue := q.tasks[*lastTask]; taskQueue != nil {
+			candidate := taskQueue.firstScript
+			if agentAvailable && taskQueue.firstAgent != nil &&
+				(candidate == nil || taskQueue.firstAgent.order < candidate.order) {
+				candidate = taskQueue.firstAgent
+			}
+			if candidate != nil {
+				return candidate, true
+			}
+		}
+	}
+	if !agentAvailable {
+		return q.firstScript, q.firstScript != nil
+	}
+	if q.firstAgent == nil {
+		return q.firstScript, q.firstScript != nil
+	}
+	if q.firstScript == nil || q.firstAgent.order < q.firstScript.order {
+		return q.firstAgent, true
+	}
+	return q.firstScript, true
 }
 
 type currentNodeAdmissionGate struct {
 	reference workflow.CurrentNodeReference
 	lease     sessionruntime.WorkflowExecutionLease
-	automatic bool
+	policy    currentNodeAdmissionPolicy
 	done      <-chan struct{}
 }
 
 type currentNodeLiveScope struct {
 	reference workflow.CurrentNodeReference
 	lease     sessionruntime.WorkflowExecutionLease
-	automatic bool
+	policy    currentNodeAdmissionPolicy
 }
 
 type currentNodeAdmissionError struct {
@@ -134,7 +355,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err != nil {
 		return err
 	}
-	defer c.releaseReservation(key, start.automatic)
+	defer c.releaseReservation(key, start.policy)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -149,7 +370,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			c.mu.Unlock()
 			return err
 		}
-		reservation, reserved := c.admissionReservationLocked(key, start.automatic)
+		reservation, reserved := c.admissionReservationLocked(key, start.policy)
 		if !reserved || reservation.done != start.done {
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
@@ -186,19 +407,19 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		reservation, reserved = c.admissionReservationLocked(key, start.automatic)
+		reservation, reserved = c.admissionReservationLocked(key, start.policy)
 		if !reserved || reservation.done != start.done {
 			c.mu.Unlock()
 			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		c.deleteAdmissionReservationLocked(key, start.automatic)
+		c.deleteAdmissionReservationLocked(key, start.policy)
 		// The gate precedes the durable restart marker, so any conflicting
 		// lifecycle mutation sees admission before slow runner preparation.
 		c.gates[key] = currentNodeAdmissionGate{
 			reference: reference,
 			lease:     next,
-			automatic: start.automatic,
+			policy:    start.policy,
 			done:      start.done,
 		}
 		c.mu.Unlock()
@@ -241,7 +462,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		delete(c.gates, key)
-		c.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease, automatic: gate.automatic}
+		c.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease, policy: gate.policy}
 		c.liveByNode[key] = lease.ScopeID()
 		lease.Release()
 		return nil
@@ -251,7 +472,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			admitted: true,
 		}
 	}
-	if !start.automatic {
+	if !start.policy.isAutomatic() {
 		c.wakeAdmissionWorker()
 	}
 	return nil
@@ -263,6 +484,9 @@ func (c *CurrentNodeController) removeGate(key workflow.CurrentNodeReferenceKey,
 	if gate, exists := c.gates[key]; exists && gate.lease.ScopeID() == scopeID {
 		delete(c.gates, key)
 		delete(c.stopping, scopeID)
+		if gate.policy.countsAgentCapacity() {
+			c.releaseAgentCapacityLocked()
+		}
 		wake = true
 	}
 	c.mu.Unlock()
@@ -274,7 +498,12 @@ func (c *CurrentNodeController) removeGate(key workflow.CurrentNodeReferenceKey,
 func (c *CurrentNodeController) discardAdmission(reference workflow.CurrentNodeReference, key workflow.CurrentNodeReferenceKey, lease sessionruntime.WorkflowExecutionLease, cause error) error {
 	c.removeGate(key, lease.ScopeID())
 	c.mu.Lock()
-	delete(c.live, lease.ScopeID())
+	if live, exists := c.live[lease.ScopeID()]; exists {
+		if live.policy.countsAgentCapacity() {
+			c.releaseAgentCapacityLocked()
+		}
+		delete(c.live, lease.ScopeID())
+	}
 	if current, exists := c.liveByNode[key]; exists && current == lease.ScopeID() {
 		delete(c.liveByNode, key)
 	}
@@ -445,7 +674,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 	}
 	for _, start := range starts {
 		var err error
-		if start.automatic {
+		if start.policy.isAutomatic() {
 			err = c.queueAutomaticStartLocked(start)
 		} else {
 			err = c.queueExplicitStartLocked(start)
@@ -459,7 +688,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 }
 
 func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueuedStart) error {
-	if start.automatic {
+	if start.policy != currentNodeAdmissionExplicitOverride {
 		return errors.New("explicit current node start cannot be automatic")
 	}
 	key, err := start.reference.Key()
@@ -476,8 +705,8 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 }
 
 func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueuedStart) error {
-	if !start.automatic {
-		return errors.New("automatic current node start must be automatic")
+	if !start.policy.isAutomatic() {
+		return errors.New("automatic current node start requires an automatic admission policy")
 	}
 	key, err := start.reference.Key()
 	if err != nil {
@@ -486,7 +715,7 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
-	c.automaticQueue = append(c.automaticQueue, start)
+	c.automaticQueue.append(start)
 	c.queued[key] = struct{}{}
 	c.wakeAdmissionWorker()
 	return nil
@@ -570,7 +799,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || c.inFlightAdmissionCountLocked(false) >= explicitAdmissionConcurrency || len(c.explicitQueue) == 0 {
+	if c.closed || c.inFlightAdmissionCountLocked(currentNodeAdmissionExplicitOverride) >= explicitAdmissionConcurrency || len(c.explicitQueue) == 0 {
 		return currentNodeQueuedStart{}, false
 	}
 	start := c.explicitQueue[0]
@@ -591,58 +820,88 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, boo
 func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || c.automaticActiveLocked() >= c.automaticConcurrency || len(c.automaticQueue) == 0 {
+	if c.closed || c.automaticQueue.len() == 0 {
 		return currentNodeQueuedStart{}, false
 	}
-	index := 0
-	if c.lastAutomaticTask != nil {
-		for candidateIndex, candidate := range c.automaticQueue {
-			if candidate.reference.TaskID == *c.lastAutomaticTask {
-				index = candidateIndex
-				break
-			}
-		}
+	agentAvailable := c.agentCapacityActive < c.agentConcurrency
+	entry, ok := c.automaticQueue.selectEntry(c.lastAutomaticTask, agentAvailable)
+	if !ok {
+		return currentNodeQueuedStart{}, false
 	}
-	start := c.automaticQueue[index]
-	c.automaticQueue = append(c.automaticQueue[:index], c.automaticQueue[index+1:]...)
+	start := c.automaticQueue.remove(entry)
 	key, err := start.reference.Key()
 	if err != nil {
 		panic(fmt.Sprintf("take automatic current node intent: %v", err))
 	}
 	delete(c.queued, key)
 	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-	start.automatic = true
 	start.done = make(chan struct{})
 	c.automaticReservations[key] = start
 	c.admissionWorkers[key] = start
+	if start.policy.countsAgentCapacity() {
+		c.agentCapacityActive++
+	}
 	c.admissionWG.Add(1)
 	taskID := start.reference.TaskID
 	c.lastAutomaticTask = &taskID
 	return start, true
 }
 
-func (c *CurrentNodeController) automaticActiveLocked() int {
-	active := c.inFlightAdmissionCountLocked(true)
-	for _, live := range c.live {
-		if live.automatic {
-			active++
-		}
+func automaticIntentAdmissible(intent CurrentNodeAutomaticIntent, agentAvailable bool) bool {
+	switch intent.NodeKind {
+	case workflow.NodeKindAgent:
+		return agentAvailable
+	case workflow.NodeKindScript:
+		return true
+	default:
+		panic(fmt.Sprintf("automatic intent %v has non-executable node kind %q", intent.CurrentNode, intent.NodeKind))
 	}
-	return active
 }
 
-func (c *CurrentNodeController) inFlightAdmissionCountLocked(automatic bool) int {
+func selectAutomaticIntentIndex(intents []CurrentNodeAutomaticIntent, lastTask *workflow.TaskID, agentAvailable bool) (int, bool) {
+	if lastTask != nil {
+		for index, intent := range intents {
+			if intent.CurrentNode.TaskID == *lastTask && automaticIntentAdmissible(intent, agentAvailable) {
+				return index, true
+			}
+		}
+	}
+	for index, intent := range intents {
+		if automaticIntentAdmissible(intent, agentAvailable) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func (c *CurrentNodeController) agentActiveLocked() int {
+	return c.agentCapacityActive
+}
+
+func (c *CurrentNodeController) releaseAgentCapacityLocked() {
+	if c.agentCapacityActive <= 0 {
+		panic("automatic Agent capacity released without an active reservation, gate, or live scope")
+	}
+	c.agentCapacityActive--
+}
+
+func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeAdmissionPolicy) int {
 	count := 0
-	for _, start := range c.admissionWorkers {
-		if start.automatic == automatic {
+	for key, start := range c.admissionWorkers {
+		if start.policy == policy {
+			if policy.countsAgentCapacity() {
+				if _, live := c.liveByNode[key]; live {
+					continue
+				}
+			}
 			count++
 		}
 	}
 	return count
 }
 
-func (c *CurrentNodeController) admissionReservationLocked(key workflow.CurrentNodeReferenceKey, automatic bool) (currentNodeQueuedStart, bool) {
-	if automatic {
+func (c *CurrentNodeController) admissionReservationLocked(key workflow.CurrentNodeReferenceKey, policy currentNodeAdmissionPolicy) (currentNodeQueuedStart, bool) {
+	if policy.isAutomatic() {
 		start, exists := c.automaticReservations[key]
 		return start, exists
 	}
@@ -650,21 +909,24 @@ func (c *CurrentNodeController) admissionReservationLocked(key workflow.CurrentN
 	return start, exists
 }
 
-func (c *CurrentNodeController) deleteAdmissionReservationLocked(key workflow.CurrentNodeReferenceKey, automatic bool) {
-	if automatic {
+func (c *CurrentNodeController) deleteAdmissionReservationLocked(key workflow.CurrentNodeReferenceKey, policy currentNodeAdmissionPolicy) {
+	if policy.isAutomatic() {
 		delete(c.automaticReservations, key)
 		return
 	}
 	delete(c.explicitReservations, key)
 }
 
-func (c *CurrentNodeController) releaseReservation(key workflow.CurrentNodeReferenceKey, automatic bool) {
+func (c *CurrentNodeController) releaseReservation(key workflow.CurrentNodeReferenceKey, policy currentNodeAdmissionPolicy) {
 	c.mu.Lock()
-	_, reserved := c.admissionReservationLocked(key, automatic)
-	c.deleteAdmissionReservationLocked(key, automatic)
+	_, reserved := c.admissionReservationLocked(key, policy)
+	c.deleteAdmissionReservationLocked(key, policy)
+	if reserved && policy.countsAgentCapacity() {
+		c.releaseAgentCapacityLocked()
+	}
 	closed := c.closed
 	c.mu.Unlock()
-	if (reserved || automatic) && !closed {
+	if (reserved || policy.isAutomatic()) && !closed {
 		c.wakeAdmissionWorker()
 	}
 }
@@ -676,7 +938,7 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 	}
 	c.mu.Lock()
 	current, exists := c.admissionWorkers[key]
-	if !exists || current.done != start.done || current.automatic != start.automatic {
+	if !exists || current.done != start.done || current.policy != start.policy {
 		c.mu.Unlock()
 		panic("current node admission worker ownership was replaced before completion")
 	}
@@ -755,19 +1017,22 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	return err
 }
 
-func currentNodeAutomaticIntents(references []workflow.CurrentNodeReference) ([]CurrentNodeAutomaticIntent, error) {
-	intents := make([]CurrentNodeAutomaticIntent, 0, len(references))
-	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
-	for index, reference := range references {
-		key, err := reference.Key()
+func currentNodeAutomaticIntents(source []workflowstore.CurrentNodeAutomaticIntent) ([]CurrentNodeAutomaticIntent, error) {
+	intents := make([]CurrentNodeAutomaticIntent, 0, len(source))
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(source))
+	for index, intent := range source {
+		key, err := intent.CurrentNode.Key()
 		if err != nil {
 			return nil, fmt.Errorf("automatic successor current node at index %d: %w", index, err)
 		}
 		if _, exists := seen[key]; exists {
 			return nil, fmt.Errorf("automatic successor current node at index %d is duplicated", index)
 		}
+		if intent.NodeKind != workflow.NodeKindAgent && intent.NodeKind != workflow.NodeKindScript {
+			return nil, fmt.Errorf("automatic successor current node at index %d has non-executable kind %q", index, intent.NodeKind)
+		}
 		seen[key] = struct{}{}
-		intents = append(intents, CurrentNodeAutomaticIntent{CurrentNode: reference})
+		intents = append(intents, intent)
 	}
 	return intents, nil
 }
@@ -775,9 +1040,13 @@ func currentNodeAutomaticIntents(references []workflow.CurrentNodeReference) ([]
 func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQueuedStart {
 	starts := make([]currentNodeQueuedStart, 0, len(intents))
 	for _, intent := range intents {
+		policy := currentNodeAdmissionAutomaticAgent
+		if intent.NodeKind == workflow.NodeKindScript {
+			policy = currentNodeAdmissionAutomaticScript
+		}
 		starts = append(starts, currentNodeQueuedStart{
 			reference: intent.CurrentNode,
-			automatic: true,
+			policy:    policy,
 		})
 	}
 	return starts

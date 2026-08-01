@@ -124,7 +124,11 @@ func completeCurrentNodeJoinArrival(
 		Handoff: handoff,
 	}
 	if executableNodeKind(target.Node.Kind()) {
-		result.AutomaticIntents = []workflow.CurrentNodeReference{targetCurrentNode.Reference}
+		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
 	return result, nil
 }

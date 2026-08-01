@@ -14,6 +14,7 @@ import (
 type currentNodeFanoutTarget struct {
 	BranchKey   workflow.TransitionBranchKey
 	CurrentNode workflow.CurrentNode
+	Node        workflow.Node
 }
 
 func completeCurrentNodeFanout(
@@ -56,6 +57,7 @@ func completeCurrentNodeFanout(
 		preparedTargets = append(preparedTargets, currentNodeFanoutTarget{
 			BranchKey:   branchKey,
 			CurrentNode: targetCurrentNode,
+			Node:        target.Node,
 		})
 		approvalBranches = append(approvalBranches, workflow.PendingApprovalBranch{
 			TransitionBranchKey: branchKey,
@@ -102,8 +104,12 @@ func completeCurrentNodeFanout(
 		},
 	}
 	for _, target := range preparedTargets {
-		if target.CurrentNode.Scheduling != nil {
-			result.AutomaticIntents = append(result.AutomaticIntents, target.CurrentNode.Reference)
+		if target.CurrentNode.Scheduling != nil && executableNodeKind(target.Node.Kind()) {
+			intent, err := newCurrentNodeAutomaticIntent(target.CurrentNode.Reference, target.Node)
+			if err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
+			result.AutomaticIntents = append(result.AutomaticIntents, intent)
 		}
 	}
 	return result, nil

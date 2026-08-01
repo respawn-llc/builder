@@ -202,8 +202,8 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	fixture.starter = starter
 	fixture.dependencies = dependencies
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
-		AutomaticConcurrency: 1,
-		AssignmentSteerer:    starter,
+		AgentConcurrency:  1,
+		AssignmentSteerer: starter,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
