@@ -396,13 +396,12 @@ type WorkflowTransitionGroup struct {
 }
 
 type Workspace struct {
-	ID                     string
-	ProjectID              string
-	CanonicalRootPath      string
-	GitMetadataJson        string
-	CreatedAtUnixMs        int64
-	UpdatedAtUnixMs        int64
-	ManagedWorktreePathKey sql.NullString
+	ID                string
+	ProjectID         string
+	CanonicalRootPath string
+	GitMetadataJson   string
+	CreatedAtUnixMs   int64
+	UpdatedAtUnixMs   int64
 }
 
 type Worktree struct {

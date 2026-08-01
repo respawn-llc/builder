@@ -1,28 +1,19 @@
 package worktree
 
 import (
-	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 
-	"core/server/metadata"
 	"core/shared/config"
 )
 
-const (
-	workspacePathKeyMaxBytes = 24
-	managedPathComponentMax  = 31
-	workspaceParentMarker    = ".kent-workspace-owner"
-	workspaceParentMarkerVer = 1
-)
+const workspacePathKeyMaxBytes = 24
 
 var errManagedRootBaseInvalid = errors.New("managed worktree base is not a directory")
 
@@ -32,24 +23,15 @@ type managedRootBase struct {
 }
 
 type managedRootAllocator struct {
-	metadata       *metadata.Store
-	configuredBase string
-	base           managedRootBase
-	entropy        io.Reader
-}
-
-type workspaceParentMarkerData struct {
-	Version     int    `json:"version"`
-	WorkspaceID string `json:"workspace_id"`
+	base    managedRootBase
+	entropy io.Reader
 }
 
 type managedRootExhaustionError struct {
 	Operation   string
-	WorkspaceID string
 	Base        string
-	Parent      *string
+	Parent      string
 	TaskShortID *string
-	Widths      []int
 	Candidates  []string
 }
 
@@ -57,160 +39,28 @@ func (e *managedRootExhaustionError) Error() string {
 	if e == nil {
 		return "managed root allocation exhausted"
 	}
-	parent := "<absent>"
-	if e.Parent != nil {
-		parent = fmt.Sprintf("%q", *e.Parent)
-	}
 	taskShortID := "<absent>"
 	if e.TaskShortID != nil {
 		taskShortID = fmt.Sprintf("%q", *e.TaskShortID)
 	}
 	return fmt.Sprintf(
-		"managed root allocation exhausted: operation=%s workspace_id=%q base=%q parent=%s task=%s widths=%v candidates=%v",
-		e.Operation, e.WorkspaceID, e.Base, parent, taskShortID, e.Widths, e.Candidates,
+		"managed root allocation exhausted: operation=%s base=%q parent=%q task=%s candidates=%v",
+		e.Operation,
+		e.Base,
+		e.Parent,
+		taskShortID,
+		e.Candidates,
 	)
 }
 
-type managedRootReservation struct {
-	allocator  *managedRootAllocator
-	parent     string
-	parentInfo os.FileInfo
-	root       string
-	info       os.FileInfo
-	released   bool
-}
-
-func (r *managedRootReservation) validate() error {
-	if r == nil || r.allocator == nil {
-		return errors.New("managed root reservation is required")
-	}
-	base, err := r.allocator.automaticBase()
-	if err != nil {
-		return err
-	}
-	parentInfo, err := os.Lstat(r.parent)
-	if err != nil {
-		return fmt.Errorf("revalidate reserved worktree parent %q: %w", r.parent, err)
-	}
-	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() || !os.SameFile(r.parentInfo, parentInfo) {
-		return fmt.Errorf("reserved worktree parent %q changed identity or type", r.parent)
-	}
-	canonicalParent, err := filepath.EvalSymlinks(r.parent)
-	if err != nil {
-		return fmt.Errorf("resolve reserved worktree parent %q: %w", r.parent, err)
-	}
-	if err := requireManagedPathContained(base, canonicalParent); err != nil {
-		return err
-	}
-	rootInfo, err := os.Lstat(r.root)
-	if err != nil {
-		return fmt.Errorf("revalidate reserved worktree root %q: %w", r.root, err)
-	}
-	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() || !os.SameFile(r.info, rootInfo) {
-		return fmt.Errorf("reserved worktree root %q changed identity or type", r.root)
-	}
-	canonicalRoot, err := filepath.EvalSymlinks(r.root)
-	if err != nil {
-		return fmt.Errorf("resolve reserved worktree root %q: %w", r.root, err)
-	}
-	return requireManagedPathContained(base, canonicalRoot)
-}
-
-func (r *managedRootReservation) release() error {
-	if r == nil || r.released {
-		return nil
-	}
-	r.released = true
-	if err := r.validateParentForCleanup(); err != nil {
-		return err
-	}
-	current, err := os.Lstat(r.root)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect reserved worktree root %q: %w", r.root, err)
-	}
-	if current.Mode()&os.ModeSymlink != 0 || !current.IsDir() {
-		return fmt.Errorf("refusing reserved worktree root cleanup for incompatible object %q", r.root)
-	}
-	if !os.SameFile(r.info, current) {
-		return fmt.Errorf("refusing reserved worktree root cleanup after identity changed: %q", r.root)
-	}
-	entries, err := os.ReadDir(r.root)
-	if err != nil {
-		return fmt.Errorf("inspect reserved worktree root %q: %w", r.root, err)
-	}
-	if len(entries) != 0 {
-		return fmt.Errorf("refusing reserved worktree root cleanup because %q is not empty", r.root)
-	}
-	if err := os.Remove(r.root); err != nil {
-		return fmt.Errorf("remove reserved worktree root %q: %w", r.root, err)
-	}
-	return nil
-}
-
-func (r *managedRootReservation) validateParentForCleanup() error {
-	if r == nil || r.allocator == nil {
-		return errors.New("managed root reservation is required")
-	}
-	base, err := r.allocator.automaticBase()
-	if err != nil {
-		return err
-	}
-	currentParent, err := os.Lstat(r.parent)
-	if err != nil {
-		return fmt.Errorf("inspect reserved worktree parent %q: %w", r.parent, err)
-	}
-	if currentParent.Mode()&os.ModeSymlink != 0 || !currentParent.IsDir() || !os.SameFile(r.parentInfo, currentParent) {
-		return fmt.Errorf("refusing reserved worktree cleanup after parent identity changed: %q", r.parent)
-	}
-	canonicalParent, err := filepath.EvalSymlinks(r.parent)
-	if err != nil {
-		return fmt.Errorf("resolve reserved worktree parent %q during cleanup: %w", r.parent, err)
-	}
-	return requireManagedPathContained(base, canonicalParent)
-}
-
-func (r *managedRootReservation) exactLeafOccupied(leaf string) (bool, error) {
-	if r == nil {
-		return false, errors.New("managed root reservation is required")
-	}
-	trimmed := strings.TrimSpace(leaf)
-	if trimmed == "" || filepath.Base(filepath.Clean(trimmed)) != trimmed || filepath.IsAbs(trimmed) {
-		return false, errors.New("leaf must be one path component")
-	}
-	candidate := filepath.Join(r.parent, trimmed)
-	if candidate == r.root {
-		return false, nil
-	}
-	_, err := os.Lstat(candidate)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, fmt.Errorf("inspect exact managed root candidate %q: %w", candidate, err)
-}
-
-func (r *managedRootReservation) disarm() {
-	if r != nil {
-		r.released = true
-	}
-}
-
-func newManagedRootAllocator(store *metadata.Store, baseDir string, entropy io.Reader) *managedRootAllocator {
+func newManagedRootAllocator(baseDir string, entropy io.Reader) *managedRootAllocator {
 	if entropy == nil {
 		entropy = rand.Reader
 	}
-	allocator := &managedRootAllocator{
-		metadata:       store,
-		configuredBase: strings.TrimSpace(baseDir),
-		entropy:        entropy,
+	return &managedRootAllocator{
+		base:    initializeManagedRootBase(strings.TrimSpace(baseDir)),
+		entropy: entropy,
 	}
-	allocator.base = initializeManagedRootBase(allocator.configuredBase)
-	return allocator
 }
 
 func initializeManagedRootBase(configuredBase string) managedRootBase {
@@ -248,13 +98,6 @@ func initializeManagedRootBase(configuredBase string) managedRootBase {
 	return managedRootBase{path: filepath.Clean(canonical)}
 }
 
-func (a *managedRootAllocator) initializedBase() managedRootBase {
-	if a == nil {
-		return managedRootBase{err: errors.New("managed root allocator is required")}
-	}
-	return a.base
-}
-
 func (a *managedRootAllocator) automaticBase() (string, error) {
 	if a == nil {
 		return "", errors.New("managed root allocator is required")
@@ -286,174 +129,146 @@ func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string
 		return "", fmt.Errorf("relative worktree root %q escapes base dir", requestedRoot)
 	}
 	candidate := filepath.Join(base, cleaned)
-	if err := requireManagedPathContained(base, candidate); err != nil {
-		return "", err
+	if !sameOrDescendantPath(base, candidate) {
+		return "", fmt.Errorf("managed worktree path %q escapes base %q", candidate, base)
 	}
 	return config.CanonicalWorkspaceRoot(candidate)
 }
 
-func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, workspaceID string, workspaceRoot string) (string, error) {
+func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (string, error) {
 	base, err := a.automaticBase()
 	if err != nil {
 		return "", err
 	}
-	if a.metadata == nil {
-		return "", errors.New("metadata store is required")
-	}
-	workspace, err := a.metadata.GetWorkspaceByID(ctx, strings.TrimSpace(workspaceID))
+	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
 	if err != nil {
-		return "", fmt.Errorf("get workspace for managed parent: %w", err)
+		return "", fmt.Errorf("canonicalize source workspace root: %w", err)
 	}
-	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace.CanonicalRootPath)
+	parent := filepath.Join(base, normalizeWorkspacePathKey(filepath.Base(canonicalWorkspaceRoot)))
+	if !sameOrDescendantPath(base, parent) {
+		return "", fmt.Errorf("managed workspace parent %q escapes base %q", parent, base)
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("create managed workspace parent %q: %w", parent, err)
+	}
+	info, err := os.Lstat(parent)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize persisted workspace root: %w", err)
+		return "", fmt.Errorf("stat managed workspace parent %q: %w", parent, err)
 	}
-	callerWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("managed workspace parent %q is not a directory", parent)
+	}
+	canonicalParent, err := filepath.EvalSymlinks(parent)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize caller workspace root: %w", err)
+		return "", fmt.Errorf("resolve managed workspace parent %q: %w", parent, err)
 	}
-	if canonicalWorkspaceRoot != callerWorkspaceRoot {
-		return "", fmt.Errorf("workspace root %q does not match persisted canonical root %q", workspaceRoot, workspace.CanonicalRootPath)
+	if !sameOrDescendantPath(base, canonicalParent) {
+		return "", fmt.Errorf("managed workspace parent %q escapes base %q", parent, base)
 	}
-	if workspace.ManagedWorktreePathKey.Valid {
-		return a.materializePersistedWorkspaceParent(workspace.ID, workspace.ManagedWorktreePathKey.String, base)
-	}
-	seed := normalizeWorkspacePathKey(filepath.Base(filepath.Clean(canonicalWorkspaceRoot)))
-	attempted := make([]string, 0, 5)
-	for width := 0; width <= 4; width++ {
-		var suffix *string
-		if width > 0 {
-			value, randomErr := a.randomDecimal(width + 2)
-			err = randomErr
-			if err != nil {
-				return "", err
-			}
-			suffix = &value
-		}
-		candidate := workspacePathKeyCandidate(seed, suffix)
-		attempted = append(attempted, candidate)
-		parent := filepath.Join(base, candidate)
-		exists, err := config.PathExists(parent)
-		if err != nil {
-			return "", fmt.Errorf("inspect managed workspace parent candidate %q: %w", parent, err)
-		}
-		if exists {
-			continue
-		}
-		claim, err := a.metadata.ClaimWorkspacePathKey(ctx, workspace.ID, candidate)
-		if err != nil {
-			if errors.Is(err, metadata.ErrWorkspacePathKeyCandidateCollision) {
-				continue
-			}
-			return "", err
-		}
-		return a.materializeClaimedWorkspaceParent(workspace.ID, claim.Key, base, claim.Claimed)
-	}
-	panic(&managedRootExhaustionError{
-		Operation:   "workspace-parent",
-		WorkspaceID: workspace.ID,
-		Base:        base,
-		Widths:      []int{0, 3, 4, 5, 6},
-		Candidates:  attempted,
-	})
+	return filepath.Clean(parent), nil
 }
 
-func (a *managedRootAllocator) reserveRegularRoot(ctx context.Context, workspaceID string, workspaceRoot string) (*managedRootReservation, error) {
-	parent, err := a.ensureWorkspaceParent(ctx, workspaceID, workspaceRoot)
+func (a *managedRootAllocator) reserveRegularRoot(workspaceRoot string) (string, error) {
+	parent, err := a.ensureWorkspaceParent(workspaceRoot)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	attempted := make([]string, 0, 4)
 	for width := 3; width <= 6; width++ {
 		leaf, err := a.randomDecimal(width)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		attempted = append(attempted, leaf)
-		if reservation, collision, err := a.reserveLeaf(parent, leaf); err != nil {
-			return nil, err
+		if root, collision, err := reserveManagedLeaf(parent, leaf); err != nil {
+			return "", err
 		} else if !collision {
-			return reservation, nil
+			return root, nil
 		}
 	}
 	panic(&managedRootExhaustionError{
-		Operation:   "regular-leaf",
-		WorkspaceID: workspaceID,
-		Base:        a.base.path,
-		Parent:      &parent,
-		Widths:      []int{3, 4, 5, 6},
-		Candidates:  attempted,
+		Operation:  "regular-leaf",
+		Base:       a.base.path,
+		Parent:     parent,
+		Candidates: attempted,
 	})
 }
 
-func (a *managedRootAllocator) reserveTaskRoot(ctx context.Context, workspaceID string, workspaceRoot string, taskShortID string) (*managedRootReservation, error) {
-	parent, err := a.ensureWorkspaceParent(ctx, workspaceID, workspaceRoot)
+func (a *managedRootAllocator) reserveTaskRoot(workspaceRoot string, taskShortID string) (string, error) {
+	parent, err := a.ensureWorkspaceParent(workspaceRoot)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	leaf := strings.TrimSpace(taskShortID)
 	if leaf == "" || filepath.Base(filepath.Clean(leaf)) != leaf || filepath.IsAbs(leaf) {
-		return nil, errors.New("task short id must be one path component")
+		return "", errors.New("task short id must be one path component")
 	}
 	attempted := []string{leaf}
-	if reservation, collision, err := a.reserveLeaf(parent, leaf); err != nil {
-		return nil, err
+	if root, collision, err := reserveManagedLeaf(parent, leaf); err != nil {
+		return "", err
 	} else if !collision {
-		return reservation, nil
+		return root, nil
 	}
 	for width := 3; width <= 6; width++ {
 		suffix, err := a.randomDecimal(width)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		candidate := leaf + "-" + suffix
 		attempted = append(attempted, candidate)
-		if reservation, collision, err := a.reserveLeaf(parent, candidate); err != nil {
-			return nil, err
+		if root, collision, err := reserveManagedLeaf(parent, candidate); err != nil {
+			return "", err
 		} else if !collision {
-			return reservation, nil
+			return root, nil
 		}
 	}
 	panic(&managedRootExhaustionError{
 		Operation:   "task-leaf",
-		WorkspaceID: workspaceID,
 		Base:        a.base.path,
-		Parent:      &parent,
-		TaskShortID: &taskShortID,
-		Widths:      []int{0, 3, 4, 5, 6},
+		Parent:      parent,
+		TaskShortID: &leaf,
 		Candidates:  attempted,
 	})
 }
 
-func (a *managedRootAllocator) reserveLeaf(parent string, leaf string) (*managedRootReservation, bool, error) {
-	root := filepath.Join(parent, leaf)
-	if err := requireManagedPathContained(parent, root); err != nil {
-		return nil, false, err
-	}
-	parentInfo, err := os.Lstat(parent)
+func (a *managedRootAllocator) exactTaskRootOccupied(workspaceRoot string, taskShortID string) (bool, error) {
+	parent, err := a.ensureWorkspaceParent(workspaceRoot)
 	if err != nil {
-		return nil, false, fmt.Errorf("stat managed worktree parent %q: %w", parent, err)
+		return false, err
 	}
-	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
-		return nil, false, fmt.Errorf("managed worktree parent %q is not a directory", parent)
+	leaf := strings.TrimSpace(taskShortID)
+	if leaf == "" || filepath.Base(filepath.Clean(leaf)) != leaf || filepath.IsAbs(leaf) {
+		return false, errors.New("task short id must be one path component")
+	}
+	_, err = os.Lstat(filepath.Join(parent, leaf))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect exact managed task root: %w", err)
+}
+
+func reserveManagedLeaf(parent string, leaf string) (string, bool, error) {
+	root := filepath.Join(parent, leaf)
+	if !sameOrDescendantPath(parent, root) {
+		return "", false, fmt.Errorf("managed worktree root %q escapes parent %q", root, parent)
 	}
 	if err := os.Mkdir(root, 0o755); err != nil {
-		if os.IsExist(err) {
-			return nil, true, nil
+		if errors.Is(err, os.ErrExist) {
+			return "", true, nil
 		}
-		return nil, false, fmt.Errorf("reserve managed worktree root %q: %w", root, err)
+		return "", false, fmt.Errorf("reserve managed worktree root %q: %w", root, err)
 	}
 	info, err := os.Lstat(root)
 	if err != nil {
-		return nil, false, fmt.Errorf("stat reserved managed worktree root %q: %w", root, err)
+		return "", false, fmt.Errorf("stat reserved managed worktree root %q: %w", root, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, false, fmt.Errorf("reserved managed worktree root %q is not a directory", root)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", false, fmt.Errorf("reserved managed worktree root %q is not a directory", root)
 	}
-	if err := requireManagedPathContained(parent, root); err != nil {
-		return nil, false, err
-	}
-	return &managedRootReservation{allocator: a, parent: parent, parentInfo: parentInfo, root: root, info: info}, false, nil
+	return root, false, nil
 }
 
 func (a *managedRootAllocator) randomDecimal(width int) (string, error) {
@@ -468,239 +283,6 @@ func (a *managedRootAllocator) randomDecimal(width int) (string, error) {
 		buf[i] = '0' + (buf[i] % 10)
 	}
 	return string(buf), nil
-}
-
-func (a *managedRootAllocator) materializePersistedWorkspaceParent(workspaceID string, key string, base string) (string, error) {
-	return a.materializeWorkspaceParent(workspaceID, key, base, false)
-}
-
-func (a *managedRootAllocator) materializeClaimedWorkspaceParent(workspaceID string, key string, base string, claimed bool) (string, error) {
-	return a.materializeWorkspaceParent(workspaceID, key, base, claimed)
-}
-
-func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, key string, base string, claimed bool) (root string, err error) {
-	parent := filepath.Join(base, key)
-	if err := requireManagedPathContained(base, parent); err != nil {
-		return "", err
-	}
-	info, err := os.Lstat(parent)
-	parentObserved := err == nil
-	createdParent := false
-	parentCreatedConcurrently := false
-	var capturedParent os.FileInfo
-	var capturedMarker os.FileInfo
-	cleanup := func() (bool, error) {
-		if !claimed {
-			return true, nil
-		}
-		if parentObserved || parentCreatedConcurrently {
-			return false, nil
-		}
-		if !createdParent {
-			return true, nil
-		}
-		if capturedParent == nil {
-			return false, nil
-		}
-		cleanupErr := rollbackCreatedWorkspaceParent(parent, workspaceParentMarker, capturedParent, capturedMarker)
-		return cleanupErr == nil, cleanupErr
-	}
-	defer func() {
-		if err != nil {
-			cleanupComplete, cleanupErr := cleanup()
-			if cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
-			}
-			_ = cleanupComplete
-		}
-	}()
-	if os.IsNotExist(err) {
-		mkdirErr := os.Mkdir(parent, 0o755)
-		if mkdirErr != nil {
-			if !os.IsExist(mkdirErr) {
-				return "", fmt.Errorf("create managed workspace parent %q: %w", parent, mkdirErr)
-			}
-			parentCreatedConcurrently = true
-		} else {
-			createdParent = true
-		}
-		info, err = os.Lstat(parent)
-		capturedParent = info
-	}
-	if err != nil {
-		return "", fmt.Errorf("stat managed workspace parent %q: %w", parent, err)
-	}
-	capturedParent = info
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("managed workspace parent %q is not a directory", parent)
-	}
-	canonicalParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return "", fmt.Errorf("resolve managed workspace parent %q: %w", parent, err)
-	}
-	if err := requireManagedPathContained(base, canonicalParent); err != nil {
-		return "", err
-	}
-	marker := filepath.Join(parent, workspaceParentMarker)
-	markerInfo, markerErr := os.Lstat(marker)
-	if os.IsNotExist(markerErr) && (createdParent || parentCreatedConcurrently) {
-		var markerCreated bool
-		var publishErr error
-		markerInfo, markerCreated, publishErr = publishWorkspaceParentMarker(parent, marker, workspaceID)
-		if publishErr != nil {
-			return "", publishErr
-		}
-		markerErr = nil
-		if markerCreated {
-			capturedMarker = markerInfo
-		}
-	} else if os.IsNotExist(markerErr) {
-		markerInfo, markerErr = waitForWorkspaceParentMarker(marker)
-	}
-	if markerErr != nil {
-		return "", fmt.Errorf("inspect workspace parent marker %q: %w", marker, markerErr)
-	}
-	if markerInfo.Mode()&os.ModeSymlink != 0 || !markerInfo.Mode().IsRegular() {
-		return "", fmt.Errorf("workspace parent marker %q is not a regular file", marker)
-	}
-	raw, err := os.ReadFile(marker)
-	if err != nil {
-		return "", fmt.Errorf("read workspace parent marker %q: %w", marker, err)
-	}
-	if _, err := validateWorkspaceParentMarker(raw, marker, workspaceID); err != nil {
-		return "", err
-	}
-	finalParent, err := os.Lstat(parent)
-	if err != nil {
-		return "", fmt.Errorf("revalidate workspace parent %q: %w", parent, err)
-	}
-	if finalParent.Mode()&os.ModeSymlink != 0 || !finalParent.IsDir() || !os.SameFile(capturedParent, finalParent) {
-		return "", fmt.Errorf("workspace parent %q changed identity or type", parent)
-	}
-	finalCanonicalParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return "", fmt.Errorf("resolve revalidated workspace parent %q: %w", parent, err)
-	}
-	if err := requireManagedPathContained(base, finalCanonicalParent); err != nil {
-		return "", err
-	}
-	finalMarker, err := os.Lstat(marker)
-	if err != nil {
-		return "", fmt.Errorf("revalidate workspace parent marker %q: %w", marker, err)
-	}
-	if finalMarker.Mode()&os.ModeSymlink != 0 || !finalMarker.Mode().IsRegular() || !os.SameFile(markerInfo, finalMarker) {
-		return "", fmt.Errorf("workspace parent marker %q changed identity or type", marker)
-	}
-	finalRaw, err := os.ReadFile(marker)
-	if err != nil {
-		return "", fmt.Errorf("read revalidated workspace parent marker %q: %w", marker, err)
-	}
-	if _, err := validateWorkspaceParentMarker(finalRaw, marker, workspaceID); err != nil {
-		return "", fmt.Errorf("revalidate workspace parent marker %q: %w", marker, err)
-	}
-	return filepath.Clean(parent), nil
-}
-
-func validateWorkspaceParentMarker(raw []byte, marker string, workspaceID string) (workspaceParentMarkerData, error) {
-	var markerData workspaceParentMarkerData
-	if err := json.Unmarshal(raw, &markerData); err != nil {
-		return workspaceParentMarkerData{}, fmt.Errorf("decode workspace parent marker %q: %w", marker, err)
-	}
-	if markerData.Version != workspaceParentMarkerVer || markerData.WorkspaceID != workspaceID {
-		return workspaceParentMarkerData{}, fmt.Errorf("workspace parent marker %q ownership/version mismatch", marker)
-	}
-	return markerData, nil
-}
-
-func waitForWorkspaceParentMarker(marker string) (os.FileInfo, error) {
-	deadline := time.Now().Add(time.Second)
-	for {
-		info, err := os.Lstat(marker)
-		if err == nil {
-			return info, nil
-		}
-		if !os.IsNotExist(err) || time.Now().After(deadline) {
-			return nil, err
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func publishWorkspaceParentMarker(parent string, marker string, workspaceID string) (markerInfo os.FileInfo, created bool, err error) {
-	payload, err := json.Marshal(workspaceParentMarkerData{Version: workspaceParentMarkerVer, WorkspaceID: workspaceID})
-	if err != nil {
-		return nil, false, fmt.Errorf("encode workspace parent marker %q: %w", marker, err)
-	}
-	created, err = config.WriteFileIfMissing(marker, payload, workspaceParentMarker+".tmp-*")
-	if err != nil {
-		return nil, false, fmt.Errorf("publish workspace parent marker %q: %w", marker, err)
-	}
-	markerInfo, err = os.Lstat(marker)
-	if err != nil {
-		return nil, false, fmt.Errorf("inspect workspace parent marker %q: %w", marker, err)
-	}
-	return markerInfo, created, nil
-}
-
-func rollbackCreatedWorkspaceParent(parent string, markerName string, parentInfo os.FileInfo, markerInfo os.FileInfo) error {
-	currentParent, err := os.Lstat(parent)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect parent during cleanup %q: %w", parent, err)
-	}
-	if !os.SameFile(parentInfo, currentParent) || currentParent.Mode()&os.ModeSymlink != 0 || !currentParent.IsDir() {
-		return fmt.Errorf("refusing parent cleanup after identity changed: %q", parent)
-	}
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return fmt.Errorf("read parent during cleanup %q: %w", parent, err)
-	}
-	if len(entries) > 1 || (len(entries) == 1 && entries[0].Name() != markerName) {
-		return fmt.Errorf("refusing parent cleanup because %q is not marker-only", parent)
-	}
-	if markerInfo != nil {
-		currentMarker, err := os.Lstat(filepath.Join(parent, markerName))
-		if err != nil {
-			return fmt.Errorf("inspect marker during cleanup %q: %w", parent, err)
-		}
-		if !os.SameFile(markerInfo, currentMarker) {
-			return fmt.Errorf("refusing marker cleanup after identity changed: %q", parent)
-		}
-		if err := os.Remove(filepath.Join(parent, markerName)); err != nil {
-			return fmt.Errorf("remove marker during cleanup %q: %w", parent, err)
-		}
-	}
-	if err := os.Remove(parent); err != nil {
-		return fmt.Errorf("remove parent during cleanup %q: %w", parent, err)
-	}
-	return nil
-}
-
-func requireManagedPathContained(base string, candidate string) error {
-	canonicalBase, err := filepath.EvalSymlinks(base)
-	if err != nil {
-		return fmt.Errorf("resolve managed worktree base %q: %w", base, err)
-	}
-	canonicalCandidate, err := filepath.EvalSymlinks(candidate)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("resolve managed worktree candidate %q: %w", candidate, err)
-		}
-		absoluteCandidate, absErr := filepath.Abs(filepath.Clean(candidate))
-		if absErr != nil {
-			return fmt.Errorf("resolve managed worktree candidate %q: %w", candidate, absErr)
-		}
-		if !sameOrDescendantPath(canonicalBase, absoluteCandidate) {
-			return fmt.Errorf("managed worktree path %q escapes base %q", candidate, canonicalBase)
-		}
-		return nil
-	}
-	if !sameOrDescendantPath(canonicalBase, canonicalCandidate) {
-		return fmt.Errorf("managed worktree path %q escapes base %q", candidate, canonicalBase)
-	}
-	return nil
 }
 
 func normalizeWorkspacePathKey(sourceFolder string) string {
@@ -738,16 +320,4 @@ func isWindowsReservedPathKey(value string) bool {
 		return lower[3] >= '1' && lower[3] <= '9'
 	}
 	return false
-}
-
-func workspacePathKeyCandidate(parentKey string, suffix *string) string {
-	parentKey = normalizeWorkspacePathKey(parentKey)
-	if suffix == nil {
-		return parentKey
-	}
-	value := strings.TrimSpace(*suffix)
-	if value == "" {
-		panic("workspace path key suffix must be non-empty when present")
-	}
-	return parentKey + "-" + value
 }

@@ -212,7 +212,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 		authority:           authority,
 		publisher:           publisher,
 		processes:           processes,
-		managedRoots:        newManagedRootAllocator(metadataStore, opts.BaseDir, nil),
+		managedRoots:        newManagedRootAllocator(opts.BaseDir, nil),
 		setupScript:         strings.TrimSpace(opts.SetupScript),
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		resolveSetup:        opts.ResolveSetup,
@@ -423,7 +423,7 @@ func (s *Service) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskW
 		return TaskWorktreeMaterialization{}, errors.New("task does not have a locked managed execution target")
 	}
 	if !task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" {
-		return s.restoreUnboundLockedTaskWorktree(ctx, req, task, workspace)
+		return s.restoreUnboundLockedTaskWorktree(task, workspace)
 	}
 	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
 	record, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
@@ -456,17 +456,8 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 	}
 }
 
-func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest, task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (result TaskWorktreeMaterialization, err error) {
-	reservation, err := s.managedRoots.reserveTaskRoot(ctx, workspace.WorkspaceID, workspace.RootPath, task.ShortID)
-	if err != nil {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: err}
-	}
-	defer func() {
-		if cleanupErr := reservation.release(); cleanupErr != nil {
-			err = errors.Join(err, cleanupErr)
-		}
-	}()
-	occupied, err := reservation.exactLeafOccupied(task.ShortID)
+func (s *Service) restoreUnboundLockedTaskWorktree(task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (TaskWorktreeMaterialization, error) {
+	occupied, err := s.managedRoots.exactTaskRootOccupied(workspace.RootPath, task.ShortID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: err}
 	}
@@ -588,21 +579,11 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		return TaskWorktreeMaterialization{}, err
 	}
 	var worktreeRoot string
-	var reservation *managedRootReservation
 	if req.RequestedRoot == nil {
-		reservation, err = s.managedRoots.reserveTaskRoot(ctx, req.Workspace.WorkspaceID, req.Workspace.RootPath, req.Task.ShortID)
+		worktreeRoot, err = s.managedRoots.reserveTaskRoot(req.Workspace.RootPath, req.Task.ShortID)
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
-		worktreeRoot = reservation.root
-		defer func() {
-			if reservation == nil || reservation.released {
-				return
-			}
-			if releaseErr := reservation.release(); releaseErr != nil {
-				err = errors.Join(err, releaseErr)
-			}
-		}()
 	} else {
 		requestedRoot := strings.TrimSpace(*req.RequestedRoot)
 		if requestedRoot == "" {
@@ -628,17 +609,9 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	if reservation != nil {
-		if err := reservation.validate(); err != nil {
-			return TaskWorktreeMaterialization{}, err
-		}
-	}
 	createdBranch, err := s.git.Add(ctx, req.Workspace.RootPath, worktreeRoot, createSpec)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
-	}
-	if reservation != nil {
-		reservation.disarm()
 	}
 	cleanup.active = true
 	cleanup.createdBranch = createdBranch
@@ -1071,39 +1044,21 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	var reservation *managedRootReservation
 	var worktreeRoot string
 	if strings.TrimSpace(req.RootPath) == "" {
-		reservation, err = s.managedRoots.reserveRegularRoot(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
+		worktreeRoot, err = s.managedRoots.reserveRegularRoot(workspaceCtx.workspaceRoot)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
-		worktreeRoot = reservation.root
-		defer func() {
-			if reservation == nil || reservation.released {
-				return
-			}
-			if releaseErr := reservation.release(); releaseErr != nil {
-				err = errors.Join(err, releaseErr)
-			}
-		}()
 	} else {
 		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
 	}
-	if reservation != nil {
-		if err := reservation.validate(); err != nil {
-			return serverapi.WorktreeCreateResponse{}, err
-		}
-	}
 	createdBranch, err := s.git.Add(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
-	}
-	if reservation != nil {
-		reservation.disarm()
 	}
 	cleanup.active = true
 	cleanup.worktreeRoot = strings.TrimSpace(worktreeRoot)

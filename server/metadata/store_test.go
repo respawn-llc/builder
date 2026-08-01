@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"context"
-	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -70,119 +69,6 @@ func TestEnsureWorkspaceBindingDoesNotRegisterUnknownWorkspace(t *testing.T) {
 	}
 	if resolved.ProjectID != binding.ProjectID || resolved.WorkspaceID != binding.WorkspaceID || resolved.ProjectKey != binding.ProjectKey {
 		t.Fatalf("resolved binding mismatch: got %+v want %+v", resolved, binding)
-	}
-}
-
-func TestWorkspacePathKeyClaimAndRelease(t *testing.T) {
-	t.Parallel()
-	store, _, binding := newMetadataTestStore(t)
-	ctx := t.Context()
-
-	var before sql.NullString
-	if err := store.db.QueryRowContext(ctx, `SELECT managed_worktree_path_key FROM workspaces WHERE id = ?`, binding.WorkspaceID).Scan(&before); err != nil {
-		t.Fatalf("read initial workspace path key: %v", err)
-	}
-	if before.Valid {
-		t.Fatalf("new workspace path key = %q, want NULL", before.String)
-	}
-	for _, candidate := range []sql.NullString{{}, {String: "", Valid: true}} {
-		rows, err := store.queries.ClaimWorkspacePathKey(ctx, sqlitegen.ClaimWorkspacePathKeyParams{
-			ManagedWorktreePathKey: candidate,
-			ID:                     binding.WorkspaceID,
-		})
-		if err != nil {
-			t.Fatalf("empty workspace path-key claim %v: %v", candidate, err)
-		}
-		if rows != 0 {
-			t.Fatalf("empty workspace path-key claim %v updated %d rows, want 0", candidate, rows)
-		}
-	}
-
-	claimed, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "source")
-	if err != nil {
-		t.Fatalf("claim workspace path key: %v", err)
-	}
-	if claimed.Key != "source" || !claimed.Claimed {
-		t.Fatalf("claimed workspace path key = %+v, want source claimed by this call", claimed)
-	}
-
-	converged, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "other")
-	if err != nil {
-		t.Fatalf("converged workspace path key: %v", err)
-	}
-	if converged.Key != "source" || converged.Claimed {
-		t.Fatalf("converged workspace path key = %+v, want existing source key without ownership", converged)
-	}
-
-	if err := store.ReleaseWorkspacePathKey(ctx, binding.WorkspaceID, "other"); err != nil {
-		t.Fatalf("release wrong workspace path key: %v", err)
-	}
-	var retained string
-	if err := store.db.QueryRowContext(ctx, `SELECT managed_worktree_path_key FROM workspaces WHERE id = ?`, binding.WorkspaceID).Scan(&retained); err != nil {
-		t.Fatalf("read retained workspace path key: %v", err)
-	}
-	if retained != "source" {
-		t.Fatalf("retained workspace path key = %q, want source", retained)
-	}
-	if err := store.ReleaseWorkspacePathKey(ctx, binding.WorkspaceID, "source"); err != nil {
-		t.Fatalf("release workspace path key: %v", err)
-	}
-	if err := store.db.QueryRowContext(ctx, `SELECT managed_worktree_path_key FROM workspaces WHERE id = ?`, binding.WorkspaceID).Scan(&before); err != nil {
-		t.Fatalf("read released workspace path key: %v", err)
-	}
-	if before.Valid {
-		t.Fatalf("released workspace path key = %q, want NULL", before.String)
-	}
-}
-
-func TestWorkspacePathKeyClaimReportsCandidateCollision(t *testing.T) {
-	t.Parallel()
-	store, cfg := newMetadataTestStoreWithoutBinding(t)
-	ctx := t.Context()
-	first, err := store.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("register first workspace: %v", err)
-	}
-	secondRoot := t.TempDir()
-	second, err := store.RegisterWorkspaceBinding(ctx, secondRoot)
-	if err != nil {
-		t.Fatalf("register second workspace: %v", err)
-	}
-	if _, err := store.ClaimWorkspacePathKey(ctx, first.WorkspaceID, "same"); err != nil {
-		t.Fatalf("claim first workspace path key: %v", err)
-	}
-	if _, err := store.ClaimWorkspacePathKey(ctx, second.WorkspaceID, "same"); !errors.Is(err, ErrWorkspacePathKeyCandidateCollision) {
-		t.Fatalf("second claim error = %v, want candidate collision", err)
-	}
-}
-
-func TestWorkspacePathKeySurvivesRegistrationUpsertAndRebind(t *testing.T) {
-	t.Parallel()
-	store, _, binding := newMetadataTestStore(t)
-	ctx := t.Context()
-	if _, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "stable"); err != nil {
-		t.Fatalf("claim workspace path key: %v", err)
-	}
-	now := time.Now().UTC().UnixMilli()
-	if err := store.queries.UpsertWorkspace(ctx, sqlitegen.UpsertWorkspaceParams{
-		ID:                binding.WorkspaceID,
-		ProjectID:         binding.ProjectID,
-		CanonicalRootPath: binding.CanonicalRoot,
-		GitMetadataJson:   "{}",
-		CreatedAtUnixMs:   now,
-		UpdatedAtUnixMs:   now,
-	}); err != nil {
-		t.Fatalf("upsert workspace: %v", err)
-	}
-	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got.Key != "stable" {
-		t.Fatalf("path key after upsert = %+v, %v; want stable", got, err)
-	}
-	newRoot := t.TempDir()
-	if _, err := store.RebindWorkspace(ctx, binding.CanonicalRoot, newRoot); err != nil {
-		t.Fatalf("rebind workspace: %v", err)
-	}
-	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got.Key != "stable" {
-		t.Fatalf("path key after rebind = %+v, %v; want stable", got, err)
 	}
 }
 

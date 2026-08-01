@@ -1,7 +1,6 @@
 package worktree
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -864,18 +862,11 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
-	sourceWorkspace, err := env.store.GetWorkspaceByID(env.ctx, source.WorkspaceID)
-	if err != nil {
-		t.Fatalf("get source workspace: %v", err)
-	}
-	if !sourceWorkspace.ManagedWorktreePathKey.Valid {
-		t.Fatalf("source workspace path key is missing: %+v", sourceWorkspace)
-	}
-	canonicalBase, err := config.CanonicalWorkspaceRoot(env.baseDir)
+	canonicalBase, err := filepath.EvalSymlinks(env.baseDir)
 	if err != nil {
 		t.Fatalf("canonical managed worktree base: %v", err)
 	}
-	expectedParent := filepath.Join(canonicalBase, sourceWorkspace.ManagedWorktreePathKey.String)
+	expectedParent := filepath.Join(canonicalBase, normalizeWorkspacePathKey(filepath.Base(sourceRoot)))
 	if taskWorktreeID(resp.Worktree) == "" || filepath.Dir(taskWorktreeRoot(resp.Worktree)) != expectedParent {
 		t.Fatalf("worktree = %+v, want compact parent %q", resp.Worktree, expectedParent)
 	}
@@ -890,8 +881,7 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	allocator := newManagedRootAllocator(env.store, env.baseDir, bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
-	parent, err := allocator.ensureWorkspaceParent(env.ctx, env.binding.WorkspaceID, env.workspaceRoot)
+	parent, err := env.service.managedRoots.ensureWorkspaceParent(env.workspaceRoot)
 	if err != nil {
 		t.Fatalf("ensure compact parent: %v", err)
 	}

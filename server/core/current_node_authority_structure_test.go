@@ -186,7 +186,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 				if !ok {
 					return true
 				}
-				function := testharness.CalledFunction(pkg, call)
+				function := calledFunction(pkg, call)
 				if function == nil || function.Pkg() == nil {
 					return true
 				}
@@ -446,7 +446,7 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 				if !ok {
 					return true
 				}
-				function := testharness.CalledFunction(pkg, call)
+				function := calledFunction(pkg, call)
 				if function != nil &&
 					function.Pkg() != nil &&
 					function.Pkg().Path() == "core/server/workflowexecution" &&
@@ -564,7 +564,7 @@ func currentNodeSessionMetadataFindings(index currentNodeTypeIndex) []currentNod
 				if !ok {
 					return true
 				}
-				function := testharness.CalledFunction(metadataPackage, call)
+				function := calledFunction(metadataPackage, call)
 				if function == nil || function.Pkg() == nil ||
 					function.Pkg().Path() != "core/server/metadata" ||
 					function.Name() != "marshalJSON" ||
@@ -755,6 +755,19 @@ func reflectStructTagJSON(tag string) string {
 		return strings.TrimSuffix(strings.TrimPrefix(field, `json:"`), `"`)
 	}
 	return ""
+}
+
+func calledFunction(pkg *packages.Package, call *ast.CallExpr) *types.Func {
+	switch function := call.Fun.(type) {
+	case *ast.Ident:
+		typed, _ := pkg.TypesInfo.Uses[function].(*types.Func)
+		return typed
+	case *ast.SelectorExpr:
+		typed, _ := pkg.TypesInfo.Uses[function.Sel].(*types.Func)
+		return typed
+	default:
+		return nil
+	}
 }
 
 func assignedVariableOfType(site currentNodeCallSite, want types.Type) *types.Var {

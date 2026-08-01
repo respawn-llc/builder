@@ -172,16 +172,9 @@ func TestCreateWorktreeUsesCompactAutomaticRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical base: %v", err)
 	}
-	workspace, err := env.store.GetWorkspaceByID(env.ctx, env.binding.WorkspaceID)
-	if err != nil {
-		t.Fatalf("get workspace: %v", err)
-	}
-	if !workspace.ManagedWorktreePathKey.Valid {
-		t.Fatal("automatic compact root did not persist a workspace path key")
-	}
-	expectedParent := filepath.Join(canonicalBase, workspace.ManagedWorktreePathKey.String)
+	expectedParent := filepath.Join(canonicalBase, normalizeWorkspacePathKey(filepath.Base(env.workspaceRoot)))
 	if filepath.Dir(root) != expectedParent {
-		t.Fatalf("compact root parent = %q, want persisted parent %q", filepath.Dir(root), expectedParent)
+		t.Fatalf("compact root parent = %q, want normalized parent %q", filepath.Dir(root), expectedParent)
 	}
 	leaf := filepath.Base(root)
 	if len(leaf) != 3 {
@@ -194,7 +187,7 @@ func TestCreateWorktreeUsesCompactAutomaticRoot(t *testing.T) {
 	}
 }
 
-func TestCreateWorktreeExplicitRootDoesNotClaimWorkspacePathKey(t *testing.T) {
+func TestCreateWorktreePreservesExplicitRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	root := filepath.Join(env.baseDir, "explicit-root")
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
@@ -214,13 +207,6 @@ func TestCreateWorktreeExplicitRootDoesNotClaimWorkspacePathKey(t *testing.T) {
 		if canonicalErr != nil || got != canonical {
 			t.Fatalf("explicit root = %q, want %q", got, root)
 		}
-	}
-	workspace, err := env.store.GetWorkspaceByID(env.ctx, env.binding.WorkspaceID)
-	if err != nil {
-		t.Fatalf("get workspace: %v", err)
-	}
-	if workspace.ManagedWorktreePathKey.Valid {
-		t.Fatalf("explicit create claimed workspace path key %q", workspace.ManagedWorktreePathKey.String)
 	}
 }
 
@@ -614,7 +600,7 @@ func TestResolveWorktreeCreateTargetClassifiesBranchDetachedRefAndNewBranch(t *t
 
 func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), "missing-base")
-	service := &Service{managedRoots: newManagedRootAllocator(nil, baseDir, nil)}
+	service := &Service{managedRoots: newManagedRootAllocator(baseDir, nil)}
 	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit")
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
