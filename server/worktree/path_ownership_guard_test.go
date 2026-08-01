@@ -51,10 +51,8 @@ func typedPathOwnershipViolations(pkg *packages.Package) []string {
 				}
 				for _, field := range structure.Fields.List {
 					for _, name := range field.Names {
-						if name.Name == "baseDir" {
-							if typ, ok := field.Type.(*ast.Ident); ok && typ.Name == "string" {
-								violations = append(violations, "direct Service baseDir state")
-							}
+						if name.Name == "baseDir" && isStringType(pkg.TypesInfo.TypeOf(field.Type)) {
+							violations = append(violations, "direct Service baseDir state")
 						}
 					}
 				}
@@ -509,6 +507,10 @@ func managedRoot(base string, wid string) string { return filepath.Join(base, wi
 import "path/filepath"
 type Binding struct { WorkspaceID string }
 func managedRoot(base string, binding Binding) string { return filepath.Join(base, binding.WorkspaceID, "leaf") }`,
+		`package fixture
+type path string
+type Service struct { baseDir path }
+func noop() Service { return Service{} }`,
 	}
 	for index, source := range fixtures {
 		root := t.TempDir()
