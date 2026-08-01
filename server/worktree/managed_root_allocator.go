@@ -487,6 +487,7 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	}
 	info, err := os.Lstat(parent)
 	createdParent := false
+	parentCreatedConcurrently := false
 	var capturedParent os.FileInfo
 	var capturedMarker os.FileInfo
 	cleanup := func() error {
@@ -508,10 +509,15 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 		}
 	}()
 	if os.IsNotExist(err) {
-		if err := os.Mkdir(parent, 0o755); err != nil {
-			return "", fmt.Errorf("create managed workspace parent %q: %w", parent, err)
+		mkdirErr := os.Mkdir(parent, 0o755)
+		if mkdirErr != nil {
+			if !os.IsExist(mkdirErr) {
+				return "", fmt.Errorf("create managed workspace parent %q: %w", parent, mkdirErr)
+			}
+			parentCreatedConcurrently = true
+		} else {
+			createdParent = true
 		}
-		createdParent = true
 		info, err = os.Lstat(parent)
 		capturedParent = info
 	}
@@ -531,22 +537,25 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	}
 	marker := filepath.Join(parent, workspaceParentMarker)
 	markerInfo, markerErr := os.Lstat(marker)
-	if os.IsNotExist(markerErr) && createdParent {
+	if os.IsNotExist(markerErr) && (createdParent || parentCreatedConcurrently) {
 		file, createErr := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if createErr != nil {
+		if os.IsExist(createErr) {
+			markerInfo, markerErr = os.Lstat(marker)
+		} else if createErr != nil {
 			return "", fmt.Errorf("create workspace parent marker %q: %w", marker, createErr)
+		} else {
+			capturedMarker, _ = file.Stat()
+			payload, marshalErr := json.Marshal(workspaceParentMarkerData{Version: workspaceParentMarkerVer, WorkspaceID: workspaceID})
+			if marshalErr == nil {
+				_, marshalErr = file.Write(payload)
+			}
+			closeErr := file.Close()
+			if marshalErr != nil || closeErr != nil {
+				return "", fmt.Errorf("write workspace parent marker %q: %w", marker, errors.Join(marshalErr, closeErr))
+			}
+			markerInfo, markerErr = os.Lstat(marker)
+			capturedMarker = markerInfo
 		}
-		capturedMarker, _ = file.Stat()
-		payload, marshalErr := json.Marshal(workspaceParentMarkerData{Version: workspaceParentMarkerVer, WorkspaceID: workspaceID})
-		if marshalErr == nil {
-			_, marshalErr = file.Write(payload)
-		}
-		closeErr := file.Close()
-		if marshalErr != nil || closeErr != nil {
-			return "", fmt.Errorf("write workspace parent marker %q: %w", marker, errors.Join(marshalErr, closeErr))
-		}
-		markerInfo, markerErr = os.Lstat(marker)
-		capturedMarker = markerInfo
 	}
 	if markerErr != nil {
 		return "", fmt.Errorf("inspect workspace parent marker %q: %w", marker, markerErr)
@@ -650,18 +659,13 @@ func requireManagedPathContained(base string, candidate string) error {
 		if absErr != nil {
 			return fmt.Errorf("resolve managed worktree candidate %q: %w", candidate, absErr)
 		}
-		if err := requireRelativeContained(canonicalBase, absoluteCandidate); err != nil {
-			return err
+		if !sameOrDescendantPath(canonicalBase, absoluteCandidate) {
+			return fmt.Errorf("managed worktree path %q escapes base %q", candidate, canonicalBase)
 		}
 		return nil
 	}
-	return requireRelativeContained(canonicalBase, canonicalCandidate)
-}
-
-func requireRelativeContained(base string, candidate string) error {
-	rel, err := filepath.Rel(base, candidate)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return fmt.Errorf("managed worktree path %q escapes base %q", candidate, base)
+	if !sameOrDescendantPath(canonicalBase, canonicalCandidate) {
+		return fmt.Errorf("managed worktree path %q escapes base %q", candidate, canonicalBase)
 	}
 	return nil
 }

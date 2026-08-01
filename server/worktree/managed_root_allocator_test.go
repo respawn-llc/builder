@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"core/server/metadata"
 	"core/shared/config"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -136,8 +137,12 @@ func TestManagedRootAllocatorClaimsAndMaterializesWorkspaceParent(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read workspace parent marker: %v", err)
 	}
-	if !bytes.Contains(marker, []byte(env.binding.WorkspaceID)) {
-		t.Fatalf("marker %q does not identify workspace %q", marker, env.binding.WorkspaceID)
+	var markerData workspaceParentMarkerData
+	if err := json.Unmarshal(marker, &markerData); err != nil {
+		t.Fatalf("decode workspace parent marker: %v", err)
+	}
+	if markerData.Version != workspaceParentMarkerVer || markerData.WorkspaceID != env.binding.WorkspaceID {
+		t.Fatalf("workspace parent marker = %+v, want version %d and workspace %q", markerData, workspaceParentMarkerVer, env.binding.WorkspaceID)
 	}
 }
 

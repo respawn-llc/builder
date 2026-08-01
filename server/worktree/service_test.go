@@ -172,23 +172,24 @@ func TestCreateWorktreeUsesCompactAutomaticRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical base: %v", err)
 	}
-	rel, err := filepath.Rel(canonicalBase, root)
+	workspace, err := env.store.GetWorkspaceByID(env.ctx, env.binding.WorkspaceID)
 	if err != nil {
-		t.Fatalf("relative compact root: %v", err)
+		t.Fatalf("get workspace: %v", err)
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) != 2 {
-		t.Fatalf("compact root relative path = %q, want parent and leaf", rel)
+	if !workspace.ManagedWorktreePathKey.Valid {
+		t.Fatal("automatic compact root did not persist a workspace path key")
 	}
-	if parts[0] == env.binding.WorkspaceID || strings.Contains(parts[0], env.binding.WorkspaceID) {
-		t.Fatalf("compact root parent contains workspace UUID: %q", parts[0])
+	expectedParent := filepath.Join(canonicalBase, workspace.ManagedWorktreePathKey.String)
+	if filepath.Dir(root) != expectedParent {
+		t.Fatalf("compact root parent = %q, want persisted parent %q", filepath.Dir(root), expectedParent)
 	}
-	if len(parts[1]) != 3 {
-		t.Fatalf("regular compact leaf = %q, want three digits", parts[1])
+	leaf := filepath.Base(root)
+	if len(leaf) != 3 {
+		t.Fatalf("regular compact leaf = %q, want three digits", leaf)
 	}
-	for _, r := range parts[1] {
+	for _, r := range leaf {
 		if r < '0' || r > '9' {
-			t.Fatalf("regular compact leaf = %q, want digits", parts[1])
+			t.Fatalf("regular compact leaf = %q, want digits", leaf)
 		}
 	}
 }
