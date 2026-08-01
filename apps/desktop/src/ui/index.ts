@@ -56,7 +56,7 @@ export { MarkdownPlainText } from "./MarkdownPlainText";
 export { compactExternalUrlLabel, safeExternalUrl } from "./externalLinks";
 export { readEffectiveTheme, type AppTheme } from "./theme";
 export { cx } from "./classes";
-export { useOpacityExit } from "./motion";
+export { motionDurationFromCSSVar, prefersReducedMotion, useOpacityExit } from "./motion";
 export { Spinner } from "./Spinner";
 export type { SpinnerProps } from "./Spinner";
 export { Switch } from "./radix/switch";

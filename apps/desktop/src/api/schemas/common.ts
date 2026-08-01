@@ -254,14 +254,12 @@ export const taskActionsSchema: z.ZodType<TaskActions> = z
     can_interrupt: z.boolean(),
     can_resume: z.boolean(),
     can_delete: z.boolean(),
-    manual_move_target_node_ids: stringList,
   })
   .transform((value) => ({
     canStart: value.can_start,
     canInterrupt: value.can_interrupt,
     canResume: value.can_resume,
     canDelete: value.can_delete,
-    manualMoveTargetNodeIDs: value.manual_move_target_node_ids,
   }));
 
 export const boardColumnSchema: z.ZodType<BoardColumn> = z
@@ -273,10 +271,6 @@ export const boardColumnSchema: z.ZodType<BoardColumn> = z
       display_name: z.string(),
       assignee_role: emptyString,
       output_fields: z
-        .array(workflowOutputFieldSchema)
-        .nullish()
-        .transform((value) => value ?? []),
-      transition_output_fields: z
         .array(workflowOutputFieldSchema)
         .nullish()
         .transform((value) => value ?? []),
@@ -294,7 +288,6 @@ export const boardColumnSchema: z.ZodType<BoardColumn> = z
     name: value.node.display_name,
     assigneeRole: value.node.assignee_role,
     outputFields: value.node.output_fields,
-    transitionOutputFields: value.node.transition_output_fields,
     groupID: value.group_id,
     sortOrder: value.sort_order,
     isBacklog: value.is_backlog,

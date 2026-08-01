@@ -85,47 +85,100 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 	}
 }
 
-func TestCurrentNodeControllerObservesExactExecutionsAndQuiescenceTogether(t *testing.T) {
-	fixture := newCurrentNodeQuestionFixture(t)
-	reference := currentNodeReferenceForControllerTest(t, "task-observation", "node-observation")
-	request := askquestion.AskQuestionRequest{
-		ID:       "observation-question",
-		StepID:   uuid.NewString(),
-		Question: "Proceed?",
+func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSibling(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
 	}
-	pending := fixture.startPendingPrompt(t, reference, request)
-	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
+	fixture := newCurrentNodeQuestionFixture(t)
+	question := currentNodeReferenceForControllerTest(t, "task-manual-move-question", "node-question")
+	running := currentNodeReferenceForControllerTest(t, "task-manual-move-question", "node-running")
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-manual-move-question",
+		StepID:   uuid.NewString(),
+		Question: "Keep waiting?",
+	}
+	pending := fixture.startPendingPrompt(t, question, request)
+	fixture.waitForPendingPrompt(t, question.TaskID, request.ID)
 	t.Cleanup(func() {
-		_ = pending.handle.Stop(context.Background())
+		pending.handle.RequestStop()
+		_, _ = pending.handle.Wait(context.Background())
+	})
+	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  "workflow-test",
+		CurrentNode: running,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	key, err := running.Key()
+	if err != nil {
+		t.Fatalf("running Current Node key: %v", err)
+	}
+	fixture.controller.mu.Lock()
+	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
+	fixture.controller.liveByNode[key] = lease.ScopeID()
+	fixture.controller.mu.Unlock()
+	waitForRunningCurrentNode(t, fixture.authority, running)
+
+	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
+		t.Fatalf("InterruptForManualMove error = %v, want pending-question blocker", err)
+	}
+	if _, live := fixture.authority.ExecutionByScope(runningHandle.Scope().ID()); !live {
+		t.Fatal("manual move interruption stopped the running sibling")
+	}
+	if _, interrupted := fixture.store.interruption(running); interrupted {
+		t.Fatal("manual move interruption persisted a sibling interruption")
+	}
+	runningHandle.RequestStop()
+	_, _ = runningHandle.Wait(context.Background())
+}
+
+func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testing.T) {
+	t.Run("quiescent", func(t *testing.T) {
+		fixture := newCurrentNodeQuestionFixture(t)
+		disposition, err := fixture.controller.ManualMoveDisposition("task-disposition-quiescent")
+		if err != nil {
+			t.Fatalf("ManualMoveDisposition: %v", err)
+		}
+		if disposition != ManualMoveDispositionQuiescent {
+			t.Fatalf("disposition = %q, want quiescent", disposition)
+		}
 	})
 
-	observation, err := fixture.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
-	if err != nil {
-		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
-	}
-	executions := observation.Executions[reference.TaskID].Executions
-	if len(executions) != 1 ||
-		!executions[0].Ref.CurrentNode.Equal(reference) ||
-		!executions[0].HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) {
-		t.Fatalf("observed executions = %+v", executions)
-	}
-	if observation.Quiescence[reference.TaskID] {
-		t.Fatal("waiting Question execution was observed as quiescent")
-	}
-
-	if err := pending.handle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop pending execution: %v", err)
-	}
-	afterRetirement, err := fixture.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
-	if err != nil {
-		t.Fatalf("ObserveWorkflowTaskExecutions after retirement: %v", err)
-	}
-	if len(afterRetirement.Executions[reference.TaskID].Executions) != 0 {
-		t.Fatalf("retired executions = %+v", afterRetirement.Executions[reference.TaskID].Executions)
-	}
-	if !afterRetirement.Quiescence[reference.TaskID] {
-		t.Fatal("retired execution was observed as non-quiescent")
-	}
+	t.Run("waiting question", func(t *testing.T) {
+		fixture := newCurrentNodeQuestionFixture(t)
+		reference := currentNodeReferenceForControllerTest(t, "task-disposition-question", "node-question")
+		pending := fixture.startPendingPrompt(t, reference, askquestion.AskQuestionRequest{
+			ID:       "ask-disposition-question",
+			StepID:   uuid.NewString(),
+			Question: "Wait?",
+		})
+		fixture.waitForPendingPrompt(t, reference.TaskID, "ask-disposition-question")
+		t.Cleanup(func() {
+			pending.handle.RequestStop()
+			_, _ = pending.handle.Wait(context.Background())
+		})
+		disposition, err := fixture.controller.ManualMoveDisposition(reference.TaskID)
+		if err != nil {
+			t.Fatalf("ManualMoveDisposition: %v", err)
+		}
+		if disposition != ManualMoveDispositionWaitingQuestion {
+			t.Fatalf("disposition = %q, want waiting_question", disposition)
+		}
+	})
 }
 
 func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing.T) {

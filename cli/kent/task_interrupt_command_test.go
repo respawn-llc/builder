@@ -14,6 +14,7 @@ type taskInterruptCommandRemote struct {
 	apicontract.WorkflowService
 	interruptRequests []serverapi.WorkflowTaskInterruptRequest
 	moveRequests      []serverapi.WorkflowTaskMoveRequest
+	previewResponse   *serverapi.WorkflowTaskMovePreviewResponse
 }
 
 func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
@@ -37,6 +38,71 @@ func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req ser
 			CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: req.TargetNodeID}},
 		},
 	}, nil
+}
+
+func (r *taskInterruptCommandRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
+	if r.previewResponse != nil {
+		return *r.previewResponse, nil
+	}
+	return serverapi.WorkflowTaskMovePreviewResponse{
+		Outcome: serverapi.WorkflowTaskMovePreviewOutcomeDirect,
+		Direct:  &serverapi.WorkflowTaskMovePreviewDirect{},
+	}, nil
+}
+
+func TestTaskMoveRejectsTransitionFlagsForDirectDestination(t *testing.T) {
+	remote := &taskInterruptCommandRemote{}
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, remote, nil
+	}
+	t.Cleanup(func() { workflowCommandRemoteOpener = previous })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "done", "--transition", "next"}, &stdout, &stderr)
+	if exitCode != 2 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+}
+
+func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					TransitionKey:         "next",
+					Label:                 "Next",
+					SourceNodeDisplayName: "Plan",
+					RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{{
+						NodeKey:     "plan",
+						OutputName:  "summary",
+						Description: "Summary",
+					}},
+				}},
+			},
+		},
+	}
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, remote, nil
+	}
+	t.Cleanup(func() { workflowCommandRemoteOpener = previous })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{
+		"move", "task-1", "implement",
+		"--transition", "next",
+		"--values-json", `{"plan":{"summary":"done"}}`,
+	}, &stdout, &stderr)
+	if exitCode != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if got := remote.moveRequests[0].Values["plan"]["summary"]; got != "done" {
+		t.Fatalf("structured values = %+v, want plan.summary=done", remote.moveRequests[0].Values)
+	}
 }
 
 func (r *taskInterruptCommandRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {

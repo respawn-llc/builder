@@ -10,7 +10,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -41,11 +40,11 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	workflow, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Activity Board"})
+	workflowRecord, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Activity Board"})
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	if _, err := workflowStore.LinkWorkflow(ctx, older.ProjectID, workflow.ID, true); err != nil {
+	if _, err := workflowStore.LinkWorkflow(ctx, older.ProjectID, workflowRecord.ID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: older.ProjectID, Title: "Recent task", Body: "Body"}); err != nil {
@@ -132,26 +131,12 @@ func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
 	fixture := newProjectHomeActivityFixture(t, ctx)
 	assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectID, fixture.older.ProjectID})
 
-	definition, _, err := fixture.workflowStore.GetDefinition(ctx, fixture.task.WorkflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	var terminalNodeID string
-	for _, node := range definition.Nodes {
-		if node.Kind() == workflow.NodeKindTerminal {
-			terminalNodeID = string(workflow.NodeIDOf(node))
-			break
-		}
-	}
-	if terminalNodeID == "" {
-		t.Fatal("terminal Node is missing")
-	}
 	fixture.setNow(fixture.highUnixMs)
-	if _, err := fixture.workflowStore.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
-		TaskID:       fixture.task.ID,
-		TargetNodeID: workflow.NodeID(terminalNodeID),
-	}); err != nil {
-		t.Fatalf("ManualMoveTask: %v", err)
+	if _, err := fixture.store.DB().ExecContext(ctx,
+		`UPDATE tasks SET updated_at_unix_ms = ? WHERE id = ?`,
+		fixture.highUnixMs, string(fixture.task.ID),
+	); err != nil {
+		t.Fatalf("touch task activity: %v", err)
 	}
 
 	home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectID})

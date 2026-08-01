@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -12,6 +13,52 @@ import (
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
+
+type ManualMoveDisposition string
+
+const (
+	ManualMoveDispositionQuiescent         ManualMoveDisposition = "quiescent"
+	ManualMoveDispositionAutoInterruptible ManualMoveDisposition = "auto_interruptible"
+	ManualMoveDispositionWaitingQuestion   ManualMoveDisposition = "waiting_question"
+	ManualMoveDispositionLifecycleConflict ManualMoveDisposition = "lifecycle_conflict"
+)
+
+var ErrManualMoveLifecycleConflict = errors.New("workflow task has a non-interruptible lifecycle conflict")
+
+func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (ManualMoveDisposition, error) {
+	if c == nil {
+		return "", errors.New("current node workflow controller is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return "", errors.New("workflow task id is required")
+	}
+	state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureTaskAvailableLocked(taskID); err != nil && !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		return "", err
+	}
+	quiescent, err := c.taskQuiescentLocked(taskID)
+	if err != nil {
+		return "", err
+	}
+	if state.WaitingQuestions > 0 {
+		return ManualMoveDispositionWaitingQuestion, nil
+	}
+	if state.Queued > 0 || state.Finalizing > 0 {
+		return ManualMoveDispositionLifecycleConflict, nil
+	}
+	if state.Running > 0 {
+		return ManualMoveDispositionAutoInterruptible, nil
+	}
+	if quiescent {
+		return ManualMoveDispositionQuiescent, nil
+	}
+	return ManualMoveDispositionLifecycleConflict, nil
+}
 
 // Recover marks any executable Current Nodes found at process startup as
 // interrupted before a new execution lifecycle is admitted.
@@ -229,10 +276,10 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
-		if moved.PendingApproval != nil {
+		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
 			return moved, nil
 		}
-		starts, err := currentNodeExplicitStarts(moved.Created)
+		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}

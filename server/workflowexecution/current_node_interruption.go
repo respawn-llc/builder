@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"core/server/sessionruntime"
@@ -107,82 +108,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, scopeRef.CurrentNode)
 			}
 
-			explicitQueue := c.explicitQueue[:0]
-			for _, start := range c.explicitQueue {
-				reference := start.reference
-				if reference.TaskID == selector.TaskID {
-					key, keyErr := reference.Key()
-					if keyErr != nil {
-						return keyErr
-					}
-					delete(c.explicitQueued, key)
-					references = append(references, reference)
-					continue
-				}
-				explicitQueue = append(explicitQueue, start)
-			}
-			c.explicitQueue = explicitQueue
-
-			var automaticQueue currentNodeAutomaticQueue
-			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-				start := entry.start
-				if start.reference.TaskID == selector.TaskID {
-					key, keyErr := start.reference.Key()
-					if keyErr != nil {
-						return keyErr
-					}
-					delete(c.queued, key)
-					references = append(references, start.reference)
-					continue
-				}
-				automaticQueue.append(start)
-			}
-			c.automaticQueue = automaticQueue
-
-			for sourceScope, starts := range c.heldStarts {
-				kept := starts[:0]
-				for _, start := range starts {
-					if start.reference.TaskID == selector.TaskID {
-						references = append(references, start.reference)
-						continue
-					}
-					kept = append(kept, start)
-				}
-				if len(kept) == 0 {
-					delete(c.heldStarts, sourceScope)
-				} else {
-					c.heldStarts[sourceScope] = kept
-				}
-			}
-			for key, start := range c.explicitReservations {
-				if start.reference.TaskID != selector.TaskID {
-					continue
-				}
-				delete(c.explicitReservations, key)
-				c.interrupts.addCurrentNode(taskFence, key)
-				references = append(references, start.reference)
-				admissionWaits = appendAdmissionWait(admissionWaits, key, start.done)
-			}
-			for key, start := range c.automaticReservations {
-				if start.reference.TaskID != selector.TaskID {
-					continue
-				}
-				delete(c.automaticReservations, key)
-				c.releaseAgentCapacityLocked(start.agentCapacityLease)
-				c.interrupts.addCurrentNode(taskFence, key)
-				references = append(references, start.reference)
-				admissionWaits = appendAdmissionWait(admissionWaits, key, start.done)
-			}
-			for key, gate := range c.gates {
-				if gate.reference.TaskID != selector.TaskID {
-					continue
-				}
-				c.stopping[gate.lease.ScopeID()] = struct{}{}
-				c.interrupts.addCurrentNode(taskFence, key)
-				drainedGates = append(drainedGates, gate)
-				references = append(references, gate.reference)
-				admissionWaits = appendAdmissionWait(admissionWaits, key, gate.done)
-			}
+			drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &drainedGates)
 			return nil
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
@@ -252,12 +178,334 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
 }
 
+// InterruptForManualMove atomically fences all currently running, pending-free
+// workflow scopes for a Task before closing their canonical prompt stores.
+// It intentionally rejects queued, finalizing, and waiting-Question work
+// before requesting any stop.
+func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, taskID workflow.TaskID) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return errors.New("workflow task id is required")
+	}
+	var (
+		stopHandles    []sessionruntime.ExecutionHandle
+		waitHandles    []sessionruntime.ExecutionHandle
+		references     []workflow.CurrentNodeReference
+		drainedGates   []currentNodeAdmissionGate
+		admissionWaits []currentNodeAdmissionWait
+		taskFence      *currentNodeInterruptFence
+	)
+	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+		return c.authority.WithWorkflowManualMoveSelection(taskID, func(selection sessionruntime.WorkflowInterruptSelection) error {
+			if len(selection.Queued) != 0 || len(selection.Finalizing) != 0 {
+				return ErrManualMoveLifecycleConflict
+			}
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.closed {
+				return errors.New("current node workflow controller is closed")
+			}
+			if c.workerErr != nil {
+				return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
+			}
+			if c.interrupts.taskActive(taskID) {
+				return ErrTaskExecutionNotQuiescent
+			}
+
+			for _, handle := range selection.Interruptible {
+				scopeID := handle.Scope().ID()
+				scopeRef, workflowScoped := handle.Scope().Workflow()
+				if !workflowScoped || scopeRef.CurrentNode.TaskID != taskID {
+					return errors.New("manual move interruption selection is not workflow scoped")
+				}
+				live, exists := c.live[scopeID]
+				if !exists || !live.reference.Equal(scopeRef.CurrentNode) {
+					return errors.New("manual move interruption selection does not match controller ownership")
+				}
+			}
+			for _, intent := range c.automaticQueue {
+				if intent.CurrentNode.TaskID == taskID {
+					if _, err := intent.CurrentNode.Key(); err != nil {
+						return err
+					}
+				}
+			}
+			for _, start := range c.explicitQueue {
+				if start.reference.TaskID == taskID {
+					if _, err := start.reference.Key(); err != nil {
+						return err
+					}
+				}
+			}
+			for _, starts := range c.heldStarts {
+				for _, start := range starts {
+					if start.reference.TaskID == taskID {
+						if _, err := start.reference.Key(); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			for _, start := range c.explicitReservations {
+				if start.reference.TaskID == taskID {
+					if err := start.reference.Validate(); err != nil {
+						return err
+					}
+				}
+			}
+			for _, start := range c.automaticReservations {
+				if start.reference.TaskID == taskID {
+					if err := start.reference.Validate(); err != nil {
+						return err
+					}
+				}
+			}
+			for _, gate := range c.gates {
+				if gate.reference.TaskID == taskID {
+					if err := gate.reference.Validate(); err != nil {
+						return err
+					}
+				}
+			}
+
+			if len(selection.Interruptible) != 0 ||
+				taskHasControllerQueuedWorkLocked(c, taskID) {
+				var err error
+				taskFence, err = c.interrupts.beginTask(taskID)
+				if err != nil {
+					return err
+				}
+			}
+			for _, handle := range selection.Interruptible {
+				scopeID := handle.Scope().ID()
+				scopeRef, _ := handle.Scope().Workflow()
+				c.stopping[scopeID] = struct{}{}
+				if taskFence != nil {
+					c.interrupts.addScope(taskFence, scopeID)
+				}
+				stopHandles = append(stopHandles, handle)
+				waitHandles = append(waitHandles, handle)
+				references = append(references, scopeRef.CurrentNode)
+			}
+			if taskFence != nil {
+				drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits, &drainedGates)
+			}
+			return nil
+		})
+	}); err != nil {
+		if errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
+			return err
+		}
+		return err
+	}
+	if len(stopHandles) == 0 {
+		if len(drainedGates) == 0 && len(admissionWaits) == 0 {
+			return nil
+		}
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cleanupCancel()
+	for _, gate := range drainedGates {
+		gate.lease.Cancel()
+	}
+	c.wakeAdmissionWorker()
+	for _, handle := range stopHandles {
+		handle.RequestStop()
+	}
+	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+		return interruptCurrentNodeReferences(
+			ctx,
+			c.store.InterruptCurrentNode,
+			references,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		)
+	})
+	var waitErrs []error
+	for _, handle := range waitHandles {
+		if _, err := handle.Wait(cleanupCtx); err != nil &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
+			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			waitErrs = append(waitErrs, err)
+		}
+	}
+	for _, wait := range admissionWaits {
+		if wait.done != nil {
+			select {
+			case <-wait.done:
+			case <-cleanupCtx.Done():
+				waitErrs = append(waitErrs, context.Cause(cleanupCtx))
+			}
+		}
+		c.finishTaskInterruptAdmissionKey(wait.key)
+	}
+	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, handle := range waitHandles {
+			if _, live := c.live[handle.Scope().ID()]; live {
+				return errors.New("manual move interruption left an affected exact execution scope")
+			}
+		}
+		if taskFence != nil && c.interrupts.fenceActive(taskFence) {
+			return errors.New("manual move interruption fence remains active")
+		}
+		return nil
+	})
+	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
+}
+
 func appendAdmissionWait(
 	waits []currentNodeAdmissionWait,
 	key workflow.CurrentNodeReferenceKey,
 	wait <-chan struct{},
 ) []currentNodeAdmissionWait {
 	return append(waits, currentNodeAdmissionWait{key: key, done: wait})
+}
+
+func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
+	for _, intent := range c.automaticQueue {
+		if intent.CurrentNode.TaskID == taskID {
+			return true
+		}
+	}
+	for _, start := range c.explicitQueue {
+		if start.reference.TaskID == taskID {
+			return true
+		}
+	}
+	for _, starts := range c.heldStarts {
+		for _, start := range starts {
+			if start.reference.TaskID == taskID {
+				return true
+			}
+		}
+	}
+	for _, start := range c.automaticReservations {
+		if start.reference.TaskID == taskID {
+			return true
+		}
+	}
+	for _, start := range c.explicitReservations {
+		if start.reference.TaskID == taskID {
+			return true
+		}
+	}
+	for _, gate := range c.gates {
+		if gate.reference.TaskID == taskID {
+			return true
+		}
+	}
+	for _, start := range c.admissionWorkers {
+		if start.reference.TaskID == taskID {
+			return true
+		}
+	}
+	return false
+}
+
+func drainTaskControllerWorkLocked(
+	c *CurrentNodeController,
+	taskID workflow.TaskID,
+	fence *currentNodeInterruptFence,
+	references *[]workflow.CurrentNodeReference,
+	admissionWaits *[]currentNodeAdmissionWait,
+	drainedGates *[]currentNodeAdmissionGate,
+) {
+	explicitQueue := c.explicitQueue[:0]
+	for _, start := range c.explicitQueue {
+		if start.reference.TaskID != taskID {
+			explicitQueue = append(explicitQueue, start)
+			continue
+		}
+		key, err := start.reference.Key()
+		if err != nil {
+			panic(fmt.Sprintf("drain manual move explicit queue: %v", err))
+		}
+		delete(c.explicitQueued, key)
+		c.interrupts.addCurrentNode(fence, key)
+		*references = append(*references, start.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+	}
+	c.explicitQueue = explicitQueue
+
+	automaticQueue := c.automaticQueue[:0]
+	for _, intent := range c.automaticQueue {
+		if intent.CurrentNode.TaskID != taskID {
+			automaticQueue = append(automaticQueue, intent)
+			continue
+		}
+		key, err := intent.CurrentNode.Key()
+		if err != nil {
+			panic(fmt.Sprintf("drain manual move automatic queue: %v", err))
+		}
+		delete(c.queued, key)
+		c.interrupts.addCurrentNode(fence, key)
+		*references = append(*references, intent.CurrentNode)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+	}
+	c.automaticQueue = automaticQueue
+
+	for sourceScope, starts := range c.heldStarts {
+		kept := starts[:0]
+		for _, start := range starts {
+			if start.reference.TaskID != taskID {
+				kept = append(kept, start)
+				continue
+			}
+			key, err := start.reference.Key()
+			if err != nil {
+				panic(fmt.Sprintf("drain manual move held start: %v", err))
+			}
+			c.interrupts.addCurrentNode(fence, key)
+			*references = append(*references, start.reference)
+			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+		}
+		if len(kept) == 0 {
+			delete(c.heldStarts, sourceScope)
+		} else {
+			c.heldStarts[sourceScope] = kept
+		}
+	}
+
+	for key, start := range c.explicitReservations {
+		if start.reference.TaskID != taskID {
+			continue
+		}
+		delete(c.explicitReservations, key)
+		c.interrupts.addCurrentNode(fence, key)
+		*references = append(*references, start.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
+	}
+	for key, start := range c.automaticReservations {
+		if start.reference.TaskID != taskID {
+			continue
+		}
+		delete(c.automaticReservations, key)
+		c.interrupts.addCurrentNode(fence, key)
+		*references = append(*references, start.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
+	}
+	for key, gate := range c.gates {
+		if gate.reference.TaskID != taskID {
+			continue
+		}
+		c.stopping[gate.lease.ScopeID()] = struct{}{}
+		c.interrupts.addCurrentNode(fence, key)
+		*drainedGates = append(*drainedGates, gate)
+		*references = append(*references, gate.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, gate.done)
+	}
+	for key, start := range c.admissionWorkers {
+		if start.reference.TaskID != taskID {
+			continue
+		}
+		c.interrupts.addCurrentNode(fence, key)
+		*references = append(*references, start.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
+	}
 }
 
 func interruptCurrentNodeReferences(

@@ -42,43 +42,47 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
-// WithWorkflowTaskExecutionSnapshots runs operation while the Authority live
-// state lock is held. The callback may acquire the Workflow Execution
-// Controller lock, which establishes the Authority-before-Controller order
-// required for lifecycle observations. It must not call back into Authority.
-func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workflow.TaskID]TaskExecutionSnapshot) error) error {
+type WorkflowTaskExecutionState struct {
+	Running          int
+	WaitingQuestions int
+	Queued           int
+	Finalizing       int
+}
+
+func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (WorkflowTaskExecutionState, error) {
 	if a == nil {
-		return errors.New("session runtime authority is required")
+		return WorkflowTaskExecutionState{}, errors.New("session runtime authority is required")
 	}
-	if operation == nil {
-		return errors.New("workflow task execution snapshot operation is required")
+	if strings.TrimSpace(string(taskID)) == "" {
+		return WorkflowTaskExecutionState{}, errors.New("workflow task id is required")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
-	if err != nil {
-		return err
-	}
-	return operation(snapshots)
-}
-
-func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	var snapshotErr error
-	a.forEachWorkflowExecutionLocked(func(execution *execution) {
-		if snapshotErr != nil {
-			return
+	state := WorkflowTaskExecutionState{}
+	for _, execution := range a.byScope {
+		ref, ok := execution.scope.Workflow()
+		if !ok || ref.CurrentNode.TaskID != taskID {
+			continue
 		}
-		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
-	})
-	if snapshotErr != nil {
-		return nil, snapshotErr
+		switch execution.phase {
+		case executionPhaseQueued:
+			state.Queued++
+		case executionPhaseRunning:
+			if execution.prompts.hasPending() {
+				state.WaitingQuestions++
+			} else {
+				state.Running++
+			}
+		case executionPhaseFinalizing:
+			state.Finalizing++
+		default:
+			return WorkflowTaskExecutionState{}, fmt.Errorf("workflow execution scope %s has invalid phase", execution.scope.ID())
+		}
 	}
-	sortTaskExecutionSnapshots(snapshots)
-	return snapshots, nil
+	return state, nil
 }
 
-func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
+func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
 	if err != nil {
 		return TaskExecutionSnapshot{}, err

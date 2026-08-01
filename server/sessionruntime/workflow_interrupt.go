@@ -1,7 +1,10 @@
 package sessionruntime
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 
 	"core/server/workflow"
@@ -15,6 +18,91 @@ type WorkflowInterruptSelection struct {
 	Interruptible []ExecutionHandle
 	Queued        []ExecutionHandle
 	Finalizing    []ExecutionHandle
+}
+
+var ErrWorkflowQuestionPending = errors.New("workflow task has a pending question")
+
+// WithWorkflowManualMoveSelection atomically selects every exact workflow
+// execution for a Task and closes Question admission before releasing
+// Authority ownership. The callback must establish the controller's
+// interruption fence; no prompt store is closed when it returns an error.
+func (a *Authority) WithWorkflowManualMoveSelection(
+	taskID workflow.TaskID,
+	operation func(WorkflowInterruptSelection) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return errors.New("workflow task id is required")
+	}
+	if operation == nil {
+		return errors.New("workflow manual move selection operation is required")
+	}
+	a.mu.Lock()
+	executions := make([]*execution, 0)
+	for _, execution := range a.byScope {
+		ref, workflowScoped := execution.scope.Workflow()
+		if workflowScoped && ref.CurrentNode.TaskID == taskID {
+			executions = append(executions, execution)
+		}
+	}
+	sort.Slice(executions, func(i, j int) bool {
+		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
+	})
+	running := make([]*execution, 0, len(executions))
+	selection := WorkflowInterruptSelection{}
+	for _, execution := range executions {
+		switch execution.phase {
+		case executionPhaseRunning:
+			execution.prompts.mu.Lock()
+			running = append(running, execution)
+			selection.Interruptible = append(selection.Interruptible, executionHandle{execution: execution})
+		case executionPhaseQueued:
+			selection.Queued = append(selection.Queued, executionHandle{execution: execution})
+		case executionPhaseFinalizing:
+			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
+		default:
+			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
+		}
+	}
+	for _, execution := range running {
+		if len(execution.prompts.pending) != 0 {
+			for _, locked := range running {
+				locked.prompts.mu.Unlock()
+			}
+			a.mu.Unlock()
+			return ErrWorkflowQuestionPending
+		}
+	}
+	err := operation(selection)
+	if err != nil {
+		for _, locked := range running {
+			locked.prompts.mu.Unlock()
+		}
+		a.mu.Unlock()
+		return err
+	}
+	resolved := make([]struct {
+		store     *executionPromptStore
+		snapshots []ExecutionPromptSnapshot
+	}, 0, len(running))
+	for _, execution := range running {
+		resolved = append(resolved, struct {
+			store     *executionPromptStore
+			snapshots []ExecutionPromptSnapshot
+		}{store: &execution.prompts, snapshots: execution.prompts.closeLocked(context.Canceled)})
+	}
+	for _, locked := range running {
+		locked.prompts.mu.Unlock()
+	}
+	a.mu.Unlock()
+	for _, item := range resolved {
+		for _, snapshot := range item.snapshots {
+			item.store.publishResolved(snapshot)
+		}
+	}
+	return nil
 }
 
 // WithWorkflowInterruptSelection linearizes Task Interrupt selection against

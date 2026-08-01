@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/runtimeids"
+	"core/shared/limits"
 )
 
 type NodeID string
@@ -75,7 +75,7 @@ const (
 	MaxInputFieldDescriptionChars  = MaxOutputFieldDescriptionChars
 	MaxParameterKeyChars           = MaxOutputFieldNameChars
 	MaxParameterDescriptionChars   = MaxOutputFieldDescriptionChars
-	MaxOutputValueBytes            = 64 * 1024
+	MaxOutputValueBytes            = limits.MaxWorkflowOutputValueBytes
 	MaxCommentaryBytes             = 64 * 1024
 	MaxTaskCommentBytes            = 256 * 1024
 )

@@ -3,7 +3,6 @@ package workflowview
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
@@ -72,7 +71,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary: taskSummary(input.Task, input.Status.Status, done),
 		Status:  input.Status.Status,
-		Actions: taskActions(done, input.Status.Status, input.CurrentNodes, input.LiveExecutions, input.Definition.api, input.Definition.nodeKinds, input.CanDelete),
+		Actions: taskActions(done, input.Status.Status, input.LiveExecutions, input.CanDelete),
 		Done:    done,
 	}
 }
@@ -180,10 +179,7 @@ func currentNodesContainTerminal(nodes []workflow.CurrentNode, nodeKinds map[str
 func taskActions(
 	done bool,
 	status serverapi.WorkflowTaskStatus,
-	currentNodes []workflow.CurrentNode,
 	live []sessionruntime.TaskExecution,
-	def serverapi.WorkflowDefinition,
-	nodeKinds map[string]workflow.NodeKind,
 	canDelete bool,
 ) serverapi.WorkflowTaskActions {
 	hasLiveExecution := len(live) != 0
@@ -198,60 +194,5 @@ func taskActions(
 		CanResume:    !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindInterrupted,
 		CanDelete:    canDelete,
 	}
-	if !done && !hasLiveExecution {
-		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, currentNodes, nodeKinds)
-	}
 	return actions
-}
-
-func manualMoveTargetNodeIDs(def serverapi.WorkflowDefinition, currentNodes []workflow.CurrentNode, nodeKinds map[string]workflow.NodeKind) []string {
-	if len(currentNodes) != 1 {
-		return []string{}
-	}
-	sourceNodeID := string(currentNodes[0].Reference.NodeID)
-	if nodeKinds[sourceNodeID] == workflow.NodeKindTerminal {
-		return []string{}
-	}
-	groupIDs := map[string]bool{}
-	for _, group := range def.TransitionGroups {
-		if group.SourceNodeID == sourceNodeID {
-			groupIDs[group.ID] = true
-		}
-	}
-	derivedEdges := workflowDerivedEdgeWiringByID(def.DerivedWiring)
-	targets := []string{}
-	seen := map[string]bool{}
-	for _, node := range def.Nodes {
-		if workflow.NodeKind(node.Kind) == workflow.NodeKindTerminal && node.ID != sourceNodeID {
-			seen[node.ID] = true
-			targets = append(targets, node.ID)
-		}
-	}
-	for _, edge := range def.Edges {
-		contextSource := workflow.CanonicalContextSource(workflow.ContextSource{
-			Kind:    workflow.ContextSourceKind(edge.ContextSource.Kind),
-			NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey),
-		})
-		if !groupIDs[edge.TransitionGroupID] ||
-			edge.RequiresApproval ||
-			len(derivedEdges[edge.ID].RequiredProvisionFields) > 0 ||
-			contextSource.Kind == workflow.ContextSourceSelectedNode ||
-			contextSource.Kind == workflow.ContextSourcePreviousTarget {
-			continue
-		}
-		if !seen[edge.TargetNodeID] {
-			seen[edge.TargetNodeID] = true
-			targets = append(targets, edge.TargetNodeID)
-		}
-	}
-	sort.Strings(targets)
-	return targets
-}
-
-func workflowDerivedEdgeWiringByID(derived serverapi.WorkflowDerivedWiring) map[string]serverapi.WorkflowDerivedEdgeWiring {
-	byID := make(map[string]serverapi.WorkflowDerivedEdgeWiring, len(derived.Edges))
-	for _, edge := range derived.Edges {
-		byID[edge.EdgeID] = edge
-	}
-	return byID
 }

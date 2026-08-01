@@ -99,6 +99,7 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied},
 		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
+		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeNoOp, NoOp: &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 	} {
 		if err := response.Validate(); err != nil {
@@ -110,6 +111,13 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 	}
 	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
 		t.Fatal("mismatched response branch validated")
+	}
+	if err := (WorkflowTaskMoveResponse{
+		Outcome:           WorkflowExecutionTargetActionOutcomeNoOp,
+		NoOp:              &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes},
+		SelectionRequired: &requirement,
+	}).Validate(); err == nil {
+		t.Fatal("move no-op response with selection requirement validated")
 	}
 }
 

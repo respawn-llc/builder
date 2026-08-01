@@ -251,6 +251,7 @@ var routeContracts = []Route{
 	unary[serverapi.WorkflowTaskInterruptRequest, serverapi.WorkflowTaskInterruptResponse](protocol.MethodWorkflowTaskInterrupt, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskResumeRequest, serverapi.WorkflowTaskResumeResponse](protocol.MethodWorkflowTaskResume, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskApproveRequest, serverapi.WorkflowTaskApproveResponse](protocol.MethodWorkflowTaskApprove, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskMovePreviewRequest, serverapi.WorkflowTaskMovePreviewResponse](protocol.MethodWorkflowTaskMovePreview, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](protocol.MethodWorkflowTaskMove, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskCompleteRequest, serverapi.WorkflowTaskCompleteResponse](protocol.MethodWorkflowTaskComplete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskDeleteRequest, struct{}](protocol.MethodWorkflowTaskDelete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),

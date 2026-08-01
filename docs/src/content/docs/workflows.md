@@ -323,51 +323,19 @@ kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
 
-### Task Dependencies
+### Manually Move A Task
 
-Task dependencies connect a Blocker Task to a Blocked Task within one Project.
-
-```bash
-kent task dep add --project . --blocker <blocker-task> --blocked <blocked-task>
-kent task dep remove --project . --blocker <blocker-task> --blocked <blocked-task>
-kent task dep list --project . <task>
-kent task dep list --project . <task> --direction blocks
-```
-
-Dependency lists include both direct directions unless `--direction blocks` or
-`--direction blocked-by` selects one. Add and remove are idempotent; plain
-mutation output is `done`, and `--json` returns the typed outcome and both Task
-identities.
-
-Starting a Task or moving it into executable work reports unsatisfied direct
-Blocker Tasks before execution-target selection. Rerun the same command with
-`--ignore-dependencies` to acknowledge that one operation:
+Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require their stable Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
 
 ```bash
-kent task start <task> --ignore-dependencies
-kent task move <task> <target-node-id> --ignore-dependencies
+kent task move <task> <target-node-id> --transition <transition-key> \
+  --values-json '{"plan":{"summary":"Approved plan"}}'
+kent task move <task> <target-node-id> --values-file ./move-values.json
 ```
 
-### Search Tasks
+Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
 
-Task search spans every Project unless `--project` narrows it. Project selectors accept a Project ID or registered workspace path and can repeat. `--status` accepts repeatable or comma-separated primary Task-status filters.
-
-```bash
-kent task search "retry policy"
-kent task search "retry policy" --project . --status backlog,running
-```
-
-Literal search is the default. It ignores search operators and requires at least one searchable trigram. `--case-sensitive` requires exact original case and diacritics. `--include-comments` adds Task Comments.
-
-```bash
-kent task search "RetryPolicy" --case-sensitive --include-comments
-```
-
-`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget. Continue a breadth-first result stream with the reported zero-based `--offset`; index changes between requests can repeat or skip hits. `--json` returns grouped structured results.
-
-```bash
-kent task search 'title:"retry policy"' --fts5 --page-size 20 --json
-```
+Desktop shows the server's Transition choices and required values, including resolved values that can be edited. Confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
 
 ### Complete Work From The CLI
 

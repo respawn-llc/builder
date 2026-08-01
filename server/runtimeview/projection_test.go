@@ -33,6 +33,16 @@ func (projectionFastClient) Generate(context.Context, llm.Request) (llm.Response
 	return llm.Response{}, errors.New("not implemented")
 }
 
+type projectionUnavailableFastModeClient struct{}
+
+func (projectionUnavailableFastModeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("not implemented")
+}
+
+func (projectionUnavailableFastModeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "anthropic"}, nil
+}
+
 func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
@@ -162,6 +172,22 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 	if status.Goal == nil || !status.Goal.Suspended {
 		t.Fatalf("goal status = %+v, want suspended goal", status.Goal)
+	}
+}
+
+func TestTranscriptSessionStatusDisablesUnavailableFastMode(t *testing.T) {
+	engine := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionUnavailableFastModeClient{}, runtime.Config{
+		Model:          "claude",
+		ThinkingLevel:  "medium",
+		CompactionMode: "local",
+		FastModeState:  runtime.NewFastModeState(true),
+	})
+	status := TranscriptSessionStatusFromRuntime(engine)
+	if status.FastModeAvailable || status.FastModeEnabled {
+		t.Fatalf("session status = %+v, want unavailable and disabled fast mode", status)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("session status validation: %v", err)
 	}
 }
 

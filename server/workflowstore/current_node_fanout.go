@@ -124,26 +124,12 @@ func replaceCurrentNodeWithFanout(
 	if source.IsBranchScoped() {
 		return errors.New("nested fan-out current node completion is not supported")
 	}
-	if len(targets) < 2 {
-		return errors.New("fan-out requires multiple target branches")
-	}
-	seenBranchKeys := make(map[workflow.TransitionBranchKey]struct{}, len(targets))
+	created := make([]workflow.CurrentNode, 0, len(targets))
 	for _, target := range targets {
-		branchKey := workflow.TransitionBranchKey(strings.TrimSpace(string(target.BranchKey)))
-		if branchKey == "" {
-			return errors.New("fan-out transition branch key is required")
-		}
-		if _, exists := seenBranchKeys[branchKey]; exists {
-			return fmt.Errorf("fan-out transition branch key %q is duplicated", branchKey)
-		}
-		seenBranchKeys[branchKey] = struct{}{}
-		if target.CurrentNode.Reference.TaskID != source.TaskID {
-			return errors.New("fan-out target task must match its source")
-		}
-		targetBranchKey, branchScoped := target.CurrentNode.Reference.TransitionBranchKey()
-		if !branchScoped || targetBranchKey != branchKey {
-			return errors.New("fan-out target branch must match its branch key")
-		}
+		created = append(created, target.CurrentNode)
+	}
+	if err := validateFanoutTargets(source.TaskID, created); err != nil {
+		return err
 	}
 	removed, err := deleteTaskCurrentNode(ctx, q, source)
 	if err != nil {
@@ -152,17 +138,51 @@ func replaceCurrentNodeWithFanout(
 	if removed != 1 {
 		return errors.New("fan-out source current node is no longer current")
 	}
-	if err := q.InsertTaskActiveFanout(ctx, string(source.TaskID)); err != nil {
+	return insertTaskFanoutTargets(ctx, q, source.TaskID, created)
+}
+
+func validateFanoutTargets(taskID workflow.TaskID, targets []workflow.CurrentNode) error {
+	if len(targets) < 2 {
+		return errors.New("fan-out requires multiple target branches")
+	}
+	seenBranchKeys := make(map[workflow.TransitionBranchKey]struct{}, len(targets))
+	for _, target := range targets {
+		branchKey, branchScoped := target.Reference.TransitionBranchKey()
+		if !branchScoped || strings.TrimSpace(string(branchKey)) == "" {
+			return errors.New("fan-out target branch must be present")
+		}
+		if _, exists := seenBranchKeys[branchKey]; exists {
+			return fmt.Errorf("fan-out transition branch key %q is duplicated", branchKey)
+		}
+		seenBranchKeys[branchKey] = struct{}{}
+		if target.Reference.TaskID != taskID {
+			return errors.New("fan-out target task must match its source")
+		}
+	}
+	return nil
+}
+
+func insertTaskFanoutTargets(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	taskID workflow.TaskID,
+	targets []workflow.CurrentNode,
+) error {
+	if err := validateFanoutTargets(taskID, targets); err != nil {
+		return err
+	}
+	if err := q.InsertTaskActiveFanout(ctx, string(taskID)); err != nil {
 		return err
 	}
 	for _, target := range targets {
+		branchKey, _ := target.Reference.TransitionBranchKey()
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:              string(source.TaskID),
-			TransitionBranchKey: string(target.BranchKey),
+			TaskID:              string(taskID),
+			TransitionBranchKey: string(branchKey),
 		}); err != nil {
 			return err
 		}
-		if err := insertTaskCurrentNode(ctx, q, target.CurrentNode); err != nil {
+		if err := insertTaskCurrentNode(ctx, q, target); err != nil {
 			return err
 		}
 	}

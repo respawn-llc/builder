@@ -5,13 +5,22 @@ import type { BoardCardDragPayload } from "./BoardDragTypes";
 import { classifyDrop } from "./BoardDropActions";
 
 describe("classifyDrop", () => {
+  it("classifies a same-current destination as a no-op", () => {
+    expect(
+      classifyDrop(
+        baseColumn,
+        { ...baseDragPayload, activeNodeIDs: ["node-target"] },
+        undefined,
+      ),
+    ).toEqual({ kind: "no_op" });
+  });
+
   it("rejects source-less moves into join columns", () => {
     expect(
       classifyDrop(
         {
           ...baseColumn,
           kind: "join",
-          transitionOutputFields: [{ name: "summary", description: "Summary" }],
         },
         { ...baseDragPayload, activeNodeIDs: [], statusKind: "backlog" },
         undefined,
@@ -24,7 +33,6 @@ describe("classifyDrop", () => {
 const baseDragPayload: BoardCardDragPayload = {
   activeNodeIDs: ["node-current"],
   canStart: false,
-  manualMoveTargetNodeIDs: [],
   statusKind: "active",
   taskID: "task-1",
 };
@@ -41,5 +49,4 @@ const baseColumn: BoardColumn = {
   outputFields: [],
   sortOrder: 0,
   taskCount: 0,
-  transitionOutputFields: [],
 };

@@ -541,6 +541,11 @@ func (c *Remote) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return validateWorkflowResponse("approve workflow task", response, err)
 }
 
+func (c *Remote) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskMovePreviewRequest, serverapi.WorkflowTaskMovePreviewResponse](c, ctx, protocol.MethodWorkflowTaskMovePreview, req)
+	return validateWorkflowResponse("preview workflow task move", response, err)
+}
+
 func (c *Remote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](c, ctx, protocol.MethodWorkflowTaskMove, req)
 	return validateWorkflowResponse("move workflow task", response, err)

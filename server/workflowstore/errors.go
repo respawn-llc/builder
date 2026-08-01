@@ -125,8 +125,7 @@ var (
 
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
-	ErrManualMoveExecutableTargetNeedsEdge = errors.New("manual move to executable target requires a workflow edge")
-	ErrManualMoveNoSourcePosition          = errors.New("manual move has no active placement or pending approval to move from")
+	ErrManualMoveNoSourcePosition = errors.New("manual move has no active placement or pending approval to move from")
 )
 
 type ProjectLabelNotFoundError struct {

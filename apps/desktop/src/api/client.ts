@@ -54,6 +54,7 @@ import type {
   TaskDependencyMutationResponse,
   TaskApproveResponse,
   TaskMoveResponse,
+  TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowBoard,
   WorkflowDeleteImpact,
@@ -551,6 +552,10 @@ export class ApiClient implements ApiService {
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
     return taskLifecycle.moveTask(this.#transport, input);
+  }
+
+  async previewMoveTask(taskID: string, targetNodeID: string): Promise<TaskMovePreviewResponse> {
+    return taskLifecycle.previewMoveTask(this.#transport, taskID, targetNodeID);
   }
 
   async interruptTask(taskID: string, sessionID?: string): Promise<void> {

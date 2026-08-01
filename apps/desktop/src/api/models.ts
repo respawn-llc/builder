@@ -7,7 +7,12 @@ export type {
   TaskApproveApplied,
   TaskApproveResponse,
   TaskMoveApplied,
+  TaskMoveNoOp,
   TaskMoveResponse,
+  TaskMovePreviewBlocker,
+  TaskMovePreviewChoice,
+  TaskMovePreviewResponse,
+  TaskMoveRequiredValue,
   TaskStartApplied,
   TaskStartResponse,
   WorkflowExecutionTargetActionResponse,
@@ -502,7 +507,6 @@ export type TaskActions = Readonly<{
   canInterrupt: boolean;
   canResume: boolean;
   canDelete: boolean;
-  manualMoveTargetNodeIDs: readonly string[];
 }>;
 
 export type MarkdownPreview = Readonly<{
@@ -585,7 +589,6 @@ export type BoardColumn = Readonly<{
   name: string;
   assigneeRole: string;
   outputFields: readonly WorkflowOutputField[];
-  transitionOutputFields: readonly WorkflowOutputField[];
   groupID: string;
   sortOrder: number;
   isBacklog: boolean;

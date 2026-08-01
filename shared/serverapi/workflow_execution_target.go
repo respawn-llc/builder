@@ -75,8 +75,9 @@ type WorkflowExecutionTargetSelectionRequirement struct {
 type WorkflowExecutionTargetActionOutcome string
 
 const (
-	WorkflowExecutionTargetActionOutcomeApplied           = "applied"
-	WorkflowExecutionTargetActionOutcomeSelectionRequired = "selection_required"
+	WorkflowExecutionTargetActionOutcomeApplied           WorkflowExecutionTargetActionOutcome = "applied"
+	WorkflowExecutionTargetActionOutcomeNoOp              WorkflowExecutionTargetActionOutcome = "no_op"
+	WorkflowExecutionTargetActionOutcomeSelectionRequired WorkflowExecutionTargetActionOutcome = "selection_required"
 )
 
 type WorkflowExecutionTargetResolutionErrorCode string
@@ -383,14 +384,20 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 }
 
 func (r WorkflowTaskMoveResponse) Validate() error {
-	if r.Outcome == WorkflowTaskActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
+		if r.NoOp == nil || r.Applied != nil || r.SelectionRequired != nil {
+			return errors.New("move action response no_op outcome requires only no_op payload")
+		}
+		return validateWorkflowTaskMoveNoOp(*r.NoOp)
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
+		if r.Applied == nil || r.NoOp != nil || r.SelectionRequired != nil {
 			return errors.New("move action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskMoveApplied(*r.Applied)
 	}
-	if r.Outcome == WorkflowTaskActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired == nil {
 			return errors.New("move action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
@@ -402,6 +409,18 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 		return nil
 	}
 	return errors.New("move action response outcome is invalid")
+}
+
+func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
+	if len(noOp.CurrentNodes) == 0 {
+		return errors.New("move no_op payload requires current_nodes")
+	}
+	for index, currentNode := range noOp.CurrentNodes {
+		if err := validateWorkflowTaskCurrentNode(currentNode); err != nil {
+			return fmt.Errorf("move no_op current node at index %d: %w", index, err)
+		}
+	}
+	return nil
 }
 
 func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {

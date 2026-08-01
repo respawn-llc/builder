@@ -62,6 +62,7 @@ import type { TaskCurrentNode } from "./models";
 export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
 export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskMoveNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
 export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
@@ -80,8 +81,40 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
     }>;
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
-export type TaskMoveResponse = WorkflowExecutionTargetActionResponse<TaskMoveApplied>;
-export type TaskApproveResponse = Exclude<
-  WorkflowExecutionTargetActionResponse<TaskApproveApplied>,
-  { outcome: "dependency_confirmation_required" }
->;
+export type TaskMoveResponse =
+  | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
+export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
+
+export type TaskMovePreviewBlocker =
+  | "invalid_workflow"
+  | "no_source_position"
+  | "unsupported_destination"
+  | "waiting_question"
+  | "lifecycle_conflict"
+  | "context_session_unavailable"
+  | "no_usable_transition"
+  | "parallel_branch_requires_fan_out";
+
+export type TaskMoveRequiredValue = Readonly<{
+  nodeKey: string;
+  outputName: string;
+  description: string;
+  resolvedValue: string | null;
+}>;
+
+export type TaskMovePreviewChoice = Readonly<{
+  transitionKey: string;
+  label: string;
+  sourceNodeDisplayName: string;
+  requiredValues: readonly TaskMoveRequiredValue[];
+}>;
+
+export type TaskMovePreviewResponse =
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>
+  | Readonly<{ outcome: "direct"; direct: Readonly<Record<string, never>> }>
+  | Readonly<{
+      outcome: "transition";
+      transition: Readonly<{ choices: readonly TaskMovePreviewChoice[] }>;
+    }>
+  | Readonly<{ outcome: "blocked"; blocked: Readonly<{ reason: TaskMovePreviewBlocker }> }>;

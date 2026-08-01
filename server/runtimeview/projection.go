@@ -62,13 +62,14 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 		return clientui.RuntimeStatus{}, err
 	}
 	usage := engine.ContextUsage()
+	fastModeAvailable, fastModeEnabled := fastModeStatus(engine)
 	status := clientui.RuntimeStatus{
 		ReviewerFrequency:                 engine.ReviewerFrequency(),
 		ReviewerEnabled:                   engine.ReviewerEnabled(),
 		AutoCompactionEnabled:             engine.AutoCompactionEnabled(),
 		QuestionsEnabled:                  engine.QuestionsEnabled(),
-		FastModeAvailable:                 engine.FastModeAvailable(),
-		FastModeEnabled:                   engine.FastModeEnabled(),
+		FastModeAvailable:                 fastModeAvailable,
+		FastModeEnabled:                   fastModeEnabled,
 		ConversationFreshness:             ConversationFreshnessFromSession(freshness),
 		PreviousSessionID:                 engine.PreviousSessionID(),
 		ParentAgentSessionID:              engine.ParentAgentSessionID(),
@@ -100,13 +101,14 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 	if engine == nil {
 		return clientui.TranscriptSessionStatus{}, nil
 	}
+	fastModeAvailable, fastModeEnabled := fastModeStatus(engine)
 	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:         engine.ReviewerFrequency(),
 		ReviewerEnabled:           engine.ReviewerEnabled(),
 		AutoCompactionEnabled:     engine.AutoCompactionEnabled(),
 		QuestionsEnabled:          engine.QuestionsEnabled(),
-		FastModeAvailable:         engine.FastModeAvailable(),
-		FastModeEnabled:           engine.FastModeEnabled(),
+		FastModeAvailable:         fastModeAvailable,
+		FastModeEnabled:           fastModeEnabled,
 		ThinkingLevel:             engine.ThinkingLevel(),
 		CompactionMode:            engine.CompactionMode(),
 		PreviousSessionID:         engine.PreviousSessionID(),
@@ -124,6 +126,11 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 		}
 	}
 	return status, nil
+}
+
+func fastModeStatus(engine *runtime.Engine) (bool, bool) {
+	available := engine.FastModeAvailable()
+	return available, available && engine.FastModeEnabled()
 }
 
 func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.RuntimeGoal {

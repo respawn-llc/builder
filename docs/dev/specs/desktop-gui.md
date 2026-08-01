@@ -86,13 +86,22 @@
   The board applies that result through its existing start or move action path.
 - Dismissing a later continuation leaves the Task unchanged and discards that
   proceed intent.
+- Every manual workflow override requires confirmation. Submitting required values confirms a move that needs them; a move without required values uses a generic manual-override confirmation.
+- When a Task has several Current Nodes, dragging any one card copy represents moving the whole Task. Dropping onto any Node that is already Current is a no-op.
+- A Manual Move drop asks the server to evaluate that Task and destination without changing the Task. The board does not receive or retain a per-Task list of executable Manual Move destinations, and dragging over a destination makes no server request.
+- Columns remain neutral while dragging. Red marks only destinations that available authoritative or structural facts already prove ineligible; the desktop does not predict eligible destinations before a drop.
+- An ineligible drop makes no workflow change and shows a reason-specific Toast. Unexpected failures use the generic move-failure treatment.
+- When exactly one usable incoming Transition contains the destination, Kent selects it automatically. When several are usable, the first dialog phase shows unselected radio choices using Transition labels; duplicate labels append their source Node names.
+- The second dialog phase shows every required value as editable. Resolved values are prefilled and may be overridden; earlier-Node values show only their output field name and description.
+- Advancing to the values or confirmation phase animates the content and dialog size, subject to reduced-motion preference. The dialog has no Back action; Cancel closes it, and choosing another Transition requires another drop.
+- Selecting a Fan-Out Transition moves to every target Node. The dialog does not list sibling destinations, and dropping onto one fan-out member never starts that branch alone.
+- Selecting an Approval-gated Transition in the Manual Move dialog acts as the Approval and does not open another Approval surface.
+- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. For Manual Move, its dialog closes before Execution Target selection opens. A usable fixed policy is not overridden.
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
-- Closing Execution Target selection leaves the Task unchanged. Continue closes
-  the dialog and returns the selection to the board. The board owns resolution,
-  setup, duplicate prevention, and actionable failure through its existing
-  action path.
+- Closing Execution Target selection leaves the Task unchanged. Manual Move does not interrupt live work until required target selection succeeds. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
-- Agent and Script drop targets exist only for actual Workflow edges. Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
+- Submitting a Manual Move revalidates it. If the Task or Workflow changed while its dialog was open, the desktop uses the ordinary move error and provides no dedicated stale-preflight recovery flow.
+- Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
 
