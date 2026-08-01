@@ -105,3 +105,45 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 		t.Fatal("successor completion contract was discarded when exact scope ownership ended")
 	}
 }
+
+func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir())
+	execution := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: mustTestCurrentNodeReference(t, "task-completed-binding", "node-completed-binding", nil),
+			WorkflowID:  runtimeids.NewWorkflowID(),
+		},
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		CurrentNodeExecution: execution,
+	})
+	binding, err := engine.BindCurrentNodeExecution(execution)
+	if err != nil {
+		t.Fatalf("bind Current Node execution: %v", err)
+	}
+	if !engine.CurrentNodeExecutionConfigured() {
+		t.Fatal("bound Current Node execution has no completion contract")
+	}
+	beforeClose, err := engine.WorkflowSessionState()
+	if err != nil {
+		t.Fatalf("WorkflowSessionState before completed binding close: %v", err)
+	}
+	if beforeClose == nil ||
+		beforeClose.TaskID != execution.Instructions.CurrentNode.TaskID ||
+		beforeClose.WorkflowID != execution.Instructions.WorkflowID {
+		t.Fatalf("WorkflowSessionState before completed binding close = %+v, want configured workflow identity", beforeClose)
+	}
+	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)
+
+	if err := binding.Close(); err != nil {
+		t.Fatalf("close completed Current Node execution binding: %v", err)
+	}
+	if engine.CurrentNodeExecutionConfigured() {
+		t.Fatal("completed Current Node execution retained its completion contract")
+	}
+	if state, err := engine.WorkflowSessionState(); err != nil || state != nil {
+		t.Fatalf("completed Workflow Session state = %+v error=%v, want absent", state, err)
+	}
+}
