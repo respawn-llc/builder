@@ -115,6 +115,7 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 			b.err = errors.New("current node execution state is unavailable")
 			return
 		}
+		completed := b.engine.WorkflowTerminalState().Completed
 		state.mu.Lock()
 		switch {
 		case state.config == nil:
@@ -129,6 +130,10 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 			)
 		default:
 			state.owner = nil
+			if completed {
+				state.config = nil
+				state.delivery = newWorkflowPromptDeliveryState(nil)
+			}
 		}
 		state.mu.Unlock()
 		if b.err == nil {
