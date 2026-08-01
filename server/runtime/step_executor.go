@@ -77,6 +77,11 @@ type completedResponsePreflightRejection struct {
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
+	if _, aborter, scopeID, ok := e.currentCompletionAttemptCapabilities(); ok && aborter != nil {
+		defer func() {
+			_ = aborter.AbortCompletionAttempt(scopeID)
+		}()
+	}
 	executedToolCall := false
 	patchEditsApplied := false
 	deferredFinal := llm.Message{}

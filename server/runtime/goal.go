@@ -137,28 +137,59 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (GoalCommand
 }
 
 func (e *Engine) SetGoalWithOrderedTurn(turn OrderedMutationTurn, objective string, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
-		return e.SetGoal(objective, actor)
+	return e.applyGoalWithOrderedTurn(turn, func(ownedTurn OrderedMutationTurn) (GoalCommandResult, error) {
+		return e.setGoalForStepWithTurn(ownedTurn, "", objective, actor)
 	})
 }
 
 func (e *Engine) applyGoalWithOrderedTurn(
 	turn OrderedMutationTurn,
-	apply func() (GoalCommandResult, error),
+	apply func(OrderedMutationTurn) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if turn == nil {
-		return apply()
+		return apply(nil)
 	}
 	var result GoalCommandResult
 	err := turn.Apply(func() error {
 		var applyErr error
-		result, applyErr = apply()
+		result, applyErr = apply(turn)
 		return applyErr
 	})
 	return result, err
 }
 
+func (e *Engine) applyGoalMutationInOrder(
+	ctx context.Context,
+	apply func(OrderedMutationTurn) error,
+) error {
+	if e == nil || apply == nil {
+		return errors.New("ordered Goal mutation is required")
+	}
+	applyTurn := func(turn OrderedMutationTurn) error {
+		if turn == nil {
+			return errors.New("ordered Goal mutation turn is required")
+		}
+		return turn.Apply(func() error { return apply(turn) })
+	}
+	if mutation := e.executionMutationSnapshot(); mutation != nil {
+		return mutation(ctx, applyTurn)
+	}
+	if e.cfg.OrderedMutation != nil {
+		return e.cfg.OrderedMutation(applyTurn)
+	}
+	return apply(DirectOrderedMutationTurn())
+}
+
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.setGoalForStepWithTurn(nil, stepID, objective, actor)
+}
+
+func (e *Engine) setGoalForStepWithTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	objective string,
+	actor session.GoalActor,
+) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -175,7 +206,7 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusUpdateFromState(goal))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -193,18 +224,28 @@ func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, ac
 }
 
 func (e *Engine) SetGoalStatusWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
-		return e.SetGoalStatus(status, actor)
+	return e.applyGoalWithOrderedTurn(turn, func(ownedTurn OrderedMutationTurn) (GoalCommandResult, error) {
+		return e.setGoalStatusForStepWithTurn(ownedTurn, "", status, actor, true)
 	})
 }
 
 func (e *Engine) SetGoalStatusWithoutGoalLoopStartWithOrderedTurn(turn OrderedMutationTurn, status session.GoalStatus, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
-		return e.SetGoalStatusWithoutGoalLoopStart(status, actor)
+	return e.applyGoalWithOrderedTurn(turn, func(ownedTurn OrderedMutationTurn) (GoalCommandResult, error) {
+		return e.setGoalStatusForStepWithTurn(ownedTurn, "", status, actor, false)
 	})
 }
 
 func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (GoalCommandResult, error) {
+	return e.setGoalStatusForStepWithTurn(nil, stepID, status, actor, requireGoalLoopStart)
+}
+
+func (e *Engine) setGoalStatusForStepWithTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	status session.GoalStatus,
+	actor session.GoalActor,
+	requireGoalLoopStart bool,
+) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -234,7 +275,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusUpdateFromState(goal))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -453,9 +494,19 @@ func (e *Engine) shiftActiveStepGoalMutation(stepID string) {
 }
 
 func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepGoalMutation) error {
+	return e.applyGoalMutationInOrder(context.Background(), func(turn OrderedMutationTurn) error {
+		return e.applyActiveStepGoalMutationInTurn(turn, stepID, mutation)
+	})
+}
+
+func (e *Engine) applyActiveStepGoalMutationInTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	mutation activeStepGoalMutation,
+) error {
 	switch mutation.kind {
 	case activeStepGoalMutationSet:
-		if _, err := e.setGoalForStep(stepID, mutation.objective, mutation.actor); err != nil {
+		if _, err := e.setGoalForStepWithTurn(turn, stepID, mutation.objective, mutation.actor); err != nil {
 			return err
 		}
 		if !e.currentNodeExecutionActive() {
@@ -463,7 +514,7 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		}
 		return nil
 	case activeStepGoalMutationStatus:
-		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, mutation.status, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
+		if _, err := e.setGoalStatusForStepWithTurn(turn, stepID, mutation.status, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
 			return err
 		}
 		if mutation.status == session.GoalStatusActive && !e.currentNodeExecutionActive() {
@@ -471,10 +522,10 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		}
 		return nil
 	case activeStepGoalMutationClear:
-		_, err := e.clearGoalForStep(stepID, mutation.actor)
+		_, err := e.clearGoalForStepWithTurn(turn, stepID, mutation.actor)
 		return err
 	case activeStepGoalMutationRestartGoalLoop:
-		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, session.GoalStatusActive, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
+		if _, err := e.setGoalStatusForStepWithTurn(turn, stepID, session.GoalStatusActive, mutation.actor, !e.currentNodeExecutionActive()); err != nil {
 			return err
 		}
 		e.deferGoalLoopStart()
@@ -489,12 +540,20 @@ func (e *Engine) ClearGoal(actor session.GoalActor) (GoalCommandResult, error) {
 }
 
 func (e *Engine) ClearGoalWithOrderedTurn(turn OrderedMutationTurn, actor session.GoalActor) (GoalCommandResult, error) {
-	return e.applyGoalWithOrderedTurn(turn, func() (GoalCommandResult, error) {
-		return e.ClearGoal(actor)
+	return e.applyGoalWithOrderedTurn(turn, func(ownedTurn OrderedMutationTurn) (GoalCommandResult, error) {
+		return e.clearGoalForStepWithTurn(ownedTurn, "", actor)
 	})
 }
 
 func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalCommandResult, error) {
+	return e.clearGoalForStepWithTurn(nil, stepID, actor)
+}
+
+func (e *Engine) clearGoalForStepWithTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	actor session.GoalActor,
+) (GoalCommandResult, error) {
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
@@ -510,7 +569,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate())
+	noticeReceipt, err := e.steerGoalNoticeAndStatusWithTurn(turn, stepID, msg, goalStatusClearUpdate())
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -522,10 +581,6 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	if !e.WorkflowTerminalState().Completed {
 		return
 	}
-	goal := e.Goal()
-	if goal == nil || goal.Status != session.GoalStatusActive {
-		return
-	}
 	reportErr := func(err error) {
 		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
@@ -533,23 +588,25 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
 		}))
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
-	if err != nil {
-		reportErr(err)
-		return
-	}
-	if !transitioned {
-		return
-	}
-	msg, err := goalNoticeMessage(GoalNoticeStatus, &completed)
-	if err != nil {
-		reportErr(err)
-		return
-	}
-	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
+	if err := e.applyGoalMutationInOrder(context.Background(), func(turn OrderedMutationTurn) error {
+		goal := e.Goal()
+		if goal == nil || goal.Status != session.GoalStatusActive {
+			return nil
+		}
+		e.controlMutationMu.Lock()
+		defer e.controlMutationMu.Unlock()
+		completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
+		if err != nil || !transitioned {
+			return err
+		}
+		msg, err := goalNoticeMessage(GoalNoticeStatus, &completed)
+		if err != nil {
+			return err
+		}
+		msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+		_, err = e.steerGoalNoticeAndStatusWithTurn(turn, "", msg, goalStatusUpdateFromState(completed))
+		return err
+	}); err != nil {
 		reportErr(err)
 	}
 }
@@ -571,10 +628,19 @@ func (e *Engine) steerGoalNoticeAndStatus(
 	message llm.Message,
 	update GoalStatusUpdate,
 ) (session.CommitReceipt, error) {
+	return e.steerGoalNoticeAndStatusWithTurn(nil, stepID, message, update)
+}
+
+func (e *Engine) steerGoalNoticeAndStatusWithTurn(
+	turn OrderedMutationTurn,
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
+	return e.steerWithCommitReceiptAndTurn(turn, stepID, steerGoalNoticeAndStatusIntent(message, update))
 }
 
 func (e *Engine) StartGoalLoop() error {

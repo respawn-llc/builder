@@ -15,15 +15,20 @@ import (
 // completionAttemptWorkflowController adds the process-local command
 // completion fence to the production Current Node controller. The base
 // controller remains responsible for workflow lifecycle and durable
-// completion; this wrapper owns the exact lease that protects the model turn
-// immediately preceding that completion.
+// completion; this wrapper holds the immutable completion baseline and reserves
+// the exact lease only when a completion result re-enters the controller.
 type completionAttemptWorkflowController struct {
 	workflowruntime.Controller
 	authority *sessionruntime.Authority
 	commands  *runtimecommand.Authority
 
-	mu     sync.Mutex
-	leases map[runtimeids.ExecutionScopeID]*runtimecommand.CompletionLease
+	mu       sync.Mutex
+	attempts map[runtimeids.ExecutionScopeID]completionAttemptState
+}
+
+type completionAttemptState struct {
+	attempt runtimecommand.CompletionAttempt
+	lease   *runtimecommand.CompletionLease
 }
 
 func newCompletionAttemptWorkflowController(
@@ -38,7 +43,7 @@ func newCompletionAttemptWorkflowController(
 		Controller: base,
 		authority:  authority,
 		commands:   commands,
-		leases:     make(map[runtimeids.ExecutionScopeID]*runtimecommand.CompletionLease),
+		attempts:   make(map[runtimeids.ExecutionScopeID]completionAttemptState),
 	}
 }
 
@@ -61,63 +66,74 @@ func (c *completionAttemptWorkflowController) BeginCompletionAttempt(
 	if err != nil {
 		return err
 	}
-	lease, err := attempt.Acquire()
-	if err != nil {
-		return err
-	}
-	if err := lease.Reserve(); err != nil {
-		return err
-	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.leases[scopeID]; exists {
-		abortErr := lease.Abort()
-		return errors.Join(
-			fmt.Errorf("workflow completion attempt already exists for scope %s", scopeID),
-			abortErr,
-		)
+	if state, exists := c.attempts[scopeID]; exists && state.lease != nil {
+		return fmt.Errorf("workflow completion attempt already reserved for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
 	}
-	c.leases[scopeID] = &lease
+	c.attempts[scopeID] = completionAttemptState{attempt: attempt}
 	return nil
 }
 
 func (c *completionAttemptWorkflowController) AbortCompletionAttempt(
 	scopeID runtimeids.ExecutionScopeID,
 ) error {
-	lease := c.takeLease(scopeID)
-	if lease == nil {
+	state, ok := c.takeAttempt(scopeID)
+	if !ok || state.lease == nil {
 		return nil
 	}
-	return lease.Abort()
+	return state.lease.Abort()
 }
 
 func (c *completionAttemptWorkflowController) CompleteCurrentNode(
 	ctx context.Context,
 	req workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
+	c.mu.Lock()
+	state, hasAttempt := c.attempts[req.ScopeID]
+	if hasAttempt {
+		lease, err := state.attempt.Acquire()
+		if err != nil {
+			delete(c.attempts, req.ScopeID)
+			c.mu.Unlock()
+			return workflowruntime.CompletionResult{}, err
+		}
+		if err := lease.Reserve(); err != nil {
+			delete(c.attempts, req.ScopeID)
+			c.mu.Unlock()
+			return workflowruntime.CompletionResult{}, err
+		}
+		state.lease = &lease
+		c.attempts[req.ScopeID] = state
+	}
 	result, completionErr := c.Controller.CompleteCurrentNode(ctx, req)
-	lease := c.takeLease(req.ScopeID)
-	if lease == nil {
+	if hasAttempt {
+		delete(c.attempts, req.ScopeID)
+	}
+	c.mu.Unlock()
+
+	if !hasAttempt {
 		return result, completionErr
 	}
+	lease := state.lease
 	if completionErr != nil {
 		return result, errors.Join(completionErr, lease.Abort())
 	}
 	return result, errors.Join(completionErr, lease.Commit())
 }
 
-func (c *completionAttemptWorkflowController) takeLease(
+func (c *completionAttemptWorkflowController) takeAttempt(
 	scopeID runtimeids.ExecutionScopeID,
-) *runtimecommand.CompletionLease {
+) (completionAttemptState, bool) {
 	if c == nil {
-		return nil
+		return completionAttemptState{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	lease := c.leases[scopeID]
-	delete(c.leases, scopeID)
-	return lease
+	state, ok := c.attempts[scopeID]
+	delete(c.attempts, scopeID)
+	return state, ok
 }
 
 var _ workflowruntime.Controller = (*completionAttemptWorkflowController)(nil)
