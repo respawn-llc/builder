@@ -529,22 +529,23 @@ func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
-	s.mu.Lock()
-	if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
-		len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
+	for {
+		s.mu.Lock()
+		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
+			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
+			s.mu.Unlock()
+			return nil
+		}
+		done := make(chan struct{})
+		s.boundaryDone = done
+		s.boundaryReady = true
+		s.notifyNextWaiterLocked()
 		s.mu.Unlock()
-		return nil
-	}
-	done := make(chan struct{})
-	s.boundaryDone = done
-	s.boundaryReady = true
-	s.notifyNextWaiterLocked()
-	s.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		return nil
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+		}
 	}
 }
 

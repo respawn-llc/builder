@@ -172,7 +172,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
 			e.compactionRuntimeState().SetManualCompactionEligible(true)
-			if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
+			if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 		}
@@ -352,7 +352,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
+		if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 			return stepLoopResult{}, err
 		}
 		patchEditsApplied = patchEditsApplied || applied
@@ -487,13 +487,6 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 		return preparedCompletedResponse{}, err
 	}
-	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
-		e.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := drainAgentStepBoundary(ctx, e.stepLifecycle); err != nil {
-			return preparedCompletedResponse{}, err
-		}
-	}
-
 	var assistantCommittedCoordinate *committedAssistantCoordinate
 	if !noopFinalAnswer {
 		executableCallIDs := make(map[string]struct{}, len(localToolCalls))
@@ -505,6 +498,12 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		var toolCallStarts map[string]int
 		assistantCommittedCoordinate, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
 		e.rememberPendingToolCallStarts(toolCallStarts)
+	}
+	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
+		e.compactionRuntimeState().SetManualCompactionEligible(true)
+		if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+			return preparedCompletedResponse{}, err
+		}
 	}
 
 	resolution := completedResponseDiscardInstruction()
@@ -594,21 +593,11 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	}
 	if len(localToolCalls) > 0 || len(hostedToolExecutions) > 0 {
 		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := drainAgentStepBoundary(ctx, s.engine.stepLifecycle); err != nil {
+		if err := s.engine.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
-}
-
-func drainAgentStepBoundary(ctx context.Context, lifecycle exclusiveStepLifecycle) error {
-	drainer, ok := lifecycle.(interface {
-		DrainAgentStepBoundary(context.Context) error
-	})
-	if !ok {
-		return nil
-	}
-	return drainer.DrainAgentStepBoundary(ctx)
 }
 
 func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.Context, stepID string, localToolCalls []llm.ToolCall) (bool, bool, error) {
