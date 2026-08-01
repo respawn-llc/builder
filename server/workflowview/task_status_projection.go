@@ -428,20 +428,6 @@ func (s *TaskStatusDurableSnapshot) BoardNodeTasks(
 	return s.queries.ListBoardNodeTasks(ctx, params)
 }
 
-func (s *TaskStatusDurableSnapshot) Status(ctx context.Context, taskID string) (workflowTaskStatusFact, error) {
-	if err := s.validate(); err != nil {
-		return workflowTaskStatusFact{}, err
-	}
-	return loadWorkflowTaskStatusFact(ctx, s.queries, s.projector, taskID)
-}
-
-func (s *TaskStatusDurableSnapshot) Statuses(ctx context.Context, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return loadWorkflowTaskStatusFacts(ctx, s.queries, s.projector, taskIDs)
-}
-
 func (s *TaskStatusDurableSnapshot) ProjectedStatuses(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,
@@ -557,16 +543,6 @@ func (s *TaskStatusDurableSnapshot) Definitions(
 		definitions[workflowID] = definition
 	}
 	return definitions, nil
-}
-
-func (s *TaskStatusDurableSnapshot) PendingApprovals(
-	ctx context.Context,
-	taskID string,
-) ([]sqlitegen.TaskPendingApproval, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return s.queries.ListTaskPendingApprovals(ctx, taskID)
 }
 
 func (s *TaskStatusDurableSnapshot) CurrentNodesByTask(

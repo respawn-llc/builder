@@ -44,9 +44,6 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		if c.closed {
 			return errors.New("current node workflow controller is closed")
 		}
-		if c.workerErr != nil {
-			return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
-		}
 		observation.Executions = executions
 		for taskID := range selected {
 			quiescent, err := c.taskQuiescentLocked(taskID)
