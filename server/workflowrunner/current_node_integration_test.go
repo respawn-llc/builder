@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -770,8 +772,17 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	})
 	f.waitForControllerCurrentNodeFinalized(t, currentNode)
 	if err := f.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *agentruntime.Engine) error {
-		if engine.CurrentNodeExecutionConfigured() {
-			t.Fatal("finalized workflow execution remained bound to attached runtime")
+		replacement, err := engine.BindCurrentNodeExecution(&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: currentNode,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("finalized workflow execution remained bound to attached runtime: %w", err)
+		}
+		if err := replacement.Close(); err != nil {
+			return fmt.Errorf("close replacement Current Node execution binding: %w", err)
 		}
 		return nil
 	}); err != nil {

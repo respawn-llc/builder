@@ -20,6 +20,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -37,6 +38,15 @@ func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.C
 }
 
 var runtimeControlPromptHistoryStores sync.Map
+
+func runtimeControlCurrentNodeInstructions() workflowruntime.TaskInstructions {
+	return workflowruntime.TaskInstructions{
+		CurrentNode: workflow.CurrentNodeReference{
+			TaskID: "task-1",
+			NodeID: "node-1",
+		},
+	}
+}
 
 type runtimeControlPromptHistoryStore struct {
 	mu             sync.Mutex
@@ -1009,7 +1019,9 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
+			ScopeID:      runtimeids.NewExecutionScopeID(),
+			Contract:     workflowruntime.CompletionContract{},
+			Instructions: runtimeControlCurrentNodeInstructions(),
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1034,7 +1046,9 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
+			ScopeID:      runtimeids.NewExecutionScopeID(),
+			Contract:     workflowruntime.CompletionContract{},
+			Instructions: runtimeControlCurrentNodeInstructions(),
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1057,7 +1071,9 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
+			ScopeID:      runtimeids.NewExecutionScopeID(),
+			Contract:     workflowruntime.CompletionContract{},
+			Instructions: runtimeControlCurrentNodeInstructions(),
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1079,7 +1095,9 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			Contract: workflowruntime.CompletionContract{},
+			ScopeID:      runtimeids.NewExecutionScopeID(),
+			Contract:     workflowruntime.CompletionContract{},
+			Instructions: runtimeControlCurrentNodeInstructions(),
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
@@ -1105,8 +1123,9 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:  runtimeids.NewExecutionScopeID(),
-			Contract: workflowruntime.CompletionContract{},
+			ScopeID:      runtimeids.NewExecutionScopeID(),
+			Contract:     workflowruntime.CompletionContract{},
+			Instructions: runtimeControlCurrentNodeInstructions(),
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
