@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 )
 
 type taskInterruptCommandRemote struct {
@@ -16,6 +18,12 @@ type taskInterruptCommandRemote struct {
 	interruptRequests []serverapi.WorkflowTaskInterruptRequest
 	moveRequests      []serverapi.WorkflowTaskMoveRequest
 	previewResponse   *serverapi.WorkflowTaskMovePreviewResponse
+	moveResponse      *serverapi.WorkflowTaskMoveResponse
+}
+
+func allowHumanTaskActionForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv(sessionenv.SessionIDEnv, "")
 }
 
 func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
@@ -33,12 +41,43 @@ func (r *taskInterruptCommandRemote) InterruptWorkflowTask(_ context.Context, re
 
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	r.moveRequests = append(r.moveRequests, req)
+	if r.moveResponse != nil {
+		return *r.moveResponse, nil
+	}
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
 			CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: req.TargetNodeID}},
 		},
 	}, nil
+}
+
+func TestTaskMoveJSONWritesPreviewNoOpTypedOutcome(t *testing.T) {
+	allowHumanTaskActionForTest(t)
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "node-2", "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		output.NoOp == nil || len(output.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("JSON output=%+v", output)
+	}
 }
 
 func (r *taskInterruptCommandRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
@@ -52,6 +91,7 @@ func (r *taskInterruptCommandRemote) PreviewWorkflowTaskMove(_ context.Context, 
 }
 
 func TestTaskMoveRejectsTransitionFlagsForDirectDestination(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{}
 	previous := workflowCommandRemoteOpener
 	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
@@ -68,6 +108,7 @@ func TestTaskMoveRejectsTransitionFlagsForDirectDestination(t *testing.T) {
 }
 
 func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
@@ -107,6 +148,7 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 }
 
 func TestTaskMoveAutoSelectsSoleTransition(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
@@ -133,7 +175,8 @@ func TestTaskMoveAutoSelectsSoleTransition(t *testing.T) {
 	}
 }
 
-func TestTaskMoveRejectsEmptyExtraValueNode(t *testing.T) {
+func TestTaskMoveForwardsExtraValueNodeToServerValidation(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
@@ -154,12 +197,16 @@ func TestTaskMoveRejectsEmptyExtraValueNode(t *testing.T) {
 	exitCode := taskSubcommand([]string{
 		"move", "task-1", "implement", "--values-json", `{"extra":{}}`,
 	}, &stdout, &stderr)
-	if exitCode != 2 || len(remote.moveRequests) != 0 {
+	if exitCode != 0 || len(remote.moveRequests) != 1 {
 		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if _, ok := remote.moveRequests[0].Values["extra"]; !ok {
+		t.Fatalf("structured values = %+v, want extra node forwarded to server", remote.moveRequests[0].Values)
 	}
 }
 
-func TestTaskMoveRejectsNullValueNode(t *testing.T) {
+func TestTaskMoveForwardsNullValueNodeToServerValidation(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	resolved := "already resolved"
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
@@ -186,12 +233,16 @@ func TestTaskMoveRejectsNullValueNode(t *testing.T) {
 	exitCode := taskSubcommand([]string{
 		"move", "task-1", "implement", "--values-json", `{"plan":null}`,
 	}, &stdout, &stderr)
-	if exitCode != 2 || len(remote.moveRequests) != 0 {
+	if exitCode != 0 || len(remote.moveRequests) != 1 {
 		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if remote.moveRequests[0].Values["plan"] != nil {
+		t.Fatalf("structured values = %+v, want null plan node forwarded to server", remote.moveRequests[0].Values)
 	}
 }
 
 func TestTaskMoveRequiresExplicitTransitionForMultipleChoices(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
@@ -227,6 +278,7 @@ func TestTaskMoveRequiresExplicitTransitionForMultipleChoices(t *testing.T) {
 }
 
 func TestTaskMoveBlockedPreviewUsesCLIBlockerMapping(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	reason := serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion
 	remote := &taskInterruptCommandRemote{
 		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
@@ -260,6 +312,7 @@ func (r *taskInterruptCommandRemote) Close() error {
 }
 
 func TestTaskInterruptTargetsTheResolvedTask(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{}
 	previous := workflowCommandRemoteOpener
 	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
@@ -286,6 +339,7 @@ func TestTaskInterruptTargetsTheResolvedTask(t *testing.T) {
 }
 
 func TestTaskMoveCarriesExecutionTargetAndSetupOperation(t *testing.T) {
+	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{}
 	previous := workflowCommandRemoteOpener
 	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {

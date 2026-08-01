@@ -235,6 +235,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
       outcome: value.outcome,
       noOp: { currentNodes: value.no_op.current_nodes },
     })),
+  dependencyConfirmationRequiredResponseSchema,
 ]);
 
 const manualMoveBlockerSchema = z.enum([
@@ -248,12 +249,14 @@ const manualMoveBlockerSchema = z.enum([
   "parallel_branch_requires_fan_out",
 ]);
 
+const nonBlankPreservingString = z.string().refine((value) => value.trim().length > 0);
+
 const manualMoveRequiredValueSchema = z
   .object({
     node_key: z.string().trim().min(1),
     output_name: z.string().trim().min(1),
     description: z.string(),
-    resolved_value: z.string().trim().min(1).nullable().optional(),
+    resolved_value: nonBlankPreservingString.nullable().optional(),
   })
   .strict()
   .transform((value) => ({

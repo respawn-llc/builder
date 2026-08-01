@@ -142,3 +142,61 @@ func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 		t.Fatalf("JSON output=%+v", output)
 	}
 }
+
+func TestTaskMoveDependencyConfirmationMapsIgnoreFlag(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "")
+	count := 2
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+			UnsatisfiedDependencyCount: &count,
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand([]string{"task-1", "node-2", "--ignore-dependencies", "--json"}, &stdout, &stderr)
+
+	if exitCode != 1 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	if !remote.moveRequests[0].ProceedDespiteDependencies {
+		t.Fatalf("move request = %+v, want proceed despite dependencies", remote.moveRequests[0])
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
+		output.UnsatisfiedDependencyCount == nil || *output.UnsatisfiedDependencyCount != count {
+		t.Fatalf("JSON output=%+v", output)
+	}
+}
+
+func TestTaskMoveJSONWritesSubmittedNoOpTypedOutcome(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "")
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand([]string{"task-1", "node-2", "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		output.NoOp == nil || len(output.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("JSON output=%+v", output)
+	}
+}

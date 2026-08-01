@@ -1389,6 +1389,18 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}
 	var targetPreflight initiatingActionTargetPreflight
 	if prepared.RequiresExecutionTarget() {
+		if !req.ProceedDespiteDependencies {
+			count, countErr := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
+			if countErr != nil {
+				return serverapi.WorkflowTaskMoveResponse{}, countErr
+			}
+			if count > 0 {
+				return serverapi.WorkflowTaskMoveResponse{
+					Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+					UnsatisfiedDependencyCount: &count,
+				}, nil
+			}
+		}
 		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
 		if err != nil {
 			return serverapi.WorkflowTaskMoveResponse{}, err

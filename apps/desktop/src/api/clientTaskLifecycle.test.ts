@@ -123,6 +123,15 @@ describe("task lifecycle client", () => {
       },
     });
     expect(
+      taskMoveResponseSchema.parse({
+        outcome: "dependency_confirmation_required",
+        unsatisfied_dependency_count: 2,
+      }),
+    ).toEqual({
+      outcome: "dependency_confirmation_required",
+      unsatisfiedDependencyCount: 2,
+    });
+    expect(
       taskApproveResponseSchema.parse({
         outcome: "selection_required",
         selection_required: { reason: "policy_requires_selection" },

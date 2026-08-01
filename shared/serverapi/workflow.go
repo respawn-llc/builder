@@ -858,20 +858,22 @@ type WorkflowTaskApproveApplied struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string                            `json:"task_id"`
-	TargetNodeID     string                            `json:"target_node_id"`
-	TransitionKey    *string                           `json:"transition_key,omitempty"`
-	Values           map[string]map[string]string      `json:"values,omitempty"`
-	Commentary       string                            `json:"commentary,omitempty"`
-	SetupOperationID WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
-	ExecutionTarget  *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	TaskID                     string                            `json:"task_id"`
+	TargetNodeID               string                            `json:"target_node_id"`
+	TransitionKey              *string                           `json:"transition_key,omitempty"`
+	Values                     map[string]map[string]string      `json:"values,omitempty"`
+	Commentary                 string                            `json:"commentary,omitempty"`
+	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
+	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
 type WorkflowTaskMoveResponse struct {
-	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
-	NoOp              *WorkflowTaskMoveNoOp                        `json:"no_op,omitempty"`
-	Applied           *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
-	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	Outcome                    WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	NoOp                       *WorkflowTaskMoveNoOp                        `json:"no_op,omitempty"`
+	Applied                    *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
+	SelectionRequired          *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+	UnsatisfiedDependencyCount *int                                         `json:"unsatisfied_dependency_count,omitempty"`
 }
 
 type WorkflowTaskMoveNoOp struct {

@@ -13,7 +13,6 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/workflowcontract"
 )
 
 var (
@@ -594,6 +593,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	transition := fs.String("transition", "", "workflow Transition key")
 	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
 	valuesFile := fs.String("values-file", "", "read nested Node/output values from a JSON file")
@@ -646,6 +646,14 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				fmt.Fprintln(stderr, "task move no-op does not accept --transition or --values-json/--values-file")
 				return 2
 			}
+			if *jsonOut {
+				return writeCommandJSON(stdout, stderr, serverapi.WorkflowTaskMoveResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+					NoOp: &serverapi.WorkflowTaskMoveNoOp{
+						CurrentNodes: preview.NoOp.CurrentNodes,
+					},
+				})
+			}
 			detail, detailErr := getWorkflowTaskByID(context.Background(), remote, taskID)
 			if detailErr != nil {
 				fmt.Fprintf(stderr, "task %s is already at %s but failed to load task detail: %v\n", taskID, positionals[1], detailErr)
@@ -683,22 +691,19 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				return 2
 			}
 			choice := *selected
-			if err := validateManualMoveCLIValues(choice, values); err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
 			authoredKey := choice.TransitionKey
 			transitionKey = &authoredKey
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-				TaskID:           taskID,
-				TargetNodeID:     positionals[1],
-				TransitionKey:    transitionKey,
-				Values:           values,
-				Commentary:       *commentary,
-				SetupOperationID: setupOperationID,
-				ExecutionTarget:  executionTarget,
+				TaskID:                     taskID,
+				TargetNodeID:               positionals[1],
+				TransitionKey:              transitionKey,
+				Values:                     values,
+				Commentary:                 *commentary,
+				SetupOperationID:           setupOperationID,
+				ExecutionTarget:            executionTarget,
+				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
@@ -719,7 +724,18 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return 1
 		}
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+				return 1
+			}
+			writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
+			return 1
+		}
 		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
+			if *jsonOut {
+				return writeCommandJSON(stdout, stderr, resp)
+			}
 			detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 			if err != nil {
 				fmt.Fprintf(stderr, "task %s move became a no-op but failed to load task detail: %v\n", taskID, err)
@@ -766,53 +782,6 @@ func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) s
 	default:
 		return "the server could not explain why this move is blocked; try again"
 	}
-}
-
-func validateManualMoveCLIValues(
-	choice serverapi.WorkflowTaskMovePreviewTransitionChoice,
-	values map[string]map[string]string,
-) error {
-	type valueIdentity struct {
-		nodeKey    string
-		outputName string
-	}
-	required := make(map[valueIdentity]serverapi.WorkflowTaskMoveRequiredValue, len(choice.RequiredValues))
-	requiredNodes := make(map[string]struct{}, len(choice.RequiredValues))
-	for _, value := range choice.RequiredValues {
-		required[valueIdentity{nodeKey: value.NodeKey, outputName: value.OutputName}] = value
-		requiredNodes[value.NodeKey] = struct{}{}
-	}
-	for nodeKey, outputs := range values {
-		if _, ok := requiredNodes[nodeKey]; !ok {
-			return fmt.Errorf("manual move value node %s is not required by the selected Transition", nodeKey)
-		}
-		if outputs == nil {
-			return fmt.Errorf("manual move value node %s must be an object", nodeKey)
-		}
-		for outputName, value := range outputs {
-			key := valueIdentity{nodeKey: nodeKey, outputName: outputName}
-			if _, ok := required[key]; !ok {
-				return fmt.Errorf("manual move value %s.%s is not required by the selected Transition", nodeKey, outputName)
-			}
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("manual move value %s.%s must be non-blank", nodeKey, outputName)
-			}
-			if len(value) > workflowcontract.MaxOutputValueBytes {
-				return fmt.Errorf("manual move value %s.%s exceeds the maximum output value size", nodeKey, outputName)
-			}
-		}
-	}
-	for key, value := range required {
-		submittedOutputs := values[key.nodeKey]
-		submitted, exists := submittedOutputs[key.outputName]
-		if exists && strings.TrimSpace(submitted) != "" {
-			continue
-		}
-		if value.ResolvedValue == nil {
-			return fmt.Errorf("manual move value %s.%s is required", key.nodeKey, key.outputName)
-		}
-	}
-	return nil
 }
 
 func readManualMoveValues(inline, file string) (map[string]map[string]string, error) {
