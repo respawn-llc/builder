@@ -444,19 +444,24 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 	return row, nil
 }
 
+type WorkspacePathKeyClaim struct {
+	Key     string
+	Claimed bool
+}
+
 // ClaimWorkspacePathKey assigns candidate to workspaceID if the Workspace has
 // not claimed a key yet. A repeated claim converges on the existing key.
-func (s *Store) ClaimWorkspacePathKey(ctx context.Context, workspaceID string, candidate string) (string, error) {
+func (s *Store) ClaimWorkspacePathKey(ctx context.Context, workspaceID string, candidate string) (WorkspacePathKeyClaim, error) {
 	if s == nil || s.queries == nil {
-		return "", errors.New("metadata store is required")
+		return WorkspacePathKeyClaim{}, errors.New("metadata store is required")
 	}
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	trimmedCandidate := strings.TrimSpace(candidate)
 	if trimmedWorkspaceID == "" {
-		return "", errors.New("workspace id is required")
+		return WorkspacePathKeyClaim{}, errors.New("workspace id is required")
 	}
 	if trimmedCandidate == "" {
-		return "", errors.New("workspace path key candidate is required")
+		return WorkspacePathKeyClaim{}, errors.New("workspace path key candidate is required")
 	}
 	rows, err := s.queries.ClaimWorkspacePathKey(ctx, sqlitegen.ClaimWorkspacePathKeyParams{
 		ManagedWorktreePathKey: sql.NullString{String: trimmedCandidate, Valid: true},
@@ -464,24 +469,24 @@ func (s *Store) ClaimWorkspacePathKey(ctx context.Context, workspaceID string, c
 	})
 	if err != nil {
 		if IsSQLiteUniqueConstraint(err) {
-			return "", fmt.Errorf("%w: candidate=%q", ErrWorkspacePathKeyCandidateCollision, trimmedCandidate)
+			return WorkspacePathKeyClaim{}, fmt.Errorf("%w: candidate=%q", ErrWorkspacePathKeyCandidateCollision, trimmedCandidate)
 		}
-		return "", fmt.Errorf("claim workspace path key: %w", err)
+		return WorkspacePathKeyClaim{}, fmt.Errorf("claim workspace path key: %w", err)
 	}
 	if rows > 0 {
-		return trimmedCandidate, nil
+		return WorkspacePathKeyClaim{Key: trimmedCandidate, Claimed: true}, nil
 	}
 	workspace, err := s.queries.GetWorkspacePathKeyByID(ctx, trimmedWorkspaceID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("workspace %q: %w", trimmedWorkspaceID, sql.ErrNoRows)
+			return WorkspacePathKeyClaim{}, fmt.Errorf("workspace %q: %w", trimmedWorkspaceID, sql.ErrNoRows)
 		}
-		return "", fmt.Errorf("read workspace path key: %w", err)
+		return WorkspacePathKeyClaim{}, fmt.Errorf("read workspace path key: %w", err)
 	}
 	if !workspace.Valid {
-		return "", fmt.Errorf("workspace %q has no available path key", trimmedWorkspaceID)
+		return WorkspacePathKeyClaim{}, fmt.Errorf("workspace %q has no available path key", trimmedWorkspaceID)
 	}
-	return workspace.String, nil
+	return WorkspacePathKeyClaim{Key: workspace.String}, nil
 }
 
 // ReleaseWorkspacePathKey clears candidate only when it is still owned by the

@@ -37,15 +37,31 @@ func TestNormalizeWorkspacePathKey(t *testing.T) {
 }
 
 func TestWorkspacePathKeyCandidateFitsPortableComponentLimit(t *testing.T) {
-	for _, suffix := range []string{"", "123", "1234", "12345", "123456"} {
+	suffixes := []*string{nil}
+	for _, value := range []string{"123", "1234", "12345", "123456"} {
+		value := value
+		suffixes = append(suffixes, &value)
+	}
+	for _, suffix := range suffixes {
 		got := workspacePathKeyCandidate("abcdefghijklmnopqrstuvwx", suffix)
 		if len(got) > 31 {
 			t.Fatalf("candidate %q is %d bytes, want at most 31", got, len(got))
 		}
 	}
-	if got := workspacePathKeyCandidate("builder", "042"); got != "builder-042" {
+	suffix := "042"
+	if got := workspacePathKeyCandidate("builder", &suffix); got != "builder-042" {
 		t.Fatalf("suffixed candidate = %q, want builder-042", got)
 	}
+}
+
+func TestWorkspacePathKeyCandidateRejectsBlankPresentSuffix(t *testing.T) {
+	suffix := " "
+	defer func() {
+		if recover() == nil {
+			t.Fatal("workspacePathKeyCandidate accepted a blank present suffix")
+		}
+	}()
+	_ = workspacePathKeyCandidate("builder", &suffix)
 }
 
 func TestManagedRootAllocatorEagerlyInitializesMissingBase(t *testing.T) {

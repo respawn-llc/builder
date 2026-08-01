@@ -102,16 +102,16 @@ func TestWorkspacePathKeyClaimAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim workspace path key: %v", err)
 	}
-	if claimed != "source" {
-		t.Fatalf("claimed workspace path key = %q, want source", claimed)
+	if claimed.Key != "source" || !claimed.Claimed {
+		t.Fatalf("claimed workspace path key = %+v, want source claimed by this call", claimed)
 	}
 
 	converged, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "other")
 	if err != nil {
 		t.Fatalf("converged workspace path key: %v", err)
 	}
-	if converged != "source" {
-		t.Fatalf("converged workspace path key = %q, want source", converged)
+	if converged.Key != "source" || converged.Claimed {
+		t.Fatalf("converged workspace path key = %+v, want existing source key without ownership", converged)
 	}
 
 	if err := store.ReleaseWorkspacePathKey(ctx, binding.WorkspaceID, "other"); err != nil {
@@ -174,15 +174,15 @@ func TestWorkspacePathKeySurvivesRegistrationUpsertAndRebind(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upsert workspace: %v", err)
 	}
-	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got != "stable" {
-		t.Fatalf("path key after upsert = %q, %v; want stable", got, err)
+	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got.Key != "stable" {
+		t.Fatalf("path key after upsert = %+v, %v; want stable", got, err)
 	}
 	newRoot := t.TempDir()
 	if _, err := store.RebindWorkspace(ctx, binding.CanonicalRoot, newRoot); err != nil {
 		t.Fatalf("rebind workspace: %v", err)
 	}
-	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got != "stable" {
-		t.Fatalf("path key after rebind = %q, %v; want stable", got, err)
+	if got, err := store.ClaimWorkspacePathKey(ctx, binding.WorkspaceID, "different"); err != nil || got.Key != "stable" {
+		t.Fatalf("path key after rebind = %+v, %v; want stable", got, err)
 	}
 }
 

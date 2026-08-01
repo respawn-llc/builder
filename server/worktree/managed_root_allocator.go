@@ -312,12 +312,14 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 	seed := normalizeWorkspacePathKey(filepath.Base(filepath.Clean(canonicalWorkspaceRoot)))
 	attempted := make([]string, 0, 5)
 	for width := 0; width <= 4; width++ {
-		suffix := ""
+		var suffix *string
 		if width > 0 {
-			suffix, err = a.randomDecimal(width + 2)
+			value, randomErr := a.randomDecimal(width + 2)
+			err = randomErr
 			if err != nil {
 				return "", err
 			}
+			suffix = &value
 		}
 		candidate := workspacePathKeyCandidate(seed, suffix)
 		attempted = append(attempted, candidate)
@@ -329,14 +331,14 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 		if exists {
 			continue
 		}
-		claimed, err := a.metadata.ClaimWorkspacePathKey(ctx, workspace.ID, candidate)
+		claim, err := a.metadata.ClaimWorkspacePathKey(ctx, workspace.ID, candidate)
 		if err != nil {
 			if errors.Is(err, metadata.ErrWorkspacePathKeyCandidateCollision) {
 				continue
 			}
 			return "", err
 		}
-		return a.materializeClaimedWorkspaceParent(workspace.ID, claimed, base)
+		return a.materializeClaimedWorkspaceParent(workspace.ID, claim.Key, base, claim.Claimed)
 	}
 	panic(&managedRootExhaustionError{
 		Operation:   "workspace-parent",
@@ -474,8 +476,8 @@ func (a *managedRootAllocator) materializePersistedWorkspaceParent(workspaceID s
 	return a.materializeWorkspaceParent(workspaceID, key, base, false)
 }
 
-func (a *managedRootAllocator) materializeClaimedWorkspaceParent(workspaceID string, key string, base string) (string, error) {
-	return a.materializeWorkspaceParent(workspaceID, key, base, true)
+func (a *managedRootAllocator) materializeClaimedWorkspaceParent(workspaceID string, key string, base string, claimed bool) (string, error) {
+	return a.materializeWorkspaceParent(workspaceID, key, base, claimed)
 }
 
 func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, key string, base string, claimed bool) (root string, err error) {
@@ -701,11 +703,14 @@ func isWindowsReservedPathKey(value string) bool {
 	return false
 }
 
-func workspacePathKeyCandidate(parentKey string, suffix string) string {
+func workspacePathKeyCandidate(parentKey string, suffix *string) string {
 	parentKey = normalizeWorkspacePathKey(parentKey)
-	suffix = strings.TrimSpace(suffix)
-	if suffix == "" {
+	if suffix == nil {
 		return parentKey
 	}
-	return parentKey + "-" + suffix
+	value := strings.TrimSpace(*suffix)
+	if value == "" {
+		panic("workspace path key suffix must be non-empty when present")
+	}
+	return parentKey + "-" + value
 }
