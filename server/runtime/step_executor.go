@@ -481,6 +481,9 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 		return preparedCompletedResponse{}, err
 	}
+	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
+		e.compactionRuntimeState().SetManualCompactionEligible(true)
+	}
 
 	var assistantCommittedCoordinate *committedAssistantCoordinate
 	if !noopFinalAnswer {
