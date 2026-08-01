@@ -95,7 +95,7 @@ describe("VerticalReorder", () => {
       pointerId: 1,
     });
 
-    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    expect(screen.getByTestId("reorder-overlay")).toHaveAttribute("data-item-id", "second");
     expect(screen.getByTestId("row-second")).not.toBeVisible();
     expect(screen.getByTestId("row-first")).toBeVisible();
     expect(screen.getByTestId("row-third")).toBeVisible();
@@ -134,7 +134,7 @@ describe("VerticalReorder", () => {
       isPrimary: true,
       pointerId: 1,
     });
-    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    expect(screen.getByTestId("reorder-overlay")).toHaveAttribute("data-item-id", "second");
     expect(screen.getByTestId("row-second")).not.toBeVisible();
     expect(screen.getByTestId("row-third")).toBeVisible();
     fireEvent.pointerUp(screen.getByTestId("row-third"), {
@@ -225,7 +225,9 @@ describe("VerticalReorder", () => {
     secondHandle.focus();
     await user.keyboard("[Space]");
     await user.keyboard("[ArrowDown]");
-    await waitFor(() => expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second"));
+    await waitFor(() =>
+      expect(screen.getByTestId("reorder-overlay")).toHaveAttribute("data-item-id", "second"),
+    );
     await user.keyboard("[Escape]");
 
     await waitFor(() => {
@@ -250,7 +252,7 @@ describe("VerticalReorder", () => {
     await user.keyboard("[ArrowDown]");
 
     await waitFor(() => {
-      expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+      expect(screen.getByTestId("reorder-overlay")).toHaveAttribute("data-item-id", "second");
     });
     expect(screen.getByTestId("row-second")).not.toBeVisible();
     await user.keyboard("[Space]");
@@ -478,6 +480,7 @@ function ReorderHarness({ onCommit, scrollable = false }: ReorderHarnessProps) {
       )}
       renderItem={(item, row) => (
         <div
+          data-item-id={item.id}
           data-row-id={row.isOverlay ? undefined : item.id}
           data-testid={row.isOverlay ? "reorder-overlay" : `row-${item.id}`}
         >
