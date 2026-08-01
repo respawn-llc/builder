@@ -356,18 +356,47 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 
 func TestProjectDeletePlainBlockerRenderingPreservesOptionalCount(t *testing.T) {
 	var withoutCount bytes.Buffer
-	writeWorkflowBlockerLine(&withoutCount, "blocked", "message", projectDeleteBlockerCount(nil))
+	absent, err := projectDeleteBlockerCount(nil)
+	if err != nil {
+		t.Fatalf("absent count rejected: %v", err)
+	}
+	writeWorkflowBlockerLine(&withoutCount, "blocked", "message", absent)
 
 	positive := 2
 	var withCount bytes.Buffer
-	writeWorkflowBlockerLine(&withCount, "blocked", "message", projectDeleteBlockerCount(&positive))
+	present, err := projectDeleteBlockerCount(&positive)
+	if err != nil {
+		t.Fatalf("positive count rejected: %v", err)
+	}
+	writeWorkflowBlockerLine(&withCount, "blocked", "message", present)
 
 	if withoutCount.Len() == 0 || withCount.Len() <= withoutCount.Len() || bytes.Equal(withoutCount.Bytes(), withCount.Bytes()) {
 		t.Fatalf("plain blocker outputs have unexpected count shapes: absent=%q positive=%q", withoutCount.String(), withCount.String())
 	}
+}
+
+func TestProjectDeletePlainOutputRejectsInvalidPresentBlockerCounts(t *testing.T) {
+	const projectID = "project-123"
 	for _, nonpositive := range []int{0, -1} {
-		if count := projectDeleteBlockerCount(&nonpositive); count != nil {
-			t.Fatalf("count %d projected as present: %v", nonpositive, *count)
+		outcome := projectDeleteOutcome{
+			Error: &projectDeleteError{
+				Code:      "project_delete_blocked",
+				Message:   "blocked",
+				ProjectID: projectID,
+				Blockers: []projectDeleteBlocker{{
+					Code:    "blocked",
+					Message: "message",
+					Count:   &nonpositive,
+				}},
+			},
+		}
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if exitCode := writeProjectDeleteOutcome(&stdout, &stderr, outcome, false); exitCode != 1 {
+			t.Fatalf("count %d exit code = %d, want 1", nonpositive, exitCode)
+		}
+		if stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("count %d streams = stdout %q stderr %q, want diagnostic-only failure", nonpositive, stdout.String(), stderr.String())
 		}
 	}
 }

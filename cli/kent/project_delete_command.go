@@ -258,7 +258,12 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 			return 1
 		}
 		for _, blocker := range outcome.Error.Blockers {
-			writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, projectDeleteBlockerCount(blocker.Count))
+			count, err := projectDeleteBlockerCount(blocker.Count)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, count)
 		}
 		fmt.Fprintln(stderr, outcome.Error.Message)
 		return 1
@@ -278,12 +283,15 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 	return 0
 }
 
-func projectDeleteBlockerCount(count *int) *int64 {
-	if count == nil || *count <= 0 {
-		return nil
+func projectDeleteBlockerCount(count *int) (*int64, error) {
+	if count == nil {
+		return nil, nil
+	}
+	if *count <= 0 {
+		return nil, errors.New("project deletion blocker count must be positive when present")
 	}
 	value := int64(*count)
-	return &value
+	return &value, nil
 }
 
 func (outcome projectDeleteOutcome) validate() error {
@@ -295,6 +303,13 @@ func (outcome projectDeleteOutcome) validate() error {
 	}
 	if outcome.Error != nil && strings.TrimSpace(outcome.Error.ProjectID) == "" {
 		return errors.New("project deletion error requires a project id")
+	}
+	if outcome.Error != nil {
+		for _, blocker := range outcome.Error.Blockers {
+			if _, err := projectDeleteBlockerCount(blocker.Count); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
