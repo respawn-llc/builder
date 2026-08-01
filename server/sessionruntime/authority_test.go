@@ -1391,6 +1391,64 @@ func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	}
 }
 
+func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	authority := fixture.authority
+	currentStarted := make(chan struct{})
+	releaseCurrent := make(chan struct{})
+	current, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(currentStarted)
+			<-releaseCurrent
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start current execution: %v", err)
+	}
+	<-currentStarted
+
+	type replacementResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	replaced := make(chan replacementResult, 1)
+	go func() {
+		handle, replaceErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   ReplaceAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		replaced <- replacementResult{handle: handle, err: replaceErr}
+	}()
+	select {
+	case outcome := <-replaced:
+		t.Fatalf("replacement returned before current execution finished: %v", outcome.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseCurrent)
+	if _, err := current.Wait(context.Background()); err != nil {
+		t.Fatalf("wait current execution: %v", err)
+	}
+	outcome := <-replaced
+	if outcome.err != nil {
+		t.Fatalf("replace after current execution finished: %v", outcome.err)
+	}
+	if _, err := outcome.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait replacement execution: %v", err)
+	}
+}
+
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
@@ -1657,6 +1715,52 @@ func TestBackgroundTerminalEventFromPredecessorGenerationRoutesToCurrentRuntime(
 		}
 	case <-time.After(time.Second):
 		t.Fatal("current resource generation did not receive background registration")
+	}
+}
+
+func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{}, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	authority := fixture.authority
+
+	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
+	event := runtimewirefixture.BackgroundCompletionEvent("1001", sessionID.String(), t.TempDir())
+	event.NoticeSuppressed = true
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		predecessor.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release predecessor runtime: %v", err)
+	}
+
+	authority.routeBackgroundEvent(event)
+	select {
+	case update := <-updates:
+		t.Fatalf("terminal event reached absent runtime: %+v", update)
+	default:
+	}
+
+	_ = openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventCompleted ||
+			update.ID != event.Snapshot.ID ||
+			update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("queued terminal event update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued terminal event did not reach the next runtime")
 	}
 }
 

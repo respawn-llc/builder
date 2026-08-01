@@ -1013,6 +1013,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
+	a.flushTerminalBackgroundEvents(resource)
 	return resource, nil
 }
 
