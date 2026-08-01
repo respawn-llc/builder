@@ -80,6 +80,13 @@ func (t *PendingBackgroundTransition) Commit() error {
 	return t.state.commit()
 }
 
+func (t *PendingBackgroundTransition) Reserve() error {
+	if t == nil || t.state == nil {
+		return errors.New("reserve pending background transition: transition is required")
+	}
+	return t.state.reserve()
+}
+
 // Abort suppresses terminal publication, terminates the retained process, and
 // removes it once its process owner has joined.
 func (t *PendingBackgroundTransition) Abort() error {
@@ -131,6 +138,7 @@ type backgroundTransitionStatus string
 
 const (
 	backgroundTransitionPending   backgroundTransitionStatus = "pending"
+	backgroundTransitionReserved  backgroundTransitionStatus = "reserved"
 	backgroundTransitionCommitted backgroundTransitionStatus = "committed"
 	backgroundTransitionAborted   backgroundTransitionStatus = "aborted"
 )
@@ -145,7 +153,10 @@ func newBackgroundTransitionState() *backgroundTransitionState {
 func (s *backgroundTransitionState) commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status != backgroundTransitionPending {
+	if s.status == backgroundTransitionPending {
+		s.status = backgroundTransitionReserved
+	}
+	if s.status != backgroundTransitionReserved {
 		return fmt.Errorf("commit pending background transition: status is %q", s.status)
 	}
 	s.status = backgroundTransitionCommitted
@@ -153,11 +164,21 @@ func (s *backgroundTransitionState) commit() error {
 	return nil
 }
 
+func (s *backgroundTransitionState) reserve() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != backgroundTransitionPending {
+		return fmt.Errorf("reserve pending background transition: status is %q", s.status)
+	}
+	s.status = backgroundTransitionReserved
+	return nil
+}
+
 func (s *backgroundTransitionState) abort() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch s.status {
-	case backgroundTransitionPending:
+	case backgroundTransitionPending, backgroundTransitionReserved:
 		s.status = backgroundTransitionAborted
 		close(s.done)
 		return true

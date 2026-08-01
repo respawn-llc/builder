@@ -829,8 +829,9 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			a.beginWorkflowExecution(execution)
 		}
 		if candidate, ok := commandLease.(ResourceExecutionMutation); ok {
-			resource.engine.BindExecutionMutation(runtime.ExecutionMutation(candidate.OrderedMutation))
-			defer resource.engine.ClearExecutionMutation()
+			bound := runtime.ExecutionMutation(candidate.OrderedMutation)
+			binding := resource.engine.BindExecutionMutation(bound)
+			defer resource.engine.ClearExecutionMutationIf(binding)
 		}
 		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
 			authority: a,

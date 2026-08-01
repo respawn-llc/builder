@@ -493,11 +493,17 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem, turn Ordere
 	if item.toolCompletion != nil {
 		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
 		transition, _ := completion.Result.TransientMetadata.(interface {
+			Reserve() error
 			Commit() error
 			Abort() error
 			Snapshot() shelltool.Snapshot
 		})
 		completion.Result.TransientMetadata = nil
+		if transition != nil {
+			if reserveErr := transition.Reserve(); reserveErr != nil {
+				return reserveErr
+			}
+		}
 		receipt, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
 		if !receipt.Committed {

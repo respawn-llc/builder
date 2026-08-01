@@ -182,6 +182,12 @@ func EnqueueTerminal[T any](
 		target:   continuation.target,
 		state:    state,
 		execute: func(turn Turn) bool {
+			if err := continuation.validateTarget(); err != nil {
+				state.valid.Store(false)
+				result <- futureResult[T]{err: err}
+				continuation.stageFinished(true)
+				return false
+			}
 			value, applyErr := apply(turn)
 			state.valid.Store(false)
 			result <- futureResult[T]{value: value, err: applyErr}

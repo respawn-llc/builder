@@ -1,14 +1,14 @@
 package runtimecommand
 
-import "core/server/runtimegate"
+import "core/server/runtime"
 
-type StartGate = runtimegate.Gate
+type StartGate = runtime.StartGate
 
 var (
-	ErrStartGateAborted = runtimegate.ErrAborted
-	ErrStartGateSettled = runtimegate.ErrSettled
+	ErrStartGateAborted = runtime.ErrStartGateAborted
+	ErrStartGateSettled = runtime.ErrStartGateSettled
 )
 
 func NewStartGate() *StartGate {
-	return runtimegate.New()
+	return runtime.NewStartGate()
 }

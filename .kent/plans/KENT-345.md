@@ -396,3 +396,15 @@ Remediation progress: the ordered execution adapter now registers the Agent owne
 - [ ] Run final focused race/build/diff checks and commit this remediation round.
 
 Round 2 progress: the live-control regressions now pass in isolation; Completion Fence reservation, exact continuation validation, Goal ordered-start handoff, shell non-commit handling, typed notice observation, and debug invariant behavior are implemented. The operator explicitly authorized retaining the unified scope; the fixed repository test cap is not used as a bypass for focused correctness checks.
+
+## Review remediation round 3
+
+- [x] Make reserved Completion Fence attempts reject input before generation advancement.
+- [x] Remove the live Goal ordered-start error fallback to direct runtime mutation.
+- [x] Validate terminal continuation stages with the same current exact-scope check as ordinary re-entry.
+- [x] Fix successor retained-session execution binding so predecessor cleanup cannot clear a successor continuation.
+- [x] Move the shared start gate into the cohesive `server/runtime` package and remove the small-package guardrail violation.
+- [x] Reserve shell transitions before durable tool-result persistence and retain abortable ownership on persistence failure.
+- [ ] Complete typed preparation callbacks for every execution-starting Session command family and run the final repository checks.
+
+Round 3 progress: reserved fences, terminal-scope validation, successor-safe mutation binding, shell transition reservation, runtimegate consolidation, and the retained-session fixture are fixed. Focused workflowrunner/runtimecommand/runtimecontrol and small-package guardrail tests pass. The remaining repository-wide timeout is the acknowledged fixed shard cap; command-family preparation remains the final architectural follow-up.

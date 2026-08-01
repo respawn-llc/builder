@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"core/server/llm"
-	"core/server/runtimegate"
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/textutil"
@@ -57,9 +56,9 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			serialOrdinal = nextSerialOrdinal
 			nextSerialOrdinal++
 		}
-		startGate := runtimegate.New()
+		startGate := NewStartGate()
 		wg.Add(1)
-		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata, gate *runtimegate.Gate) {
+		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata, gate *StartGate) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error

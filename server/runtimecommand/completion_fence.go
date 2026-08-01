@@ -74,7 +74,7 @@ func (f *CompletionFence) BeginInput() (InputAcceptance, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced {
+	if f.fenced || f.reserved {
 		return InputAcceptance{}, ErrCompletionFenced
 	}
 	previous := f.generation

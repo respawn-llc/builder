@@ -163,6 +163,10 @@ type OrderedMutationLease interface {
 // execution's command-stage permit instead of acquiring a nested permit.
 type ExecutionMutation func(context.Context, func(OrderedMutationTurn) error) error
 
+type ExecutionMutationBinding struct {
+	mutation ExecutionMutation
+}
+
 type LifecycleTaskMutation interface {
 	OrderedMutation(context.Context, func(OrderedMutationTurn) error) error
 }
@@ -226,6 +230,7 @@ type Engine struct {
 	outputMutationMu    sync.Mutex
 	executionMutationMu sync.RWMutex
 	executionMutation   ExecutionMutation
+	executionBinding    *ExecutionMutationBinding
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -271,13 +276,16 @@ type Engine struct {
 
 // BindExecutionMutation installs the retained continuation for the currently
 // running Agent execution. The Session runtime owns the binding lifecycle.
-func (e *Engine) BindExecutionMutation(mutation ExecutionMutation) {
+func (e *Engine) BindExecutionMutation(mutation ExecutionMutation) *ExecutionMutationBinding {
 	if e == nil {
-		return
+		return nil
 	}
 	e.executionMutationMu.Lock()
+	binding := &ExecutionMutationBinding{mutation: mutation}
 	e.executionMutation = mutation
+	e.executionBinding = binding
 	e.executionMutationMu.Unlock()
+	return binding
 }
 
 // ClearExecutionMutation removes the continuation after the owning Agent
@@ -288,6 +296,18 @@ func (e *Engine) ClearExecutionMutation() {
 	}
 	e.executionMutationMu.Lock()
 	e.executionMutation = nil
+	e.executionMutationMu.Unlock()
+}
+
+func (e *Engine) ClearExecutionMutationIf(binding *ExecutionMutationBinding) {
+	if e == nil || binding == nil {
+		return
+	}
+	e.executionMutationMu.Lock()
+	if e.executionBinding == binding {
+		e.executionMutation = nil
+		e.executionBinding = nil
+	}
 	e.executionMutationMu.Unlock()
 }
 

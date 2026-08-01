@@ -105,6 +105,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		PromptFeed:        fixture.runtimes,
 		ResourceLifecycle: fixture.runtimes,
 	})
+	commands.WithExecutionScopeAuthority(fixture.authority)
 	t.Cleanup(func() {
 		if fixture.controller != nil {
 			_ = fixture.controller.Close()
