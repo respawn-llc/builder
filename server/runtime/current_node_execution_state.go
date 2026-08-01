@@ -115,7 +115,6 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 			b.err = errors.New("current node execution state is unavailable")
 			return
 		}
-		completed := b.engine.WorkflowTerminalState().Completed
 		state.mu.Lock()
 		switch {
 		case state.config == nil:
@@ -130,19 +129,45 @@ func (b *CurrentNodeExecutionBinding) Close() error {
 			)
 		default:
 			state.owner = nil
-			if completed {
-				state.config = nil
-				state.delivery = newWorkflowPromptDeliveryState(nil)
-			}
 		}
 		state.mu.Unlock()
 		if b.err == nil {
-			b.engine.mu.Lock()
-			b.engine.workflowTerminal = WorkflowTerminalState{}
-			b.engine.mu.Unlock()
+			b.err = b.engine.FinishCurrentNodeExecutionActivation()
 		}
 	})
 	return b.err
+}
+
+// FinishCurrentNodeExecutionActivation releases terminal workflow state after
+// either an exact workflow binding or an ordinary retained-Session activation.
+func (e *Engine) FinishCurrentNodeExecutionActivation() error {
+	if e == nil {
+		return errors.New("runtime engine is required")
+	}
+	state := e.currentNodeExecution
+	if state == nil {
+		return errors.New("current node execution state is unavailable")
+	}
+	completed := e.WorkflowTerminalState().Completed
+	state.mu.Lock()
+	if state.owner != nil {
+		owner := state.owner.scopeID
+		state.mu.Unlock()
+		return fmt.Errorf("current node execution activation cannot finish while scope %s owns the state", owner)
+	}
+	if completed {
+		if state.config == nil {
+			state.mu.Unlock()
+			return errors.New("completed current node execution has no active config")
+		}
+		state.config = nil
+		state.delivery = newWorkflowPromptDeliveryState(nil)
+	}
+	state.mu.Unlock()
+	e.mu.Lock()
+	e.workflowTerminal = WorkflowTerminalState{}
+	e.mu.Unlock()
+	return nil
 }
 
 func (e *Engine) currentNodeExecutionSnapshot() currentNodeExecutionSnapshot {

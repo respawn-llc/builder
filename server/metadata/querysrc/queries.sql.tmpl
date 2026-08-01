@@ -3762,16 +3762,75 @@ ranked_sources AS (
         ), 0) AS INTEGER) AS source_ordinal_before
     FROM matching_sources
 ),
+task_hits AS (
+    SELECT
+        task_id,
+        MAX(total_hit_count) AS total_hit_count
+    FROM ranked_sources
+    GROUP BY task_id
+),
+hit_count_buckets AS (
+    SELECT
+        total_hit_count,
+        COUNT(*) AS task_count
+    FROM task_hits
+    GROUP BY total_hit_count
+),
+round_intervals AS (
+    SELECT
+        COALESCE(LAG(total_hit_count) OVER (
+            ORDER BY total_hit_count ASC
+        ), 0) + 1 AS first_ordinal,
+        total_hit_count AS last_ordinal,
+        CAST(
+            COALESCE(SUM(total_hit_count * task_count) OVER (
+                ORDER BY total_hit_count ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ), 0)
+            + COALESCE(LAG(total_hit_count) OVER (
+                ORDER BY total_hit_count ASC
+            ), 0) * SUM(task_count) OVER (
+                ORDER BY total_hit_count ASC
+                ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+            )
+            AS INTEGER
+        ) AS rows_before,
+        CAST(SUM(task_count) OVER (
+            ORDER BY total_hit_count ASC
+            ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+        ) AS INTEGER) AS rows_per_round
+    FROM hit_count_buckets
+),
+page_window AS (
+    SELECT
+        capacities.first_ordinal + CAST(
+            (args.offset_rows - capacities.rows_before) / capacities.rows_per_round
+            AS INTEGER
+        ) AS first_ordinal,
+        CAST(
+            (args.offset_rows - capacities.rows_before) % capacities.rows_per_round
+            AS INTEGER
+        ) AS first_round_offset,
+        args.limit_rows
+    FROM round_intervals capacities
+    CROSS JOIN args
+    WHERE args.limit_rows > 0
+      AND args.offset_rows >= capacities.rows_before
+      AND args.offset_rows < capacities.rows_before
+          + (capacities.last_ordinal - capacities.first_ordinal + 1) * capacities.rows_per_round
+    ORDER BY capacities.first_ordinal ASC
+    LIMIT 1
+),
 rounds AS (
     SELECT
-        1 AS ordinal
-    FROM args
+        page_window.first_ordinal AS ordinal
+    FROM page_window
     UNION ALL
     SELECT
         rounds.ordinal + 1
     FROM rounds
-    CROSS JOIN args
-    WHERE rounds.ordinal < args.offset_rows + args.limit_rows
+    CROSS JOIN page_window
+    WHERE rounds.ordinal - page_window.first_ordinal + 1 < page_window.limit_rows
 )
 SELECT
     ranked_sources.task_id,
@@ -3802,6 +3861,6 @@ ORDER BY
     ranked_sources.task_weighted_rank DESC,
     ranked_sources.task_id ASC
 LIMIT (SELECT limit_rows FROM args)
-OFFSET (SELECT offset_rows FROM args);
+OFFSET COALESCE((SELECT first_round_offset FROM page_window), 0);
 {{end}}
 {{if .IncludeTaskSearchPageDescriptors}}{{template "taskSearchPageDescriptors" .}}{{end}}
