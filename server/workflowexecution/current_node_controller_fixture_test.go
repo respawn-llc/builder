@@ -250,7 +250,9 @@ func waitForRunningCurrentNode(
 			return false
 		}
 		for _, execution := range snapshots[reference.TaskID].Executions {
-			if execution.Ref.CurrentNode.Equal(reference) && !execution.Queued && !execution.WaitingQuestion {
+			if execution.Ref.CurrentNode.Equal(reference) &&
+				!execution.Queued &&
+				len(execution.PendingPrompts) == 0 {
 				return true
 			}
 		}

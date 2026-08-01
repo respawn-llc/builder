@@ -753,7 +753,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		ctx:           runCtx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
-		prompts:       newExecutionPromptStore(scope, a.promptFeed),
+		prompts:       newExecutionPromptStore(a, scope, a.promptFeed),
 		closeResource: closeResource,
 		phase:         executionPhaseRunning,
 	}

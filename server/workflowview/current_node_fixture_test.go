@@ -13,6 +13,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -23,19 +24,46 @@ import (
 )
 
 type currentNodeViewFixture struct {
-	ctx         context.Context
-	metadata    *metadata.Store
-	store       *workflowstore.Store
-	binding     metadata.Binding
-	cfg         config.App
-	workflowID  runtimeids.WorkflowID
-	agentNodeID workflow.NodeID
-	authority   *sessionruntime.Authority
-	quiescence  *currentNodeViewQuiescence
-	board       *Board
-	detail      *TaskDetail
-	tasks       *TaskList
-	activity    *Activity
+	ctx               context.Context
+	metadata          *metadata.Store
+	store             *workflowstore.Store
+	binding           metadata.Binding
+	cfg               config.App
+	workflowID        runtimeids.WorkflowID
+	agentNodeID       workflow.NodeID
+	authority         *sessionruntime.Authority
+	dependencyCounter *TaskDependencyCounter
+	quiescence        *currentNodeViewQuiescence
+	projection        *TaskStatusProjection
+	board             *Board
+	detail            *TaskDetail
+	tasks             *TaskList
+	search            *TaskSearch
+	activity          *Activity
+}
+
+type currentNodeViewStatusObservationSource struct {
+	authority  *sessionruntime.Authority
+	quiescence currentNodeViewQuiescenceSource
+}
+
+type currentNodeViewQuiescenceSource interface {
+	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+}
+
+func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	executions, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	return workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: executions,
+		Quiescence: quiescence,
+	}, nil
 }
 
 type startedCurrentNodeViewTask struct {
@@ -95,40 +123,63 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		}
 	})
 	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(metadataStore, projector, authority)
+	projection, err := NewTaskStatusProjection(
+		metadataStore,
+		store,
+		projector,
+		currentNodeViewStatusObservationSource{
+			authority:  authority,
+			quiescence: quiescence,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencyCounter, err := NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("NewTaskDependencyCounter: %v", err)
+	}
+	dependencies, err := NewTaskDependencies(metadataStore, projection, dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
-	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, authority, quiescence)
+	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projection)
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
+	detail, err := NewTaskDetail(metadataStore, projection, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
-	tasks, err := NewTaskList(metadataStore, definitions, projector, authority)
+	tasks, err := NewTaskList(metadataStore, definitions, projection)
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, projection)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
 	}
 	activity, err := NewActivity(metadataStore, projector)
 	if err != nil {
 		t.Fatalf("NewActivity: %v", err)
 	}
 	return currentNodeViewFixture{
-		ctx:         t.Context(),
-		metadata:    metadataStore,
-		store:       store,
-		binding:     binding,
-		cfg:         cfg,
-		workflowID:  workflowID,
-		agentNodeID: agentNodeID,
-		authority:   authority,
-		quiescence:  quiescence,
-		board:       board,
-		detail:      detail,
-		tasks:       tasks,
-		activity:    activity,
+		ctx:               t.Context(),
+		metadata:          metadataStore,
+		store:             store,
+		binding:           binding,
+		cfg:               cfg,
+		workflowID:        workflowID,
+		agentNodeID:       agentNodeID,
+		authority:         authority,
+		dependencyCounter: dependencyCounter,
+		quiescence:        quiescence,
+		projection:        projection,
+		board:             board,
+		detail:            detail,
+		tasks:             tasks,
+		search:            search,
+		activity:          activity,
 	}
 }
 
@@ -148,13 +199,19 @@ func (f currentNodeViewFixture) startTask(t *testing.T, title string) startedCur
 	t.Helper()
 	workflowID := f.workflowID
 	task, err := f.store.CreateTask(f.ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  f.binding.ProjectID,
-		WorkflowID: &workflowID,
-		Title:      title,
+		ProjectID:         f.binding.ProjectID,
+		WorkflowID:        &workflowID,
+		Title:             title,
+		SourceWorkspaceID: f.binding.WorkspaceID,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	return f.startExistingTask(t, task)
+}
+
+func (f currentNodeViewFixture) startExistingTask(t *testing.T, task workflowstore.TaskRecord) startedCurrentNodeViewTask {
+	t.Helper()
 	started, err := f.store.StartTask(f.ctx, task.ID)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
@@ -169,9 +226,10 @@ func (f currentNodeViewFixture) createBacklogTask(t *testing.T, title string) wo
 	t.Helper()
 	workflowID := f.workflowID
 	task, err := f.store.CreateTask(f.ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  f.binding.ProjectID,
-		WorkflowID: &workflowID,
-		Title:      title,
+		ProjectID:         f.binding.ProjectID,
+		WorkflowID:        &workflowID,
+		Title:             title,
+		SourceWorkspaceID: f.binding.WorkspaceID,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask backlog: %v", err)
@@ -180,6 +238,21 @@ func (f currentNodeViewFixture) createBacklogTask(t *testing.T, title string) wo
 }
 
 func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started startedCurrentNodeViewTask) runtimeids.SessionID {
+	t.Helper()
+	sessionID := f.newCurrentNodeViewSession(t)
+	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  started.currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	return sessionID
+}
+
+func (f currentNodeViewFixture) newCurrentNodeViewSession(t *testing.T) runtimeids.SessionID {
 	t.Helper()
 	sessionRoot := filepath.Join(f.cfg.PersistenceRoot, "projects", f.binding.ProjectID, "sessions")
 	sessionStore, err := session.Create(
@@ -204,15 +277,6 @@ func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started sta
 	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
-	}
-	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
-		Association: workflowstore.TaskSessionAssociationRequest{
-			SessionID:    sessionID,
-			CurrentNode:  started.currentNode,
-			AssociatedAt: time.Now().UTC(),
-		},
-	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	return sessionID
 }
@@ -363,7 +427,7 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 			return false
 		}
 		executions := snapshots[started.task.ID].Executions
-		return len(executions) == 1 && executions[0].WaitingQuestion
+		return len(executions) == 1 && executions[0].HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion)
 	}, "timed out waiting for live workflow Question")
 	return currentNodeViewQuestion{
 		authority: authority,

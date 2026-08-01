@@ -33,6 +33,27 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 }
 
+func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) {
+	cause := errors.New("automatic assignment failed")
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{
+		authority: authority,
+		workerErr: cause,
+	}
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+	taskID := workflow.TaskID("task-status-read")
+
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	if !observation.Quiescence[taskID] {
+		t.Fatalf("task quiescence = %+v, want quiescent observation", observation.Quiescence)
+	}
+}
+
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	source := currentNodeReferenceForControllerTest(t, "task-retained-session-completion", "node-source")

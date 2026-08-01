@@ -13,20 +13,6 @@ type workflowTaskStatusFact struct {
 	Done   bool
 }
 
-func loadWorkflowTaskStatusFact(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskID string) (workflowTaskStatusFact, error) {
-	row, err := queries.GetWorkflowTaskStatusRecord(ctx, taskID)
-	if err != nil {
-		return workflowTaskStatusFact{}, err
-	}
-	return projector.DecodeStatus(TaskStatusInput{
-		TaskID:             row.TaskID,
-		Kind:               row.Kind,
-		NodeIDsJSON:        row.NodeIdsJson,
-		AttentionTypesJSON: row.AttentionTypesJson,
-		Done:               row.IsDone != 0,
-	})
-}
-
 func loadWorkflowTaskStatusFacts(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
 	if len(taskIDs) == 0 {
 		return map[string]workflowTaskStatusFact{}, nil

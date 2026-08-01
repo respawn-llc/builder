@@ -500,20 +500,6 @@ func (q *Queries) CountExecutableCurrentNodesByWorkspace(ctx context.Context, wo
 	return current_node_count, err
 }
 
-const countWorktreesByWorkspace = `-- name: CountWorktreesByWorkspace :one
-SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
-FROM worktrees
-WHERE workspace_id = ?1
-`
-
-func (q *Queries) CountWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countWorktreesByWorkspace, workspaceID)
-	var worktree_count int64
-	err := recordQueryError(ctx, row.Scan(&worktree_count), countWorktreesByWorkspace, 1)
-
-	return worktree_count, err
-}
-
 const countNonTerminalTasksByManagedWorktree = `-- name: CountNonTerminalTasksByManagedWorktree :one
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS ref_count
 FROM tasks t
@@ -650,6 +636,25 @@ func (q *Queries) CountProjectWorkspaces(ctx context.Context, projectID string) 
 	return workspace_count, err
 }
 
+const countSessionsMissingWorkspaceSnapshot = `-- name: CountSessionsMissingWorkspaceSnapshot :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE workspace_id = CAST(?1 AS TEXT)
+  AND (
+      NOT json_valid(metadata_json)
+      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
+      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
+  )
+`
+
+func (q *Queries) CountSessionsMissingWorkspaceSnapshot(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSessionsMissingWorkspaceSnapshot, workspaceID)
+	var session_count int64
+	err := recordQueryError(ctx, row.Scan(&session_count), countSessionsMissingWorkspaceSnapshot, 1)
+
+	return session_count, err
+}
+
 const countTaskComments = `-- name: CountTaskComments :one
 SELECT CAST(COUNT(*) AS INTEGER)
 FROM task_comments
@@ -781,56 +786,6 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	return task_count, err
 }
 
-const listTasksMissingSourceWorkspaceDisplayName = `-- name: ListTasksMissingSourceWorkspaceDisplayName :many
-SELECT metadata_json
-FROM tasks
-WHERE source_workspace_id = ?1
-  AND json_valid(metadata_json)
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
-ORDER BY rowid ASC
-`
-
-func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listTasksMissingSourceWorkspaceDisplayName, workspaceID)
-	err = recordQueryError(ctx, err, listTasksMissingSourceWorkspaceDisplayName, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var metadata_json string
-		if err := recordQueryError(ctx, rows.Scan(&metadata_json), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, metadata_json)
-	}
-	if err := recordQueryError(ctx, rows.Err(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const countSessionsMissingWorkspaceSnapshot = `-- name: CountSessionsMissingWorkspaceSnapshot :one
-SELECT CAST(COUNT(*) AS INTEGER) AS session_count
-FROM sessions
-WHERE workspace_id = ?1
-  AND (
-      NOT json_valid(metadata_json)
-      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
-      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
-  )
-`
-
-func (q *Queries) CountSessionsMissingWorkspaceSnapshot(ctx context.Context, workspaceID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSessionsMissingWorkspaceSnapshot, workspaceID)
-	var session_count int64
-	err := recordQueryError(ctx, row.Scan(&session_count), countSessionsMissingWorkspaceSnapshot, 1)
-
-	return session_count, err
-}
-
 const countWorkflowNodesByGroup = `-- name: CountWorkflowNodesByGroup :one
 SELECT CAST(COUNT(*) AS INTEGER) AS node_count
 FROM workflow_nodes
@@ -843,6 +798,20 @@ func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.Nul
 	err := recordQueryError(ctx, row.Scan(&node_count), countWorkflowNodesByGroup, 1)
 
 	return node_count, err
+}
+
+const countWorktreesByWorkspace = `-- name: CountWorktreesByWorkspace :one
+SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
+FROM worktrees
+WHERE workspace_id = ?1
+`
+
+func (q *Queries) CountWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countWorktreesByWorkspace, workspaceID)
+	var worktree_count int64
+	err := recordQueryError(ctx, row.Scan(&worktree_count), countWorktreesByWorkspace, 1)
+
+	return worktree_count, err
 }
 
 const deleteProject = `-- name: DeleteProject :execrows
@@ -2478,43 +2447,6 @@ func (q *Queries) GetWorkflowNodeGroupByKey(ctx context.Context, arg GetWorkflow
 		&i.DisplayName,
 		&i.SortOrder,
 	), getWorkflowNodeGroupByKey, 2)
-
-	return i, err
-}
-
-const getWorkflowTaskStatusRecord = `-- name: GetWorkflowTaskStatusRecord :one
-SELECT
-    task_id,
-    is_done,
-    CAST(kind AS TEXT) AS kind,
-    primary_status_rank,
-    CAST(node_ids_json AS TEXT) AS node_ids_json,
-    CAST(attention_types_json AS TEXT) AS attention_types_json
-FROM workflow_task_status_records
-WHERE task_id = ?1
-LIMIT 1
-`
-
-type GetWorkflowTaskStatusRecordRow struct {
-	TaskID             string
-	IsDone             int64
-	Kind               string
-	PrimaryStatusRank  int64
-	NodeIdsJson        string
-	AttentionTypesJson string
-}
-
-func (q *Queries) GetWorkflowTaskStatusRecord(ctx context.Context, taskID string) (GetWorkflowTaskStatusRecordRow, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowTaskStatusRecord, taskID)
-	var i GetWorkflowTaskStatusRecordRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.TaskID,
-		&i.IsDone,
-		&i.Kind,
-		&i.PrimaryStatusRank,
-		&i.NodeIdsJson,
-		&i.AttentionTypesJson,
-	), getWorkflowTaskStatusRecord, 1)
 
 	return i, err
 }
@@ -5814,6 +5746,134 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	return items, nil
 }
 
+const listTaskPendingApprovalsByTasks = `-- name: ListTaskPendingApprovalsByTasks :many
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(?1)
+)
+ORDER BY source_task_id, created_at_unix_ms, id
+`
+
+func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJson interface{}) ([]TaskPendingApproval, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalsByTasks, taskIdsJson)
+	err = recordQueryError(ctx, err, listTaskPendingApprovalsByTasks, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskPendingApproval
+	for rows.Next() {
+		var i TaskPendingApproval
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ID,
+			&i.SourceTaskID,
+			&i.SourceNodeID,
+			&i.SourceTransitionBranchKey,
+			&i.SourceSessionID,
+			&i.WorkflowVersion,
+			&i.TransitionSnapshotJson,
+			&i.MaterializedValuesJson,
+			&i.CreatedAtUnixMs,
+		), listTaskPendingApprovalsByTasks, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTaskPendingApprovalsByTasks, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTaskPendingApprovalsByTasks, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTasksByIDs = `-- name: ListTasksByIDs :many
+SELECT
+    id,
+    project_id,
+    project_workflow_link_id,
+    workflow_id,
+    workflow_revision_seen,
+    task_seq,
+    short_id,
+    title,
+    body,
+    source_url,
+    source_workspace_id,
+    managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    metadata_json
+FROM task_records
+WHERE id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(?1)
+)
+ORDER BY id ASC
+`
+
+func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) ([]TaskRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listTasksByIDs, taskIdsJson)
+	err = recordQueryError(ctx, err, listTasksByIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskRecord
+	for rows.Next() {
+		var i TaskRecord
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.ProjectWorkflowLinkID,
+			&i.WorkflowID,
+			&i.WorkflowRevisionSeen,
+			&i.TaskSeq,
+			&i.ShortID,
+			&i.Title,
+			&i.Body,
+			&i.SourceUrl,
+			&i.SourceWorkspaceID,
+			&i.ManagedWorktreeID,
+			&i.ExecutionTargetMode,
+			&i.ExecutionTargetRequestedRef,
+			&i.ExecutionTargetResolvedRef,
+			&i.ExecutionTargetCommitOid,
+			&i.ExecutionTargetProvenance,
+			&i.CreatedAtUnixMs,
+			&i.UpdatedAtUnixMs,
+			&i.MetadataJson,
+		), listTasksByIDs, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTasksByIDs, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTasksByIDs, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasksByProject = `-- name: ListTasksByProject :many
 SELECT
     id,
@@ -5969,6 +6029,40 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listTasksByShortID, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTasksMissingSourceWorkspaceDisplayName = `-- name: ListTasksMissingSourceWorkspaceDisplayName :many
+SELECT metadata_json
+FROM tasks
+WHERE source_workspace_id = ?1
+  AND json_valid(metadata_json)
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+ORDER BY rowid ASC
+`
+
+func (q *Queries) ListTasksMissingSourceWorkspaceDisplayName(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTasksMissingSourceWorkspaceDisplayName, workspaceID)
+	err = recordQueryError(ctx, err, listTasksMissingSourceWorkspaceDisplayName, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var metadata_json string
+		if err := recordQueryError(ctx, rows.Scan(&metadata_json), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, metadata_json)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listTasksMissingSourceWorkspaceDisplayName, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6765,7 +6859,8 @@ live_task_states AS (
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
     FROM json_each((SELECT live_task_states_json FROM args))
 ),
 effective_status AS (
@@ -6775,7 +6870,8 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
             WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
@@ -6784,7 +6880,8 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
             WHEN COALESCE(live.has_running, 0) != 0 THEN 5
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
@@ -6792,13 +6889,22 @@ effective_status AS (
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-            WHEN EXISTS (
-                SELECT 1
-                FROM json_each(durable.attention_types_json) existing_attention
-                WHERE existing_attention.value = 'question'
-            ) THEN durable.attention_types_json
-            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
@@ -7178,6 +7284,128 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 26); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowTaskStatusProjectionByTasks = `-- name: ListWorkflowTaskStatusProjectionByTasks :many
+WITH
+requested_task_ids AS (
+    SELECT CAST(value AS TEXT) AS task_id
+    FROM json_each(?1)
+),
+args AS (
+    SELECT CAST(?2 AS TEXT) AS live_task_states_json
+),
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM json_each((SELECT live_task_states_json FROM args))
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+)
+
+SELECT
+    task_id,
+    is_done,
+    CAST(kind AS TEXT) AS kind,
+    primary_status_rank,
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
+FROM effective_status
+WHERE task_id IN (SELECT task_id FROM requested_task_ids)
+ORDER BY task_id ASC
+`
+
+type ListWorkflowTaskStatusProjectionByTasksParams struct {
+	TaskIdsJson        interface{}
+	LiveTaskStatesJson string
+}
+
+type ListWorkflowTaskStatusProjectionByTasksRow struct {
+	TaskID             string
+	IsDone             int64
+	Kind               string
+	PrimaryStatusRank  interface{}
+	NodeIdsJson        string
+	AttentionTypesJson string
+}
+
+func (q *Queries) ListWorkflowTaskStatusProjectionByTasks(ctx context.Context, arg ListWorkflowTaskStatusProjectionByTasksParams) ([]ListWorkflowTaskStatusProjectionByTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowTaskStatusProjectionByTasks, arg.TaskIdsJson, arg.LiveTaskStatesJson)
+	err = recordQueryError(ctx, err, listWorkflowTaskStatusProjectionByTasks, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkflowTaskStatusProjectionByTasksRow
+	for rows.Next() {
+		var i ListWorkflowTaskStatusProjectionByTasksRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.TaskID,
+			&i.IsDone,
+			&i.Kind,
+			&i.PrimaryStatusRank,
+			&i.NodeIdsJson,
+			&i.AttentionTypesJson,
+		), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskStatusProjectionByTasks, 2); err != nil {
 		return nil, err
 	}
 	return items, nil
