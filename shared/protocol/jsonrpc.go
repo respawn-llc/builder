@@ -63,6 +63,7 @@ const (
 	ErrCodeWorkflowTaskDependency            = -32053
 	ErrCodeManualCompactionTooSoon           = -32054
 	ErrCodeManualCompactionDisabled          = -32055
+	ErrCodeManualCompactionActive            = -32056
 )
 
 type Request struct {

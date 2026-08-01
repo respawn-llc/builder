@@ -33,6 +33,8 @@ type defaultExclusiveStepLifecycle struct {
 	nextWaiters        []*exclusiveStepWaiter
 	heldReservation    *exclusiveStepReservation
 	heldWaiter         *exclusiveStepWaiter
+	reservationWaiters map[*exclusiveStepReservation]*exclusiveStepWaiter
+	reservations       map[*exclusiveStepReservation]struct{}
 	runSeq             uint64
 	terminalPublishing bool
 }
@@ -72,25 +74,44 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 	if s.reservationPendingLocked(reservation) {
 		return ErrExclusiveStepReservationPending
 	}
-	s.heldReservation = reservation
-	s.heldWaiter = &exclusiveStepWaiter{ready: make(chan struct{}), reservation: reservation}
-	s.nextWaiters = append(s.nextWaiters, s.heldWaiter)
+	waiter := &exclusiveStepWaiter{ready: make(chan struct{}), reservation: reservation}
+	if s.reservationWaiters == nil {
+		s.reservationWaiters = make(map[*exclusiveStepReservation]*exclusiveStepWaiter)
+		s.reservations = make(map[*exclusiveStepReservation]struct{})
+	}
+	s.reservationWaiters[reservation] = waiter
+	s.reservations[reservation] = struct{}{}
+	if s.heldReservation == nil {
+		s.heldReservation = reservation
+		s.heldWaiter = waiter
+	}
+	s.nextWaiters = append(s.nextWaiters, waiter)
 	s.notifyNextWaiterLocked()
 	return nil
 }
 
 func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiveStepReservation) {
 	s.mu.Lock()
-	if reservation == nil || s.heldReservation != reservation {
+	if reservation == nil || s.reservations == nil {
 		s.mu.Unlock()
 		panic("exclusive step reservation release does not match the held reservation")
 	}
-	if s.heldWaiter != nil {
-		index := slices.Index(s.nextWaiters, s.heldWaiter)
-		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+	if _, known := s.reservations[reservation]; !known {
+		s.mu.Unlock()
+		panic("exclusive step reservation release does not match the held reservation")
 	}
-	s.heldReservation = nil
-	s.heldWaiter = nil
+	if waiter := s.reservationWaiters[reservation]; waiter != nil {
+		index := slices.Index(s.nextWaiters, waiter)
+		if index >= 0 {
+			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+		}
+		delete(s.reservationWaiters, reservation)
+	}
+	delete(s.reservations, reservation)
+	if s.heldReservation == reservation {
+		s.heldReservation = nil
+		s.heldWaiter = nil
+	}
 	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 	s.engine.surfaceRunError(s.scheduleIdleWork(true))
@@ -318,7 +339,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	}
 	var waiter *exclusiveStepWaiter
 	if options.Reservation != nil {
-		waiter = s.heldWaiter
+		waiter = s.reservationWaiters[options.Reservation]
 	}
 	if waiter == nil {
 		if options.Reservation != nil {
@@ -350,6 +371,9 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	s.nextWaiters = s.nextWaiters[1:]
 	if waiter == s.heldWaiter {
 		s.heldWaiter = nil
+	}
+	if options.Reservation != nil {
+		delete(s.reservationWaiters, options.Reservation)
 	}
 	stepCtx, stepID := s.activateLocked(ctx, options)
 	s.mu.Unlock()
@@ -422,6 +446,9 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 }
 
 func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *exclusiveStepReservation) bool {
+	if reservation != nil && reservation.queueable {
+		return false
+	}
 	return reservation != nil && s.heldReservation != nil && s.heldReservation != reservation && s.heldReservation.Kind == reservation.Kind
 }
 

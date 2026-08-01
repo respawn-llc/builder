@@ -47,6 +47,7 @@ var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output 
 
 var (
 	ErrManualCompactionTooSoon = serverapi.ErrManualCompactionTooSoon
+	ErrManualCompactionActive  = serverapi.ErrManualCompactionActive
 
 	// errHandoffDisabledByUser is returned when the user has disabled handoff and the agent requests one.
 	errHandoffDisabledByUser = errors.New(handoffDisabledByUserMessage)
@@ -116,7 +117,16 @@ func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx cont
 }
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
-	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	if requireEligibility {
+		if snapshot := c.steps.Snapshot(); snapshot != nil &&
+			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
+			return session.CommitReceipt{}, ErrManualCompactionActive
+		}
+	}
+	reservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationManualCompaction,
+		queueable: true,
+	}
 	if err := c.steps.AcquireReservation(reservation); err != nil {
 		return session.CommitReceipt{}, err
 	}

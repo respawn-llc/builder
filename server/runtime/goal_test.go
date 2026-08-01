@@ -1061,8 +1061,8 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	}
 	client.releaseCall(2)
 	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrExclusiveStepReservationPending) && !errors.Is(second, ErrExclusiveStepReservationPending)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one pending rejection", first, second)
+	if (first == nil) == (second == nil) || (!errors.Is(first, ErrManualCompactionTooSoon) && !errors.Is(second, ErrManualCompactionTooSoon)) {
+		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one too-soon result", first, second)
 	}
 	if got := engine.CompactionCount(); got != 1 {
 		t.Fatalf("compaction count = %d, want 1", got)

@@ -618,6 +618,8 @@ func protocolError(resp *protocol.ResponseError) error {
 		return serverapi.ErrManualCompactionTooSoon
 	case protocol.ErrCodeManualCompactionDisabled:
 		return serverapi.ErrManualCompactionDisabled
+	case protocol.ErrCodeManualCompactionActive:
+		return serverapi.ErrManualCompactionActive
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:

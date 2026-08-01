@@ -71,6 +71,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload); err != nil {
 				return err
 			}
+			manualEligible = true
 			completion, err := storedToolCompletionFromSessionRecord(payload)
 			if err != nil {
 				return fmt.Errorf("restore session tool completion record: %w", err)
