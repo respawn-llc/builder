@@ -283,6 +283,7 @@ func (s *Store) materializeManualMoveTargets(
 			Edge:                 edge,
 			Source:               choice.SourceNode,
 			Target:               target,
+			ContextTaskID:        currentNodes[0].Reference.TaskID,
 			ContextCurrentSource: contextSource,
 			ManualMoveContext:    true,
 			PriorValues:          priorValues,
@@ -322,27 +323,10 @@ func manualMoveBasePriorValues(currentNodes []workflow.CurrentNode) workflow.Mat
 	return priorValues
 }
 
-func manualMoveContextCurrentNode(currentNodes []workflow.CurrentNode) workflow.CurrentNode {
-	if len(currentNodes) == 0 {
-		return workflow.CurrentNode{}
+func manualMoveContextCurrentNode(currentNodes []workflow.CurrentNode) *workflow.CurrentNode {
+	if len(currentNodes) != 1 || currentNodes[0].Reference.IsBranchScoped() {
+		return nil
 	}
 	current := currentNodes[0]
-	if !current.Reference.IsBranchScoped() {
-		return current
-	}
-	reference, err := workflow.NewCurrentNodeReference(current.Reference.TaskID, current.Reference.NodeID, nil)
-	if err != nil {
-		panic(fmt.Sprintf("manual move context reference: %v", err))
-	}
-	current.Reference = reference
-	return current
-}
-
-func manualMoveTransitionGroup(definition workflow.Definition, edge workflow.Edge) (workflow.TransitionGroup, error) {
-	for _, group := range definition.TransitionGroups {
-		if group.ID == edge.TransitionGroupID {
-			return group, nil
-		}
-	}
-	return workflow.TransitionGroup{}, fmt.Errorf("manual move edge %q transition group %q is absent from workflow %q", edge.ID, edge.TransitionGroupID, definition.ID)
+	return &current
 }

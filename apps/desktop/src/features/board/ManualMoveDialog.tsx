@@ -130,6 +130,7 @@ function ManualMoveDialogContent({
       }}
     >
       <div className="grid gap-[var(--space-4)]" ref={contentRef}>
+      <div className="manual-move-dialog-phase" key={phase}>
       {phase === "choices" && choices.length > 1 ? (
         <ManualMoveChoicePhase
           choices={choices}
@@ -144,6 +145,7 @@ function ManualMoveDialogContent({
           values={values}
         />
       )}
+      </div>
       <div className="flex justify-end gap-[var(--space-2)]">
         <Button onClick={onCancel}>{t("app.cancel")}</Button>
         {phase === "choices" ? (

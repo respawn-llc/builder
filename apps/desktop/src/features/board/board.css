@@ -205,6 +205,28 @@
   }
 }
 
+@keyframes manual-move-dialog-phase-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.manual-move-dialog-phase {
+  animation: manual-move-dialog-phase-enter var(--motion-morph) ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .manual-move-dialog-phase {
+    animation: none;
+  }
+}
+
 .board-label-filter-summary-incoming {
   animation: board-label-filter-summary-crossfade-in var(--motion-morph) both;
 }

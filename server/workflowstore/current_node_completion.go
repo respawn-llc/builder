@@ -509,7 +509,8 @@ type transitionTargetMaterializationRequest struct {
 	Edge                 workflow.Edge
 	Source               workflow.Node
 	Target               workflow.Node
-	ContextCurrentSource workflow.CurrentNode
+	ContextTaskID        workflow.TaskID
+	ContextCurrentSource *workflow.CurrentNode
 	ManualMoveContext    bool
 	PriorValues          workflow.MaterializedPriorValues
 	Value                transitionTargetValueResolver
@@ -525,6 +526,9 @@ func materializeTransitionTargetCurrentNode(
 	edge := request.Edge
 	source := request.Source
 	target := request.Target
+	if strings.TrimSpace(string(request.ContextTaskID)) == "" {
+		return workflow.CurrentNode{}, ErrManualMoveTransitionNotUsable
+	}
 	transitionGroup, err := transitionGroupForEdge(definition, edge)
 	if err != nil {
 		return workflow.CurrentNode{}, err
@@ -564,6 +568,7 @@ func materializeTransitionTargetCurrentNode(
 		q,
 		definition,
 		edge,
+		request.ContextTaskID,
 		request.ContextCurrentSource,
 		request.TransitionBranchKey,
 		request.Source,
@@ -573,7 +578,7 @@ func materializeTransitionTargetCurrentNode(
 		return workflow.CurrentNode{}, err
 	}
 	return completionTargetCurrentNode(
-		request.ContextCurrentSource.Reference.TaskID,
+		request.ContextTaskID,
 		target,
 		request.TransitionBranchKey,
 		currentInputValues,
@@ -638,7 +643,8 @@ func materializeCompletionTargetCurrentNode(
 		Edge:                 edge,
 		Source:               source,
 		Target:               target,
-		ContextCurrentSource: currentSource,
+		ContextTaskID:        currentSource.Reference.TaskID,
+		ContextCurrentSource: &currentSource,
 		PriorValues:          currentSource.PriorValues,
 		Value:                value,
 		TransitionBranchKey:  transitionBranchKey,
@@ -742,7 +748,8 @@ func resolveTransitionTargetSession(
 	q *sqlitegen.Queries,
 	definition workflow.Definition,
 	edge workflow.Edge,
-	source workflow.CurrentNode,
+	taskID workflow.TaskID,
+	source *workflow.CurrentNode,
 	targetBranchKey *workflow.TransitionBranchKey,
 	sourceNode workflow.Node,
 	manualMoveContext bool,
@@ -753,7 +760,8 @@ func resolveTransitionTargetSession(
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
 	switch contextSource.Kind {
 	case workflow.ContextSourceImmediateSource:
-		if source.SessionID == nil ||
+		if source == nil ||
+			source.SessionID == nil ||
 			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
 			sourceNode.Kind() != workflow.NodeKindAgent ||
 			(manualMoveContext && source.Reference.IsBranchScoped()) {
@@ -767,9 +775,9 @@ func resolveTransitionTargetSession(
 			return nil, err
 		}
 		selectedReference, err := workflow.NewCurrentNodeReference(
-			source.Reference.TaskID,
+			taskID,
 			workflow.NodeIDOf(selected),
-			currentNodeReferenceBranchKey(source.Reference),
+			selectedContextBranchKey(manualMoveContext, source),
 		)
 		if err != nil {
 			return nil, err
@@ -782,9 +790,9 @@ func resolveTransitionTargetSession(
 		return &sessionID, nil
 	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
 		targetReference, err := workflow.NewCurrentNodeReference(
-			source.Reference.TaskID,
+			taskID,
 			edge.TargetNodeID,
-			targetBranchKey,
+			nilIfManualMoveContext(manualMoveContext, targetBranchKey),
 		)
 		if err != nil {
 			return nil, err
@@ -804,6 +812,20 @@ func resolveTransitionTargetSession(
 		}
 		return nil, fmt.Errorf("current node completion does not yet support context source %q", contextSource.Kind)
 	}
+}
+
+func nilIfManualMoveContext(manualMoveContext bool, branchKey *workflow.TransitionBranchKey) *workflow.TransitionBranchKey {
+	if manualMoveContext {
+		return nil
+	}
+	return branchKey
+}
+
+func selectedContextBranchKey(manualMoveContext bool, source *workflow.CurrentNode) *workflow.TransitionBranchKey {
+	if manualMoveContext || source == nil {
+		return nil
+	}
+	return currentNodeReferenceBranchKey(source.Reference)
 }
 
 func currentNodeDefinitionNodeByKey(definition workflow.Definition, key workflow.ModelKey) (workflow.Node, error) {

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/limits"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/workflowkey"
@@ -2695,7 +2694,7 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 			if strings.TrimSpace(value) == "" {
 				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must be non-blank")
 			}
-			if len(value) > limits.MaxWorkflowOutputValueBytes {
+			if len(value) > workflowkey.MaxWorkflowOutputValueBytes {
 				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must not exceed the maximum output value size")
 			}
 		}

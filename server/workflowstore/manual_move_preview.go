@@ -283,11 +283,14 @@ func manualMoveContextUnavailable(
 	currentNodes []workflow.CurrentNode,
 ) (bool, error) {
 	contextSource := manualMoveContextCurrentNode(currentNodes)
+	if len(currentNodes) == 0 {
+		return true, nil
+	}
 	for _, edge := range choice.Edges {
 		if edge.ContextMode == workflow.ContextModeNewSession {
 			continue
 		}
-		_, err := resolveTransitionTargetSession(ctx, q, definition, edge, contextSource, nil, choice.SourceNode, true)
+		_, err := resolveTransitionTargetSession(ctx, q, definition, edge, currentNodes[0].Reference.TaskID, contextSource, nil, choice.SourceNode, true)
 		if err == nil {
 			continue
 		}
@@ -311,7 +314,7 @@ func manualMoveRequiredValues(
 		if err != nil {
 			continue
 		}
-		group, err := manualMoveTransitionGroup(definition, edge)
+		group, err := transitionGroupForEdge(definition, edge)
 		if err != nil {
 			continue
 		}
@@ -383,7 +386,7 @@ func manualMoveRequiredValuesForTarget(
 			if edge.TargetNodeID != workflow.NodeIDOf(source) {
 				continue
 			}
-			providerGroup, err := manualMoveTransitionGroup(definition, edge)
+			providerGroup, err := transitionGroupForEdge(definition, edge)
 			if err != nil {
 				continue
 			}
@@ -571,7 +574,7 @@ func (s *Store) addManualMoveArrivedFanoutValues(
 		if !exists {
 			return currentFanoutJoinTopologyError(definition, taskID)
 		}
-		group, err := manualMoveTransitionGroup(definition, joinEdge)
+		group, err := transitionGroupForEdge(definition, joinEdge)
 		if err != nil {
 			return err
 		}
@@ -597,7 +600,7 @@ func addManualMoveCurrentNodeValues(
 		if err != nil {
 			return err
 		}
-		group, err := manualMoveTransitionGroup(definition, edge)
+		group, err := transitionGroupForEdge(definition, edge)
 		if err != nil {
 			return err
 		}

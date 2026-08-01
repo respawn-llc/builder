@@ -6,6 +6,17 @@ import (
 	"core/server/workflow"
 )
 
+func TestManualMoveContextDoesNotSelectParallelBranch(t *testing.T) {
+	branch := workflow.TransitionBranchKey("split_a")
+	reference, err := workflow.NewCurrentNodeReference("task", "node", &branch)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	if contextSource := manualMoveContextCurrentNode([]workflow.CurrentNode{{Reference: reference}}); contextSource != nil {
+		t.Fatalf("manual move context source = %+v, want no branch-scoped source", contextSource)
+	}
+}
+
 func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")

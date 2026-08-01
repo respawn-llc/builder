@@ -3,8 +3,9 @@ package workflowkey
 import "strings"
 
 const (
-	MaxChars    = 64
-	Description = "start with a lowercase letter and contain only lowercase letters, digits, or underscores, up to 64 characters"
+	MaxChars                    = 64
+	MaxWorkflowOutputValueBytes = 64 * 1024
+	Description                 = "start with a lowercase letter and contain only lowercase letters, digits, or underscores, up to 64 characters"
 )
 
 // reservedParameters are transition-parameter keys the runtime owns, so authors

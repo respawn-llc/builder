@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/limits"
+	"core/shared/workflowkey"
 )
 
 func TestWorkflowTaskMovePreviewResponseValidatesEachOutcome(t *testing.T) {
@@ -142,7 +142,7 @@ func TestWorkflowTaskMoveRequestRejectsOversizedStructuredValues(t *testing.T) {
 		TargetNodeID:     "implement",
 		TransitionKey:    &transitionKey,
 		Values: map[string]map[string]string{
-			"plan": {"summary": strings.Repeat("x", limits.MaxWorkflowOutputValueBytes+1)},
+			"plan": {"summary": strings.Repeat("x", workflowkey.MaxWorkflowOutputValueBytes+1)},
 		},
 	}
 	if err := request.Validate(); err == nil {

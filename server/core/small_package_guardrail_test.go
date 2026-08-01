@@ -132,7 +132,6 @@ var allowedSmallPackages = map[string]string{
 	"shared/boundedio":                            "single bounded-output writer shared by lifecycle hooks and existing shell, workflow, and worktree consumers",
 	"shared/lifecyclecontract":                    "small public JSON contract shared by the interactive TUI and external lifecycle-hook receivers",
 	"shared/labelcontract":                        "versioned Project-label comparison and bounds contract shared by the workflow domain, server API, desktop generator, and CLI without introducing a server-to-API dependency",
-	"shared/limits":                               "shared bounded-value policy constants consumed by server and client contract validation without coupling limits to either boundary",
 	"shared/llmerrors":                            "shared provider-error contract surfaced by CLI and server",
 	"shared/modelcontract":                        "shared model identifier contract needed by server/llm and shared clients",
 	"shared/rollbacktarget":                       "shared session rollback target contract used by CLI and server session lifecycle",

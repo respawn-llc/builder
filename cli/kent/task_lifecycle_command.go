@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"core/shared/config"
-	"core/shared/limits"
 	"core/shared/serverapi"
+	"core/shared/workflowkey"
 )
 
 var (
@@ -759,32 +759,36 @@ func validateManualMoveCLIValues(
 	choice serverapi.WorkflowTaskMovePreviewTransitionChoice,
 	values map[string]map[string]string,
 ) error {
-	required := make(map[string]serverapi.WorkflowTaskMoveRequiredValue, len(choice.RequiredValues))
+	type valueIdentity struct {
+		nodeKey    string
+		outputName string
+	}
+	required := make(map[valueIdentity]serverapi.WorkflowTaskMoveRequiredValue, len(choice.RequiredValues))
 	for _, value := range choice.RequiredValues {
-		required[value.NodeKey+"\x00"+value.OutputName] = value
+		required[valueIdentity{nodeKey: value.NodeKey, outputName: value.OutputName}] = value
 	}
 	for nodeKey, outputs := range values {
 		for outputName, value := range outputs {
-			key := nodeKey + "\x00" + outputName
+			key := valueIdentity{nodeKey: nodeKey, outputName: outputName}
 			if _, ok := required[key]; !ok {
 				return fmt.Errorf("manual move value %s.%s is not required by the selected Transition", nodeKey, outputName)
 			}
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("manual move value %s.%s must be non-blank", nodeKey, outputName)
 			}
-			if len(value) > limits.MaxWorkflowOutputValueBytes {
+			if len(value) > workflowkey.MaxWorkflowOutputValueBytes {
 				return fmt.Errorf("manual move value %s.%s exceeds the maximum output value size", nodeKey, outputName)
 			}
 		}
 	}
 	for key, value := range required {
-		nodeKey, outputName, _ := strings.Cut(key, "\x00")
-		submitted, exists := values[nodeKey][outputName]
+		submittedOutputs := values[key.nodeKey]
+		submitted, exists := submittedOutputs[key.outputName]
 		if exists && strings.TrimSpace(submitted) != "" {
 			continue
 		}
 		if value.ResolvedValue == nil {
-			return fmt.Errorf("manual move value %s.%s is required", nodeKey, outputName)
+			return fmt.Errorf("manual move value %s.%s is required", key.nodeKey, key.outputName)
 		}
 	}
 	return nil

@@ -49,14 +49,20 @@ describe("ManualMoveDialog", () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog(transitionPreview(2));
 
-    expect(screen.getByRole("radio", { name: "Implement · Plan" })).not.toBeChecked();
-    expect(screen.getByRole("radio", { name: "Implement · Review" })).not.toBeChecked();
-    const continueButton = screen.getByRole("button", { name: "Continue" });
+    const radios = screen.getAllByRole("radio");
+    expect(radios).toHaveLength(2);
+    const [firstRadio, secondRadio] = radios;
+    if (firstRadio === undefined || secondRadio === undefined) {
+      throw new Error("expected two transition choices");
+    }
+    expect(firstRadio).not.toBeChecked();
+    expect(secondRadio).not.toBeChecked();
+    const continueButton = screen.getByRole("button", { name: appI18n.t("app.continue") });
     expect(continueButton).toBeDisabled();
 
-    await user.click(screen.getByRole("radio", { name: "Implement · Plan" }));
+    await user.click(firstRadio);
     await user.click(continueButton);
-    const confirmButton = screen.getByRole("button", { name: "Confirm move" });
+    const confirmButton = screen.getByRole("button", { name: appI18n.t("board.manualMoveConfirm") });
     expect(confirmButton).toBeDisabled();
 
     await user.type(screen.getByLabelText("summary"), "A plan");
@@ -94,7 +100,7 @@ describe("ManualMoveDialog", () => {
     }, undefined, onCancel);
 
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
-    const confirmButton = screen.getByRole("button", { name: "Confirm move" });
+    const confirmButton = screen.getByRole("button", { name: appI18n.t("board.manualMoveConfirm") });
     expect(confirmButton).toBeEnabled();
     await user.click(confirmButton);
     expect(onSubmit).toHaveBeenCalledWith({
@@ -102,7 +108,7 @@ describe("ManualMoveDialog", () => {
       values: { plan: { summary: "Prefilled" } },
     });
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: appI18n.t("app.cancel") }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
 });
