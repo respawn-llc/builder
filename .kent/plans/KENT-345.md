@@ -438,3 +438,12 @@ Round 5 progress: help now uses a quoted heredoc piped through a literal placeho
 - [x] Re-run focused verification and the server suite; record that isolated runtime passes while the repository cap remains the only full-suite limitation.
 
 Round 6 progress: `scripts/test.sh --help` is now a plain quoted heredoc with no subprocess or replacement; `tools/testshard` keeps the stateful runtime package in one job. The full suite's remaining cap is an infrastructure/runtime-budget limitation, while focused and isolated package behavior remains green.
+
+## Review remediation round 7
+
+- [x] Remove the package-specific runtime test-sharder exception; restore the generic scheduling policy and avoid a one-off package-name branch.
+- [x] Verify the two runtime tests cited by review independently and repeatedly; both pass.
+- [x] Run `./scripts/test.sh server`; it completes successfully with no feature assertion failures.
+- [x] Run the required no-argument `./scripts/test.sh`; server, TUI, and desktop suites complete successfully.
+
+Round 7 progress: the generic test-sharder policy is restored; the server suite now completes successfully under the fixed cap, and the no-argument repository suite passes. The earlier contention symptom was transient scheduling pressure rather than a product failure.
