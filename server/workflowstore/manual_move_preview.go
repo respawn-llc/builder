@@ -478,10 +478,15 @@ func validateManualMoveValues(
 	environment manualMoveValueEnvironment,
 ) error {
 	requirements := make(map[manualMoveValueIdentity]struct{}, len(choice.RequiredValues))
+	requiredNodes := make(map[workflow.ModelKey]struct{}, len(choice.RequiredValues))
 	for _, required := range choice.RequiredValues {
 		requirements[manualMoveValueIdentity{NodeKey: required.NodeKey, OutputName: required.OutputName}] = struct{}{}
+		requiredNodes[required.NodeKey] = struct{}{}
 	}
 	for nodeKey, outputs := range submitted {
+		if _, exists := requiredNodes[nodeKey]; !exists {
+			return fmt.Errorf("%w: extra value node %s", ErrManualMoveValuesInvalid, nodeKey)
+		}
 		for outputName, value := range outputs {
 			if _, exists := requirements[manualMoveValueIdentity{NodeKey: nodeKey, OutputName: outputName}]; !exists {
 				return fmt.Errorf("%w: extra value %s.%s", ErrManualMoveValuesInvalid, nodeKey, outputName)

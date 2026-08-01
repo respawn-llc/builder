@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"core/shared/apicontract"
@@ -102,6 +103,119 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 	}
 	if got := remote.moveRequests[0].Values["plan"]["summary"]; got != "done" {
 		t.Fatalf("structured values = %+v, want plan.summary=done", remote.moveRequests[0].Values)
+	}
+}
+
+func TestTaskMoveAutoSelectsSoleTransition(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					TransitionKey:         "next",
+					Label:                 "Next",
+					SourceNodeDisplayName: "Plan",
+					RequiredValues:        []serverapi.WorkflowTaskMoveRequiredValue{},
+				}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "implement"}, &stdout, &stderr)
+	if exitCode != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if remote.moveRequests[0].TransitionKey == nil || *remote.moveRequests[0].TransitionKey != "next" {
+		t.Fatalf("move request = %+v, want automatically selected next Transition", remote.moveRequests[0])
+	}
+}
+
+func TestTaskMoveRejectsEmptyExtraValueNode(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					TransitionKey:         "next",
+					Label:                 "Next",
+					SourceNodeDisplayName: "Plan",
+					RequiredValues:        []serverapi.WorkflowTaskMoveRequiredValue{},
+				}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{
+		"move", "task-1", "implement", "--values-json", `{"extra":{}}`,
+	}, &stdout, &stderr)
+	if exitCode != 2 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+}
+
+func TestTaskMoveRequiresExplicitTransitionForMultipleChoices(t *testing.T) {
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{
+					{TransitionKey: "next", Label: "Next", SourceNodeDisplayName: "Plan", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+					{TransitionKey: "alternate", Label: "Alternate", SourceNodeDisplayName: "Review", RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{}},
+				},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := taskSubcommand([]string{"move", "task-1", "implement"}, &stdout, &stderr); exitCode != 2 {
+		t.Fatalf("exit code = %d, want selection-required exit; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.moveRequests) != 0 {
+		t.Fatalf("move requests = %+v, want none before selection", remote.moveRequests)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := taskSubcommand([]string{"move", "task-1", "implement", "--transition", "alternate"}, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("explicit selection exit code = %d, stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.moveRequests) != 1 ||
+		remote.moveRequests[0].TransitionKey == nil ||
+		*remote.moveRequests[0].TransitionKey != "alternate" {
+		t.Fatalf("move requests = %+v, want alternate Transition selection", remote.moveRequests)
+	}
+}
+
+func TestTaskMoveBlockedPreviewUsesCLIBlockerMapping(t *testing.T) {
+	reason := serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
+			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{Reason: reason},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"move", "task-1", "implement"}, &stdout, &stderr)
+	if exitCode != 1 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
+	}
+	if manualMoveBlockerMessage(reason) == string(reason) {
+		t.Fatalf("blocker mapping returned raw protocol reason %q", reason)
+	}
+	want := fmt.Sprintf("task move blocked: %s\n", manualMoveBlockerMessage(reason))
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want mapped blocker output", stderr.String())
 	}
 }
 

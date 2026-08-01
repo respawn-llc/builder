@@ -783,10 +783,15 @@ func validateManualMoveCLIValues(
 		outputName string
 	}
 	required := make(map[valueIdentity]serverapi.WorkflowTaskMoveRequiredValue, len(choice.RequiredValues))
+	requiredNodes := make(map[string]struct{}, len(choice.RequiredValues))
 	for _, value := range choice.RequiredValues {
 		required[valueIdentity{nodeKey: value.NodeKey, outputName: value.OutputName}] = value
+		requiredNodes[value.NodeKey] = struct{}{}
 	}
 	for nodeKey, outputs := range values {
+		if _, ok := requiredNodes[nodeKey]; !ok {
+			return fmt.Errorf("manual move value node %s is not required by the selected Transition", nodeKey)
+		}
 		for outputName, value := range outputs {
 			key := valueIdentity{nodeKey: nodeKey, outputName: outputName}
 			if _, ok := required[key]; !ok {
