@@ -17,7 +17,7 @@
 - If the selected workspace is not attached to the selected Project, detach fails without revealing its relationships to other Projects.
 - A saved workspace path may be detached while its directory is missing or inaccessible.
 - When path identity cannot be recovered, the operator can select the workspace by ID.
-- Detach is blocked for a default workspace, including a Project's sole workspace, non-terminal dependent Tasks, live Session execution, Kent-managed worktree dependencies, or missing retained Session location information.
+- Detach is blocked for a default workspace, including a Project's sole workspace, non-terminal dependent Tasks, live Session execution, worktree dependencies, or missing retained Session location information.
 - Detach is allowed when references are only terminal Tasks and retained Sessions whose locations remain readable.
 - A blocked or concurrently invalidated detach changes nothing.
 - A concurrently invalidated detach reports that retrying is safe.
@@ -88,6 +88,6 @@
 - `active_sessions` directs the operator to stop active runs or rebind Sessions that use the workspace, then retry detach.
 - `non_terminal_tasks` directs the operator to move editable Backlog Tasks to another source workspace, or complete, manually move, or delete dependent Tasks, then retry detach.
 - `executable_current_nodes` directs the operator to stop execution and move, complete, or delete affected Tasks until no executable Current Node uses the workspace, then retry detach.
-- `managed_owned_worktrees` directs the operator to delete dependent managed worktrees or their owning quiescent Tasks, then retry detach.
+- `managed_owned_worktrees` directs the operator to delete dependent worktrees or their owning quiescent Tasks, then retry detach.
 - `missing_history_snapshot` directs the operator to re-save an editable Task's source workspace. If the affected Task history cannot be edited, the operator keeps the binding and reports the blocker because detach is unsafe.
 - For an unknown blocker code, Kent preserves the server message, directs the operator to resolve that code and retry, and tells the operator to update the CLI and server together when the CLI does not recognize the code. Kent never invents a command for an unknown blocker.

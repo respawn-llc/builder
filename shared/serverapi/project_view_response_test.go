@@ -45,11 +45,28 @@ func TestProjectHomeSummaryValidateRequiresAuthoritativeIdentity(t *testing.T) {
 }
 
 func TestProjectHomeSummaryValidateAllowsRootWorkspaceWithoutDisplayName(t *testing.T) {
-	summary := validProjectHomeSummaryForResponseTest()
-	summary.PrimaryWorkspace.RootPath = "/"
-	summary.PrimaryWorkspace.DisplayName = ""
-	if err := summary.Validate(); err != nil {
-		t.Fatalf("filesystem-root workspace summary rejected: %v", err)
+	for _, rootPath := range []string{"/", `C:\`, "C:/"} {
+		t.Run(rootPath, func(t *testing.T) {
+			summary := validProjectHomeSummaryForResponseTest()
+			summary.PrimaryWorkspace.RootPath = rootPath
+			summary.PrimaryWorkspace.DisplayName = ""
+			if err := summary.Validate(); err != nil {
+				t.Fatalf("filesystem-root workspace summary rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestProjectHomeSummaryValidateRejectsBlankNameForNonRootWorkspace(t *testing.T) {
+	for _, rootPath := range []string{"/workspace", `C:\workspace`, "C:/workspace"} {
+		t.Run(rootPath, func(t *testing.T) {
+			summary := validProjectHomeSummaryForResponseTest()
+			summary.PrimaryWorkspace.RootPath = rootPath
+			summary.PrimaryWorkspace.DisplayName = ""
+			if err := summary.Validate(); err == nil {
+				t.Fatal("non-root workspace accepted without display name")
+			}
+		})
 	}
 }
 

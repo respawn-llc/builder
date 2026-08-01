@@ -2076,8 +2076,7 @@ WHERE node.kind IN ('agent', 'script')
 -- name: CountManagedOwnedWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND managed <> 0;
+WHERE workspace_id = sqlc.arg(workspace_id);
 
 -- name: CountTasksMissingSourceWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS task_count

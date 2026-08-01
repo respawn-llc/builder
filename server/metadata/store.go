@@ -1020,9 +1020,9 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 	addCountBlocker("executable_current_nodes", "Executable current nodes still depend on this workspace.", executableCurrentNodes)
 	ownedWorktrees, err := q.CountManagedOwnedWorktreesByWorkspace(ctx, workspace.ID)
 	if err != nil {
-		return nil, fmt.Errorf("count managed owned worktrees: %w", err)
+		return nil, fmt.Errorf("count workspace worktrees: %w", err)
 	}
-	addCountBlocker("managed_owned_worktrees", "Kent-managed owned worktrees still depend on this workspace.", ownedWorktrees)
+	addCountBlocker("managed_owned_worktrees", "Worktrees still depend on this workspace.", ownedWorktrees)
 	missingSnapshots, err := q.CountTasksMissingSourceWorkspaceSnapshot(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing workspace snapshots: %w", err)

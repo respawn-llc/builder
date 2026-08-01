@@ -309,12 +309,14 @@ VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameter
 
 	for _, test := range []struct {
 		name          string
+		managed       bool
 		createdBranch bool
 	}{
-		{name: "created branch", createdBranch: true},
-		{name: "existing ref", createdBranch: false},
+		{name: "managed created branch", managed: true, createdBranch: true},
+		{name: "managed existing ref", managed: true, createdBranch: false},
+		{name: "unmanaged worktree", managed: false},
 	} {
-		t.Run("managed owned worktree/"+test.name, func(t *testing.T) {
+		t.Run("worktree dependency/"+test.name, func(t *testing.T) {
 			ctx := context.Background()
 			store, _, binding := newMetadataTestStore(t)
 			attached, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
@@ -325,7 +327,7 @@ VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameter
 				ID:              "managed-owned-worktree",
 				WorkspaceID:     attached.WorkspaceID,
 				CanonicalRoot:   t.TempDir(),
-				Managed:         true,
+				Managed:         test.managed,
 				CreatedBranch:   test.createdBranch,
 				GitMetadataJSON: "{}",
 			}); err != nil {
@@ -624,7 +626,7 @@ func TestWorkspaceUnlinkRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testi
 	}
 }
 
-func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
+func TestUnlinkProjectWorkspacePreservesTerminalHistoryWithoutWorktreeDependency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, _, binding := newMetadataTestStore(t)
@@ -634,14 +636,11 @@ func TestUnlinkProjectWorkspacePreservesTerminalHistory(t *testing.T) {
 	}
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
-	worktreeID := "worktree-terminal-workspace"
-	execSeed(t, store.db, "terminal workspace worktree", `INSERT INTO worktrees (id, workspace_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms)
-VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(attached.CanonicalRoot, "terminal-worktree"), now, now)
-	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
+	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	insertTaskCurrentNode(t, store.db, "task-terminal-workspace", "node-done", nil)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -655,21 +654,19 @@ VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', NULL, NU
 	}
 	var taskCount int
 	var sourceWorkspaceID sql.NullString
-	var managedWorktreeID sql.NullString
 	var metadataJSON string
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*), source_workspace_id, managed_worktree_id, metadata_json FROM tasks WHERE id = 'task-terminal-workspace'`).Scan(&taskCount, &sourceWorkspaceID, &managedWorktreeID, &metadataJSON); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*), source_workspace_id, metadata_json FROM tasks WHERE id = 'task-terminal-workspace'`).Scan(&taskCount, &sourceWorkspaceID, &metadataJSON); err != nil {
 		t.Fatalf("scan preserved task: %v", err)
 	}
-	if taskCount != 1 || sourceWorkspaceID.Valid || managedWorktreeID.Valid || !strings.Contains(metadataJSON, attached.CanonicalRoot) {
-		t.Fatalf("preserved task count/source/managed/metadata = %d/%v/%v/%s", taskCount, sourceWorkspaceID, managedWorktreeID, metadataJSON)
+	if taskCount != 1 || sourceWorkspaceID.Valid || !strings.Contains(metadataJSON, attached.CanonicalRoot) {
+		t.Fatalf("preserved task count/source/metadata = %d/%v/%s", taskCount, sourceWorkspaceID, metadataJSON)
 	}
 	var sessionWorkspaceID sql.NullString
-	var sessionWorktreeID sql.NullString
-	if err := store.db.QueryRowContext(ctx, `SELECT workspace_id, worktree_id FROM sessions WHERE id = 'session-terminal-workspace'`).Scan(&sessionWorkspaceID, &sessionWorktreeID); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT workspace_id FROM sessions WHERE id = 'session-terminal-workspace'`).Scan(&sessionWorkspaceID); err != nil {
 		t.Fatalf("scan preserved session: %v", err)
 	}
-	if sessionWorkspaceID.Valid || sessionWorktreeID.Valid {
-		t.Fatalf("preserved session workspace/worktree = %v/%v, want null/null", sessionWorkspaceID, sessionWorktreeID)
+	if sessionWorkspaceID.Valid {
+		t.Fatalf("preserved session workspace = %v, want null", sessionWorkspaceID)
 	}
 	record, err := store.ResolvePersistedSession(ctx, "session-terminal-workspace")
 	if err != nil {

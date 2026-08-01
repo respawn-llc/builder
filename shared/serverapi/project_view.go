@@ -4,7 +4,6 @@ import (
 	"core/shared/runtimeids"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"core/shared/clientui"
@@ -221,8 +220,14 @@ func (s ProjectHomeSummary) Validate() error {
 }
 
 func isFilesystemRootPath(path string) bool {
-	cleaned := filepath.Clean(strings.TrimSpace(path))
-	return filepath.IsAbs(cleaned) && filepath.Dir(cleaned) == cleaned
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "/" {
+		return true
+	}
+	return len(trimmed) == 3 &&
+		((trimmed[0] >= 'a' && trimmed[0] <= 'z') || (trimmed[0] >= 'A' && trimmed[0] <= 'Z')) &&
+		trimmed[1] == ':' &&
+		(trimmed[2] == '/' || trimmed[2] == '\\')
 }
 
 func (r ProjectDefaultWorkspaceSetResponse) Validate() error {
