@@ -328,6 +328,77 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 	}
 }
 
+func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-idle-completion-late-assignment", "node-source")
+	target := currentNodeReferenceForControllerTest(t, "task-idle-completion-late-assignment", "node-target")
+	sourceNode := workflow.CurrentNode{
+		Reference:  source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflow.CurrentNodeReference{target},
+		},
+	}
+	release := make(chan struct{})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AutomaticConcurrency: 1,
+		AssignmentSteerer:    lateCommitCurrentNodeAssignmentSteerer{release: release},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	taskID := source.TaskID
+	if _, err := controller.CompleteIdleCurrentNode(
+		ctx,
+		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+		"next",
+		nil,
+		"forced completion",
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CompleteIdleCurrentNode error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case started := <-runner.started:
+		t.Fatalf("runner started %v before late assignment commit", started)
+	default:
+	}
+
+	close(release)
+	select {
+	case started := <-runner.started:
+		if !started.Equal(target) {
+			t.Fatalf("runner started %v after late assignment commit, want %v", started, target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("late-assigned successor did not start")
+	}
+	if interruption, interrupted := store.interruption(target); interrupted {
+		t.Fatalf("late-assigned successor was interrupted: %+v", interruption)
+	}
+}
+
 func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetires(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
