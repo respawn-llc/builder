@@ -53,7 +53,7 @@ var (
 	// errHandoffTooEarly is returned when the agent requests a handoff before the trigger_handoff tool is enabled.
 	errHandoffTooEarly = errors.New(handoffTooEarlyMessage)
 	// errCompactionDisabledModeNone is returned when manual compaction is requested while compaction_mode=none.
-	errCompactionDisabledModeNone = errors.New("context compaction is disabled (compaction_mode=none)")
+	errCompactionDisabledModeNone = serverapi.ErrManualCompactionDisabled
 )
 
 type compactionResult struct {
@@ -121,18 +121,11 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	planningSnapshot := c.engine.compactionPlanningSnapshot()
-	if requireEligibility && c.engine.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
-		return session.CommitReceipt{}, errCompactionDisabledModeNone
-	}
-	if requireEligibility && !c.engine.compactionRuntimeState().ManualCompactionEligible() {
-		return session.CommitReceipt{}, ErrManualCompactionTooSoon
-	}
-	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive)
+	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, requireEligibility)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive)
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, false)
 }
 
 func isAgentStepCapable(kind ActiveKind) bool {
@@ -167,7 +160,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includePreservedUserMessage {
@@ -177,6 +170,15 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+		if requireEligibility {
+			planningSnapshot := e.compactionPlanningSnapshot()
+			if e.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
+				return errCompactionDisabledModeNone
+			}
+			if !e.compactionRuntimeState().ManualCompactionEligible() {
+				return ErrManualCompactionTooSoon
+			}
+		}
 		if onActive != nil {
 			onActive()
 		}

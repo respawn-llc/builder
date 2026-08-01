@@ -41,6 +41,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		return matchErr
 	}
 	var rollbackLocator rollbackCandidateLocatorTracker
+	manualEligible := false
 	for _, record := range activeWindow.Records {
 		stepID, _ := textutil.OptionalExact(record.StepID())
 		payload, err := record.Payload()
@@ -58,6 +59,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
+			}
+			if msg.Role == llm.RoleAssistant && msg.Phase != nil && *msg.Phase == llm.MessagePhaseFinal {
+				manualEligible = true
 			}
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
@@ -99,6 +103,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
+			manualEligible = false
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
 				stepID,
 				replacement.Items,
@@ -134,6 +139,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
+	e.compactionRuntimeState().SetManualCompactionEligible(manualEligible)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {
 		return err
 	}
