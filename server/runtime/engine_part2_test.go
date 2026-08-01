@@ -11,6 +11,7 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -585,6 +586,22 @@ func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
 	}
 	if eng.FastModeEnabled() {
 		t.Fatal("expected effective fast mode to be disabled when provider is unavailable")
+	}
+}
+
+func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
+	store := mustCreateTestSession(t)
+	capabilityErr := errors.New("provider capability lookup failed")
+
+	_, err := New(
+		store,
+		mustMaterializeTestEventLog(t, store),
+		&fakeClient{capsErr: capabilityErr},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	if !errors.Is(err, capabilityErr) {
+		t.Fatalf("New error = %v, want provider capability error", err)
 	}
 }
 

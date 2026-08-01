@@ -352,6 +352,40 @@ type fakeNoopStreamClient struct{}
 
 type fakeReasoningStreamClient struct{}
 
+func defaultTestProviderCapabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+		SupportsNativeWebSearch:        true,
+		SupportsReasoningEncrypted:     true,
+		SupportsServerSideContextEdit:  true,
+		IsOpenAIFirstParty:             true,
+	}
+}
+
+func (f *fakeStreamClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (fakeAsyncLateDeltaClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (fakeNoopStreamClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (fakeReasoningStreamClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (fakeNonRetriableStreamClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
 func (f *fakeStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
 	return llm.Response{}, errors.New("not implemented")
 }
@@ -560,6 +594,18 @@ type statusFailClient struct {
 type providerContractFailClient struct {
 	mu    sync.Mutex
 	calls int
+}
+
+func (*authFailClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (*statusFailClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
+func (*providerContractFailClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
 }
 
 type streamRequiredClient struct {

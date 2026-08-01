@@ -627,49 +627,19 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 	}
 }
 
-func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t *testing.T) {
+func TestNewRejectsTransientProviderCapabilityFailure(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	client := &fakeClient{
-		capsErr: errors.New("transient auth metadata failure"),
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		}},
-	}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5.3-codex"})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	locked := store.Meta().Locked
-	if locked == nil {
-		t.Fatal("expected session to lock")
-	}
-	if strings.TrimSpace(locked.ProviderContract.ProviderID) != "" {
-		t.Fatalf("expected transient provider capability failure to avoid persisting fallback provider contract, got %+v", locked.ProviderContract)
-	}
-
-	client.mu.Lock()
-	client.capsErr = nil
-	client.caps = llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}
-	client.mu.Unlock()
-
-	caps, err := eng.providerCapabilities(context.Background())
-	if err != nil {
-		t.Fatalf("providerCapabilities after recovery: %v", err)
-	}
-	if caps.ProviderID != "openai" || !caps.SupportsNativeWebSearch || !caps.SupportsResponsesCompact {
-		t.Fatalf("expected live provider capabilities after recovery, got %+v", caps)
+	capabilityErr := errors.New("transient auth metadata failure")
+	_, err := New(
+		store,
+		mustMaterializeTestEventLog(t, store),
+		&fakeClient{capsErr: capabilityErr},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5.3-codex"},
+	)
+	if !errors.Is(err, capabilityErr) {
+		t.Fatalf("New error = %v, want provider capability error", err)
 	}
 }
 
