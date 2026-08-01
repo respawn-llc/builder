@@ -108,10 +108,16 @@ func writeSettingsFileIfMissing(path string, contents string) (bool, error) {
 	if err := ensureSettingsDir(path); err != nil {
 		return false, err
 	}
+	return WriteFileIfMissing(path, []byte(contents), ".config.toml.tmp-*")
+}
+
+// WriteFileIfMissing atomically installs contents when path does not already exist.
+// The parent directory must already exist.
+func WriteFileIfMissing(path string, contents []byte, tempPattern string) (bool, error) {
 	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".config.toml.tmp-*")
+	temp, err := os.CreateTemp(dir, tempPattern)
 	if err != nil {
-		return false, fmt.Errorf("create settings temp file: %w", err)
+		return false, fmt.Errorf("create atomic temp file: %w", err)
 	}
 	tempPath := temp.Name()
 	cleanupTemp := true
@@ -120,22 +126,22 @@ func writeSettingsFileIfMissing(path string, contents string) (bool, error) {
 			_ = os.Remove(tempPath)
 		}
 	}()
-	if _, err := temp.WriteString(contents); err != nil {
+	if _, err := temp.Write(contents); err != nil {
 		_ = temp.Close()
-		return false, fmt.Errorf("write settings temp file: %w", err)
+		return false, fmt.Errorf("write atomic temp file: %w", err)
 	}
 	if err := temp.Sync(); err != nil {
 		_ = temp.Close()
-		return false, fmt.Errorf("sync settings temp file: %w", err)
+		return false, fmt.Errorf("sync atomic temp file: %w", err)
 	}
 	if err := temp.Close(); err != nil {
-		return false, fmt.Errorf("close settings temp file: %w", err)
+		return false, fmt.Errorf("close atomic temp file: %w", err)
 	}
 	if err := os.Link(tempPath, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("install settings file: %w", err)
+		return false, fmt.Errorf("install atomic file: %w", err)
 	}
 	cleanupTemp = true
 	return true, nil

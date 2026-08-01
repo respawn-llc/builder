@@ -91,7 +91,7 @@ func workspaceTypeForPackage(pkg *packages.Package) *types.Named {
 
 type workspaceIdentityAnalysis struct {
 	objects   map[types.Object]bool
-	returning map[*types.Func]bool
+	returning map[*types.Func]map[int]bool
 }
 
 func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named) workspaceIdentityAnalysis {
@@ -106,7 +106,7 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 			objects[object] = true
 		}
 	}
-	returning := make(map[*types.Func]bool)
+	returning := make(map[*types.Func]map[int]bool)
 	for {
 		changed := false
 		for _, file := range pkg.Syntax {
@@ -114,15 +114,13 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 				switch current := node.(type) {
 				case *ast.AssignStmt:
 					for index := range current.Lhs {
-						if index < len(current.Rhs) &&
-							assignWorkspaceIdentity(pkg, current.Lhs[index], current.Rhs[index], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+						if assignWorkspaceIdentityFromRHS(pkg, current.Lhs[index], current.Rhs, index, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
 							changed = true
 						}
 					}
 				case *ast.ValueSpec:
 					for index := range current.Names {
-						if index < len(current.Values) &&
-							assignWorkspaceIdentity(pkg, current.Names[index], current.Values[index], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+						if assignWorkspaceIdentityFromRHS(pkg, current.Names[index], current.Values, index, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
 							changed = true
 						}
 					}
@@ -154,10 +152,17 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 						if !ok {
 							return true
 						}
-						for _, result := range returnStmt.Results {
-							if typedCarriesWorkspaceIdentity(pkg, result, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) &&
-								!returning[callee] {
-								returning[callee] = true
+						for index, result := range returnStmt.Results {
+							if !typedCarriesWorkspaceIdentity(pkg, result, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+								continue
+							}
+							positions := returning[callee]
+							if positions == nil {
+								positions = make(map[int]bool)
+								returning[callee] = positions
+							}
+							if !positions[index] {
+								positions[index] = true
 								changed = true
 							}
 						}
@@ -173,8 +178,34 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 	}
 }
 
-func assignWorkspaceIdentity(pkg *packages.Package, target ast.Expr, value ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
-	if !typedCarriesWorkspaceIdentity(pkg, value, identity, workspaceType) {
+func assignWorkspaceIdentityFromRHS(pkg *packages.Package, target ast.Expr, values []ast.Expr, resultIndex int, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
+	if resultIndex < 0 {
+		return false
+	}
+	if len(values) == 1 {
+		value := values[0]
+		if resultIndex == 0 {
+			return assignWorkspaceIdentity(pkg, target, value, 0, identity, workspaceType)
+		}
+		call, ok := value.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		callee := testharness.CalledFunction(pkg, call)
+		if callee == nil || !identity.returning[callee][resultIndex] {
+			return false
+		}
+		return assignWorkspaceIdentity(pkg, target, value, resultIndex, identity, workspaceType)
+	}
+	if resultIndex >= len(values) {
+		return false
+	}
+	value := values[resultIndex]
+	return assignWorkspaceIdentity(pkg, target, value, 0, identity, workspaceType)
+}
+
+func assignWorkspaceIdentity(pkg *packages.Package, target ast.Expr, value ast.Expr, resultIndex int, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
+	if resultIndex == 0 && !typedCarriesWorkspaceIdentity(pkg, value, identity, workspaceType) {
 		return false
 	}
 	targetIdent, ok := target.(*ast.Ident)
@@ -207,7 +238,7 @@ func typedCarriesWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, i
 			selection.Obj().Name() == "ID"
 	case *ast.CallExpr:
 		if callee := testharness.CalledFunction(pkg, current); callee != nil {
-			return identity.returning[callee]
+			return identity.returning[callee][0]
 		}
 		return len(current.Args) == 1 &&
 			isStringType(pkg.TypesInfo.TypeOf(current)) &&
@@ -243,7 +274,7 @@ func typedContainsWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, 
 				found = true
 			}
 		case *ast.CallExpr:
-			if callee := testharness.CalledFunction(pkg, current); callee != nil && identity.returning[callee] {
+			if callee := testharness.CalledFunction(pkg, current); callee != nil && identity.returning[callee][0] {
 				found = true
 			}
 		}
@@ -526,6 +557,14 @@ import "path/filepath"
 type Workspace struct { ID string }
 func automatic(base string, workspace Workspace) string {
 	_, wid := "ignored", workspace.ID
+	return filepath.Join(base, wid, "leaf")
+}`,
+		`package fixture
+import "path/filepath"
+type Workspace struct { ID string }
+func split(workspace Workspace) (string, string) { return "ignored", workspace.ID }
+func automatic(base string, workspace Workspace) string {
+	_, wid := split(workspace)
 	return filepath.Join(base, wid, "leaf")
 }`,
 	}

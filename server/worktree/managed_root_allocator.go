@@ -489,7 +489,13 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	var capturedParent os.FileInfo
 	var capturedMarker os.FileInfo
 	cleanup := func() (bool, error) {
-		if !claimed || !createdParent {
+		if !claimed {
+			return true, nil
+		}
+		if parentCreatedConcurrently {
+			return false, nil
+		}
+		if !createdParent {
 			return true, nil
 		}
 		if capturedParent == nil {
@@ -628,42 +634,15 @@ func publishWorkspaceParentMarker(parent string, marker string, workspaceID stri
 	if err != nil {
 		return nil, false, fmt.Errorf("encode workspace parent marker %q: %w", marker, err)
 	}
-	tempFile, err := os.CreateTemp(parent, workspaceParentMarker+".tmp-*")
+	created, err = config.WriteFileIfMissing(marker, payload, workspaceParentMarker+".tmp-*")
 	if err != nil {
-		return nil, false, fmt.Errorf("create temporary workspace parent marker %q: %w", marker, err)
+		return nil, false, fmt.Errorf("publish workspace parent marker %q: %w", marker, err)
 	}
-	tempPath := tempFile.Name()
-	removeTemp := true
-	defer func() {
-		if removeTemp {
-			if cleanupErr := os.Remove(tempPath); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
-				err = errors.Join(err, fmt.Errorf("remove temporary workspace parent marker %q: %w", tempPath, cleanupErr))
-			}
-		}
-	}()
-	if _, writeErr := tempFile.Write(payload); writeErr != nil {
-		closeErr := tempFile.Close()
-		return nil, false, fmt.Errorf("write temporary workspace parent marker %q: %w", marker, errors.Join(writeErr, closeErr))
-	}
-	if closeErr := tempFile.Close(); closeErr != nil {
-		return nil, false, fmt.Errorf("close temporary workspace parent marker %q: %w", marker, closeErr)
-	}
-	if linkErr := os.Link(tempPath, marker); linkErr != nil {
-		if !os.IsExist(linkErr) {
-			return nil, false, fmt.Errorf("publish workspace parent marker %q: %w", marker, linkErr)
-		}
-		markerInfo, statErr := os.Lstat(marker)
-		if statErr != nil {
-			return nil, false, fmt.Errorf("inspect concurrently published workspace parent marker %q: %w", marker, statErr)
-		}
-		return markerInfo, false, nil
-	}
-	removeTemp = true
 	markerInfo, err = os.Lstat(marker)
 	if err != nil {
-		return nil, false, fmt.Errorf("inspect published workspace parent marker %q: %w", marker, err)
+		return nil, false, fmt.Errorf("inspect workspace parent marker %q: %w", marker, err)
 	}
-	return markerInfo, true, nil
+	return markerInfo, created, nil
 }
 
 func rollbackCreatedWorkspaceParent(parent string, markerName string, parentInfo os.FileInfo, markerInfo os.FileInfo) error {
