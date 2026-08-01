@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -119,6 +118,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 	tests := []struct {
 		name             string
 		requiresApproval bool
+		startsExisting   bool
 		wantStatus       serverapi.WorkflowTaskStatusKind
 		wantAttention    int
 		wantCanInterrupt bool
@@ -202,6 +202,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 		{
 			name:             "durable transition approval",
 			requiresApproval: true,
+			startsExisting:   true,
 			wantStatus:       serverapi.WorkflowTaskStatusKindWaitingApproval,
 			wantAttention:    1,
 			wantCanDelete:    true,
@@ -217,10 +218,11 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:          "interrupted",
-			wantStatus:    serverapi.WorkflowTaskStatusKindInterrupted,
-			wantAttention: 1,
-			wantCanDelete: true,
+			name:           "interrupted",
+			startsExisting: true,
+			wantStatus:     serverapi.WorkflowTaskStatusKindInterrupted,
+			wantAttention:  1,
+			wantCanDelete:  true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
 				if err := surfaces.fixture.store.InterruptCurrentNode(
 					surfaces.fixture.ctx,
@@ -234,9 +236,10 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:          "completed",
-			wantStatus:    serverapi.WorkflowTaskStatusKindDone,
-			wantCanDelete: true,
+			name:           "completed",
+			startsExisting: true,
+			wantStatus:     serverapi.WorkflowTaskStatusKindDone,
+			wantCanDelete:  true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
 				if _, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       task.currentNode,
@@ -261,7 +264,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			task := startedCurrentNodeViewTask{
 				task: surfaces.fixture.createBacklogTask(t, "Lifecycle "+test.name),
 			}
-			if test.name == "durable transition approval" || test.name == "interrupted" || test.name == "completed" {
+			if test.startsExisting {
 				task = surfaces.fixture.startExistingTask(t, task.task)
 			}
 			expected := test.setup(t, surfaces, task)
@@ -391,7 +394,7 @@ func assertRealTaskStatusAcrossSurfaces(
 	}
 	searchResponse, err := surfaces.search.Search(surfaces.fixture.ctx, serverapi.TaskSearchRequest{
 		Mode:        serverapi.TaskSearchModeLiteral,
-		Query:       "Lifecycle " + strings.TrimSpace(strings.TrimPrefix(task.task.Title, "Lifecycle ")),
+		Query:       task.task.Title,
 		Context:     serverapi.TaskSearchDefaultContext,
 		ProjectIDs:  []string{projectID},
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{wantStatus},

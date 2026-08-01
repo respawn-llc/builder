@@ -55,6 +55,14 @@ func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workfl
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		return err
+	}
+	return operation(snapshots)
+}
+
+func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
 	var snapshotErr error
 	a.forEachWorkflowExecutionLocked(func(execution *execution) {
@@ -64,10 +72,10 @@ func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workfl
 		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
 	})
 	if snapshotErr != nil {
-		return snapshotErr
+		return nil, snapshotErr
 	}
 	sortTaskExecutionSnapshots(snapshots)
-	return operation(snapshots)
+	return snapshots, nil
 }
 
 func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
@@ -87,22 +95,9 @@ func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	var snapshotErr error
-	a.forEachWorkflowExecutionLocked(func(execution *execution) {
-		if snapshotErr != nil {
-			return
-		}
-		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
-	})
-	if snapshotErr != nil {
-		return nil, snapshotErr
-	}
-	for taskID, snapshot := range snapshots {
-		sort.Slice(snapshot.Executions, func(i, j int) bool {
-			return workflowExecutionLess(snapshot.Executions[i], snapshot.Executions[j])
-		})
-		snapshots[taskID] = snapshot
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		return nil, err
 	}
 	return snapshots, nil
 }
@@ -270,11 +265,11 @@ func (e TaskExecution) validate() error {
 			return errors.New("live workflow script execution has no executable path")
 		}
 		if len(e.PendingPrompts) != 0 {
-			return errors.New("live workflow script execution cannot wait for a question")
+			return errors.New("live workflow script execution cannot have pending prompts")
 		}
 	}
 	if e.Queued && len(e.PendingPrompts) != 0 {
-		return errors.New("queued workflow execution cannot wait for a question")
+		return errors.New("queued workflow execution cannot have pending prompts")
 	}
 	return nil
 }

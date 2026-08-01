@@ -317,6 +317,13 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowview.TaskDetail",
 	} {
 		surfaceType := index.named[surface]
+		if surfaceType == nil {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: surface + " production surface type is missing",
+			})
+			continue
+		}
 		structure, ok := surfaceType.Underlying().(*types.Struct)
 		if !ok {
 			continue

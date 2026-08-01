@@ -25,7 +25,7 @@ type TaskSearch struct {
 
 type taskSearchReadSnapshot struct {
 	queries            *sqlitegen.Queries
-	liveTaskStatesJSON string
+	liveTaskStatesJSON *string
 	close              func() error
 }
 
@@ -78,7 +78,10 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveTaskStatesJSON, req, offset)
+	if snapshot.liveTaskStatesJSON == nil {
+		return serverapi.TaskSearchResponse{}, errors.New("task search read snapshot is closed")
+	}
+	rows, err := s.queryPage(ctx, snapshot.queries, *snapshot.liveTaskStatesJSON, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -128,9 +131,10 @@ func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.Task
 	if err != nil {
 		return nil, errors.Join(err, closeTransaction())
 	}
+	liveTaskStatesJSON := observation.LiveTaskStatesJSON
 	return &taskSearchReadSnapshot{
 		queries:            queries,
-		liveTaskStatesJSON: observation.LiveTaskStatesJSON,
+		liveTaskStatesJSON: &liveTaskStatesJSON,
 		close:              closeTransaction,
 	}, nil
 }
@@ -142,7 +146,7 @@ func (s *taskSearchReadSnapshot) Close() error {
 	close := s.close
 	s.close = nil
 	s.queries = nil
-	s.liveTaskStatesJSON = ""
+	s.liveTaskStatesJSON = nil
 	return close()
 }
 

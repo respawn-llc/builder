@@ -297,7 +297,8 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 		}
 		var task *sqlitegen.TaskRecord
 		for _, execution := range snapshot.Executions {
-			if !execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) {
+			if !execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) &&
+				!execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval) {
 				continue
 			}
 			if execution.Agent == nil {
@@ -326,7 +327,8 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				promptsByID[promptID] = prompt
 			}
 			for _, promptReference := range execution.PendingPrompts {
-				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion {
+				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion &&
+					promptReference.Kind != sessionruntime.PendingPromptKindSessionApproval {
 					continue
 				}
 				prompt, present := promptsByID[promptReference.ID]
@@ -340,8 +342,8 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				if !present {
 					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
-				if prompt.Approval {
-					return nil, fmt.Errorf("task %q session %q prompt %q changed from Question to Approval", taskID, execution.Agent.SessionID, promptReference.ID)
+				if prompt.Approval != (promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval) {
+					return nil, fmt.Errorf("task %q session %q prompt %q changed prompt kind", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
 				occurredAt := prompt.CreatedAt.UnixMilli()
 				if occurredAt <= 0 {

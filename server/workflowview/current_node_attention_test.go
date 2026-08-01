@@ -289,3 +289,54 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	question.resolve(t, fixture.ctx)
 }
+
+func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
+	surfaces := newRealTaskStatusSurfaces(t, false)
+	fixture := surfaces.fixture
+	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Live approval")}
+	request := realTaskStatusApprovalRequest()
+	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
+	agentTarget, ok := execution.target.(taskStatusAgentTarget)
+	if !ok {
+		t.Fatalf("approval execution target = %T, want agent", execution.target)
+	}
+	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
+		agentTarget.sessionID.String(): {{
+			ID:                request.ID,
+			CreatedAt:         time.UnixMilli(4_000).UTC(),
+			Question:          request.Question,
+			Approval:          true,
+			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny},
+		}},
+	}}
+	attention, err := NewAttention(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		fixture.authority,
+		prompts,
+	)
+	if err != nil {
+		t.Fatalf("NewAttention: %v", err)
+	}
+	response, err := attention.ListTask(fixture.ctx, serverapi.WorkflowTaskAttentionListRequest{
+		TaskID: string(started.task.ID),
+	})
+	if err != nil {
+		t.Fatalf("Attention.ListTask: %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("live approval attention = %+v, want one item", response.Items)
+	}
+	item := response.Items[0]
+	if item.Kind != "question" ||
+		item.QuestionID == nil ||
+		*item.QuestionID != request.ID ||
+		item.SessionID == nil ||
+		*item.SessionID != agentTarget.sessionID.String() ||
+		item.Question == nil ||
+		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
+		item.CurrentNode == nil ||
+		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
+		t.Fatalf("live approval attention item = %+v", item)
+	}
+}
