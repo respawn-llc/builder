@@ -8,7 +8,7 @@ parallelism_cap=18
 cd "$repo_root"
 
 usage() {
-    cat <<'USAGE'
+    cat <<USAGE
 Usage: scripts/test.sh [target ...] [options] [go-test-args ...]
 
 Runs Kent repository test targets.
