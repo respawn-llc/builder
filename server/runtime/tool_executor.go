@@ -63,7 +63,13 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
 
-			if err := gate.Wait(ctx); err != nil {
+			gateErr := gate.Wait(ctx)
+			if gateErr != nil {
+				if errors.Is(gateErr, context.Canceled) || errors.Is(gateErr, context.DeadlineExceeded) {
+					gateErr = gate.Wait(context.Background())
+				}
+			}
+			if gateErr != nil {
 				if serialOrdinal >= 0 {
 					serialGate.done(serialOrdinal)
 				}

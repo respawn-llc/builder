@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,25 @@ type blockingBackgroundStepLifecycle struct {
 	started chan struct{}
 	stopped chan error
 	busy    bool
+}
+
+type reschedulingBackgroundStepLifecycle struct {
+	blockingBackgroundStepLifecycle
+	runs          atomic.Int32
+	firstStarted  chan struct{}
+	releaseFirst  chan struct{}
+	secondStarted chan struct{}
+}
+
+func (s *reschedulingBackgroundStepLifecycle) Run(context.Context, exclusiveStepOptions, func(context.Context, string) error) error {
+	switch s.runs.Add(1) {
+	case 1:
+		close(s.firstStarted)
+		<-s.releaseFirst
+	default:
+		close(s.secondStarted)
+	}
+	return context.Canceled
 }
 
 type retainingBackgroundMutationLease struct {
@@ -226,6 +246,32 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	case <-closeDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("engine close did not wait for queued background continuation")
+	}
+}
+
+func TestBackgroundNoticeSchedulerReschedulesAfterActiveTask(t *testing.T) {
+	steps := &reschedulingBackgroundStepLifecycle{
+		firstStarted:  make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+	}
+	engine := &Engine{}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("first")})
+	select {
+	case <-steps.firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first background notice task did not start")
+	}
+
+	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("second")})
+	close(steps.releaseFirst)
+	select {
+	case <-steps.secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notice queued during active task was not rescheduled")
 	}
 }
 

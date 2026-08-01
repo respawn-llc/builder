@@ -122,7 +122,7 @@ func (m *Manager) SetMinimumExecToBgTime(value time.Duration) {
 	m.minimumExecToBgTime = value
 }
 
-func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error) {
+func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult, err error) {
 	if len(req.Command) == 0 {
 		return ExecResult{}, errors.New("command is required")
 	}
@@ -261,14 +261,22 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		_ = killManagedProcess(cmd.Process)
 		return ExecResult{}, err
 	}
-	result := ExecResult{
+	result = ExecResult{
 		SessionID:          id,
 		WallTime:           time.Since(start),
 		OutputPath:         logPath,
 		RawOutputRequested: req.Raw,
 	}
 	entry.interactMu.Lock()
-	defer entry.interactMu.Unlock()
+	var backgroundTransition *PendingBackgroundTransition
+	defer func() {
+		entry.interactMu.Unlock()
+		if backgroundTransition != nil && err != nil {
+			if abortErr := backgroundTransition.Abort(); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
+		}
+	}()
 	snapshot, backgrounded := entry.transitionToBackground()
 	if !backgrounded {
 		if pending := entry.drainPending(); len(pending) > 0 {
@@ -288,6 +296,15 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return result, nil
 	}
 	_ = deprioritizeManagedProcess(cmd.Process)
+	backgroundTransition = &PendingBackgroundTransition{
+		manager:  m,
+		entry:    entry,
+		snapshot: snapshotWithExecutionCorrelationCopy(snapshot),
+		state:    newBackgroundTransitionState(),
+	}
+	entry.mu.Lock()
+	entry.backgroundTransition = backgroundTransition.state
+	entry.mu.Unlock()
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
 		return ExecResult{}, err
@@ -300,16 +317,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	result.Truncated = truncated
 	result.Warning = processed.Warning
 	result.ToolError = processed.UnrecoverableError
-	transition := &PendingBackgroundTransition{
-		manager:  m,
-		entry:    entry,
-		snapshot: snapshotWithExecutionCorrelationCopy(snapshot),
-		state:    newBackgroundTransitionState(),
-	}
-	entry.mu.Lock()
-	entry.backgroundTransition = transition.state
-	entry.mu.Unlock()
-	result.PendingTransition = transition
+	result.PendingTransition = backgroundTransition
 	return result, nil
 }
 

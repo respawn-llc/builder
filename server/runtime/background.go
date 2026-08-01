@@ -448,6 +448,7 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		b.mu.Lock()
 		b.task = false
 		b.mu.Unlock()
+		b.ScheduleIfIdle()
 	}()
 	if _, err := b.runQueuedNotices(ctx, batch); err != nil {
 		if errors.Is(err, context.Canceled) {
