@@ -21,7 +21,6 @@ type sessionFeedSequencer struct {
 type sessionFeedSnapshot struct {
 	runtimeReadModel *clientui.RuntimeReadModelUpdate
 	activeReasoning  *clientui.TranscriptReasoningUpdate
-	activeStep       *clientui.TranscriptStepState
 	activeReviewer   *clientui.TranscriptReviewerState
 	activeCompaction *clientui.TranscriptCompactionStatus
 	queuedMessages   queuedMessageStateLedger
@@ -143,7 +142,7 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 		hydration.SessionIdentity = cloneTranscriptSessionIdentity(*s.sessionIdentity)
 	}
 	hydration.ActiveReasoning = cloneTranscriptReasoningUpdate(s.activeReasoning)
-	hydration.ActiveStep = cloneTranscriptStepState(s.activeStep)
+	hydration.ActiveStep = transcriptActiveStepFromRuntimeReadModel(*s.runtimeReadModel)
 	hydration.ActiveReviewer = cloneTranscriptReviewerState(s.activeReviewer)
 	hydration.ActiveCompaction = cloneTranscriptCompactionStatus(s.activeCompaction)
 	if s.inFlightTools.len() > 0 {
@@ -188,6 +187,20 @@ func cloneRuntimeReadModelUpdate(value clientui.RuntimeReadModelUpdate) clientui
 	return copied
 }
 
+func transcriptActiveStepFromRuntimeReadModel(update clientui.RuntimeReadModelUpdate) *clientui.TranscriptStepState {
+	active := update.Activity.ActiveStep
+	if active == nil {
+		return nil
+	}
+	return &clientui.TranscriptStepState{
+		RunID:      active.RunID,
+		StepID:     active.StepID,
+		Lifecycle:  clientui.StepLifecycleStarted,
+		ActiveKind: active.ActiveKind,
+		Status:     clientui.RunStatusRunning,
+	}
+}
+
 func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 	payload := message.Payload
 	switch message.Kind {
@@ -204,8 +217,6 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if payload.CommittedRow.Tool != nil {
 			s.inFlightTools.delete(payload.CommittedRow.Tool.ToolCallID)
 		}
-	case clientui.TranscriptMessageStepState:
-		s.applyStepState(*payload.StepState)
 	case clientui.TranscriptMessageReviewerState:
 		if payload.ReviewerState.State == clientui.ReviewerStateRunning {
 			s.activeReviewer = cloneTranscriptReviewerState(payload.ReviewerState)
@@ -245,25 +256,6 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		} else {
 			s.backgrounds.delete(background.ActivityID)
 		}
-	}
-}
-
-func (s *sessionFeedSnapshot) applyStepState(state clientui.TranscriptStepState) {
-	switch state.Lifecycle {
-	case clientui.StepLifecycleStarted:
-		copied := state
-		s.activeStep = &copied
-	case clientui.StepLifecycleFinished:
-		if s.activeStep != nil && s.activeStep.StepID != state.StepID {
-			panic(fmt.Sprintf(
-				"canonical transcript finished step %q while step %q is active",
-				state.StepID.String(),
-				s.activeStep.StepID.String(),
-			))
-		}
-		s.activeStep = nil
-	default:
-		panic(fmt.Sprintf("canonical transcript has unknown step lifecycle %q", state.Lifecycle))
 	}
 }
 
@@ -373,14 +365,6 @@ func cloneTranscriptReasoningUpdate(value *clientui.TranscriptReasoningUpdate) *
 		status := *value.CurrentStatus
 		copied.CurrentStatus = &status
 	}
-	return &copied
-}
-
-func cloneTranscriptStepState(value *clientui.TranscriptStepState) *clientui.TranscriptStepState {
-	if value == nil {
-		return nil
-	}
-	copied := *value
 	return &copied
 }
 

@@ -270,6 +270,40 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 }
 
+func TestTranscriptHydrationUsesCanonicalRuntimeActivityAfterStepEnds(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	publishRunState(registry, engine.SessionID(), true)
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:   runtime.EventRunStateChanged,
+		StepID: registryTestStepID,
+		RunState: &runtime.RunState{
+			Lifecycle:  runtime.RunningRunLifecycle(runtime.RunModeTurn),
+			RunID:      registryTestRunID,
+			ActiveKind: runtime.ActiveKindUserTurn,
+			Status:     runtime.RunStatusRunning,
+			StartedAt:  time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("publish running step state: %v", err)
+	}
+	publishRunState(registry, engine.SessionID(), false)
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	hydration := nextTranscriptMessage(t, sub)
+	if hydration.Payload.Hydration.ActiveStep != nil {
+		t.Fatalf(
+			"hydrated active step = %+v, want none after canonical runtime became idle",
+			hydration.Payload.Hydration.ActiveStep,
+		)
+	}
+}
+
 func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	sessionID := runtimeids.NewSessionID()

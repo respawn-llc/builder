@@ -90,6 +90,31 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 	}
 }
 
+func TestStartSessionTranscriptEventsSurfacesSubscriptionOpenFailure(t *testing.T) {
+	subscribeErr := errors.New("canonical hydration is invalid")
+	stream := startSessionTranscriptEvents(
+		context.Background(),
+		"session-1",
+		func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+			return nil, subscribeErr
+		},
+	)
+	defer stream.Stop()
+
+	failure := nextTranscriptEvent(t, stream.Events)
+	if failure.Kind != ongoingTranscriptEventFailure || !errors.Is(failure.Err, subscribeErr) {
+		t.Fatalf("subscription failure event = %+v, want terminal open failure", failure)
+	}
+	select {
+	case _, ok := <-stream.Events:
+		if ok {
+			t.Fatal("transcript event stream remained open after subscription failure")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transcript event stream did not close after subscription failure")
+	}
+}
+
 type recordingTranscriptSubscriber struct {
 	sessionIDs []string
 	subs       []*scriptedTranscriptSubscription

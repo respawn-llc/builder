@@ -13,6 +13,7 @@ type ongoingTranscriptEventKind string
 const (
 	ongoingTranscriptEventMessage ongoingTranscriptEventKind = "message"
 	ongoingTranscriptEventLoss    ongoingTranscriptEventKind = "loss"
+	ongoingTranscriptEventFailure ongoingTranscriptEventKind = "failure"
 )
 
 type ongoingTranscriptEvent struct {
@@ -45,8 +46,12 @@ func startSessionTranscriptEvents(
 	go func() {
 		defer close(out)
 		for {
-			sub, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe)
+			sub, err := subscribeSessionTranscript(pollCtx, sessionID, subscribe)
 			if err != nil {
+				if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && pollCtx.Err() != nil {
+					return
+				}
+				emitSessionTranscriptFailure(pollCtx, out, err)
 				return
 			}
 			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests, observers...)
@@ -135,25 +140,20 @@ func waitForTranscriptRehydrationRequest(ctx context.Context, requests <-chan st
 	}
 }
 
-func resubscribeSessionTranscript(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) (serverapi.TranscriptSubscription, error) {
-	for {
-		sub, err := subscribe(ctx, serverapi.TranscriptSubscribeRequest{SessionID: sessionID})
-		if err == nil {
-			return sub, nil
-		}
-		if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
-			return nil, err
-		}
-		emitWait := waitSubscriptionRetry(ctx)
-		if !emitWait {
-			return nil, ctx.Err()
-		}
-	}
+func subscribeSessionTranscript(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) (serverapi.TranscriptSubscription, error) {
+	return subscribe(ctx, serverapi.TranscriptSubscribeRequest{SessionID: sessionID})
 }
 
 func emitSessionTranscriptLoss(ctx context.Context, out chan<- ongoingTranscriptEvent, err error) {
 	select {
 	case <-ctx.Done():
 	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss, Err: err}:
+	}
+}
+
+func emitSessionTranscriptFailure(ctx context.Context, out chan<- ongoingTranscriptEvent, err error) {
+	select {
+	case <-ctx.Done():
+	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventFailure, Err: err}:
 	}
 }
