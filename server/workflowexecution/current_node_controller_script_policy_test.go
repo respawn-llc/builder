@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,6 +298,109 @@ func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, refer
 		r.started <- reference
 	}
 	return err
+}
+
+type finalizingBeforeLiveRunner struct {
+	authority *sessionruntime.Authority
+	fast      workflow.CurrentNodeReference
+	shellPath string
+	finalized <-chan struct{}
+	started   chan workflow.CurrentNodeReference
+}
+
+func (r *finalizingBeforeLiveRunner) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	command := sessionruntime.ScriptCommand{
+		Path: r.shellPath,
+		Args: []string{"-c", "while :; do sleep 1; done"},
+	}
+	if reference.Equal(r.fast) {
+		command.Args = []string{"-c", "exit 0"}
+		if _, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+			Workflow: &lease,
+			Command:  command,
+		}); err != nil {
+			return err
+		}
+		lease.Release()
+		select {
+		case <-r.finalized:
+			return nil
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  command,
+	})
+	if err == nil {
+		r.started <- reference
+	}
+	return err
+}
+
+func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	fast := currentNodeReferenceForControllerTest(t, "task-finalized-gate", "node-fast")
+	next := currentNodeReferenceForControllerTest(t, "task-after-finalized-gate", "node-next")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	finalized := make(chan struct{})
+	var finalizedOnce sync.Once
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+			finalizedOnce.Do(func() { close(finalized) })
+		}),
+	})
+	runner := &finalizingBeforeLiveRunner{
+		authority: authority,
+		fast:      fast,
+		shellPath: shellPath,
+		finalized: finalized,
+		started:   make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: fast,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, interrupted := store.interruption(fast)
+		return interrupted
+	}, "fast-finalized gated Agent was not cleaned up")
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: next,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case started := <-runner.started:
+		if !started.Equal(next) {
+			t.Fatalf("queued Agent start = %v, want %v", started, next)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued Agent did not start after gated finalization released capacity")
+	}
 }
 
 func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {

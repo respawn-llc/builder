@@ -18,14 +18,16 @@ type currentNodeAutomaticQueueLaneState struct {
 	last  *currentNodeAutomaticQueueEntry
 }
 
+type currentNodeAutomaticQueueLanes [2]currentNodeAutomaticQueueLaneState
+
 type currentNodeAutomaticTaskQueue struct {
-	lanes [2]currentNodeAutomaticQueueLaneState
+	lanes currentNodeAutomaticQueueLanes
 }
 
 type currentNodeAutomaticQueue struct {
 	first     *currentNodeAutomaticQueueEntry
 	last      *currentNodeAutomaticQueueEntry
-	lanes     [2]currentNodeAutomaticQueueLaneState
+	lanes     currentNodeAutomaticQueueLanes
 	tasks     map[workflow.TaskID]*currentNodeAutomaticTaskQueue
 	nextOrder uint64
 	size      int
@@ -53,12 +55,8 @@ func currentNodeAutomaticQueueLaneForPolicy(policy currentNodeAdmissionPolicy) c
 	}
 }
 
-func (q *currentNodeAutomaticQueue) lane(policy currentNodeAdmissionPolicy) *currentNodeAutomaticQueueLaneState {
-	return &q.lanes[currentNodeAutomaticQueueLaneForPolicy(policy)]
-}
-
-func (q *currentNodeAutomaticTaskQueue) lane(policy currentNodeAdmissionPolicy) *currentNodeAutomaticQueueLaneState {
-	return &q.lanes[currentNodeAutomaticQueueLaneForPolicy(policy)]
+func (lanes *currentNodeAutomaticQueueLanes) lane(policy currentNodeAdmissionPolicy) *currentNodeAutomaticQueueLaneState {
+	return &lanes[currentNodeAutomaticQueueLaneForPolicy(policy)]
 }
 
 func (q *currentNodeAutomaticQueue) append(start currentNodeQueuedStart) {
@@ -86,8 +84,8 @@ func (q *currentNodeAutomaticQueue) append(start currentNodeQueuedStart) {
 		taskQueue = &currentNodeAutomaticTaskQueue{}
 		q.tasks[start.reference.TaskID] = taskQueue
 	}
-	policyLane := q.lane(start.policy)
-	taskLane := taskQueue.lane(start.policy)
+	policyLane := q.lanes.lane(start.policy)
+	taskLane := taskQueue.lanes.lane(start.policy)
 	entry.policyPrev = policyLane.last
 	entry.taskPrev = taskLane.last
 	if policyLane.last == nil {
@@ -121,8 +119,8 @@ func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry
 	if taskQueue == nil {
 		panic("automatic queue task index lost an entry")
 	}
-	policyLane := q.lane(entry.start.policy)
-	taskLane := taskQueue.lane(entry.start.policy)
+	policyLane := q.lanes.lane(entry.start.policy)
+	taskLane := taskQueue.lanes.lane(entry.start.policy)
 	if entry.policyPrev == nil {
 		policyLane.first = entry.policyNext
 	} else {
@@ -154,7 +152,7 @@ func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry
 func (q *currentNodeAutomaticQueue) clear() {
 	q.first = nil
 	q.last = nil
-	q.lanes = [2]currentNodeAutomaticQueueLaneState{}
+	q.lanes = currentNodeAutomaticQueueLanes{}
 	q.tasks = nil
 	q.nextOrder = 0
 	q.size = 0
@@ -167,10 +165,10 @@ func (q *currentNodeAutomaticQueue) len() int {
 func (q *currentNodeAutomaticQueue) selectEntry(lastTask *workflow.TaskID, agentAvailable bool) (*currentNodeAutomaticQueueEntry, bool) {
 	if lastTask != nil {
 		if taskQueue := q.tasks[*lastTask]; taskQueue != nil {
-			script := taskQueue.lane(currentNodeAdmissionAutomaticScript).first
+			script := taskQueue.lanes.lane(currentNodeAdmissionAutomaticScript).first
 			candidate := script
 			if agentAvailable {
-				agent := taskQueue.lane(currentNodeAdmissionAutomaticAgent).first
+				agent := taskQueue.lanes.lane(currentNodeAdmissionAutomaticAgent).first
 				if agent != nil && (candidate == nil || agent.order < candidate.order) {
 					candidate = agent
 				}
@@ -180,11 +178,11 @@ func (q *currentNodeAutomaticQueue) selectEntry(lastTask *workflow.TaskID, agent
 			}
 		}
 	}
-	script := q.lane(currentNodeAdmissionAutomaticScript).first
+	script := q.lanes.lane(currentNodeAdmissionAutomaticScript).first
 	if !agentAvailable {
 		return script, script != nil
 	}
-	agent := q.lane(currentNodeAdmissionAutomaticAgent).first
+	agent := q.lanes.lane(currentNodeAdmissionAutomaticAgent).first
 	if agent == nil {
 		return script, script != nil
 	}

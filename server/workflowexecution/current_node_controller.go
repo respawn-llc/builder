@@ -650,6 +650,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	starts := append([]currentNodeQueuedStart(nil), c.heldStarts[scope.ID()]...)
 	delete(c.heldStarts, scope.ID())
 	if gate, gated := c.gates[key]; gated && gate.lease.ScopeID() == scope.ID() {
+		c.releaseAgentCapacityLocked(gate.agentCapacityLease)
 		delete(c.gates, key)
 	}
 	interrupted := c.interrupts.scopeFenced(scope.ID())
