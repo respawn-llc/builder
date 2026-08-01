@@ -677,6 +677,10 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
 			key := strings.TrimSpace(*transition)
 			if key == "" {
+				if flagExplicit(fs, "transition") {
+					fmt.Fprintln(stderr, "task move --transition cannot be blank")
+					return 2
+				}
 				if len(preview.Transition.Choices) != 1 {
 					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
 					return 2

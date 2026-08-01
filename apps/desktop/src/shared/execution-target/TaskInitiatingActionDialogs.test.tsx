@@ -69,7 +69,7 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(screen.queryByTestId("dependency-confirmation-view")).not.toBeInTheDocument();
   });
 
-  it("closes target selection and returns the selected target without executing it", async () => {
+  it("keeps target selection while the selected target action is submitted", async () => {
     const execute = vi.fn<ExecuteStub>().mockResolvedValue({
       kind: "start",
       response: {
@@ -95,7 +95,7 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(result.action.proceedDespiteDependencies).toBe(false);
     expect(result.selection).toEqual({ mode: "default_branch", customRef: null });
     expect(execute).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
   });
 });
 

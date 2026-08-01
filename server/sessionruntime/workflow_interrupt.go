@@ -20,7 +20,10 @@ type WorkflowInterruptSelection struct {
 	Finalizing    []ExecutionHandle
 }
 
-var ErrWorkflowQuestionPending = errors.New("workflow task has a pending question")
+var (
+	ErrWorkflowQuestionPending = errors.New("workflow task has a pending question")
+	ErrWorkflowApprovalPending = errors.New("workflow task has a pending session approval")
+)
 
 // WithWorkflowManualMoveSelection atomically selects every exact workflow
 // execution for a Task and closes Question admission before releasing
@@ -73,9 +76,24 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		}
 	}
 	for _, execution := range running {
-		if len(execution.prompts.pending) != 0 {
+		hasQuestion := false
+		hasApproval := false
+		for _, entry := range execution.prompts.pending {
+			if entry == nil {
+				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
+			}
+			if entry.snapshot.Request.Approval {
+				hasApproval = true
+			} else {
+				hasQuestion = true
+			}
+		}
+		if hasQuestion || hasApproval {
 			for _, locked := range running {
 				locked.prompts.mu.Unlock()
+			}
+			if hasApproval {
+				return ErrWorkflowApprovalPending
 			}
 			return ErrWorkflowQuestionPending
 		}

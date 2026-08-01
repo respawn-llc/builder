@@ -177,6 +177,32 @@ func TestTaskMoveAutoSelectsSoleTransition(t *testing.T) {
 	}
 }
 
+func TestTaskMoveRejectsExplicitBlankTransition(t *testing.T) {
+	allowHumanTaskActionForTest(t)
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{
+				Choices: []serverapi.WorkflowTaskMovePreviewTransitionChoice{{
+					TransitionKey:         "next",
+					Label:                 "Next",
+					SourceNodeDisplayName: "Plan",
+					RequiredValues:        []serverapi.WorkflowTaskMoveRequiredValue{},
+				}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{
+		"move", "task-1", "implement", "--transition", " \t",
+	}, &stdout, &stderr)
+	if exitCode != 2 || stdout.Len() != 0 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+}
+
 func TestTaskMoveForwardsExtraValueNodeToServerValidation(t *testing.T) {
 	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{

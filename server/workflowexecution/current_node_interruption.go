@@ -305,6 +305,9 @@ func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, task
 		if errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
 			return err
 		}
+		if errors.Is(err, sessionruntime.ErrWorkflowApprovalPending) {
+			return ErrManualMoveLifecycleConflict
+		}
 		return err
 	}
 	if len(stopHandles) == 0 {

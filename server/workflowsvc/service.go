@@ -901,8 +901,9 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: true,
 		targetPreflight:         preflight.target,
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
-		return s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.StartTaskResult, error) {
+		started, err := s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+		return &started, err
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
@@ -931,7 +932,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}, nil
 }
 
-func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (T, error)) (initiatingActionResult[T], error) {
+func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
 	var candidate *workflowstore.ExecutionTargetCandidate
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
@@ -950,9 +951,15 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	}
 	applied, err := apply(candidate)
 	if err != nil {
+		// A mutation may commit before its post-commit lifecycle work fails.
+		// Preserve that result so the operation owner can publish and finalize
+		// the durable mutation instead of reporting it as unapplied.
+		if applied != nil {
+			return initiatingActionResult[T]{applied: applied}, err
+		}
 		return initiatingActionResult[T]{}, err
 	}
-	return initiatingActionResult[T]{applied: &applied}, nil
+	return initiatingActionResult[T]{applied: applied}, nil
 }
 
 func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID workflow.TaskID, explicit *serverapi.WorkflowExecutionTargetSelection) (initiatingActionTargetPreflight, error) {
@@ -1414,10 +1421,15 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		afterTargetResolution: func() error {
 			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID)
 		},
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
-		return s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
+		moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
+		if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
+			moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
+			return nil, err
+		}
+		return &moved, err
 	})
-	if err != nil {
+	if err != nil && coordinated.applied == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if coordinated.selectionRequired != nil {

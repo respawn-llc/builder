@@ -281,17 +281,17 @@ func (c *CurrentNodeController) ApplyManualMove(
 		}
 		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
 		if err != nil {
-			return workflowstore.ManualMoveResult{}, err
+			return moved, err
 		}
 		starts, err = c.steerAndWaitStarts(ctx, starts)
 		if err != nil {
-			return workflowstore.ManualMoveResult{}, err
+			return moved, err
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, start := range starts {
 			if err := c.queueExplicitStartLocked(start); err != nil {
-				return workflowstore.ManualMoveResult{}, err
+				return moved, err
 			}
 		}
 		return moved, nil
