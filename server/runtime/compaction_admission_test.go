@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -134,6 +135,78 @@ func TestManualCompactionRechecksEligibilityAfterQueuedRunNextOwnership(t *testi
 				t.Fatalf("provider compaction calls = %d, want zero after ownership recheck", len(client.compactionCalls))
 			}
 		})
+	}
+}
+
+func TestQueuedManualCompactionsRecheckEligibilitySerially(t *testing.T) {
+	store := mustCreateTestSession(t)
+	appendAgentStepBoundaryForEligibilityTest(t, store, "queued-repeat-seed")
+	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
+		remoteCompactionReplacement(1_000, 100, 200_000),
+		remoteCompactionReplacement(1_000, 100, 200_000),
+	}}
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	lifecycle := engine.stepLifecycle.(*defaultExclusiveStepLifecycle)
+
+	maintenanceStarted := make(chan struct{})
+	releaseMaintenance := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- lifecycle.Run(
+			context.Background(),
+			exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance},
+			func(context.Context, string) error {
+				close(maintenanceStarted)
+				<-releaseMaintenance
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-maintenanceStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance run did not start")
+	}
+
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		firstDone <- engine.CompactContext(context.Background(), "")
+	}()
+	go func() {
+		secondDone <- engine.CompactContext(context.Background(), "")
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		lifecycle.mu.Lock()
+		waiters := len(lifecycle.nextWaiters)
+		lifecycle.mu.Unlock()
+		if waiters == 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	lifecycle.mu.Lock()
+	waiters := len(lifecycle.nextWaiters)
+	lifecycle.mu.Unlock()
+	if waiters != 2 {
+		t.Fatalf("queued manual RunNext waiters = %d, want 2", waiters)
+	}
+	close(releaseMaintenance)
+	if err := <-maintenanceDone; err != nil {
+		t.Fatalf("maintenance run: %v", err)
+	}
+	firstErr := <-firstDone
+	secondErr := <-secondDone
+	if (firstErr == nil) == (secondErr == nil) {
+		t.Fatalf("queued manual results = first:%v second:%v, want exactly one success", firstErr, secondErr)
+	}
+	assertManualCompactionAdmissionReason(t, errors.Join(firstErr, secondErr), ManualCompactionAdmissionReasonTooSoon)
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.compactionCalls) != 1 {
+		t.Fatalf("provider compaction calls = %d, want one", len(client.compactionCalls))
 	}
 }
 
