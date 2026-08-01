@@ -6,7 +6,6 @@ import {
   hasSelectedWorkflow,
   type BoardColumn,
   type SelectedWorkflowBoard,
-  type WorkflowExecutionTargetSelection,
 } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
@@ -18,11 +17,8 @@ import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
-  executeTaskInitiatingAction,
   startTaskInitiatingAction,
-  type TaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
-  useTaskInitiatingActionController,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
@@ -40,6 +36,7 @@ import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
 import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
+import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
 import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
@@ -243,37 +240,6 @@ function BoardContent({
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const refreshBoard = actions.refresh;
-  const executeInitiatingAction = useCallback(
-    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection) =>
-      executeTaskInitiatingAction(api, action, selection),
-    [api],
-  );
-  const onInitiatingActionApplied = useCallback(async () => {
-    await refreshBoard();
-  }, [refreshBoard]);
-  const onInitiatingActionAppliedError = useCallback(
-    (error: unknown) => {
-      push({
-        body: errorMessage(error),
-        durationMs: Infinity,
-        id: "board-action-refresh-error",
-        title: t("board.loadFailed"),
-        tone: "danger",
-      });
-    },
-    [push, t],
-  );
-  const initiatingAction = useTaskInitiatingActionController({
-    execute: executeInitiatingAction,
-    onApplied: onInitiatingActionApplied,
-    onAppliedError: onInitiatingActionAppliedError,
-  });
-  const {
-    pending: initiatingActionPending,
-    run: runInitiatingAction,
-    running: initiatingActionRunning,
-  } = initiatingAction;
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
       const body = errorMessage(error);
@@ -305,30 +271,16 @@ function BoardContent({
     },
     [push, t],
   );
-  const clearPendingCardMove = useCallback((pendingMove: PendingBoardCardMove) => {
-    setPendingCardMove((current) =>
-      current?.taskID === pendingMove.taskID && current.targetColumnID === pendingMove.targetColumnID
-        ? null
-        : current,
-    );
-  }, []);
-  const runCardAction = useCallback(
-    (
-      action: TaskInitiatingAction,
-      pendingMove: PendingBoardCardMove,
-      selection?: WorkflowExecutionTargetSelection,
-    ): void => {
-      setPendingCardMove(pendingMove);
-      void runInitiatingAction(action, selection)
-        .catch(action.kind === "start" ? reportStartError : reportMoveError)
-        .finally(() => {
-          clearPendingCardMove(pendingMove);
-        });
-    },
-    [clearPendingCardMove, reportMoveError, reportStartError, runInitiatingAction],
-  );
-  const actionsDisabled =
-    connection.phase !== "connected" || initiatingActionRunning || initiatingActionPending !== null;
+  const { actionsDisabled, initiatingAction, runCardAction } = useBoardInitiatingActionController({
+    api,
+    connected: connection.phase === "connected",
+    moveErrorTitle: t("board.moveFailed"),
+    onActionError: reportActionError,
+    onApplied: actions.refresh,
+    onPendingMoveChange: setPendingCardMove,
+    refreshErrorTitle: t("board.loadFailed"),
+    startErrorTitle: t("board.startFailed"),
+  });
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,

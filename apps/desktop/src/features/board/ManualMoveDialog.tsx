@@ -288,10 +288,10 @@ function ManualMoveDetailsPhase({
         <p className="m-0 text-[var(--color-muted)]">{t("board.manualMoveConfirmBody")}</p>
       ) : (
         <div className="grid gap-[var(--space-4)]">
-          {requiredValues.map((value) => (
+          {requiredValues.map((value, index) => (
             <TextArea
               key={`${value.nodeKey}:${value.outputName}`}
-              label={t("board.manualMoveValueLabel")}
+              label={t("board.manualMoveValueLabel", { index: index + 1 })}
               hint={value.description}
               onChange={(event) => {
                 onValueChange(value.nodeKey, value.outputName, event.target.value);
