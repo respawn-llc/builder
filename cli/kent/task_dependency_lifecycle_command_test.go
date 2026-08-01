@@ -38,6 +38,13 @@ func (r *taskDependencyLifecycleRemote) MoveWorkflowTask(_ context.Context, req 
 	return r.moveResponse, nil
 }
 
+func (r *taskDependencyLifecycleRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
+	return serverapi.WorkflowTaskMovePreviewResponse{
+		Outcome: serverapi.WorkflowTaskMovePreviewOutcomeDirect,
+		Direct:  &serverapi.WorkflowTaskMovePreviewDirect{},
+	}, nil
+}
+
 func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
 	return canceledWorktreeSetupSubscription{}, nil
 }
@@ -108,45 +115,11 @@ func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *tes
 	}
 }
 
-func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
-	count := 1
-	remote := &taskDependencyLifecycleRemote{
-		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome:                    serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired,
-			UnsatisfiedDependencyCount: &count,
-		},
-	}
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout, stderr bytes.Buffer
-	exitCode := taskMoveSubcommand(
-		[]string{"task-1", "node-2", "--ignore-dependencies", "--json"},
-		&stdout,
-		&stderr,
-	)
-
-	if exitCode != 1 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
-	}
-	if !remote.moveRequests[0].ProceedDespiteDependencies {
-		t.Fatalf("move request=%+v", remote.moveRequests[0])
-	}
-	var output serverapi.WorkflowTaskMoveResponse
-	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
-		t.Fatalf("decode JSON: %v", err)
-	}
-	if output.Outcome != serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired ||
-		output.UnsatisfiedDependencyCount == nil || *output.UnsatisfiedDependencyCount != 1 {
-		t.Fatalf("JSON output=%+v", output)
-	}
-}
-
 func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 			Applied: &serverapi.WorkflowTaskMoveApplied{
 				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
 			},
@@ -164,7 +137,7 @@ func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if output.Outcome != serverapi.WorkflowTaskActionOutcomeApplied ||
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
 		output.Applied == nil || len(output.Applied.CurrentNodes) != 1 {
 		t.Fatalf("JSON output=%+v", output)
 	}

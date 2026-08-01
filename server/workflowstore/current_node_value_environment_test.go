@@ -128,7 +128,7 @@ func TestCompleteCurrentNodeUsesTransitionParametersInsteadOfTargetInputFields(t
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
-			workflow.EdgeID("edge-review-"+string(workflowID)),
+			workflow.EdgeID("edge-review-"+workflowID.String()),
 		).PromptTemplate = "Review {{.Params.summary}}."
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -164,14 +164,14 @@ func TestCompleteCurrentNodePreservesPathSpecificPriorParametersAcrossLoop(t *te
 		auditEdge := workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
-			workflow.EdgeID("edge-audit-"+string(workflowID)),
+			workflow.EdgeID("edge-audit-"+workflowID.String()),
 		)
 		auditEdge.PromptTemplate = "Audit {{.Params.summary}}."
 		auditEdge.Parameters = []workflow.Parameter{{
 			Key:         "summary",
 			Description: "Audit findings.",
 		}}
-		reworkGroupID := workflow.TransitionGroupID("group-rework-" + string(workflowID))
+		reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           reworkGroupID,
 			WorkflowID:   workflowID,
@@ -180,7 +180,7 @@ func TestCompleteCurrentNodePreservesPathSpecificPriorParametersAcrossLoop(t *te
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",
@@ -230,8 +230,8 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		synth := nodeByKey(t, def, "synth")
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		auditID := workflow.NodeID("node-audit-" + string(workflowID))
-		auditGroupID := workflow.TransitionGroupID("group-audit-" + string(workflowID))
+		auditID := workflow.NodeID("node-audit-" + workflowID.String())
+		auditGroupID := workflow.TransitionGroupID("group-audit-" + workflowID.String())
 		req.Nodes = append(req.Nodes, NodeRecord{
 			ID:             auditID,
 			WorkflowID:     workflowID,
@@ -244,7 +244,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
-			workflow.EdgeID("edge-join-synth-"+string(workflowID)),
+			workflow.EdgeID("edge-join-synth-"+workflowID.String()),
 		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}}."
 		for index := range req.TransitionGroups {
 			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(synth) {
@@ -253,7 +253,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 			}
 		}
 		for index := range req.Edges {
-			if req.Edges[index].TransitionGroupID != workflow.TransitionGroupID("group-synth-done-"+string(workflowID)) {
+			if req.Edges[index].TransitionGroupID != workflow.TransitionGroupID("group-synth-done-"+workflowID.String()) {
 				continue
 			}
 			req.Edges[index].Key = "audit"
@@ -268,7 +268,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 			DisplayName:  "Done",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-audit-done-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-audit-done-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: auditGroupID,
 			Key:               "done",
@@ -339,15 +339,15 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		branchCID := workflow.NodeID("node-impl-c-" + string(workflowID))
-		branchCGroupID := workflow.TransitionGroupID("group-join-c-" + string(workflowID))
+		branchCID := workflow.NodeID("node-impl-c-" + workflowID.String())
+		branchCGroupID := workflow.TransitionGroupID("group-join-c-" + workflowID.String())
 		synth := nodeByKey(t, def, "synth")
 		synthRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(synth))
 		synthRecord.InputFields = nil
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
-			workflow.EdgeID("edge-join-synth-"+string(workflowID)),
+			workflow.EdgeID("edge-join-synth-"+workflowID.String()),
 		).PromptTemplate = "Synthesize {{.Params.joined}} {{.Params.compliance_findings}}."
 		req.Nodes = append(req.Nodes, NodeRecord{
 			ID:             branchCID,
@@ -367,16 +367,16 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 		})
 		req.Edges = append(req.Edges,
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-split-c-" + string(workflowID)),
+				ID:                workflow.EdgeID("edge-split-c-" + workflowID.String()),
 				WorkflowID:        workflowID,
-				TransitionGroupID: workflow.TransitionGroupID("group-split-" + string(workflowID)),
+				TransitionGroupID: workflow.TransitionGroupID("group-split-" + workflowID.String()),
 				Key:               "split_c",
 				TargetNodeID:      branchCID,
 				ContextMode:       workflow.ContextModeNewSession,
 				PromptTemplate:    "C.",
 			},
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-join-c-" + string(workflowID)),
+				ID:                workflow.EdgeID("edge-join-c-" + workflowID.String()),
 				WorkflowID:        workflowID,
 				TransitionGroupID: branchCGroupID,
 				Key:               "join_c",
@@ -437,7 +437,7 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 	}
 }
 
-func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Materialized Current Node Values"})
 	if err != nil {

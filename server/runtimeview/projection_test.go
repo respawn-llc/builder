@@ -188,7 +188,10 @@ func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T
 		},
 	)
 
-	status := TranscriptSessionStatusFromRuntime(eng)
+	status, err := TranscriptSessionStatusFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("TranscriptSessionStatusFromRuntime: %v", err)
+	}
 	if status.FastModeAvailable {
 		t.Fatal("expected transcript status to report fast mode unavailable")
 	}

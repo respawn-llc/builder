@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/workflowcontract"
 )
@@ -596,6 +597,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	transition := fs.String("transition", "", "workflow Transition key")
 	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
 	valuesFile := fs.String("values-file", "", "read nested Node/output values from a JSON file")
+	jsonOut := fs.Bool("json", false, "write the typed move outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -640,7 +642,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
-			if flagWasProvided(fs, "transition") || len(values) != 0 {
+			if flagExplicit(fs, "transition") || len(values) != 0 {
 				fmt.Fprintln(stderr, "task move no-op does not accept --transition or --values-json/--values-file")
 				return 2
 			}
@@ -653,7 +655,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 0
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeDirect {
-			if flagWasProvided(fs, "transition") || len(values) != 0 {
+			if flagExplicit(fs, "transition") || len(values) != 0 {
 				fmt.Fprintln(stderr, "direct task move does not accept --transition or --values-json/--values-file")
 				return 2
 			}
@@ -709,15 +711,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-			} else {
-				writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
-			}
-			return 1
-		}
-		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeSelectionRequired {
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
 			if *jsonOut {
 				_ = writeCommandJSON(stdout, stderr, resp)
 			} else {
@@ -734,7 +728,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			writeTaskLifecycleResult(stdout, "No-op move", detail)
 			return 0
 		}
-		if _, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied); err != nil {
+		if _, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -847,13 +841,9 @@ func flagValueProvided(value string) bool {
 	return strings.TrimSpace(value) != ""
 }
 
-func workflowActionRequiresExecutionTargetSelection(
-	stderr io.Writer,
-	outcome serverapi.WorkflowExecutionTargetActionOutcome,
-	requirement *serverapi.WorkflowExecutionTargetSelectionRequirement,
-) bool {
-	if outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		return false
+func writeTaskDependencyConfirmationRequired(stderr io.Writer, taskRef string, count *int) {
+	if count == nil {
+		panic("dependency confirmation outcome requires an unsatisfied dependency count")
 	}
 	fmt.Fprintf(stderr, "Task %s has %d unsatisfied dependencies.\n", taskRef, *count)
 	fmt.Fprintf(stderr, "Review them with `%s task show %s`.\n", config.Command, taskRef)

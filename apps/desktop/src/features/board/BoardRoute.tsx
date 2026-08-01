@@ -7,6 +7,7 @@ import {
   type BoardColumn,
   type SelectedWorkflowBoard,
   type TaskMovePreviewResponse,
+  type WorkflowExecutionTargetSelection,
 } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
@@ -41,6 +42,7 @@ import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
 import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog, type ManualMoveDialogSubmit } from "./ManualMoveDialog";
+import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
@@ -521,7 +523,7 @@ function BoardContent({
       ...(input.values === undefined ? {} : { values: input.values }),
     };
     runCardAction(
-      moveExecutionTargetAction(moveInput),
+      moveTaskInitiatingAction(moveInput),
       { taskID: drop.taskID, targetColumnID: drop.targetNodeID },
     );
   }

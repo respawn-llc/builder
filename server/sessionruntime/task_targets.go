@@ -42,6 +42,42 @@ type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
 }
 
+// WithWorkflowTaskExecutionSnapshots runs operation while the Authority live
+// state lock is held. The callback may acquire the Workflow Execution
+// Controller lock, which establishes the Authority-before-Controller order
+// required for lifecycle observations. It must not call back into Authority.
+func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workflow.TaskID]TaskExecutionSnapshot) error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if operation == nil {
+		return errors.New("workflow task execution snapshot operation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		return err
+	}
+	return operation(snapshots)
+}
+
+func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	var snapshotErr error
+	a.forEachWorkflowExecutionLocked(func(execution *execution) {
+		if snapshotErr != nil {
+			return
+		}
+		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+	})
+	if snapshotErr != nil {
+		return nil, snapshotErr
+	}
+	sortTaskExecutionSnapshots(snapshots)
+	return snapshots, nil
+}
+
 type WorkflowTaskExecutionState struct {
 	Running          int
 	WaitingQuestions int
@@ -82,7 +118,7 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 	return state, nil
 }
 
-func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID workflow.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
+func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
 	if err != nil {
 		return TaskExecutionSnapshot{}, err

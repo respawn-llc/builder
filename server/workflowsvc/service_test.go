@@ -300,7 +300,7 @@ func TestServiceTaskStartRequiresSelectionWithoutApplyingAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired ||
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeSelectionRequired ||
 		response.Applied != nil ||
 		response.SelectionRequired == nil ||
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection {
@@ -781,7 +781,7 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("start response = %+v, want applied", response)
 	}
 	if len(response.Applied.CurrentNodes) != 1 || strings.TrimSpace(response.Applied.CurrentNodes[0].NodeID) == "" {
@@ -853,7 +853,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("start response = %+v, want applied", response)
 	}
 	if infrastructure.resolveSelection.Mode != workflow.ExecutionTargetModeHead ||
@@ -929,7 +929,7 @@ func TestServiceTaskStartReturnsSelectionWhenConfiguredTargetIsUnavailable(t *te
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired ||
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeSelectionRequired ||
 		response.Applied != nil ||
 		response.SelectionRequired == nil ||
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable ||

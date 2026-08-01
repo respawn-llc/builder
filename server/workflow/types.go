@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/workflowcontract"
 )
 

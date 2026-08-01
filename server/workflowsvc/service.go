@@ -909,7 +909,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}
 	if coordinated.selectionRequired != nil {
 		return serverapi.WorkflowTaskStartResponse{
-			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
 			SelectionRequired: coordinated.selectionRequired,
 		}, nil
 	}
@@ -924,7 +924,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID)
 	}
 	return serverapi.WorkflowTaskStartResponse{
-		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskStartApplied{
 			CurrentNodes: workflowCurrentNodes(started.Mutation.Created),
 		},
@@ -1387,11 +1387,18 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			return serverapi.WorkflowTaskMoveResponse{}, err
 		}
 	}
-	prepared := preflight.preparation
+	var targetPreflight initiatingActionTargetPreflight
+	if prepared.RequiresExecutionTarget() {
+		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
+		if err != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+	}
 	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
 		taskID:                  moveRequest.TaskID,
 		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
+		targetPreflight:         targetPreflight,
 		afterTargetResolution: func() error {
 			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID)
 		},
@@ -1403,7 +1410,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}
 	if coordinated.selectionRequired != nil {
 		return serverapi.WorkflowTaskMoveResponse{
-			Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
+			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
 			SelectionRequired: coordinated.selectionRequired,
 		}, nil
 	}
@@ -1427,7 +1434,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID)
 	}
 	return serverapi.WorkflowTaskMoveResponse{
-		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
 			CurrentNodes: workflowCurrentNodes(moved.Mutation.Created),
 		},

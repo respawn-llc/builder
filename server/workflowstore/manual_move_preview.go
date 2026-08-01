@@ -10,6 +10,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type ManualMovePreviewOutcome string
@@ -138,7 +139,7 @@ func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req
 			}, nil
 		}
 	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMovePreview{}, err
 	}

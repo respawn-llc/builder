@@ -51,7 +51,7 @@ export function useTaskInitiatingActionController({
   const initialRunRef = useRef<Promise<void> | null>(null);
 
   const handleResult = useCallback(
-    async (result: ExecutionTargetActionResult): Promise<void> => {
+    async (result: TaskInitiatingActionResult): Promise<void> => {
       if (result.response.outcome === "applied" || result.response.outcome === "no_op") {
         setPending(null);
         try {

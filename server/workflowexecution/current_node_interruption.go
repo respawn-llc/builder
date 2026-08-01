@@ -225,9 +225,9 @@ func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, task
 					return errors.New("manual move interruption selection does not match controller ownership")
 				}
 			}
-			for _, intent := range c.automaticQueue {
-				if intent.CurrentNode.TaskID == taskID {
-					if _, err := intent.CurrentNode.Key(); err != nil {
+			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+				if entry.start.reference.TaskID == taskID {
+					if _, err := entry.start.reference.Key(); err != nil {
 						return err
 					}
 				}
@@ -315,12 +315,16 @@ func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, task
 		handle.RequestStop()
 	}
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		return interruptCurrentNodeReferences(
+		_, err := interruptCurrentNodeReferences(
 			ctx,
 			c.store.InterruptCurrentNode,
 			references,
 			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.CurrentNodeInterruptionDetail{
+				Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+			},
 		)
+		return err
 	})
 	var waitErrs []error
 	for _, handle := range waitHandles {
@@ -366,8 +370,8 @@ func appendAdmissionWait(
 }
 
 func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
-	for _, intent := range c.automaticQueue {
-		if intent.CurrentNode.TaskID == taskID {
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		if entry.start.reference.TaskID == taskID {
 			return true
 		}
 	}
@@ -431,22 +435,23 @@ func drainTaskControllerWorkLocked(
 	}
 	c.explicitQueue = explicitQueue
 
-	automaticQueue := c.automaticQueue[:0]
-	for _, intent := range c.automaticQueue {
-		if intent.CurrentNode.TaskID != taskID {
-			automaticQueue = append(automaticQueue, intent)
+	for entry := c.automaticQueue.first; entry != nil; {
+		next := entry.globalNext
+		if entry.start.reference.TaskID != taskID {
+			entry = next
 			continue
 		}
-		key, err := intent.CurrentNode.Key()
+		start := c.automaticQueue.remove(entry)
+		key, err := start.reference.Key()
 		if err != nil {
 			panic(fmt.Sprintf("drain manual move automatic queue: %v", err))
 		}
 		delete(c.queued, key)
 		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, intent.CurrentNode)
+		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+		entry = next
 	}
-	c.automaticQueue = automaticQueue
 
 	for sourceScope, starts := range c.heldStarts {
 		kept := starts[:0]
@@ -484,6 +489,7 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		delete(c.automaticReservations, key)
+		c.releaseAgentCapacityLocked(start.agentCapacityLease)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)

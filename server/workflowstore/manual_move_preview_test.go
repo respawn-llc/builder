@@ -130,7 +130,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		plan := nodeByKey(t, def, "plan")
 		target := nodeByKey(t, def, "implement")
-		groupID := workflow.TransitionGroupID("group-alternate-" + string(workflowID))
+		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -139,7 +139,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + string(workflowID)),
+			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -221,12 +221,12 @@ func TestManualMovePreviewRejectsFieldsForDirectDestinations(t *testing.T) {
 func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	detailAID := workflow.NodeID("node-detail-a-" + string(workflowID))
-	detailBID := workflow.NodeID("node-detail-b-" + string(workflowID))
-	joinAGroupID := workflow.TransitionGroupID("group-join-a-" + string(workflowID))
-	joinBGroupID := workflow.TransitionGroupID("group-join-b-" + string(workflowID))
-	detailAGroupID := workflow.TransitionGroupID("group-detail-a-" + string(workflowID))
-	detailBGroupID := workflow.TransitionGroupID("group-detail-b-" + string(workflowID))
+	detailAID := workflow.NodeID("node-detail-a-" + workflowID.String())
+	detailBID := workflow.NodeID("node-detail-b-" + workflowID.String())
+	joinAGroupID := workflow.TransitionGroupID("group-join-a-" + workflowID.String())
+	joinBGroupID := workflow.TransitionGroupID("group-join-b-" + workflowID.String())
+	detailAGroupID := workflow.TransitionGroupID("group-detail-a-" + workflowID.String())
+	detailBGroupID := workflow.TransitionGroupID("group-detail-b-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		implA := nodeByKey(t, def, "impl_a")
 		implB := nodeByKey(t, def, "impl_b")
@@ -246,8 +246,8 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 			TransitionGroupRecord{ID: detailBGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implB), TransitionID: "detail_b", DisplayName: "Detail"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-detail-a-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
-			EdgeRecord{ID: workflow.EdgeID("edge-detail-b-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B."},
+			EdgeRecord{ID: workflow.EdgeID("edge-detail-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
+			EdgeRecord{ID: workflow.EdgeID("edge-detail-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B."},
 		)
 		_ = join
 	})

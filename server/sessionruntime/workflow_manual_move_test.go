@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 
@@ -22,7 +23,7 @@ func TestAuthorityManualMoveSelectionClosesPromptAdmissionBeforeRelease(t *testi
 	taskID := workflow.TaskID("task-manual-move-prompt-close")
 	ref := WorkflowExecutionRef{
 		ProjectID:   "project-manual-move",
-		WorkflowID:  "workflow-manual-move",
+		WorkflowID:  testsetup.WorkflowID(t, "workflow-manual-move"),
 		CurrentNode: mustWorkflowCurrentNodeReference(t, taskID, "node-running"),
 	}
 	lease, err := authority.NewWorkflowExecutionLease(ref)

@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"errors"
 	"testing"
 
 	"core/server/workflow"
@@ -88,11 +89,12 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
-		OutputValues: map[string]string{"unknown": "value"},
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"unknown": "value"},
+		},
 	})
-	var validationErr CompletionValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("PrepareManualMove error = %T %v, want CompletionValidationError", err, err)
+	if !errors.Is(err, ErrManualMoveValuesInvalid) {
+		t.Fatalf("PrepareManualMove error = %T %v, want ErrManualMoveValuesInvalid", err, err)
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
@@ -118,7 +120,9 @@ func TestPrepareManualMoveDryRunsTargetValueAndContextMaterialization(t *testing
 	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
-		OutputValues: map[string]string{"prior_summary": "manual plan"},
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "manual plan"},
+		},
 	}); err == nil {
 		t.Fatal("PrepareManualMove accepted a target whose required continuation context could not be materialized")
 	}

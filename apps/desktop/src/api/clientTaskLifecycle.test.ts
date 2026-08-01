@@ -62,7 +62,7 @@ describe("task lifecycle client", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.startTask("task-1")).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-1" }] } });
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-1" }] } });
     await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-2" }] } });
     await expect(client.previewMoveTask("task-1", "node-2")).resolves.toEqual({
       outcome: "transition",

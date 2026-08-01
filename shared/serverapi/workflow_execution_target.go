@@ -402,12 +402,6 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 		}
 		return r.SelectionRequired.Validate()
 	}
-	if r.Outcome == WorkflowTaskActionOutcomeDependencyConfirmationRequired {
-		if r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
-			return errors.New("move action response dependency confirmation outcome requires only a positive count")
-		}
-		return nil
-	}
 	return errors.New("move action response outcome is invalid")
 }
 

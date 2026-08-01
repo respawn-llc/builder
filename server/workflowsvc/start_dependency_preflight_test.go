@@ -115,63 +115,6 @@ func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *test
 	}
 }
 
-func TestExecutableManualMoveDependencyPreflightWarnsBeforeTargetAndProceedReachesSelection(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
-	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-	blocker := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	blocked := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	if _, err := service.AddWorkflowTaskDependency(ctx, serverapi.WorkflowTaskDependencyAddRequest{
-		BlockerTaskID: blocker.Task.ID,
-		BlockedTaskID: blocked.Task.ID,
-	}); err != nil {
-		t.Fatalf("add dependency: %v", err)
-	}
-	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
-	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
-	execution := newManualMoveExecutionStub(service)
-	service.currentNodeExecution = execution
-	targets := &recordingExecutionTargetInfrastructure{}
-	service.executionTargets = targets
-
-	warning, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		TaskID:           blocked.Task.ID,
-		TargetNodeID:     targetNodeID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-	})
-	if err != nil {
-		t.Fatalf("MoveWorkflowTask warning: %v", err)
-	}
-	if warning.Outcome != serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired ||
-		warning.UnsatisfiedDependencyCount == nil || *warning.UnsatisfiedDependencyCount != 1 {
-		t.Fatalf("warning = %+v", warning)
-	}
-	if len(execution.started) != 0 ||
-		targets.resolveSelection != (workflow.ExecutionTargetSelection{}) ||
-		targets.materializeTaskID != "" ||
-		targets.restoreTaskID != "" {
-		t.Fatalf("manual move continued before dependency confirmation: execution=%+v targets=%+v", execution.started, targets)
-	}
-
-	selection, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		TaskID:                     blocked.Task.ID,
-		TargetNodeID:               targetNodeID,
-		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
-		ProceedDespiteDependencies: true,
-	})
-	if err != nil {
-		t.Fatalf("MoveWorkflowTask proceed: %v", err)
-	}
-	if selection.Outcome != serverapi.WorkflowTaskActionOutcomeSelectionRequired ||
-		selection.SelectionRequired == nil ||
-		selection.UnsatisfiedDependencyCount != nil {
-		t.Fatalf("proceeded move = %+v, want selection-required without another warning", selection)
-	}
-}
-
 func TestExecutableMoveTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -220,7 +163,9 @@ func TestExecutableMoveTargetCompatibilityPreflightReturnsBeforeDependencyReader
 		TaskID:           task.Task.ID,
 		TargetNodeID:     workflowServiceNodeIDByKey(t, definition.Definition, "implement"),
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		OutputValues:     map[string]string{"prior_summary": "manual plan"},
+		Values: map[string]map[string]string{
+			"plan": {"prior_summary": "manual plan"},
+		},
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},

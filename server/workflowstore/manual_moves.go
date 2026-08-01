@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type ManualMovePreparation struct {
@@ -84,7 +85,7 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 	if err != nil {
 		return nil, err
 	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if preview.Outcome == ManualMovePreviewOutcomeBlocked {
 		return ManualMoveResult{}, manualMovePreviewBlockerError(preview.Blocker)
 	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(task.WorkflowID))
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
 	}

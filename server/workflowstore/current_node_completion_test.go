@@ -177,14 +177,14 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       first.Reference,
-		TransitionID: "join",
+		TransitionID: "join_a",
 		OutputValues: map[string]string{"joined": "branch complete"},
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
 	}
 	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       second.Reference,
-		TransitionID: "join",
+		TransitionID: "join_b",
 		OutputValues: map[string]string{},
 	})
 	if err != nil {

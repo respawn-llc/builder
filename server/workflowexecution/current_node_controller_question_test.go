@@ -106,7 +106,7 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 	})
 	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
 		ProjectID:   "project-test",
-		WorkflowID:  "workflow-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
 		CurrentNode: running,
 	})
 	if err != nil {
