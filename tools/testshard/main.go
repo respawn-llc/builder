@@ -149,6 +149,14 @@ func planJobs(packages []goPackage, workers int) ([]testJob, error) {
 			})
 			continue
 		}
+		if pkg.ImportPath == runtimePackagePath {
+			jobs = append(jobs, testJob{
+				packagePath:     pkg.ImportPath,
+				testRootCount:   len(testRoots),
+				estimatedWeight: sumRootWeights(testRoots),
+			})
+			continue
+		}
 		appendShardableJobs(&jobs, pkg, testRoots, workers)
 	}
 	assignPackageScheduling(&jobs)

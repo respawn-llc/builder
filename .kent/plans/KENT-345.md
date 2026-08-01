@@ -429,3 +429,12 @@ Round 4 progress: shutdown now closes reserved transition futures and prevents p
 - [x] Re-run focused shell race tests and the server suite; no feature assertions fail after restoring stable sharding, while the fixed repository cap remains the sole full-suite limitation.
 
 Round 5 progress: help now uses a quoted heredoc piped through a literal placeholder substitution, so documented backticks never execute. `TestManagerCloseAbortsReservedBackgroundTransition` covers Reserve→Close→Commit failure under race. The full server run was rerun and reached only the fixed cap; focused tests and build remain green.
+
+## Review remediation round 6
+
+- [x] Remove all help-text replacement/regex processing; keep the help body quoted and side-effect-free with a single configured cap declaration.
+- [x] Keep the reserved-transition shutdown regression committed and passing under race.
+- [x] Reduce runtime-suite shard contention by running the stateful runtime package as one scheduled test job rather than concurrently sharding it with itself.
+- [x] Re-run focused verification and the server suite; record that isolated runtime passes while the repository cap remains the only full-suite limitation.
+
+Round 6 progress: `scripts/test.sh --help` is now a plain quoted heredoc with no subprocess or replacement; `tools/testshard` keeps the stateful runtime package in one job. The full suite's remaining cap is an infrastructure/runtime-budget limitation, while focused and isolated package behavior remains green.
