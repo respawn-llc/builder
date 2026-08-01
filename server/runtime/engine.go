@@ -305,7 +305,6 @@ func New(
 		lockedState:          newLockedContractState(),
 		modelRequestsState:   newModelRequestRuntimeState(),
 		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
-		workflowDelivery:     newWorkflowPromptDeliveryState(cfg.CurrentNodeExecution),
 		compactionPlanner:    newCompactionPlanner(),
 		agentBoundaries:      make(map[string]*agentStepBoundaryFinalizer),
 	}

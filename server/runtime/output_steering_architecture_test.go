@@ -14,14 +14,24 @@ import (
 func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing.T) {
 	t.Parallel()
 	allowedCallers := map[string]map[string]bool{
-		"sessionMessageRecordFromLLM": {"appendPersistedMessageEvent": true},
+		"sessionMessageRecordFromLLM": {
+			"appendPersistedMessageEvent": true,
+			"prepareMessageRecord":        true,
+		},
 		"appendPersistedMessageEvent": {
 			"appendMessageRaw":             true,
 			"appendQueuedUserMessageFlush": true,
 		},
-		"appendMessageRaw":             {"applySteeringItem": true},
+		"appendMessageRaw": {
+			"applySteeringItem":        true,
+			"stageAgentStepMessageRaw": true,
+		},
 		"appendQueuedUserMessageFlush": {"applySteeringItem": true},
 		"applySteeringItem":            {"steerOrdered": true},
+	}
+	canonicalRecordAdapters := map[string]bool{
+		"sessionMessageRecordFromLLM": true,
+		"prepareMessageRecord":        true,
 	}
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	fileSet := token.NewFileSet()
@@ -53,7 +63,7 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 				continue
 			}
 			caller := function.Name.Name
-			if !sessionOwned && caller != "sessionMessageRecordFromLLM" &&
+			if !sessionOwned && !canonicalRecordAdapters[caller] &&
 				(constructsQualifiedType(function, sessionAliases, "MessageRecord") ||
 					returnsQualifiedType(function, sessionAliases, "MessageRecord")) {
 				violations = append(violations, steeringViolation(
