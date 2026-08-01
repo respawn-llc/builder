@@ -88,7 +88,11 @@ func writeTaskSearchPlainProjection(stdout io.Writer, projection taskSearchPlain
 					return err
 				}
 			case taskSearchPlainLineKindHit:
-				if _, err := fmt.Fprintln(stdout, taskSearchPlainFragment(line)); err != nil {
+				fragment, err := taskSearchPlainFragment(line)
+				if err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintln(stdout, fragment); err != nil {
 					return err
 				}
 			default:
@@ -104,9 +108,16 @@ func writeTaskSearchPlainProjection(stdout io.Writer, projection taskSearchPlain
 	return nil
 }
 
-func taskSearchPlainFragment(line taskSearchPlainLine) string {
-	if line.Literal == nil {
-		return taskSearchPlainWhitespace(line.FTS5.Snippet)
+func taskSearchPlainFragment(line taskSearchPlainLine) (string, error) {
+	if (line.Literal == nil) == (line.FTS5 == nil) {
+		return "", fmt.Errorf(
+			"task search plain hit must contain exactly one payload: literal=%t fts5=%t",
+			line.Literal != nil,
+			line.FTS5 != nil,
+		)
+	}
+	if line.FTS5 != nil {
+		return taskSearchPlainWhitespace(line.FTS5.Snippet), nil
 	}
 	var fragment strings.Builder
 	if line.Literal.LeftTruncated {
@@ -118,7 +129,7 @@ func taskSearchPlainFragment(line taskSearchPlainLine) string {
 	if line.Literal.RightTruncated {
 		fragment.WriteString(taskSearchPlainLiteralOmissionMarker)
 	}
-	return taskSearchPlainWhitespace(fragment.String())
+	return taskSearchPlainWhitespace(fragment.String()), nil
 }
 
 func taskSearchPlainWhitespace(fragment string) string {
