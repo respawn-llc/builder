@@ -2107,12 +2107,13 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 		name       string
 		readModels ReadModels
 	}{
-		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, Activity: complete.Activity, Attention: complete.Attention}},
-		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
-		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
+		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task search", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
+		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2189,6 +2190,10 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskSearch: %v", err)
+	}
 	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
@@ -2205,6 +2210,7 @@ func newWorkflowServiceReadModels(
 		Definitions: definitions,
 		Board:       board,
 		TaskList:    taskList,
+		TaskSearch:  taskSearch,
 		TaskDetail:  taskDetail,
 		Activity:    activity,
 		Attention:   attention,

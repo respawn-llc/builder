@@ -202,6 +202,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowsvc.New",
+		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
 		"core/server/workflowsvc.WithCurrentNodeExecution",
 		"core/server/workflowexecution.Recover",
@@ -262,6 +263,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	for _, key := range []string{
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowexecution.NewCurrentNodeController",
+		"core/server/workflowview.NewTaskSearch",
 	} {
 		if !callReferencesExactly(calls[key][0], authorityType, authorityObject) {
 			findings = append(findings, currentNodeStructureFinding{

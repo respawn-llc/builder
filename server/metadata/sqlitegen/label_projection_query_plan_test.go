@@ -2,29 +2,12 @@ package sqlitegen
 
 import (
 	"context"
-	"database/sql"
 	"reflect"
 	"testing"
-
-	"core/server/workflow/label"
-
-	sqlitedriver "modernc.org/sqlite"
 )
 
-func init() {
-	sqlitedriver.MustRegisterCollationUtf8(
-		"kent_label_casefold_v1",
-		func(left string, right string) int {
-			return label.Compare(label.Name(left), label.Name(right))
-		},
-	)
-}
-
 func TestListTaskAssignedLabelIDsByTasksUsesBoundedTaskAssignmentIndex(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE project_labels (
