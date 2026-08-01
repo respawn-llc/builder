@@ -8,7 +8,6 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
-  type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
   type Collision,
@@ -67,7 +66,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
   const [session, setSession] = useState<VerticalReorderDragSession | null>(null);
-  const pointerListenerActive = useRef(false);
   const rowNodes = useRef(new Map<UniqueIdentifier, HTMLElement>());
   const listRef = useRef<HTMLDivElement | null>(null);
   const edgeScroll = useBoundedVerticalEdgeScroll();
@@ -92,7 +90,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   );
   const clearSession = useCallback(() => {
     edgeScroll.stop();
-    pointerListenerActive.current = false;
     setSession(null);
   }, [edgeScroll]);
 
@@ -128,22 +125,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     [session?.source],
   );
 
-  const onDragMove = useCallback(
-    (event: DragMoveEvent) => {
-      if (session?.source === "keyboard") {
-        return;
-      }
-      if (pointerListenerActive.current) {
-        return;
-      }
-      const pointer = pointerLocation(event);
-      if (pointer !== null) {
-        recordPointerPosition(pointer);
-      }
-    },
-    [recordPointerPosition, session?.source],
-  );
-
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeID = event.active.id;
@@ -166,21 +147,14 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
 
   useEffect(() => clearSession, [clearSession]);
   useEffect(() => {
-    if (session?.source !== "pointer") {
-      pointerListenerActive.current = false;
-      return undefined;
-    }
     const handlePointerMove = (event: PointerEvent) => {
       recordPointerPosition({ x: event.clientX, y: event.clientY });
     };
-    pointerListenerActive.current = true;
     window.addEventListener("pointermove", handlePointerMove, { passive: true });
     return () => {
-      pointerListenerActive.current = false;
       window.removeEventListener("pointermove", handlePointerMove);
     };
-  }, [recordPointerPosition, session?.source]);
-
+  }, [recordPointerPosition]);
   const activeItem = session === null ? undefined : itemByID.get(session.activeID);
 
   return (
@@ -189,7 +163,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       collisionDetection={verticalReorderCollisionDetection}
       onDragCancel={onDragCancel}
       onDragEnd={onDragEnd}
-      onDragMove={onDragMove}
       onDragOver={onDragOver}
       onDragStart={onDragStart}
       sensors={sensors}
@@ -309,17 +282,18 @@ const verticalReorderCollisionDetection: CollisionDetection = ({
   pointerCoordinates,
   ...args
 }) => {
-  if (pointerCoordinates === null) {
-    const collisions = closestCenter({ active, collisionRect, pointerCoordinates, ...args });
-    return keyboardActivationCollisions(active, collisionRect, collisions);
-  }
-  const pointerCollisions = pointerWithin({ active, collisionRect, pointerCoordinates, ...args });
-  return pointerCollisions.length === 0
-    ? closestCenter({ active, collisionRect, pointerCoordinates, ...args })
-    : pointerCollisions;
+  const pointerCollisions =
+    pointerCoordinates === null
+      ? []
+      : pointerWithin({ active, collisionRect, pointerCoordinates, ...args });
+  const collisions =
+    pointerCollisions.length === 0
+      ? closestCenter({ active, collisionRect, pointerCoordinates, ...args })
+      : pointerCollisions;
+  return activationCollisions(active, collisionRect, collisions);
 };
 
-function keyboardActivationCollisions(
+function activationCollisions(
   active: { id: UniqueIdentifier; rect: { current: { initial: ClientRect | null } } },
   collisionRect: ClientRect,
   collisions: Collision[],
@@ -392,25 +366,11 @@ function keyboardCurrentIndex(
   return hasMoved && overIndex !== undefined ? overIndex : activeIndex;
 }
 
-function pointerLocation(event: DragMoveEvent): Readonly<{ x: number; y: number }> | null {
-  return pointerEventLocation(event.activatorEvent, event.delta);
-}
-
 function pointerActivationLocation(event: Event): Readonly<{ x: number; y: number }> | null {
-  return pointerEventLocation(event, { x: 0, y: 0 });
-}
-
-function pointerEventLocation(
-  event: Event,
-  delta: Readonly<{ x: number; y: number }>,
-): Readonly<{ x: number; y: number }> | null {
   if (!(event instanceof PointerEvent)) {
     return null;
   }
-  return {
-    x: event.clientX + delta.x,
-    y: event.clientY + delta.y,
-  };
+  return { x: event.clientX, y: event.clientY };
 }
 
 function useReducedMotion(): boolean {
@@ -446,26 +406,26 @@ function useBoundedVerticalEdgeScroll(): Readonly<{
   const driver = useRef<ReturnType<typeof createEdgeScrollDriver> | null>(null);
   useEffect(() => {
     const created = createEdgeScrollDriver(() => {
-        const current = container.current;
-        const position = pointer.current;
-        if (current === null || !current.isConnected || position === null) {
-          return null;
-        }
-        const rect = current.getBoundingClientRect();
-        if (
-          position.x < rect.left ||
-          position.x > rect.right ||
-          position.y < rect.top ||
-          position.y > rect.bottom
-        ) {
-          return null;
-        }
-        const velocity = verticalEdgeScrollVelocity(position.y, rect.top, rect.bottom);
-        if (velocity === 0 || !canScrollVertically(current, velocity)) {
-          return null;
-        }
-        return [{ axis: "y", element: current, velocity }];
-      });
+      const current = container.current;
+      const position = pointer.current;
+      if (current === null || !current.isConnected || position === null) {
+        return null;
+      }
+      const rect = current.getBoundingClientRect();
+      if (
+        position.x < rect.left ||
+        position.x > rect.right ||
+        position.y < rect.top ||
+        position.y > rect.bottom
+      ) {
+        return null;
+      }
+      const velocity = verticalEdgeScrollVelocity(position.y, rect.top, rect.bottom);
+      if (velocity === 0 || !canScrollVertically(current, velocity)) {
+        return null;
+      }
+      return [{ axis: "y", element: current, velocity }];
+    });
     driver.current = created;
     return () => {
       created.stop();

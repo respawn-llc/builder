@@ -217,6 +217,60 @@ describe("LabelChooser", () => {
     await user.keyboard("[Escape]");
   });
 
+  it("does not reorder a Label while pointer activation remains in its source row", async () => {
+    hooks.catalogLabels = [
+      { id: "first-label", name: "First" },
+      { id: "second-label", name: "Second" },
+      { id: "third-label", name: "Third" },
+    ];
+    mockLabelRowGeometry();
+    const view = render(
+      <LabelChooser
+        invocation={{
+          kind: "filter",
+          onAction: vi.fn(),
+          state: createLabelFilterState(),
+        }}
+        trigger={<button type="button">Open label chooser</button>}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open label chooser" }));
+    const handles = reorderHandles();
+    snapshotLabelRowGeometry();
+    const secondHandle = handles[1];
+    if (secondHandle === undefined) {
+      throw new Error("Second Label reorder handle did not render.");
+    }
+    fireEvent.pointerDown(secondHandle, {
+      button: 0,
+      clientX: 20,
+      clientY: 50,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(document, {
+      buttons: 1,
+      clientX: 20,
+      clientY: 57,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    expect(screen.getAllByText("Second")).toHaveLength(2);
+    fireEvent.pointerCancel(document, {
+      clientX: 20,
+      clientY: 57,
+      pointerId: 1,
+    });
+
+    await waitFor(() => {
+      expect(hooks.reorder).not.toHaveBeenCalled();
+      expect(screen.getAllByText("Second")).toHaveLength(1);
+    });
+    view.unmount();
+  });
+
   it("cancels a Label drag without requesting a reorder", async () => {
     hooks.catalogLabels = [
       { id: "first-label", name: "First" },
