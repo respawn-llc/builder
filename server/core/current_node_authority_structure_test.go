@@ -172,9 +172,10 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	controller := index.named["core/server/workflowexecution.CurrentNodeController"]
 	starter := index.named["core/server/workflowrunner.Starter"]
 	authority := index.named["core/server/sessionruntime.Authority"]
+	statusProjection := index.named["core/server/workflowview.TaskStatusProjection"]
 	projectService := index.named["core/server/projectview.Service"]
 	workflowService := index.named["core/server/workflowsvc.Service"]
-	if permit == nil || controller == nil || starter == nil || authority == nil || projectService == nil || workflowService == nil {
+	if permit == nil || controller == nil || starter == nil || authority == nil || statusProjection == nil || projectService == nil || workflowService == nil {
 		return nil
 	}
 
@@ -201,6 +202,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowexecution.NewMutationPermit",
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
+		"core/server/workflowview.NewTaskStatusProjection",
 		"core/server/workflowsvc.New",
 		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
@@ -226,15 +228,18 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	authorityType := types.NewPointer(authority)
 	starterType := types.NewPointer(starter)
 	controllerType := types.NewPointer(controller)
+	statusProjectionType := types.NewPointer(statusProjection)
 	permitObject := assignedVariableOfType(calls["core/server/workflowexecution.NewMutationPermit"][0], permitType)
 	authorityObject := assignedVariableOfType(calls["core/server/sessionruntime.NewAuthority"][0], authorityType)
 	starterObject := assignedVariableOfType(calls["core/server/workflowrunner.NewStarter"][0], starterType)
 	controllerObject := assignedVariableOfType(controllerCalls[0], controllerType)
+	statusProjectionObject := assignedVariableOfType(calls["core/server/workflowview.NewTaskStatusProjection"][0], statusProjectionType)
 	for name, object := range map[string]*types.Var{
-		"workflow mutation permit":      permitObject,
-		"session runtime authority":     authorityObject,
-		"workflow runtime starter":      starterObject,
-		"workflow execution controller": controllerObject,
+		"workflow mutation permit":        permitObject,
+		"session runtime authority":       authorityObject,
+		"workflow runtime starter":        starterObject,
+		"workflow execution controller":   controllerObject,
+		"workflow task status projection": statusProjectionObject,
 	} {
 		if object == nil {
 			findings = append(findings, currentNodeStructureFinding{
@@ -263,12 +268,70 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	for _, key := range []string{
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowexecution.NewCurrentNodeController",
-		"core/server/workflowview.NewTaskSearch",
 	} {
 		if !callReferencesExactly(calls[key][0], authorityType, authorityObject) {
 			findings = append(findings, currentNodeStructureFinding{
 				kind:     findingControllerComposition,
 				position: key + " must receive the one production Session runtime Authority",
+			})
+		}
+	}
+	if !callReferencesExactly(calls["core/server/workflowview.NewTaskStatusProjection"][0], controllerType, controllerObject) {
+		findings = append(findings, currentNodeStructureFinding{
+			kind:     findingControllerComposition,
+			position: "NewTaskStatusProjection must receive the one production Workflow Execution controller",
+		})
+	}
+	for _, key := range []string{
+		"core/server/workflowview.NewTaskSearch",
+		"core/server/workflowview.NewTaskList",
+		"core/server/workflowview.NewBoard",
+		"core/server/workflowview.NewTaskDetail",
+	} {
+		if len(calls[key]) != 1 || !callReferencesExactly(calls[key][0], statusProjectionType, statusProjectionObject) {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: key + " must receive the one production TaskStatusProjection",
+			})
+		}
+	}
+	projectionStruct, projectionIsStruct := statusProjection.Underlying().(*types.Struct)
+	if projectionIsStruct {
+		if structDirectlyContains(projectionStruct, authorityType) {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: "TaskStatusProjection must not directly own Session runtime Authority",
+			})
+		}
+		if structHasCurrentTaskQuiescenceSource(projectionStruct) {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: "TaskStatusProjection must not directly own TaskQuiescenceSource",
+			})
+		}
+	}
+	for _, surface := range []string{
+		"core/server/workflowview.TaskSearch",
+		"core/server/workflowview.TaskList",
+		"core/server/workflowview.Board",
+		"core/server/workflowview.TaskDetail",
+	} {
+		surfaceType := index.named[surface]
+		if surfaceType == nil {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: surface + " production surface type is missing",
+			})
+			continue
+		}
+		structure, ok := surfaceType.Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		if structDirectlyContains(structure, authorityType) || structHasCurrentTaskQuiescenceSource(structure) {
+			findings = append(findings, currentNodeStructureFinding{
+				kind:     findingControllerComposition,
+				position: surface + " must not directly own live Authority or Quiescence",
 			})
 		}
 	}
@@ -294,11 +357,13 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 
 	controllerPosition := controllerCalls[0].call.Pos()
 	recoveryPosition := calls["core/server/workflowexecution.Recover"][0].call.Pos()
+	projectionPosition := calls["core/server/workflowview.NewTaskStatusProjection"][0].call.Pos()
 	projectWiringPosition := calls["core/server/projectview.WithWorkflowExecution"][0].call.Pos()
 	servicePosition := calls["core/server/workflowsvc.New"][0].call.Pos()
 	corePosition := calls["core/server/core.composeBundles"][0].call.Pos()
 	if !(controllerPosition < recoveryPosition &&
 		recoveryPosition < projectWiringPosition &&
+		recoveryPosition < projectionPosition &&
 		projectWiringPosition < servicePosition &&
 		servicePosition < corePosition) {
 		findings = append(findings, currentNodeStructureFinding{
@@ -307,6 +372,29 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		})
 	}
 	return findings
+}
+
+func structHasCurrentTaskQuiescenceSource(structure *types.Struct) bool {
+	for fieldIndex := 0; fieldIndex < structure.NumFields(); fieldIndex++ {
+		fieldType := types.Unalias(structure.Field(fieldIndex).Type())
+		if pointer, ok := fieldType.(*types.Pointer); ok {
+			fieldType = types.Unalias(pointer.Elem())
+		}
+		if named, ok := fieldType.(*types.Named); ok {
+			fieldType = types.Unalias(named.Underlying())
+		}
+		interfaceType, ok := fieldType.(*types.Interface)
+		if !ok {
+			continue
+		}
+		interfaceType.Complete()
+		for methodIndex := 0; methodIndex < interfaceType.NumMethods(); methodIndex++ {
+			if interfaceType.Method(methodIndex).Name() == "CurrentTaskQuiescence" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func indexCurrentNodeTypes(pkgs []*packages.Package) currentNodeTypeIndex {

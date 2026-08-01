@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -17,16 +18,64 @@ type TaskAgentExecutionTarget struct {
 	SessionID runtimeids.SessionID
 }
 
+type PendingPromptKind string
+
+const (
+	PendingPromptKindQuestion        PendingPromptKind = "question"
+	PendingPromptKindSessionApproval PendingPromptKind = "session_approval"
+)
+
+type PendingPromptReference struct {
+	ID   string
+	Kind PendingPromptKind
+}
+
 type TaskExecution struct {
-	Ref             WorkflowExecutionRef
-	Agent           *TaskAgentExecutionTarget
-	Script          *TaskScriptExecutionTarget
-	Queued          bool
-	WaitingQuestion bool
+	Ref            WorkflowExecutionRef
+	Agent          *TaskAgentExecutionTarget
+	Script         *TaskScriptExecutionTarget
+	Queued         bool
+	PendingPrompts []PendingPromptReference
 }
 
 type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
+}
+
+// WithWorkflowTaskExecutionSnapshots runs operation while the Authority live
+// state lock is held. The callback may acquire the Workflow Execution
+// Controller lock, which establishes the Authority-before-Controller order
+// required for lifecycle observations. It must not call back into Authority.
+func (a *Authority) WithWorkflowTaskExecutionSnapshots(operation func(map[workflow.TaskID]TaskExecutionSnapshot) error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if operation == nil {
+		return errors.New("workflow task execution snapshot operation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		return err
+	}
+	return operation(snapshots)
+}
+
+func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
+	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
+	var snapshotErr error
+	a.forEachWorkflowExecutionLocked(func(execution *execution) {
+		if snapshotErr != nil {
+			return
+		}
+		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
+	})
+	if snapshotErr != nil {
+		return nil, snapshotErr
+	}
+	sortTaskExecutionSnapshots(snapshots)
+	return snapshots, nil
 }
 
 func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
@@ -46,22 +95,9 @@ func (a *Authority) CurrentWorkflowTaskExecutionSnapshots() (map[workflow.TaskID
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	var snapshotErr error
-	a.forEachWorkflowExecutionLocked(func(execution *execution) {
-		if snapshotErr != nil {
-			return
-		}
-		snapshotErr = appendTaskExecutionSnapshot(snapshots, execution)
-	})
-	if snapshotErr != nil {
-		return nil, snapshotErr
-	}
-	for taskID, snapshot := range snapshots {
-		sort.Slice(snapshot.Executions, func(i, j int) bool {
-			return workflowExecutionLess(snapshot.Executions[i], snapshot.Executions[j])
-		})
-		snapshots[taskID] = snapshot
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		return nil, err
 	}
 	return snapshots, nil
 }
@@ -158,10 +194,14 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 		return errors.New("live workflow execution has an invalid phase")
 	}
 	target := TaskExecution{
-		Ref:             ref,
-		Queued:          execution.phase == executionPhaseQueued,
-		WaitingQuestion: execution.prompts.hasPending(),
+		Ref:    ref,
+		Queued: execution.phase == executionPhaseQueued,
 	}
+	pendingPrompts, err := execution.prompts.pendingReferences()
+	if err != nil {
+		return err
+	}
+	target.PendingPrompts = pendingPrompts
 	if resource, ok := execution.scope.Resource(); ok {
 		target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
 	} else {
@@ -206,6 +246,14 @@ func (e TaskExecution) validate() error {
 	if err := e.Ref.Validate(); err != nil {
 		return err
 	}
+	for index, prompt := range e.PendingPrompts {
+		if err := prompt.validate(); err != nil {
+			return fmt.Errorf("pending prompt %d: %w", index, err)
+		}
+		if index != 0 && e.PendingPrompts[index-1].ID >= prompt.ID {
+			return errors.New("live workflow execution pending prompts are not sorted and unique")
+		}
+	}
 	if (e.Agent == nil) == (e.Script == nil) {
 		return errors.New("live workflow execution must have exactly one target")
 	}
@@ -216,12 +264,37 @@ func (e TaskExecution) validate() error {
 		if strings.TrimSpace(e.Script.Path) == "" {
 			return errors.New("live workflow script execution has no executable path")
 		}
-		if e.WaitingQuestion {
-			return errors.New("live workflow script execution cannot wait for a question")
+		if len(e.PendingPrompts) != 0 {
+			return errors.New("live workflow script execution cannot have pending prompts")
 		}
 	}
-	if e.Queued && e.WaitingQuestion {
-		return errors.New("queued workflow execution cannot wait for a question")
+	if e.Queued && len(e.PendingPrompts) != 0 {
+		return errors.New("queued workflow execution cannot have pending prompts")
 	}
 	return nil
+}
+
+func (p PendingPromptReference) validate() error {
+	if strings.TrimSpace(p.ID) == "" {
+		return errors.New("pending prompt id is required")
+	}
+	switch p.Kind {
+	case PendingPromptKindQuestion, PendingPromptKindSessionApproval:
+		return nil
+	default:
+		return fmt.Errorf("pending prompt %q has invalid kind %q", p.ID, p.Kind)
+	}
+}
+
+func (e TaskExecution) HasPendingPromptKind(kind PendingPromptKind) bool {
+	for _, prompt := range e.PendingPrompts {
+		if prompt.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (e TaskExecution) HasPendingPrompts() bool {
+	return len(e.PendingPrompts) != 0
 }

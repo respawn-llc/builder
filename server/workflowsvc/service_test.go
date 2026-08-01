@@ -2246,23 +2246,36 @@ func newWorkflowServiceReadModels(
 			t.Errorf("close workflow read-model authority: %v", err)
 		}
 	})
-	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector, authority, quiescence)
+	projection, err := workflowview.NewTaskStatusProjection(
+		metadataStore,
+		store,
+		projector,
+		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence},
+	)
 	if err != nil {
-		t.Fatalf("workflowview.NewBoard: %v", err)
+		t.Fatalf("workflowview.NewTaskStatusProjection: %v", err)
 	}
-	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector, authority)
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
-		t.Fatalf("workflowview.NewTaskList: %v", err)
+		t.Fatalf("workflowview.NewTaskDependencyCounter: %v", err)
 	}
-	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projector, authority)
+	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projector, authority)
+	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projection)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskList: %v", err)
+	}
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projection)
+	if err != nil {
+		t.Fatalf("workflowview.NewBoard: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDependencies: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projection, dependencies)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -2287,6 +2300,30 @@ func newWorkflowServiceReadModels(
 }
 
 type workflowViewQuiescenceSource struct{}
+
+type workflowViewStatusObservationSource struct {
+	authority  *sessionruntime.Authority
+	quiescence workflowViewTaskQuiescenceSource
+}
+
+type workflowViewTaskQuiescenceSource interface {
+	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+}
+
+func (s workflowViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	executions, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	return workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: executions,
+		Quiescence: quiescence,
+	}, nil
+}
 
 func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
 	result := make(map[workflow.TaskID]bool, len(taskIDs))

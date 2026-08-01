@@ -393,7 +393,7 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		ctx:       runCtx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		prompts:   newExecutionPromptStore(scope, a.promptFeed),
+		prompts:   newExecutionPromptStore(a, scope, a.promptFeed),
 		phase:     executionPhaseRunning,
 	}
 	if workflowRef != nil {

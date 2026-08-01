@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -36,15 +33,15 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 }
 
 type workflowTaskListQueryRequest struct {
-	projectID      string
-	narrowed       *workflowTaskListNarrowedQueryFacts
-	statusKinds    []serverapi.WorkflowTaskStatusKind
-	attentionKinds []serverapi.WorkflowTaskAttentionKind
-	labelFilter    workflowTaskLabelFilterFacts
-	sortSelectors  []serverapi.WorkflowTaskListSort
-	liveSnapshots  map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	offset         int
-	limit          int
+	projectID          string
+	narrowed           *workflowTaskListNarrowedQueryFacts
+	statusKinds        []serverapi.WorkflowTaskStatusKind
+	attentionKinds     []serverapi.WorkflowTaskAttentionKind
+	labelFilter        workflowTaskLabelFilterFacts
+	sortSelectors      []serverapi.WorkflowTaskListSort
+	liveTaskStatesJSON string
+	offset             int
+	limit              int
 }
 
 type workflowTaskListNarrowedQueryFacts struct {
@@ -108,10 +105,6 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	liveStatesJSON, err := workflowTaskListLiveStatesJSON(req.liveSnapshots)
-	if err != nil {
-		return workflowTaskListPageResult{}, err
-	}
 	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:            req.projectID,
 		WorkflowID:           workflowFilter,
@@ -137,7 +130,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		Sort4Desc:            workflowTaskListSortDescending(req.sortSelectors, 3),
 		Sort5Field:           string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
 		Sort5Desc:            workflowTaskListSortDescending(req.sortSelectors, 4),
-		LiveTaskStatesJson:   liveStatesJSON,
+		LiveTaskStatesJson:   req.liveTaskStatesJSON,
 		LimitRows:            int64(req.limit),
 	})
 	if err != nil {
@@ -157,7 +150,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		if !row.ID.Valid {
 			continue
 		}
-		statusFact, err := l.projector.DecodeStatus(TaskStatusInput{
+		statusFact, err := l.projection.DecodeStatus(TaskStatusInput{
 			TaskID:             row.ID.String,
 			Kind:               row.Kind.String,
 			NodeIDsJSON:        row.NodeIdsJson.String,
@@ -262,35 +255,6 @@ func workflowTaskListSortDescending(sortSelectors []serverapi.WorkflowTaskListSo
 		return 1
 	}
 	return 0
-}
-
-type workflowTaskListLiveState struct {
-	TaskID          string `json:"task_id"`
-	HasRunning      bool   `json:"has_running"`
-	HasQueued       bool   `json:"has_queued"`
-	WaitingQuestion bool   `json:"waiting_question"`
-}
-
-func workflowTaskListLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) (string, error) {
-	states := make([]workflowTaskListLiveState, 0, len(snapshots))
-	for taskID, snapshot := range snapshots {
-		if len(snapshot.Executions) == 0 {
-			continue
-		}
-		state := workflowTaskListLiveState{TaskID: string(taskID)}
-		for _, execution := range snapshot.Executions {
-			state.HasRunning = state.HasRunning || !execution.Queued
-			state.HasQueued = state.HasQueued || execution.Queued
-			state.WaitingQuestion = state.WaitingQuestion || execution.WaitingQuestion
-		}
-		states = append(states, state)
-	}
-	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })
-	raw, err := json.Marshal(states)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 type workflowTaskListVisibleColumn struct {

@@ -85,6 +85,49 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 	}
 }
 
+func TestCurrentNodeControllerObservesExactExecutionsAndQuiescenceTogether(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-observation", "node-observation")
+	request := askquestion.AskQuestionRequest{
+		ID:       "observation-question",
+		StepID:   uuid.NewString(),
+		Question: "Proceed?",
+	}
+	pending := fixture.startPendingPrompt(t, reference, request)
+	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
+	t.Cleanup(func() {
+		_ = pending.handle.Stop(context.Background())
+	})
+
+	observation, err := fixture.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	executions := observation.Executions[reference.TaskID].Executions
+	if len(executions) != 1 ||
+		!executions[0].Ref.CurrentNode.Equal(reference) ||
+		!executions[0].HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) {
+		t.Fatalf("observed executions = %+v", executions)
+	}
+	if observation.Quiescence[reference.TaskID] {
+		t.Fatal("waiting Question execution was observed as quiescent")
+	}
+
+	if err := pending.handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop pending execution: %v", err)
+	}
+	afterRetirement, err := fixture.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions after retirement: %v", err)
+	}
+	if len(afterRetirement.Executions[reference.TaskID].Executions) != 0 {
+		t.Fatalf("retired executions = %+v", afterRetirement.Executions[reference.TaskID].Executions)
+	}
+	if !afterRetirement.Quiescence[reference.TaskID] {
+		t.Fatal("retired execution was observed as non-quiescent")
+	}
+}
+
 func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question", "node-question")

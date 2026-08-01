@@ -278,6 +278,7 @@
 - All clients use the same authoritative Question and Approval state. A client marks an interaction resolved only after Kent accepts the answer.
 - A Question belongs to its Session. Workflow attention refers to that Question and does not create a second Task-owned copy.
 - Live Questions and live Approvals exist only within their Exact Execution Scope. A restart does not restore them. Kent interrupts the affected Current Node. Resume closes stale tool operations with a restart outcome before it continues.
+- The bounded active Session transcript supplies Question content to read surfaces. An unfinished transcript operation without a matching Exact Execution Scope does not create a live Question or `waiting_question` Task status.
 - A pending Workflow Transition Approval belongs to the current Task and survives restart.
 - Approval is a Transition Branch property.
 - If any branch of a selected Transition requires Approval, the complete Transition waits for one Approval before any target becomes current or begins work.
@@ -367,7 +368,13 @@
 
 ## Task Status And Listing
 
-- Task detail, Workflow boards, and Task lists use one authoritative Task status derived from Current Nodes and current live activity.
+- Task Search, Task detail, Workflow boards, and Task lists use one server-owned authoritative Task-status projection derived from Current Nodes, pending Workflow Transition Approvals, and current live activity.
+- The projection supplies primary status, every applicable attention kind and reference, available Task actions, and the exact Current Node, Session, or Script targets for those actions. A surface may omit fields it does not expose, but does not independently recompute lifecycle-sensitive facts.
+- Each request combines one durable Task-state view with one Immutable Live Snapshot, then derives the complete projection from those views. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
+- Each request is independent. Kent does not synchronize separate Search, List, Board, and Detail requests, so they may observe different lifecycle moments.
+- Agreement among List/Search status filtering, status sorting, and returned status is not a product invariant. Each evaluation still follows the authoritative Task-status semantics.
+- Projected actions and targets are hints that may become stale after the response. Each Task-changing operation checks its authoritative state again before changing the Task.
+- If required durable or live facts cannot be read, the request fails instead of returning a partial projection or using a surface-specific fallback.
 - Workflow attention has a global paginated Inbox and a bounded Task-specific feed. It has no Project-specific feed.
 - Workflow attention is task-scoped. It includes only unresolved Questions, unresolved Workflow Approvals, and executable Nodes interrupted by errors.
 - Workflow validity is not attention and does not create Inbox items.
@@ -400,6 +407,8 @@
 
 - Task search reuses the authoritative Task status defined above.
 - [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
+- Search returns Task status from the server-owned Task-status projection.
+- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with one separately captured Immutable Live Snapshot. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
 
 ## Execution Targets And Worktrees
 
