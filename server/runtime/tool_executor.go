@@ -256,12 +256,7 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
-	completed, err := execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      execution.ScopeID,
-		TransitionID: parsed.TransitionID,
-		OutputValues: parsed.OutputValues,
-		Commentary:   parsed.Commentary,
-	})
+	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}

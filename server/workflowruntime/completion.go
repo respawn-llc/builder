@@ -133,6 +133,7 @@ type TransitionInstruction struct {
 
 type CompletionRequest struct {
 	ScopeID      runtimeids.ExecutionScopeID
+	SessionID    *runtimeids.SessionID
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
@@ -170,14 +171,16 @@ type Controller interface {
 }
 
 type ViolationRequest struct {
-	ScopeID  runtimeids.ExecutionScopeID
-	Kind     ViolationKind
-	MaxCount int
-	Detail   string
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
+	Kind      ViolationKind
+	MaxCount  int
+	Detail    string
 }
 
 type ViolationResetRequest struct {
-	ScopeID runtimeids.ExecutionScopeID
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {

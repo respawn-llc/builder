@@ -55,32 +55,96 @@ func newCurrentNodeControllerWithAttentionForTest(
 type noOpCurrentNodeAssignmentSteerer struct{}
 
 func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
-	return completedCurrentNodeAssignmentSteer{}, nil
+	return completedCurrentNodeAssignmentSteer{
+		receipt: session.CommitReceipt{Committed: true},
+	}, nil
 }
 
 type completedCurrentNodeAssignmentSteer struct {
-	err error
+	receipt session.CommitReceipt
+	err     error
 }
 
-func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) error {
-	return s.err
+func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
+	return s.receipt, s.err
+}
+
+type deadlineRecordingCurrentNodeAssignmentSteerer struct {
+	reference workflow.CurrentNodeReference
+	deadline  chan<- time.Time
+}
+
+func (s deadlineRecordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+	_ context.Context,
+	reference workflow.CurrentNodeReference,
+) (CurrentNodeAssignmentSteer, error) {
+	if !reference.Equal(s.reference) {
+		return completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}, nil
+	}
+	return &deadlineRecordingCurrentNodeAssignmentSteer{deadline: s.deadline}, nil
+}
+
+type deadlineRecordingCurrentNodeAssignmentSteer struct {
+	deadline chan<- time.Time
+	mu       sync.Mutex
+	recorded bool
+}
+
+func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recorded {
+		return session.CommitReceipt{Committed: true}, nil
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return session.CommitReceipt{}, errors.New("assignment steer wait context has no deadline")
+	}
+	s.recorded = true
+	s.deadline <- deadline
+	return session.CommitReceipt{Committed: true}, nil
 }
 
 type recordingCurrentNodeAssignmentSteerer struct {
-	mu      sync.Mutex
-	steered []workflow.CurrentNodeReference
-	err     error
-	waitErr error
+	mu          sync.Mutex
+	steered     []workflow.CurrentNodeReference
+	outcomes    []currentNodeAssignmentSteerOutcome
+	err         error
+	waitReceipt session.CommitReceipt
+	waitErr     error
+}
+
+type currentNodeAssignmentSteerOutcome struct {
+	receipt  session.CommitReceipt
+	steerErr error
+	waitErr  error
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ context.Context, reference workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.steered = append(s.steered, reference)
+	index := len(s.steered) - 1
+	if index < len(s.outcomes) {
+		outcome := s.outcomes[index]
+		if outcome.steerErr != nil {
+			return nil, outcome.steerErr
+		}
+		return completedCurrentNodeAssignmentSteer{
+			receipt: outcome.receipt,
+			err:     outcome.waitErr,
+		}, nil
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
-	return completedCurrentNodeAssignmentSteer{err: s.waitErr}, nil
+	receipt := s.waitReceipt
+	if s.waitErr == nil {
+		receipt.Committed = true
+	}
+	return completedCurrentNodeAssignmentSteer{receipt: receipt, err: s.waitErr}, nil
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {

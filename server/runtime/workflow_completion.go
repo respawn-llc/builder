@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -43,6 +45,10 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 	if !active || execution.Controller == nil {
 		return workflowruntime.ViolationResult{}, nil
 	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return workflowruntime.ViolationResult{}, err
+	}
 	maxCount := execution.MaxInvalidCompletionAttempts
 	if maxCount <= 0 {
 		maxCount = workflowInvalidCompletionFailClosedMaxCount
@@ -52,10 +58,11 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 		"detail": strings.TrimSpace(detail),
 	})
 	return execution.Controller.RecordProtocolViolation(ctx, workflowruntime.ViolationRequest{
-		ScopeID:  execution.ScopeID,
-		Kind:     kind,
-		MaxCount: maxCount,
-		Detail:   string(payload),
+		ScopeID:   execution.ScopeID,
+		SessionID: &sessionID,
+		Kind:      kind,
+		MaxCount:  maxCount,
+		Detail:    string(payload),
 	})
 }
 
@@ -64,8 +71,13 @@ func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error
 	if !active || execution.Controller == nil {
 		return nil
 	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return err
+	}
 	return execution.Controller.ResetProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
-		ScopeID: execution.ScopeID,
+		ScopeID:   execution.ScopeID,
+		SessionID: &sessionID,
 	})
 }
 
@@ -84,6 +96,35 @@ func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, er
 		e.recordWorkflowTerminalState(WorkflowCompletionSourceObserved)
 	}
 	return result.Completed, nil
+}
+
+func (e *Engine) completeWorkflowCurrentNode(
+	ctx context.Context,
+	parsed workflowruntime.ParsedCompletion,
+) (workflowruntime.CompletionResult, error) {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
+		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
+	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return workflowruntime.CompletionResult{}, err
+	}
+	return execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+		ScopeID:      execution.ScopeID,
+		SessionID:    &sessionID,
+		TransitionID: parsed.TransitionID,
+		OutputValues: parsed.OutputValues,
+		Commentary:   parsed.Commentary,
+	})
+}
+
+func (e *Engine) workflowSessionID() (runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(e.SessionID())
+	if err != nil {
+		return runtimeids.SessionID{}, fmt.Errorf("parse workflow Session identity: %w", err)
+	}
+	return sessionID, nil
 }
 
 func workflowCompletionCallCount(calls []llm.ToolCall) int {

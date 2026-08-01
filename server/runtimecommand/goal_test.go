@@ -304,7 +304,10 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: workflow.CurrentNodeReference{TaskID: "task-1", NodeID: "node-1"},
+				CurrentNode: workflow.CurrentNodeReference{
+					TaskID: "task-goal-authority",
+					NodeID: "node-goal-authority",
+				},
 			},
 		},
 	})
