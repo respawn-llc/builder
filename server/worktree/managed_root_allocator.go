@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"core/server/metadata"
@@ -538,24 +539,18 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	marker := filepath.Join(parent, workspaceParentMarker)
 	markerInfo, markerErr := os.Lstat(marker)
 	if os.IsNotExist(markerErr) && (createdParent || parentCreatedConcurrently) {
-		file, createErr := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if os.IsExist(createErr) {
-			markerInfo, markerErr = os.Lstat(marker)
-		} else if createErr != nil {
-			return "", fmt.Errorf("create workspace parent marker %q: %w", marker, createErr)
-		} else {
-			capturedMarker, _ = file.Stat()
-			payload, marshalErr := json.Marshal(workspaceParentMarkerData{Version: workspaceParentMarkerVer, WorkspaceID: workspaceID})
-			if marshalErr == nil {
-				_, marshalErr = file.Write(payload)
-			}
-			closeErr := file.Close()
-			if marshalErr != nil || closeErr != nil {
-				return "", fmt.Errorf("write workspace parent marker %q: %w", marker, errors.Join(marshalErr, closeErr))
-			}
-			markerInfo, markerErr = os.Lstat(marker)
+		var markerCreated bool
+		var publishErr error
+		markerInfo, markerCreated, publishErr = publishWorkspaceParentMarker(parent, marker, workspaceID)
+		if publishErr != nil {
+			return "", publishErr
+		}
+		markerErr = nil
+		if markerCreated {
 			capturedMarker = markerInfo
 		}
+	} else if os.IsNotExist(markerErr) {
+		markerInfo, markerErr = waitForWorkspaceParentMarker(marker)
 	}
 	if markerErr != nil {
 		return "", fmt.Errorf("inspect workspace parent marker %q: %w", marker, markerErr)
@@ -607,6 +602,63 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 		return "", fmt.Errorf("workspace parent marker %q ownership/version mismatch after revalidation", marker)
 	}
 	return filepath.Clean(parent), nil
+}
+
+func waitForWorkspaceParentMarker(marker string) (os.FileInfo, error) {
+	deadline := time.Now().Add(time.Second)
+	for {
+		info, err := os.Lstat(marker)
+		if err == nil {
+			return info, nil
+		}
+		if !os.IsNotExist(err) || time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func publishWorkspaceParentMarker(parent string, marker string, workspaceID string) (markerInfo os.FileInfo, created bool, err error) {
+	payload, err := json.Marshal(workspaceParentMarkerData{Version: workspaceParentMarkerVer, WorkspaceID: workspaceID})
+	if err != nil {
+		return nil, false, fmt.Errorf("encode workspace parent marker %q: %w", marker, err)
+	}
+	tempFile, err := os.CreateTemp(parent, workspaceParentMarker+".tmp-*")
+	if err != nil {
+		return nil, false, fmt.Errorf("create temporary workspace parent marker %q: %w", marker, err)
+	}
+	tempPath := tempFile.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			if cleanupErr := os.Remove(tempPath); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+				err = errors.Join(err, fmt.Errorf("remove temporary workspace parent marker %q: %w", tempPath, cleanupErr))
+			}
+		}
+	}()
+	if _, writeErr := tempFile.Write(payload); writeErr != nil {
+		closeErr := tempFile.Close()
+		return nil, false, fmt.Errorf("write temporary workspace parent marker %q: %w", marker, errors.Join(writeErr, closeErr))
+	}
+	if closeErr := tempFile.Close(); closeErr != nil {
+		return nil, false, fmt.Errorf("close temporary workspace parent marker %q: %w", marker, closeErr)
+	}
+	if linkErr := os.Link(tempPath, marker); linkErr != nil {
+		if !os.IsExist(linkErr) {
+			return nil, false, fmt.Errorf("publish workspace parent marker %q: %w", marker, linkErr)
+		}
+		markerInfo, statErr := os.Lstat(marker)
+		if statErr != nil {
+			return nil, false, fmt.Errorf("inspect concurrently published workspace parent marker %q: %w", marker, statErr)
+		}
+		return markerInfo, false, nil
+	}
+	removeTemp = true
+	markerInfo, err = os.Lstat(marker)
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect published workspace parent marker %q: %w", marker, err)
+	}
+	return markerInfo, true, nil
 }
 
 func rollbackCreatedWorkspaceParent(parent string, markerName string, parentInfo os.FileInfo, markerInfo os.FileInfo) error {

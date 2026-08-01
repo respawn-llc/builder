@@ -450,7 +450,7 @@ func isWorkspaceIDSource(object types.Object) bool {
 	if variable.IsField() {
 		return variable.Name() == "WorkspaceID" || variable.Name() == "SourceWorkspaceID"
 	}
-	return variable.Name() == "workspaceID" || variable.Name() == "workspaceId"
+	return false
 }
 
 func isStringType(typ types.Type) bool {
@@ -502,8 +502,9 @@ func automatic(base string, workspace Workspace) string {
 }`,
 		`package fixture
 import "path/filepath"
-func caller(base string, workspaceID string) string { return managedRoot(base, workspaceID) }
-func managedRoot(base string, id string) string { return filepath.Join(base, id, "leaf") }`,
+type Workspace struct { ID string }
+func caller(base string, workspace Workspace) string { return managedRoot(base, workspace.ID) }
+func managedRoot(base string, wid string) string { return filepath.Join(base, wid, "leaf") }`,
 		`package fixture
 import "path/filepath"
 type Binding struct { WorkspaceID string }

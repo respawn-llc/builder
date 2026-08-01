@@ -231,6 +231,51 @@ func TestManagedRootAllocatorConcurrentWorkspacesUseDistinctParents(t *testing.T
 	}
 }
 
+func TestManagedRootAllocatorConcurrentlyMaterializesPersistedWorkspaceParent(t *testing.T) {
+	env := newServiceTestEnv(t)
+	allocator := newManagedRootAllocator(env.store, env.baseDir, bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
+	const workers = 32
+	start := make(chan struct{})
+	results := make(chan struct {
+		root string
+		err  error
+	}, workers)
+	for range workers {
+		go func() {
+			<-start
+			root, err := allocator.materializePersistedWorkspaceParent(
+				env.binding.WorkspaceID,
+				"persisted",
+				allocator.base.path,
+			)
+			results <- struct {
+				root string
+				err  error
+			}{root: root, err: err}
+		}()
+	}
+	close(start)
+	var expectedRoot string
+	for range workers {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent persisted parent materialization: %v", result.err)
+		}
+		if expectedRoot == "" {
+			expectedRoot = result.root
+		} else if result.root != expectedRoot {
+			t.Fatalf("concurrent persisted parent roots differ: %q and %q", expectedRoot, result.root)
+		}
+	}
+	entries, err := os.ReadDir(expectedRoot)
+	if err != nil {
+		t.Fatalf("read concurrently materialized parent: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != workspaceParentMarker {
+		t.Fatalf("concurrently materialized parent entries = %+v, want only %q", entries, workspaceParentMarker)
+	}
+}
+
 func TestManagedRootAllocatorRejectsInvalidPersistedMarkers(t *testing.T) {
 	env := newServiceTestEnv(t)
 	tests := []struct {
