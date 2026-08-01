@@ -88,7 +88,18 @@ func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiv
 		s.heldReservation = reservation
 		s.heldWaiter = waiter
 	}
-	s.nextWaiters = append(s.nextWaiters, waiter)
+	insertAt := len(s.nextWaiters)
+	if reservation.queueable {
+		for index, queued := range s.nextWaiters {
+			if queued.reservation == nil {
+				insertAt = index
+				break
+			}
+		}
+	}
+	s.nextWaiters = append(s.nextWaiters, nil)
+	copy(s.nextWaiters[insertAt+1:], s.nextWaiters[insertAt:])
+	s.nextWaiters[insertAt] = waiter
 	s.notifyNextWaiterLocked()
 	return nil
 }
@@ -245,14 +256,14 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		suspended.cancel()
 	}
 	s.mu.Lock()
-	if s.active == nil || s.active.sequence != active.sequence {
+	if active != nil && (s.active == nil || s.active.sequence != active.sequence) {
 		s.mu.Unlock()
 		return nil, nil
 	}
 	s.mu.Unlock()
 	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
 		s.mu.Lock()
-		if s.active != nil && s.active.sequence == active.sequence {
+		if active != nil && s.active != nil && s.active.sequence == active.sequence {
 			s.active.interrupted = false
 		}
 		s.mu.Unlock()
@@ -376,13 +387,13 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 
 	s.mu.Lock()
 	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter ||
-		(s.active != nil && !(s.boundaryReady && waiter.reservation != nil)) ||
+		(s.active != nil && !s.boundaryReady) ||
 		s.terminalPublishing {
 		s.mu.Unlock()
 		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
 	}
 	s.nextWaiters = s.nextWaiters[1:]
-	if s.active != nil && s.boundaryReady && waiter.reservation != nil {
+	if s.active != nil && s.boundaryReady {
 		s.suspended = s.active
 		s.active = nil
 		s.boundaryReady = false
@@ -543,7 +554,7 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 	for {
 		s.mu.Lock()
 		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
-			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
+			len(s.nextWaiters) == 0 {
 			s.mu.Unlock()
 			return nil
 		}

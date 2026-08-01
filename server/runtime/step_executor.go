@@ -343,6 +343,11 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
 			}
+			if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
+				if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+					return stepLoopResult{}, err
+				}
+			}
 			resolvedCommittedStart, resolvedCommittedStartSet = committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
@@ -501,11 +506,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-			return preparedCompletedResponse{}, err
-		}
 	}
-
 	resolution := completedResponseDiscardInstruction()
 	if committedAssistantMessageFinalizesStreaming(assistantMsg) {
 		if assistantCommittedCoordinate == nil {
