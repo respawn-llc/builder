@@ -615,7 +615,12 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	values, err := readManualMoveValues(*valuesJSON, *valuesFile)
+	values, err := readManualMoveValues(
+		*valuesJSON,
+		*valuesFile,
+		flagExplicit(fs, "values-json"),
+		flagExplicit(fs, "values-file"),
+	)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -784,12 +789,15 @@ func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) s
 	}
 }
 
-func readManualMoveValues(inline, file string) (map[string]map[string]string, error) {
-	if flagValueProvided(inline) && strings.TrimSpace(file) != "" {
+func readManualMoveValues(inline, file string, inlineProvided, fileProvided bool) (map[string]map[string]string, error) {
+	if inlineProvided && fileProvided {
 		return nil, errors.New("--values-json and --values-file cannot be combined")
 	}
 	raw := inline
-	if strings.TrimSpace(file) != "" {
+	if fileProvided {
+		if strings.TrimSpace(file) == "" {
+			return nil, errors.New("--values-file requires a path")
+		}
 		content, err := os.ReadFile(file)
 		if err != nil {
 			return nil, fmt.Errorf("read --values-file: %w", err)
@@ -797,6 +805,9 @@ func readManualMoveValues(inline, file string) (map[string]map[string]string, er
 		raw = string(content)
 	}
 	if strings.TrimSpace(raw) == "" {
+		if inlineProvided || fileProvided {
+			return nil, errors.New("parse manual move values: expected a JSON object")
+		}
 		return nil, nil
 	}
 	var values map[string]map[string]string
@@ -807,10 +818,6 @@ func readManualMoveValues(inline, file string) (map[string]map[string]string, er
 		return nil, errors.New("parse manual move values: expected a JSON object")
 	}
 	return values, nil
-}
-
-func flagValueProvided(value string) bool {
-	return strings.TrimSpace(value) != ""
 }
 
 func writeTaskDependencyConfirmationRequired(stderr io.Writer, taskRef string, count *int) {

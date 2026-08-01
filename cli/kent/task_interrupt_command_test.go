@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/shared/apicontract"
@@ -253,6 +255,19 @@ func TestTaskMoveRejectsNullValuesDocument(t *testing.T) {
 
 	if exitCode != 2 || stdout.Len() != 0 || len(remote.moveRequests) != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+}
+
+func TestReadManualMoveValuesRejectsExplicitEmptyDocuments(t *testing.T) {
+	if _, err := readManualMoveValues("", "", true, false); err == nil {
+		t.Fatal("explicit empty inline values document was accepted")
+	}
+	path := filepath.Join(t.TempDir(), "values.json")
+	if err := os.WriteFile(path, []byte(" \n"), 0o600); err != nil {
+		t.Fatalf("write values file: %v", err)
+	}
+	if _, err := readManualMoveValues("", path, false, true); err == nil {
+		t.Fatal("explicit whitespace-only values file was accepted")
 	}
 }
 
