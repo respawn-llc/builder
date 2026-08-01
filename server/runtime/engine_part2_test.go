@@ -564,6 +564,30 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 	})
 }
 
+func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{caps: llm.ProviderCapabilities{
+			ProviderID:           "azure-openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		}},
+		tools.NewRegistry(),
+		Config{
+			Model:         "gpt-5.3-codex",
+			FastModeState: NewFastModeState(true),
+		},
+	)
+
+	if eng.FastModeAvailable() {
+		t.Fatal("expected fast mode to be unavailable for non-OpenAI provider")
+	}
+	if eng.FastModeEnabled() {
+		t.Fatal("expected effective fast mode to be disabled when provider is unavailable")
+	}
+}
+
 func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{

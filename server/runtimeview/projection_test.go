@@ -37,6 +37,16 @@ func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderC
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
+type projectionUnavailableFastClient struct{}
+
+func (projectionUnavailableFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("not implemented")
+}
+
+func (projectionUnavailableFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "azure-openai", SupportsResponsesAPI: true}, nil
+}
+
 type projectionBlockingClient struct {
 	started chan struct{}
 	release chan struct{}
@@ -162,6 +172,31 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 	if status.Goal == nil || !status.Goal.Suspended {
 		t.Fatalf("goal status = %+v, want suspended goal", status.Goal)
+	}
+}
+
+func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T) {
+	eng := newRuntimeViewEngine(
+		t,
+		newRuntimeViewStore(t),
+		projectionUnavailableFastClient{},
+		runtime.Config{
+			Model:          "gpt-5",
+			FastModeState:  runtime.NewFastModeState(true),
+			ThinkingLevel:  "medium",
+			CompactionMode: "auto",
+		},
+	)
+
+	status := TranscriptSessionStatusFromRuntime(eng)
+	if status.FastModeAvailable {
+		t.Fatal("expected transcript status to report fast mode unavailable")
+	}
+	if status.FastModeEnabled {
+		t.Fatal("expected transcript status to disable unavailable fast mode")
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("transcript session status: %v", err)
 	}
 }
 
