@@ -152,17 +152,22 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 						if !ok {
 							return true
 						}
+						if len(returnStmt.Results) == 1 {
+							if call, ok := returnStmt.Results[0].(*ast.CallExpr); ok {
+								if forwarded := testharness.CalledFunction(pkg, call); forwarded != nil {
+									for index := range returning[forwarded] {
+										if markWorkspaceIdentityReturn(returning, callee, index) {
+											changed = true
+										}
+									}
+								}
+							}
+						}
 						for index, result := range returnStmt.Results {
 							if !typedCarriesWorkspaceIdentity(pkg, result, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
 								continue
 							}
-							positions := returning[callee]
-							if positions == nil {
-								positions = make(map[int]bool)
-								returning[callee] = positions
-							}
-							if !positions[index] {
-								positions[index] = true
+							if markWorkspaceIdentityReturn(returning, callee, index) {
 								changed = true
 							}
 						}
@@ -176,6 +181,19 @@ func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named)
 			return workspaceIdentityAnalysis{objects: objects, returning: returning}
 		}
 	}
+}
+
+func markWorkspaceIdentityReturn(returning map[*types.Func]map[int]bool, callee *types.Func, index int) bool {
+	positions := returning[callee]
+	if positions == nil {
+		positions = make(map[int]bool)
+		returning[callee] = positions
+	}
+	if positions[index] {
+		return false
+	}
+	positions[index] = true
+	return true
 }
 
 func assignWorkspaceIdentityFromRHS(pkg *packages.Package, target ast.Expr, values []ast.Expr, resultIndex int, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
@@ -563,8 +581,9 @@ func automatic(base string, workspace Workspace) string {
 import "path/filepath"
 type Workspace struct { ID string }
 func split(workspace Workspace) (string, string) { return "ignored", workspace.ID }
+func outer(workspace Workspace) (string, string) { return split(workspace) }
 func automatic(base string, workspace Workspace) string {
-	_, wid := split(workspace)
+	_, wid := outer(workspace)
 	return filepath.Join(base, wid, "leaf")
 }`,
 	}

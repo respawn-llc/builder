@@ -484,6 +484,7 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 		return "", err
 	}
 	info, err := os.Lstat(parent)
+	parentObserved := err == nil
 	createdParent := false
 	parentCreatedConcurrently := false
 	var capturedParent os.FileInfo
@@ -492,7 +493,7 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 		if !claimed {
 			return true, nil
 		}
-		if parentCreatedConcurrently {
+		if parentObserved || parentCreatedConcurrently {
 			return false, nil
 		}
 		if !createdParent {
