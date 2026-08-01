@@ -20,7 +20,6 @@ type agentStepBoundaryFinalizer struct {
 	hadPendingRecovery  bool
 	stagedFinalPayloads []session.EventRecordPayload
 	stagedFinalMessage  *llm.Message
-	stagedFinalPolicy   steeringMessageEventPolicy
 	deferredStream      *deferredAssistantStreamCleanup
 	detachedManual      []*pendingManualCompaction
 	receipt             session.CommitReceipt
@@ -60,7 +59,6 @@ func (f *agentStepBoundaryFinalizer) Open() {
 	f.hadPendingRecovery = false
 	f.stagedFinalPayloads = nil
 	f.stagedFinalMessage = nil
-	f.stagedFinalPolicy = steeringMessageEventDefault
 	f.deferredStream = nil
 	f.detachedManual = nil
 	f.receipt = session.CommitReceipt{}
@@ -115,7 +113,7 @@ func (f *agentStepBoundaryFinalizer) stageFinalPayload(payload session.EventReco
 	return nil
 }
 
-func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, payload session.EventRecordPayload, policy steeringMessageEventPolicy) error {
+func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, payload session.EventRecordPayload) error {
 	if err := f.stageFinalPayload(payload); err != nil {
 		return err
 	}
@@ -124,7 +122,6 @@ func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, pa
 		copyMessage := message
 		f.stagedFinalMessage = &copyMessage
 	}
-	f.stagedFinalPolicy = policy
 	f.mu.Unlock()
 	return nil
 }

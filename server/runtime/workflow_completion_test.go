@@ -246,6 +246,42 @@ func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.
 	}
 }
 
+func TestWorkflowInvalidCompletionNudgeIsAtomicWithBoundary(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{finalTextResponse("not a completion")}}
+	engine := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+	stepID := "workflow-invalid-atomic"
+	boundary := engine.openAgentStepBoundary(stepID)
+	boundary.MarkDispatched()
+	executor := &defaultStepExecutor{engine: engine}
+	handled, terminal, err := executor.handleWorkflowCompletionSubmission(t.Context(), stepID, "not a completion")
+	if err != nil {
+		t.Fatalf("handle invalid completion: %v", err)
+	}
+	if !handled || terminal {
+		t.Fatalf("invalid completion result = handled:%t terminal:%t, want handled and non-terminal", handled, terminal)
+	}
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	if err := completeAgentStepBoundary(boundary, stepID); err == nil {
+		t.Fatal("blocked workflow invalid-completion boundary unexpectedly succeeded")
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+	if got := controller.violations.Load(); got != 1 {
+		t.Fatalf("workflow protocol violations = %d, want 1", got)
+	}
+
+	for _, record := range mustReadRuntimeEvents(t, engine) {
+		switch mustSessionEventPayload(record).(type) {
+		case session.MessageRecord, session.AgentStepBoundaryRecord:
+			t.Fatal("uncommitted workflow nudge finalization left durable message or boundary")
+		}
+	}
+}
+
 func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

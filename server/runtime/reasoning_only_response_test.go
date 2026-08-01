@@ -76,6 +76,74 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 	}
 }
 
+func TestReasoningOnlyBoundaryFlushesQueuedBackgroundNoticeBeforeNextDispatch(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	completionTool := &externalCompletionTool{controller: controller}
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role: llm.RoleAssistant,
+				ReasoningItems: []llm.ReasoningItem{{
+					ID:               "rs_background",
+					EncryptedContent: "encrypted-reasoning",
+				}},
+			},
+			ReasoningItems: []llm.ReasoningItem{{
+				ID:               "rs_background",
+				EncryptedContent: "encrypted-reasoning",
+			}},
+			OutputItems: []llm.ResponseItem{{
+				Type:             llm.ResponseItemTypeReasoning,
+				ID:               textutil.Value("rs_background"),
+				EncryptedContent: textutil.Value("encrypted-reasoning"),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		commentaryResponse("complete the workflow", llm.ToolCall{
+			ID:    "call_complete_background",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"kent task complete"}`),
+		}),
+	}}
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: completionTool,
+	}), Config{
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+	})
+	scheduler := &defaultBackgroundNoticeScheduler{
+		engine: engine,
+		steps:  &stubExclusiveStepLifecycle{busy: true},
+	}
+	engine.backgroundFlow = scheduler
+	scheduler.QueueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Name:    textutil.Value("background-1"),
+		Content: textutil.Value("background completed"),
+	})
+
+	if _, err := engine.runStepLoop(t.Context(), "reasoning-background"); err != nil {
+		t.Fatalf("runStepLoop: %v", err)
+	}
+	if scheduler.HasPendingNotices() {
+		t.Fatal("reasoning-only boundary left queued background notice pending")
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("model calls = %d, want reasoning-only continuation after one boundary", len(client.calls))
+	}
+	foundNotice := false
+	for _, message := range requestMessages(client.calls[1]) {
+		if message.Role == llm.RoleDeveloper && message.Name != nil && *message.Name == "background-1" {
+			foundNotice = true
+			break
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("next request omitted flushed background notice: %+v", requestMessages(client.calls[1]))
+	}
+}
+
 func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

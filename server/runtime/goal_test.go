@@ -586,6 +586,32 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 	}
 }
 
+func TestGoalNoopFinalWarningIsAtomicWithBoundary(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := &fakeClient{responses: []llm.Response{finalTextResponse("NO_OP")}}
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	baseline := len(mustReadRuntimeEvents(t, engine))
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	if _, err := engine.runStepLoop(t.Context(), "goal-noop-atomic"); err == nil {
+		t.Fatal("blocked goal NO_OP boundary unexpectedly succeeded")
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+
+	records := mustReadRuntimeEvents(t, engine)
+	for _, record := range records[baseline:] {
+		switch mustSessionEventPayload(record).(type) {
+		case session.MessageRecord, session.AgentStepBoundaryRecord:
+			t.Fatal("uncommitted goal NO_OP finalization left durable message or boundary")
+		}
+	}
+}
+
 func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 	msg := llm.Message{
 		Role:           llm.RoleDeveloper,

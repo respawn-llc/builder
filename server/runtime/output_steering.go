@@ -458,7 +458,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if err != nil {
 				return err
 			}
-			return finalizer.StageFinalAssistant(msg, record, item.message.eventPolicy)
+			return finalizer.StageFinalAssistant(msg, record)
 		}
 		if item.message.persist && shouldStageAgentStepMessage(item.message.message) && e.agentStepBoundary(stepID) != nil && e.agentStepBoundary(stepID).Capturing() {
 			return e.stageAgentStepMessageRaw(stepID, item.message.message, item.message.eventPolicy)

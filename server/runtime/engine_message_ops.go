@@ -368,7 +368,7 @@ func (e *Engine) stageAgentStepMessageRaw(stepID string, msg llm.Message, eventP
 	if err != nil {
 		return err
 	}
-	if err := finalizer.StageFinalAssistant(msg, record, eventPolicy); err != nil {
+	if err := finalizer.StageFinalAssistant(msg, record); err != nil {
 		return err
 	}
 	return nil
