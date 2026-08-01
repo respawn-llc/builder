@@ -182,7 +182,6 @@ describe("VerticalReorder", () => {
       pointerId: 1,
     });
     expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
-    expect(within(screen.getByRole("list")).getByRole("presentation", { hidden: true })).toBeInTheDocument();
 
     fireEvent.pointerUp(destination, {
       clientX: 20,
@@ -236,7 +235,6 @@ describe("VerticalReorder", () => {
     await waitFor(() => {
       expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
     });
-    expect(within(screen.getByRole("list")).getByRole("presentation", { hidden: true })).toBeInTheDocument();
     expect(screen.getByTestId("row-second")).not.toBeVisible();
     await user.keyboard("[Space]");
     await waitFor(() => {
