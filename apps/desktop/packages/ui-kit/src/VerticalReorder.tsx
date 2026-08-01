@@ -67,6 +67,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
   const [session, setSession] = useState<VerticalReorderDragSession | null>(null);
+  const pointerListenerActive = useRef(false);
   const rowNodes = useRef(new Map<UniqueIdentifier, HTMLElement>());
   const listRef = useRef<HTMLDivElement | null>(null);
   const edgeScroll = useBoundedVerticalEdgeScroll();
@@ -83,8 +84,15 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     }
     rowNodes.current.set(id, element);
   }, []);
+  const recordPointerPosition = useCallback(
+    (pointer: Readonly<{ x: number; y: number }>) => {
+      edgeScroll.move(pointer);
+    },
+    [edgeScroll],
+  );
   const clearSession = useCallback(() => {
     edgeScroll.stop();
+    pointerListenerActive.current = false;
     setSession(null);
   }, [edgeScroll]);
 
@@ -98,9 +106,13 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       });
       if (source === "pointer") {
         edgeScroll.start(listRef.current);
+        const pointer = pointerActivationLocation(event.activatorEvent);
+        if (pointer !== null) {
+          recordPointerPosition(pointer);
+        }
       }
     },
-    [edgeScroll],
+    [edgeScroll, recordPointerPosition],
   );
 
   const onDragOver = useCallback(
@@ -121,12 +133,15 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       if (session?.source === "keyboard") {
         return;
       }
+      if (pointerListenerActive.current) {
+        return;
+      }
       const pointer = pointerLocation(event);
       if (pointer !== null) {
-        edgeScroll.move(pointer);
+        recordPointerPosition(pointer);
       }
     },
-    [edgeScroll, session?.source],
+    [recordPointerPosition, session?.source],
   );
 
   const onDragEnd = useCallback(
@@ -150,6 +165,21 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   );
 
   useEffect(() => clearSession, [clearSession]);
+  useEffect(() => {
+    if (session?.source !== "pointer") {
+      pointerListenerActive.current = false;
+      return undefined;
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      recordPointerPosition({ x: event.clientX, y: event.clientY });
+    };
+    pointerListenerActive.current = true;
+    window.addEventListener("pointermove", handlePointerMove, { passive: true });
+    return () => {
+      pointerListenerActive.current = false;
+      window.removeEventListener("pointermove", handlePointerMove);
+    };
+  }, [recordPointerPosition, session?.source]);
 
   const activeItem = session === null ? undefined : itemByID.get(session.activeID);
 
@@ -363,12 +393,23 @@ function keyboardCurrentIndex(
 }
 
 function pointerLocation(event: DragMoveEvent): Readonly<{ x: number; y: number }> | null {
-  if (!(event.activatorEvent instanceof PointerEvent)) {
+  return pointerEventLocation(event.activatorEvent, event.delta);
+}
+
+function pointerActivationLocation(event: Event): Readonly<{ x: number; y: number }> | null {
+  return pointerEventLocation(event, { x: 0, y: 0 });
+}
+
+function pointerEventLocation(
+  event: Event,
+  delta: Readonly<{ x: number; y: number }>,
+): Readonly<{ x: number; y: number }> | null {
+  if (!(event instanceof PointerEvent)) {
     return null;
   }
   return {
-    x: event.activatorEvent.clientX + event.delta.x,
-    y: event.activatorEvent.clientY + event.delta.y,
+    x: event.clientX + delta.x,
+    y: event.clientY + delta.y,
   };
 }
 

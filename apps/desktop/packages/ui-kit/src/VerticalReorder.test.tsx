@@ -89,6 +89,67 @@ describe("VerticalReorder", () => {
     view.unmount();
   });
 
+  it("does not commit a pointer activation while the pointer remains in the source row", async () => {
+    const onCommit = vi.fn();
+    mockRowGeometry({ secondHeight: 80 });
+
+    const view = render(<ReorderHarness onCommit={onCommit} />);
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      clientX: 20,
+      clientY: 110,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(screen.getByTestId("row-third"), {
+      buttons: 1,
+      clientX: 20,
+      clientY: 118,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(screen.getByTestId("row-third"), {
+      buttons: 1,
+      clientX: 20,
+      clientY: 119,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    fireEvent.pointerUp(screen.getByTestId("row-third"), {
+      clientX: 20,
+      clientY: 119,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    await waitFor(() => {
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
+    });
+    view.unmount();
+  });
+
+  it("does not commit keyboard activation before one directional move", async () => {
+    const onCommit = vi.fn();
+    const user = userEvent.setup();
+    mockRowGeometry();
+
+    render(<ReorderHarness onCommit={onCommit} />);
+
+    const secondHandle = screen.getByRole("button", { name: "Reorder Second" });
+    secondHandle.focus();
+    await user.keyboard("[Space]");
+    await user.keyboard("[Space]");
+
+    await waitFor(() => {
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("reorder-overlay")).not.toBeInTheDocument();
+    });
+  });
+
   it("commits a pointer drag to the adjacent row and clears the drag projection", async () => {
     const onCommit = vi.fn();
     mockRowGeometry();
@@ -423,7 +484,7 @@ function firstFrame(
   return undefined;
 }
 
-function mockRowGeometry(): void {
+function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number }> = {}): void {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.dataset.testid === "reorder-scrollport" || this === document.documentElement) {
       return {
@@ -447,10 +508,16 @@ function mockRowGeometry(): void {
       third: 2,
     };
     const index = rowID === undefined ? undefined : rowIndexByID[rowID];
-    const top = index === undefined ? 0 : index * 40;
+    const top =
+      index === undefined
+        ? 0
+        : index === 2
+          ? 40 + secondHeight + 8
+          : index * 40;
+    const height = index === 1 ? secondHeight : 32;
     return {
-      bottom: top + 32,
-      height: 32,
+      bottom: top + height,
+      height,
       left: 0,
       right: 240,
       toJSON: () => ({}),
