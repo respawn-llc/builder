@@ -1017,12 +1017,9 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 	for _, span := range line.Spans {
 		spans = append(spans, positionedSpan{span: span})
 	}
-	appendText := func(span Span, text string, leading bool, generatedEllipsis bool) {
+	appendText := func(span Span, text string, leading bool) {
 		fragment := span
 		fragment.Text = text
-		if generatedEllipsis {
-			fragment.Hyperlink = nil
-		}
 		if leading {
 			if out.LeadingSymbol == nil {
 				out.LeadingSymbol = &fragment
@@ -1040,10 +1037,11 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 			cluster := graphemes.Str()
 			w := lipgloss.Width(cluster)
 			if consumed+w > visibleLimit {
-				appendText(span, "…", positioned.leading, true)
+				span.Hyperlink = nil
+				appendText(span, "…", positioned.leading)
 				return out
 			}
-			appendText(span, cluster, positioned.leading, false)
+			appendText(span, cluster, positioned.leading)
 			consumed += w
 		}
 	}

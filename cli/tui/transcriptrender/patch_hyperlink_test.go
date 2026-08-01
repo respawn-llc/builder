@@ -4,7 +4,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
-	"strings"
 	"testing"
 )
 
@@ -14,12 +13,14 @@ func TestPatchHyperlinks(t *testing.T) {
 	status := "ok"
 	statusRow := patchRow(rendered)
 	statusRow.Tool.ResultSummary = &status
-	if strings.Contains(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0].Plain(), status) {
+	success := lastSpan(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0])
+	if role, ok := success.Style.Role(); !ok || role != StyleRoleToolSuccess {
 		t.Fatal("successful patch row displayed result suffix")
 	}
 	status = "failed"
 	statusRow.Tool.IsError = true
-	if !strings.Contains(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0].Plain(), status) {
+	last := lastSpan(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0])
+	if role, ok := last.Style.Role(); !ok || role != StyleRoleNotice || last.Text != status {
 		t.Fatal("failed patch row omitted failure status")
 	}
 	assertPatchLink(t, RenderCommittedRow(patchRow(rendered), 80, "dark", ModeOngoing).Lines, "./dir/file.go", "file:///worktree/dir/file.go")
@@ -53,6 +54,7 @@ func patchLink(lines []Line) (text, url string) {
 	}
 	return text, url
 }
+func lastSpan(line Line) Span { return line.Spans[len(line.Spans)-1] }
 func assertPatchLink(t *testing.T, lines []Line, text, url string) {
 	got, gotURL := patchLink(lines)
 	if got != text || gotURL != url {
