@@ -421,3 +421,11 @@ Final design resolution: the operator rejected the larger prepared-command refac
 - [x] Record the operator's prior explicit direction that the repository cap is non-blocking for this task.
 
 Round 4 progress: shutdown now closes reserved transition futures and prevents post-close commitment; scripts/test.sh derives its help text and behavior from one parallelism cap. The stable shard threshold remains unchanged after the experimental speed-up caused unrelated runtime test contention. The fixed 180-second repository cap remains the only full-suite limitation and is covered by the operator authorization recorded in ticket comments.
+
+## Review remediation round 5
+
+- [x] Keep `scripts/test.sh --help` side-effect-free while interpolating the shared parallelism cap.
+- [x] Add a behavioral Manager.Close regression proving a reserved transition is aborted and cannot commit afterward.
+- [x] Re-run focused shell race tests and the server suite; no feature assertions fail after restoring stable sharding, while the fixed repository cap remains the sole full-suite limitation.
+
+Round 5 progress: help now uses a quoted heredoc piped through a literal placeholder substitution, so documented backticks never execute. `TestManagerCloseAbortsReservedBackgroundTransition` covers Reserve→Close→Commit failure under race. The full server run was rerun and reached only the fixed cap; focused tests and build remain green.
