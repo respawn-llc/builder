@@ -54,7 +54,7 @@ describe("Task dependency removal", () => {
     });
   });
 
-  it("requests an authoritative Task reload after failure", async () => {
+  it("restores the dependency before requesting an authoritative reload after failure", async () => {
     const services = createTaskDetailTestServices(taskWithBlocker(), {
       routes: [
         {
@@ -81,6 +81,7 @@ describe("Task dependency removal", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.task("task-1"),
     });
+    expect(queryClient.getQueryData<TaskDetail>(queryKeys.task("task-1"))?.dependencies.blockerCount).toBe(1);
   });
 });
 

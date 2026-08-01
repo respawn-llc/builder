@@ -38,6 +38,7 @@ import type { BoardColumnDropState } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
 import { BoardBackgroundRefreshNotice } from "./BoardBackgroundRefreshNotice";
 import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
+import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import {
   classifyDrop,
   missingInputValues,
@@ -308,7 +309,7 @@ function BoardContent({
       onMutated: undefined,
       taskID: selectedTaskId,
     }).then((result) => {
-      if (active && result.status === "canceled" && result.reason === "closed") {
+      if (active && taskDetailRouteShouldClose(result)) {
         void navigation
           .closeProjectTask(board.projectID, board.selectedWorkflow.id)
           .catch(reportNavigationError);

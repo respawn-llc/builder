@@ -193,11 +193,16 @@ export function useTaskMutations(
         api.removeTaskDependency(pair.blockerTaskID, pair.blockedTaskID),
       onMutate: async (pair) => {
         await queryClient.cancelQueries({ queryKey: queryKeys.task(taskID) });
+        const previous = queryClient.getQueryData<TaskDetail>(queryKeys.task(taskID)) ?? null;
         queryClient.setQueryData<TaskDetail>(queryKeys.task(taskID), (current) =>
           current === undefined ? current : optimisticTaskDependencyRemoval(current, pair),
         );
+        return { previous };
       },
-      onError: async (error) => {
+      onError: async (error, _pair, context) => {
+        if (context?.previous != null) {
+          queryClient.setQueryData(queryKeys.task(taskID), context.previous);
+        }
         onActionError?.("dependency_remove", error);
         await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) });
       },

@@ -19,7 +19,6 @@ export type TaskInitiatingAction =
   | Readonly<{
       kind: "move";
       input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
-      proceedDespiteDependencies: boolean;
     }>;
 
 export type TaskInitiatingActionResult =
@@ -60,7 +59,6 @@ export function moveTaskInitiatingAction(
       ...input,
       setupOperationID: input.setupOperationID ?? newSetupOperationID(),
     },
-    proceedDespiteDependencies: false,
   };
 }
 
@@ -71,7 +69,6 @@ export function proceedWithTaskInitiatingAction(action: TaskInitiatingAction): T
   return {
     ...action,
     input: { ...action.input, proceedDespiteDependencies: true },
-    proceedDespiteDependencies: true,
   };
 }
 
@@ -121,7 +118,6 @@ export async function executeTaskInitiatingAction(
         response: await api.moveTask({
           ...action.input,
           executionTarget: selection,
-          proceedDespiteDependencies: action.proceedDespiteDependencies,
         }),
       };
   }

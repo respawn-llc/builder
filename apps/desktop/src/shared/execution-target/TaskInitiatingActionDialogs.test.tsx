@@ -37,6 +37,9 @@ describe("TaskInitiatingActionDialogs", () => {
     if (result?.kind !== "continue") {
       throw new Error("Expected a continue result.");
     }
+    if (result.action.kind !== "start") {
+      throw new Error("Expected a Start action.");
+    }
     expect(result.action.proceedDespiteDependencies).toBe(true);
     expect(result.selection).toBeUndefined();
     expect(execute).toHaveBeenCalledOnce();
@@ -85,6 +88,9 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(result?.kind).toBe("continue");
     if (result?.kind !== "continue") {
       throw new Error("Expected a continue result.");
+    }
+    if (result.action.kind !== "start") {
+      throw new Error("Expected a Start action.");
     }
     expect(result.action.proceedDespiteDependencies).toBe(false);
     expect(result.selection).toEqual({ mode: "default_branch", customRef: null });

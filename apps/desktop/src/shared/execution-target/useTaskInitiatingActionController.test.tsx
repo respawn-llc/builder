@@ -168,7 +168,6 @@ describe("task initiating action controller", () => {
       kind: "execution_target",
       action: {
         kind: "move",
-        proceedDespiteDependencies: true,
         input: {
           taskID: "task-1",
           targetNodeID: "node-2",
@@ -176,6 +175,16 @@ describe("task initiating action controller", () => {
         },
       },
     });
+  });
+
+  it("preserves an existing Move proceed intent in its single input authority", () => {
+    const action = moveTaskInitiatingAction({
+      taskID: "task-1",
+      targetNodeID: "node-2",
+      proceedDespiteDependencies: true,
+    });
+
+    expect(action.input.proceedDespiteDependencies).toBe(true);
   });
 });
 
