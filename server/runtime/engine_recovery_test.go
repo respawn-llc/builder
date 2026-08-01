@@ -33,9 +33,11 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
-			if event.Kind == EventAssistantMessage && !failureArmed {
+			if event.Kind == EventModelResponse && !failureArmed {
 				failureArmed = true
-				gate.FailNext(clearErr)
+				gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+					return snapshot.Meta.PendingModelRecovery == nil && snapshot.Meta.LastSequence > 1
+				}, clearErr)
 			}
 		},
 	})
@@ -44,7 +46,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		t.Fatalf("submit error = %v, want committed observer failure", err)
 	}
 	if !failureArmed {
-		t.Fatal("assistant commit did not arm pending-recovery clear failure")
+		t.Fatal("model response did not arm pending-recovery clear failure")
 	}
 
 	clearFailureEvents := 0

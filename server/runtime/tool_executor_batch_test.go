@@ -122,7 +122,7 @@ func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
 		Config{
 			Model: "gpt-5",
 			OnEvent: func(event Event) {
-				if event.Kind != EventToolCallCompleted || event.ToolResult == nil {
+				if event.Kind != EventToolCallCompleted || !event.CommittedTranscriptChanged || event.ToolResult == nil {
 					return
 				}
 				result := *event.ToolResult

@@ -284,7 +284,7 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 			Model:        "gpt-5",
 			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
 			OnEvent: func(event Event) {
-				if event.Kind != EventToolCallCompleted || event.ToolResult == nil {
+				if event.Kind != EventToolCallCompleted || !event.CommittedTranscriptChanged || event.ToolResult == nil {
 					return
 				}
 				resultMu.Lock()

@@ -337,6 +337,9 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 		return result, err
 	}
 	if m.background != nil {
+		if boundary := m.engine.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+			return result, nil
+		}
 		flushed, flushErr := m.background.flushPendingNotices(stepID)
 		result.flushed += flushed
 		if flushErr != nil {
@@ -395,6 +398,9 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			return result, nil
 		}
 		result.flushed++
+		if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+			return result, nil
+		}
 	}
 	for _, item := range pending {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)

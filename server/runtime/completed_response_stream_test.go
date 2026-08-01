@@ -373,6 +373,9 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 			delta = event
 			deltaIndex = index
 		case EventToolCallStarted:
+			if !event.CommittedTranscriptChanged {
+				continue
+			}
 			if event.ToolCall == nil || event.ToolCall.ID != callID {
 				continue
 			}
@@ -382,6 +385,9 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 			toolStart = event
 			toolStartIndex = index
 		case EventToolCallCompleted:
+			if !event.CommittedTranscriptChanged {
+				continue
+			}
 			if event.ToolResult == nil || event.ToolResult.CallID != callID {
 				continue
 			}

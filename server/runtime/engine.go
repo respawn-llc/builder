@@ -867,6 +867,10 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 // 400 is unrelated to missing outputs (nothing to repair), the original error is
 // returned unchanged.
 func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+	return e.generateWithMissingToolOutputRepairAtDispatch(ctx, stepID, rebuild, onDelta, onReasoningDelta, onAttemptReset, nil)
+}
+
+func (e *Engine) generateWithMissingToolOutputRepairAtDispatch(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func(), onDispatch func()) (llm.Response, error) {
 	for {
 		req, err := rebuild()
 		if err != nil {
@@ -891,7 +895,7 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 				onReasoningDelta(delta)
 			}
 		}
-		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset)
+		resp, err := e.generateWithRetryClientAtDispatch(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset, onDispatch)
 		if err == nil {
 			return resp, nil
 		}
@@ -912,6 +916,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 }
 
 func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+	return e.generateWithRetryClientAtDispatch(ctx, stepID, client, req, onDelta, onReasoningDelta, onAttemptReset, nil)
+}
+
+func (e *Engine) generateWithRetryClientAtDispatch(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func(), onDispatch func()) (llm.Response, error) {
 	prepared, err := e.modelRequests().RequestCache().Prepare(req)
 	if err != nil {
 		return llm.Response{}, err
@@ -920,6 +928,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 		return llm.Response{}, err
 	}
 	var lastErr error
+	var dispatchOnce sync.Once
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -954,6 +963,14 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 				onReasoningDelta(delta)
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return llm.Response{}, err
+		}
+		dispatchOnce.Do(func() {
+			if onDispatch != nil {
+				onDispatch()
+			}
+		})
 		if streamingClient, ok := client.(llm.StreamEventsClient); ok {
 			resp, attemptErr = streamingClient.GenerateStreamWithEvents(ctx, req, llm.StreamCallbacks{
 				OnAssistantDelta:        attemptOnDelta,

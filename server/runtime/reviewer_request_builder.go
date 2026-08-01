@@ -28,8 +28,16 @@ func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 }
 
 func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Client) (llm.Request, error) {
+	return e.buildReviewerRequestForStep(ctx, "", reviewerClient)
+}
+
+func (e *Engine) buildReviewerRequestForStep(ctx context.Context, stepID string, reviewerClient llm.Client) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
-	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Meta(), e.transcriptWorkingDir(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
+	items := e.transcriptRuntimeState().SnapshotItems()
+	if boundary := e.agentStepBoundary(stepID); boundary != nil {
+		items = append(items, llm.ItemsFromMessages(boundary.StagedMessages())...)
+	}
+	reviewerItems, err := buildReviewerRequestItemsWithBuilder(items, newActiveMetaContextBuilder(e.store.Meta(), e.transcriptWorkingDir(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
 	if err != nil {
 		return llm.Request{}, err
 	}

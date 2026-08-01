@@ -27,6 +27,8 @@ type manualBoundaryCoordinator struct {
 	mu         sync.Mutex
 	current    *manualBoundaryGeneration
 	nextID     uint64
+	armed      bool
+	armedErr   error
 	turnActive bool
 	changed    chan struct{}
 }
@@ -71,6 +73,8 @@ func (c *manualBoundaryCoordinator) beginGeneration() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextID++
+	c.armed = false
+	c.armedErr = nil
 	c.current = &manualBoundaryGeneration{
 		id:    c.nextID,
 		phase: manualBoundaryGenerationOpen,
@@ -78,6 +82,37 @@ func (c *manualBoundaryCoordinator) beginGeneration() uint64 {
 	c.turnActive = true
 	c.signalLocked()
 	return c.nextID
+}
+
+func (c *manualBoundaryCoordinator) armNextGeneration() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.armed = true
+	c.armedErr = nil
+	c.turnActive = true
+	c.signalLocked()
+	c.mu.Unlock()
+}
+
+func (c *manualBoundaryCoordinator) abortArmedGeneration(err error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if !c.armed || c.current != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.armed = false
+	if err == nil {
+		err = errManualBoundaryNoGeneration
+	}
+	c.armedErr = err
+	c.turnActive = false
+	c.signalLocked()
+	c.mu.Unlock()
 }
 
 func (c *manualBoundaryCoordinator) enqueueForGeneration(
@@ -107,6 +142,11 @@ func (c *manualBoundaryCoordinator) enqueueForGeneration(
 			return entry, nil
 		}
 		if !c.turnActive {
+			if c.armedErr != nil {
+				err := c.armedErr
+				c.mu.Unlock()
+				return nil, err
+			}
 			c.mu.Unlock()
 			return nil, errManualBoundaryNoGeneration
 		}
@@ -154,6 +194,8 @@ func (c *manualBoundaryCoordinator) endTurn() {
 	}
 	c.mu.Lock()
 	c.turnActive = false
+	c.armed = false
+	c.armedErr = nil
 	c.current = nil
 	c.signalLocked()
 	c.mu.Unlock()

@@ -16,6 +16,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/rollbacktarget"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -114,6 +115,67 @@ func (e *Engine) prepareStoredToolCompletion(
 	return payload, backgroundSessionID, hasBackgroundSession
 }
 
+func (e *Engine) stageAgentStepToolCompletionRaw(stepID string, result tools.Result) error {
+	finalizer := e.agentStepBoundary(stepID)
+	if finalizer == nil || !finalizer.Capturing() {
+		return errors.New("agent step boundary is not capturing tool completion")
+	}
+	completion := e.finalizeLiveToolCompletion(result)
+	payload, _, _ := e.prepareStoredToolCompletionForBoundary(completion.Result, finalizer)
+	record, err := sessionToolCompletionRecordFromStored(payload)
+	if err != nil {
+		return err
+	}
+	if err := finalizer.Stage(record); err != nil {
+		return err
+	}
+	finalizer.StageToolCompletionResult(completion.Result)
+	if completion.OperatorFeedback != nil {
+		feedback, normalizeErr := normalizeStoredLocalEntry(*completion.OperatorFeedback)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		feedbackRecord, adaptErr := sessionLocalEntryRecordFromRuntime(feedback)
+		if adaptErr != nil {
+			return adaptErr
+		}
+		if err := finalizer.Stage(feedbackRecord); err != nil {
+			return err
+		}
+	}
+	liveResult := cloneToolResult(completion.Result)
+	finalizer.StageChatEntries(stepID, TranscriptEntriesFromEvent(Event{
+		Kind:       EventToolCallCompleted,
+		StepID:     stepID,
+		ToolResult: &liveResult,
+	}))
+	e.transcriptRuntimeState().CompleteLiveTool(liveResult.CallID)
+	return e.emitRaw(Event{
+		Kind:                       EventToolCallCompleted,
+		StepID:                     stepID,
+		ToolResult:                 &liveResult,
+		CommittedTranscriptChanged: false,
+	})
+}
+
+func (e *Engine) prepareStoredToolCompletionForBoundary(
+	result tools.Result,
+	finalizer *agentStepBoundaryFinalizer,
+) (storedToolCompletion, string, bool) {
+	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(result)
+	if finalizer == nil {
+		return payload, backgroundSessionID, hasBackgroundSession
+	}
+	payload.ProviderItems = e.providerItemsForToolCompletionWithItems(
+		result,
+		append(
+			e.transcriptRuntimeState().SnapshotItems(),
+			llm.ItemsFromMessages(finalizer.StagedMessages())...,
+		),
+	)
+	return payload, backgroundSessionID, hasBackgroundSession
+}
+
 func (e *Engine) applyCommittedStoredToolCompletion(
 	payload storedToolCompletion,
 	backgroundSessionID string,
@@ -128,12 +190,16 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 }
 
 func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseItem {
+	return e.providerItemsForToolCompletionWithItems(r, e.transcriptRuntimeState().SnapshotItems())
+}
+
+func (e *Engine) providerItemsForToolCompletionWithItems(r tools.Result, items []llm.ResponseItem) []llm.ResponseItem {
 	callID := strings.TrimSpace(r.CallID)
 	if callID == "" {
 		return nil
 	}
 	var callItem *llm.ResponseItem
-	for _, item := range e.transcriptRuntimeState().SnapshotItems() {
+	for _, item := range items {
 		if !isToolCallItem(item.Type) {
 			continue
 		}
@@ -157,6 +223,22 @@ func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseIt
 		Name:   textutil.OptionalExactString(name),
 		Output: append(json.RawMessage(nil), r.Output...),
 	}})
+}
+
+func storedToolCompletionResult(completion storedToolCompletion) tools.Result {
+	return tools.Result{
+		CallID:        completion.CallID,
+		Name:          toolspec.ID(completion.Name),
+		IsError:       completion.IsError,
+		Output:        append(json.RawMessage(nil), completion.Output...),
+		Summary:       completion.Summary,
+		CondensedText: completion.CondensedText,
+		Presentation:  completion.Presentation,
+	}
+}
+
+func harvestedBackgroundCompletionSessionIDFromStored(completion storedToolCompletion) (string, bool) {
+	return harvestedBackgroundCompletionSessionID(storedToolCompletionResult(completion))
 }
 
 func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text string) error {
@@ -279,14 +361,6 @@ func (e *Engine) resetLocalDiagnostics() {
 	e.diagnosticDedupeStore().Reset()
 }
 
-func (e *Engine) restoreTransientAgentStepProjection() error {
-	if e == nil {
-		return nil
-	}
-	e.transcriptRuntimeState().ResetProjection()
-	return e.restoreMessages()
-}
-
 func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -379,23 +453,10 @@ func (e *Engine) stageAgentStepMessageRaw(stepID string, msg llm.Message, eventP
 	if err := finalizer.Stage(record); err != nil {
 		return err
 	}
+	if err := finalizer.StageMessage(msg); err != nil {
+		return err
+	}
 	finalizer.StageChatEntries(stepID, VisibleChatEntriesFromMessage(msg))
-	return e.projectMessageRaw(stepID, msg, eventPolicy)
-}
-
-func (e *Engine) projectMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy) error {
-	previousCommittedCount := e.CommittedTranscriptEntryCount()
-	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-	} else {
-		e.markCurrentRequestShapeDirty()
-	}
-	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
-		return fmt.Errorf("append message projection: %w", projectionErr)
-	}
-	if eventPolicy != steeringMessageEventNone && e.CommittedTranscriptEntryCount() > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
-		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
-	}
 	return nil
 }
 
@@ -412,9 +473,35 @@ func (e *Engine) stageAgentStepLocalEntryRaw(stepID string, entry storedLocalEnt
 	if err := finalizer.Stage(record); err != nil {
 		return err
 	}
-	projected := localEntryChatEntryForStep(entry, stepID)
-	e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
-	return e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: projected, CommittedTranscriptChanged: true})
+	finalizer.StageChatEntries(stepID, []ChatEntry{*localEntryChatEntryForStep(entry, stepID)})
+	return nil
+}
+
+func (e *Engine) stageAgentStepQueuedUserMessageFlushRaw(stepID string, flush steeringQueuedUserMessageFlush) error {
+	finalizer := e.agentStepBoundary(stepID)
+	if finalizer == nil || !finalizer.Capturing() {
+		return errors.New("agent step boundary is not capturing queued user message flush")
+	}
+	msg := normalizeMessageForTranscript(
+		llm.Message{Role: llm.RoleUser, Content: textutil.Value(flush.text)},
+		e.transcriptWorkingDir(),
+	)
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+		return nil
+	}
+	msg, record, err := e.prepareMessageRecord(stepID, msg)
+	if err != nil {
+		return err
+	}
+	if err := finalizer.Stage(record); err != nil {
+		return err
+	}
+	if err := finalizer.StageMessage(msg); err != nil {
+		return err
+	}
+	finalizer.StageQueuedUserFlush(flush)
+	finalizer.StageChatEntries(stepID, VisibleChatEntriesFromMessage(msg))
+	return nil
 }
 
 func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventRecordAppendResult, error) {
@@ -627,6 +714,12 @@ func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steer
 }
 
 func (e *Engine) emitCommittedAssistantMessageEventRaw(stepID string, committed steeringCommittedAssistantMessage, streamMetadata *AssistantStreamMetadata, streamID *uuid.UUID) error {
+	if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+		// The assistant message is already staged in the same boundary
+		// transaction. Its committed event is emitted from the append receipt
+		// path, after the durable boundary and all sibling payloads commit.
+		return nil
+	}
 	event := Event{
 		Kind:                        EventAssistantMessage,
 		StepID:                      stepID,
@@ -666,9 +759,10 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 	}
 
 	clearedMetadata, clearedStreamID := e.clearStreamingAssistantStateRaw()
+	boundary := e.agentStepBoundary(stepID)
 	if instruction.kind == completedResponseResolutionInstructionFinalize {
 		committed := instruction.committedAssistant
-		if clearedStreamID != nil {
+		if clearedStreamID != nil && (boundary == nil || !boundary.Capturing()) {
 			e.transcriptRuntimeState().RecordAssistantStreamFinalization(committed.coordinate.start, clearedStreamID)
 		}
 		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
@@ -680,6 +774,20 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 		if clearedStreamID == nil {
 			return completedResponseResolutionOutcome{
 				kind:                             completedResponseResolutionAbsent,
+				committedAssistantEventPublished: true,
+			}, nil
+		}
+		if boundary != nil && boundary.Capturing() {
+			boundary.DeferStreamingAssistantCleanup(
+				clearedMetadata,
+				clearedStreamID,
+				nil,
+				true,
+				committed.coordinate.start,
+			)
+			return completedResponseResolutionOutcome{
+				kind:                             completedResponseResolutionFinalized,
+				streamID:                         cloneTranscriptStreamID(clearedStreamID),
 				committedAssistantEventPublished: true,
 			}, nil
 		}
@@ -695,6 +803,13 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 
 	if clearedStreamID == nil {
 		return completedResponseResolutionOutcome{kind: completedResponseResolutionAbsent}, nil
+	}
+	if boundary != nil && boundary.Capturing() {
+		boundary.DeferStreamingAssistantCleanup(clearedMetadata, clearedStreamID, instruction.abortReason, false, 0)
+		return completedResponseResolutionOutcome{
+			kind:     completedResponseResolutionDiscarded,
+			streamID: cloneTranscriptStreamID(clearedStreamID),
+		}, nil
 	}
 	if err := e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason); err != nil {
 		return completedResponseResolutionOutcome{}, err

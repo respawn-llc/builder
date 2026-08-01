@@ -25,10 +25,10 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	snapshot.Streaming = streaming
 	snapshot.StreamingMetadata = streamingMetadata
 	snapshot.StreamingError = streamingErr
-	e.overlayTransientAgentStepEntries(snapshot)
+	e.overlayPendingAgentStepEntries(snapshot)
 }
 
-func (e *Engine) overlayTransientAgentStepEntries(snapshot *ChatSnapshot) {
+func (e *Engine) overlayPendingAgentStepEntries(snapshot *ChatSnapshot) {
 	e.agentBoundaryMu.Lock()
 	boundaries := make([]*agentStepBoundaryFinalizer, 0, len(e.agentBoundaries))
 	for _, boundary := range e.agentBoundaries {
@@ -921,8 +921,13 @@ func eventShouldCarryContextUsage(evt Event) bool {
 
 func eventShouldCarryCommittedEntryCount(evt Event) bool {
 	switch evt.Kind {
-	case EventBackgroundUpdated:
-		return false
+	case EventBackgroundUpdated,
+		EventAssistantMessage,
+		EventConversationUpdated,
+		EventToolCallStarted,
+		EventToolCallCompleted,
+		EventLocalEntryAdded:
+		return evt.CommittedTranscriptChanged
 	default:
 		return true
 	}

@@ -216,6 +216,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
+	s.engine.compactionRuntimeState().manualBoundaryCoordinator().endTurn()
 	if !errors.Is(err, errPendingModelRecoveryClear) {
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
@@ -227,7 +228,6 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
 	}
-	s.engine.compactionRuntimeState().manualBoundaryCoordinator().endTurn()
 	s.engine.closeAgentStepBoundary(stepID)
 	return err
 }
@@ -498,6 +498,9 @@ func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, opti
 		startedAt:   startedAt,
 		reservation: options.Reservation,
 	}
+	if isAgentStepCapable(options.ActiveKind) {
+		s.engine.compactionRuntimeState().manualBoundaryCoordinator().armNextGeneration()
+	}
 	return stepCtx, stepID
 }
 
@@ -526,6 +529,9 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 			}
 			if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
 				err = errors.Join(err, fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr))
+			}
+			if isAgentStepCapable(options.ActiveKind) {
+				s.engine.compactionRuntimeState().manualBoundaryCoordinator().endTurn()
 			}
 			s.finishTerminalPublication()
 			return nil, "", err

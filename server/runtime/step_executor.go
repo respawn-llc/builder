@@ -65,6 +65,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 	}
 	for {
 		boundary.Open()
+		boundary.ArmGeneration()
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
@@ -81,8 +82,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 
-		boundary.MarkDispatched()
-		resp, err := e.generateWithMissingToolOutputRepair(
+		resp, err := e.generateWithMissingToolOutputRepairAtDispatch(
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
@@ -104,6 +104,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			func() {
 				_ = e.steer(stepID, steerClearStreamingStateIntent())
 			},
+			boundary.MarkDispatched,
 		)
 		if err != nil {
 			return stepLoopResult{}, err
@@ -434,6 +435,11 @@ func completeAgentStepBoundary(finalizer *agentStepBoundaryFinalizer, stepID str
 		if compactor, ok := finalizer.engine.compactionFlow.(*defaultContextCompactor); ok {
 			compactor.drainPendingManualCompactions(stepID, entries)
 		}
+		if finalizer.engine.backgroundFlow != nil {
+			if _, flushErr := finalizer.engine.backgroundFlow.flushPendingNotices(stepID); flushErr != nil {
+				err = errors.Join(err, flushErr)
+			}
+		}
 	} else {
 		finalizer.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(entries, err)
 	}
@@ -571,7 +577,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			}
 		}
 		var toolCallStarts map[string]int
-		assistantCommittedCoordinate, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
+		assistantCommittedCoordinate, toolCallStarts = committedStartsForPersistedAssistantMessage(e, stepID, assistantMsg, executableCallIDs)
 		e.rememberPendingToolCallStarts(toolCallStarts)
 	}
 
@@ -630,7 +636,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 			executableCallIDs[callID] = struct{}{}
 		}
 	}
-	_, toolCallStarts := committedStartsForPersistedAssistantMessage(e, toolCallMessage, executableCallIDs)
+	_, toolCallStarts := committedStartsForPersistedAssistantMessage(e, stepID, toolCallMessage, executableCallIDs)
 	e.rememberPendingToolCallStarts(toolCallStarts)
 	if len(VisibleChatEntriesFromMessage(toolCallMessage)) > 0 {
 		var committedCoordinate *committedAssistantCoordinate
@@ -640,7 +646,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 			}
 		}
 		if committedCoordinate == nil {
-			committedCoordinate, _ = committedStartsForPersistedAssistantMessage(e, toolCallMessage, nil)
+			committedCoordinate, _ = committedStartsForPersistedAssistantMessage(e, stepID, toolCallMessage, nil)
 		}
 		if err := s.publishCommittedAssistantMessage(stepID, toolCallMessage, committedCoordinate); err != nil {
 			return false, false, err
@@ -919,7 +925,7 @@ func sameVisibleChatEntryContent(a, b ChatEntry) bool {
 		strings.TrimSpace(a.ToolCallID) == strings.TrimSpace(b.ToolCallID)
 }
 
-func committedStartsForPersistedAssistantMessage(e *Engine, msg llm.Message, executableCallIDs map[string]struct{}) (*committedAssistantCoordinate, map[string]int) {
+func committedStartsForPersistedAssistantMessage(e *Engine, stepID string, msg llm.Message, executableCallIDs map[string]struct{}) (*committedAssistantCoordinate, map[string]int) {
 	if e == nil {
 		return nil, nil
 	}
@@ -928,7 +934,11 @@ func committedStartsForPersistedAssistantMessage(e *Engine, msg llm.Message, exe
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	start := e.CommittedTranscriptEntryCount() - len(entries)
+	stagedEntryCount := 0
+	if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+		stagedEntryCount = boundary.StagedVisibleChatEntryCount()
+	}
+	start := e.CommittedTranscriptEntryCount() + stagedEntryCount - len(entries)
 	if start < 0 {
 		return nil, nil
 	}

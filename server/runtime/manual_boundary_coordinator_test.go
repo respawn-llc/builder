@@ -52,6 +52,34 @@ func TestManualBoundaryCoordinatorRejectsAdmissionWithoutDispatchedGeneration(t 
 	}
 }
 
+func TestManualBoundaryCoordinatorRejectsArmedAdmissionWhenDispatchAborts(t *testing.T) {
+	coordinator := newManualBoundaryCoordinator()
+	coordinator.armNextGeneration()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := coordinator.enqueueForGeneration(ctx, compactionInstructionsInput{}, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("armed admission completed before dispatch outcome: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	dispatchErr := errors.New("request preparation failed")
+	coordinator.abortArmedGeneration(dispatchErr)
+	select {
+	case err := <-done:
+		if !errors.Is(err, dispatchErr) {
+			t.Fatalf("armed admission error = %v, want dispatch error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("armed admission remained blocked after dispatch abort")
+	}
+}
+
 func TestManualBoundaryCoordinatorMovesLateAdmissionToNextGeneration(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
 	firstGeneration := coordinator.beginGeneration()

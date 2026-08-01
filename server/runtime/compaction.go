@@ -131,6 +131,11 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 			if !errors.Is(err, errManualBoundaryNoGeneration) {
 				return session.CommitReceipt{}, err
 			}
+			if snapshot := c.steps.Snapshot(); snapshot != nil && isAgentStepCapable(snapshot.ActiveKind) {
+				return session.CommitReceipt{}, &ManualCompactionAdmissionError{
+					Reason: ManualCompactionAdmissionReasonActive,
+				}
+			}
 		}
 		if !c.engine.compactionRuntimeState().ManualCompactionEligible() {
 			return session.CommitReceipt{}, &ManualCompactionAdmissionError{

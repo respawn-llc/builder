@@ -50,9 +50,13 @@ type steeringItem struct {
 }
 
 type steeringAgentStepFinalization struct {
-	payloads     []session.EventRecordPayload
-	receipt      *session.CommitReceipt
-	preprojected bool
+	payloads                 []session.EventRecordPayload
+	receipt                  *session.CommitReceipt
+	deferredToolStarts       []Event
+	stagedToolResults        []tools.Result
+	stagedQueuedFlushes      []steeringQueuedUserMessageFlush
+	deferredStreamCleanup    *deferredAssistantStreamCleanup
+	deferredTranscriptUpdate bool
 }
 
 type steeringMessage struct {
@@ -146,9 +150,10 @@ type steeringLiveToolAbort struct {
 }
 
 type steeringQueuedUserMessageFlush struct {
-	text       string
-	batch      []string
-	queueItems []QueuedUserMessage
+	payloadIndex int
+	text         string
+	batch        []string
+	queueItems   []QueuedUserMessage
 }
 
 type steeringMessageEventPolicy uint8
@@ -247,14 +252,22 @@ func steerLiveToolAbortIntent(reason string) steeringIntent {
 func steerAgentStepFinalizationIntent(
 	payloads []session.EventRecordPayload,
 	receipt *session.CommitReceipt,
-	preprojected bool,
+	deferredToolStarts []Event,
+	stagedToolResults []tools.Result,
+	stagedQueuedFlushes []steeringQueuedUserMessageFlush,
+	deferredStreamCleanup *deferredAssistantStreamCleanup,
+	deferredTranscriptUpdate bool,
 ) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{agentStepFinalization: &steeringAgentStepFinalization{
-			payloads:     append([]session.EventRecordPayload(nil), payloads...),
-			receipt:      receipt,
-			preprojected: preprojected,
+			payloads:                 append([]session.EventRecordPayload(nil), payloads...),
+			receipt:                  receipt,
+			deferredToolStarts:       append([]Event(nil), deferredToolStarts...),
+			stagedToolResults:        append([]tools.Result(nil), stagedToolResults...),
+			stagedQueuedFlushes:      append([]steeringQueuedUserMessageFlush(nil), stagedQueuedFlushes...),
+			deferredStreamCleanup:    deferredStreamCleanup,
+			deferredTranscriptUpdate: deferredTranscriptUpdate,
 		}}},
 	}
 }
@@ -468,6 +481,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return nil
 	}
 	if item.localEntry != nil {
+		if e.agentStepBoundary(stepID) != nil && e.agentStepBoundary(stepID).Capturing() && shouldStageAgentStepLocalEntry(item.localEntry.entry) {
+			return e.stageAgentStepLocalEntryRaw(stepID, item.localEntry.entry)
+		}
 		receipt, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)
 		item.recordCommitReceipt(receipt)
 		return err
@@ -478,6 +494,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return err
 	}
 	if item.toolCompletion != nil {
+		if e.agentStepBoundary(stepID) != nil && e.agentStepBoundary(stepID).Capturing() {
+			return e.stageAgentStepToolCompletionRaw(stepID, *item.toolCompletion)
+		}
 		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
 		receipt, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
@@ -498,6 +517,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return err
 	}
 	if item.queuedFlush != nil {
+		if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+			return e.stageAgentStepQueuedUserMessageFlushRaw(stepID, *item.queuedFlush)
+		}
 		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
 		return err
@@ -506,6 +528,20 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		evt := *item.event
 		if evt.StepID == "" {
 			evt.StepID = stepID
+		}
+		if evt.CommittedTranscriptChanged {
+			if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
+				if evt.Kind == EventConversationUpdated && len(TranscriptEntriesFromEvent(evt)) == 0 {
+					boundary.DeferCommittedTranscriptUpdate()
+				}
+				if evt.Kind == EventToolCallStarted {
+					boundary.DeferCommittedToolStart(evt)
+				}
+				// Live runtime events may describe staged output, but they
+				// cannot advance the committed transcript until the boundary
+				// transaction has returned a durable receipt.
+				evt.CommittedTranscriptChanged = false
+			}
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
 			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
@@ -558,17 +594,127 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if item.agentStepFinalization.receipt != nil {
 			*item.agentStepFinalization.receipt = receipt
 		}
-		if item.agentStepFinalization.preprojected {
-			return err
-		}
 		if receipt.Committed {
-			for _, record := range records {
+			committedEntryStart := e.CommittedTranscriptEntryCount()
+			queuedFlushesByPayloadIndex := make(map[int]steeringQueuedUserMessageFlush, len(item.agentStepFinalization.stagedQueuedFlushes))
+			for _, flush := range item.agentStepFinalization.stagedQueuedFlushes {
+				queuedFlushesByPayloadIndex[flush.payloadIndex] = flush
+			}
+			deferredToolStartsEmitted := false
+			emitDeferredToolStarts := func() {
+				if deferredToolStartsEmitted {
+					return
+				}
+				deferredToolStartsEmitted = true
+				for _, deferred := range item.agentStepFinalization.deferredToolStarts {
+					deferred.CommittedTranscriptChanged = true
+					deferred.CommittedEntryCount = e.CommittedTranscriptEntryCount()
+					err = errors.Join(err, e.emitRaw(deferred))
+				}
+			}
+			for recordIndex, record := range records {
 				payload, payloadErr := record.Payload()
 				if payloadErr != nil {
 					err = errors.Join(err, payloadErr)
 					continue
 				}
 				switch typed := payload.(type) {
+				case session.MessageRecord:
+					message, restoreErr := llmMessageFromSessionRecord(typed)
+					if restoreErr != nil {
+						err = errors.Join(err, restoreErr)
+						continue
+					}
+					start := committedEntryStart
+					if mutation := tokenUsageMutationForMessage(message); mutation == tokenUsageMutationSignificant {
+						e.markCurrentRequestShapeDirtyForSignificantMutation()
+					} else {
+						e.markCurrentRequestShapeDirty()
+					}
+					if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, message); projectionErr != nil {
+						err = errors.Join(err, projectionErr)
+						continue
+					}
+					committedEntryStart = e.CommittedTranscriptEntryCount()
+					if flush, queuedFlush := queuedFlushesByPayloadIndex[recordIndex]; queuedFlush {
+						normalizedItems := normalizedQueuedUserMessageStatusItems(flush.queueItems)
+						messageText := ""
+						if message.Content != nil {
+							messageText = *message.Content
+						}
+						e.emitRaw(Event{
+							Kind:                         EventUserMessageFlushed,
+							StepID:                       stepID,
+							UserMessage:                  messageText,
+							UserMessageBatch:             append([]string(nil), flush.batch...),
+							UserMessageBatchQueueItemIDs: queuedUserMessageStatusItemIDs(normalizedItems),
+							UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
+							CommittedTranscriptChanged:   true,
+							CommittedEntryStart:          start,
+							CommittedEntryStartSet:       true,
+							CommittedEntryCount:          e.CommittedTranscriptEntryCount(),
+						})
+						for _, item := range normalizedItems {
+							e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+							e.emitQueuedUserMessageStatus(item, QueuedUserMessageSubmitted, "", false)
+						}
+						e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
+					} else if message.Role != llm.RoleTool && shouldEmitCommittedMessageEvent(message) && e.CommittedTranscriptEntryCount() > start {
+						eventKind := EventConversationUpdated
+						if message.Role == llm.RoleAssistant {
+							eventKind = EventAssistantMessage
+						}
+						var streamMetadata *AssistantStreamMetadata
+						var streamID *uuid.UUID
+						if eventKind == EventAssistantMessage {
+							if cleanup := item.agentStepFinalization.deferredStreamCleanup; cleanup != nil && cleanup.finalizeAssistant {
+								streamMetadata = cloneAssistantStreamMetadata(cleanup.metadata)
+								streamID = cloneTranscriptStreamID(cleanup.streamID)
+							}
+						}
+						err = errors.Join(err, e.emitRaw(Event{
+							Kind:                        eventKind,
+							StepID:                      stepID,
+							CommittedTranscriptChanged:  true,
+							CommittedEntryStart:         start,
+							CommittedEntryStartSet:      true,
+							CommittedEntryCount:         e.CommittedTranscriptEntryCount(),
+							Message:                     message,
+							AssistantStreamMetadata:     streamMetadata,
+							AssistantTranscriptStreamID: streamID,
+						}))
+					}
+				case session.ToolCompletionRecord:
+					emitDeferredToolStarts()
+					completion, restoreErr := storedToolCompletionFromSessionRecord(typed)
+					if restoreErr != nil {
+						err = errors.Join(err, restoreErr)
+						continue
+					}
+					before := e.CommittedTranscriptEntryCount()
+					backgroundSessionID, hasBackgroundSession := harvestedBackgroundCompletionSessionIDFromStored(completion)
+					e.applyCommittedStoredToolCompletion(
+						completion,
+						backgroundSessionID,
+						hasBackgroundSession,
+					)
+					e.transcriptRuntimeState().CompleteLiveTool(completion.CallID)
+					result := storedToolCompletionResult(completion)
+					for _, stagedResult := range item.agentStepFinalization.stagedToolResults {
+						if stagedResult.CallID == result.CallID {
+							result = cloneToolResult(stagedResult)
+							break
+						}
+					}
+					err = errors.Join(err, e.emitRaw(Event{
+						Kind:                       EventToolCallCompleted,
+						StepID:                     stepID,
+						ToolResult:                 &result,
+						CommittedTranscriptChanged: e.CommittedTranscriptEntryCount() > before,
+						CommittedEntryStart:        before,
+						CommittedEntryStartSet:     e.CommittedTranscriptEntryCount() > before,
+						CommittedEntryCount:        e.CommittedTranscriptEntryCount(),
+					}))
 				case session.LocalEntryRecord:
 					entry, restoreErr := storedLocalEntryFromSessionRecord(typed)
 					if restoreErr != nil {
@@ -584,6 +730,29 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 						CommittedTranscriptChanged: true,
 					}))
 				}
+			}
+			emitDeferredToolStarts()
+			if item.agentStepFinalization.deferredTranscriptUpdate {
+				err = errors.Join(err, e.emitRaw(Event{
+					Kind:                       EventConversationUpdated,
+					StepID:                     stepID,
+					CommittedTranscriptChanged: true,
+					CommittedEntryCount:        e.CommittedTranscriptEntryCount(),
+				}))
+			}
+			if cleanup := item.agentStepFinalization.deferredStreamCleanup; cleanup != nil {
+				if cleanup.finalizeAssistant && cleanup.streamID != nil {
+					e.transcriptRuntimeState().RecordAssistantStreamFinalization(
+						cleanup.committedEntryStart,
+						cleanup.streamID,
+					)
+				}
+				err = errors.Join(err, e.emitStreamingAssistantCleanupEventsRaw(
+					stepID,
+					cleanup.metadata,
+					cleanup.streamID,
+					cleanup.abortReason,
+				))
 			}
 		}
 		return err
@@ -619,7 +788,17 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 }
 
 func shouldStageAgentStepMessage(message llm.Message) bool {
-	return message.Role == llm.RoleAssistant && len(message.ToolCalls) == 0
+	if message.Role == llm.RoleAssistant || message.Role == llm.RoleTool {
+		return true
+	}
+	if message.MessageType == nil {
+		return false
+	}
+	return *message.MessageType == llm.MessageTypeReviewerFeedback || *message.MessageType == llm.MessageTypeGoal
+}
+
+func shouldStageAgentStepLocalEntry(entry storedLocalEntry) bool {
+	return strings.TrimSpace(entry.Role) != "" && strings.TrimSpace(entry.Text) != ""
 }
 
 func (item steeringItem) recordCommitReceipt(receipt session.CommitReceipt) {
