@@ -75,6 +75,8 @@ func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (M
 			requiresExecutionTarget: executableNodeKind(target.Kind()),
 			currentNodes:            preview.CurrentNodes,
 		}, nil
+	case ManualMovePreviewOutcomeBlocked:
+		return ManualMovePreparation{}, manualMovePreviewBlockerError(preview.Blocker)
 	default:
 		return ManualMovePreparation{}, fmt.Errorf("manual move preview cannot be prepared from outcome %q", preview.Outcome)
 	}

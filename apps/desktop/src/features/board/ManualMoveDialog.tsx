@@ -233,7 +233,7 @@ function ManualMoveChoicePhase({
     <RadioGroup
       aria-label={t("board.manualMoveTransitionChoices")}
       onValueChange={onSelect}
-      value={selectedTransitionKey}
+      value={selectedTransitionKey ?? ""}
     >
       {choices.map((choice) => (
         <label className="flex items-start gap-[var(--space-2)]" key={choice.transitionKey}>
@@ -291,7 +291,7 @@ function ManualMoveDetailsPhase({
           {requiredValues.map((value) => (
             <TextArea
               key={`${value.nodeKey}:${value.outputName}`}
-              label={value.outputName}
+              label={t("board.manualMoveValueLabel")}
               hint={value.description}
               onChange={(event) => {
                 onValueChange(value.nodeKey, value.outputName, event.target.value);

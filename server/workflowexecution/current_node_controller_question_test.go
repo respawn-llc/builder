@@ -179,6 +179,29 @@ func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testin
 			t.Fatalf("disposition = %q, want waiting_question", disposition)
 		}
 	})
+
+	t.Run("pending session approval", func(t *testing.T) {
+		fixture := newCurrentNodeQuestionFixture(t)
+		reference := currentNodeReferenceForControllerTest(t, "task-disposition-approval", "node-approval")
+		pending := fixture.startPendingPrompt(t, reference, askquestion.AskQuestionRequest{
+			ID:       "ask-disposition-approval",
+			StepID:   uuid.NewString(),
+			Question: "Approve?",
+			Approval: true,
+		})
+		fixture.waitForPendingPrompt(t, reference.TaskID, "ask-disposition-approval")
+		t.Cleanup(func() {
+			pending.handle.RequestStop()
+			_, _ = pending.handle.Wait(context.Background())
+		})
+		disposition, err := fixture.controller.ManualMoveDisposition(reference.TaskID)
+		if err != nil {
+			t.Fatalf("ManualMoveDisposition: %v", err)
+		}
+		if disposition != ManualMoveDispositionLifecycleConflict {
+			t.Fatalf("disposition = %q, want lifecycle_conflict", disposition)
+		}
+	})
 }
 
 func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing.T) {

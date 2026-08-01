@@ -803,6 +803,9 @@ func readManualMoveValues(inline, file string) (map[string]map[string]string, er
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return nil, fmt.Errorf("parse manual move values: %w", err)
 	}
+	if values == nil {
+		return nil, errors.New("parse manual move values: expected a JSON object")
+	}
 	return values, nil
 }
 

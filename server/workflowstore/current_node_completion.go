@@ -527,7 +527,10 @@ func materializeTransitionTargetCurrentNode(
 	source := request.Source
 	target := request.Target
 	if strings.TrimSpace(string(request.ContextTaskID)) == "" {
-		return workflow.CurrentNode{}, ErrManualMoveTransitionNotUsable
+		if request.ManualMoveContext {
+			return workflow.CurrentNode{}, ErrManualMoveTransitionNotUsable
+		}
+		return workflow.CurrentNode{}, errors.New("current node completion requires task id")
 	}
 	transitionGroup, err := transitionGroupForEdge(definition, edge)
 	if err != nil {
@@ -765,7 +768,13 @@ func resolveTransitionTargetSession(
 			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
 			sourceNode.Kind() != workflow.NodeKindAgent ||
 			(manualMoveContext && source.Reference.IsBranchScoped()) {
-			return nil, ErrManualMoveTransitionNotUsable
+			if manualMoveContext {
+				return nil, ErrManualMoveTransitionNotUsable
+			}
+			return nil, fmt.Errorf(
+				"current node completion cannot continue the immediate source session for node %q",
+				workflow.NodeIDOf(sourceNode),
+			)
 		}
 		sessionID := *source.SessionID
 		return &sessionID, nil

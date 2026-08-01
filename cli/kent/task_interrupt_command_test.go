@@ -241,6 +241,21 @@ func TestTaskMoveForwardsNullValueNodeToServerValidation(t *testing.T) {
 	}
 }
 
+func TestTaskMoveRejectsNullValuesDocument(t *testing.T) {
+	allowHumanTaskActionForTest(t)
+	remote := &taskInterruptCommandRemote{}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{
+		"move", "task-1", "implement", "--values-json", "null",
+	}, &stdout, &stderr)
+
+	if exitCode != 2 || stdout.Len() != 0 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+}
+
 func TestTaskMoveRequiresExplicitTransitionForMultipleChoices(t *testing.T) {
 	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{

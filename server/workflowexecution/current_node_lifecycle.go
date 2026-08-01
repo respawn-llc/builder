@@ -48,7 +48,7 @@ func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (M
 	if state.WaitingQuestions > 0 {
 		return ManualMoveDispositionWaitingQuestion, nil
 	}
-	if state.Queued > 0 || state.Finalizing > 0 {
+	if state.WaitingApprovals > 0 || state.Queued > 0 || state.Finalizing > 0 {
 		return ManualMoveDispositionLifecycleConflict, nil
 	}
 	if state.Running > 0 {

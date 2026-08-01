@@ -5,7 +5,7 @@ Usage of kent task:
   kent task interrupt <short-id-or-task-id> [--project <project>] [--session <session-id>] [--reason <text>]
   kent task resume <short-id-or-task-id> [--project <project>]
   kent task approve <approval-id>
-  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--transition <key>] [--values-json <json>|--values-file <path>] [--commentary <text>] [--execution-target none|head|default-branch|ref:<revision>]
+  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--transition <key>] [--values-json <json>|--values-file <path>] [--commentary <text>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--offset <n>] [--limit <n>] [--json]
   kent task search <query> [--fts5] [--case-sensitive] [--context <n>] [--include-comments] [--project <project>]... [--status <status>[,<status>...]] [--page-size <n>] [--offset <n>] [--json]

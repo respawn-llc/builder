@@ -40,6 +40,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		return errors.New("workflow manual move selection operation is required")
 	}
 	a.mu.Lock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			a.mu.Unlock()
+		}
+	}()
 	executions := make([]*execution, 0)
 	for _, execution := range a.byScope {
 		ref, workflowScoped := execution.scope.Workflow()
@@ -71,7 +77,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 			for _, locked := range running {
 				locked.prompts.mu.Unlock()
 			}
-			a.mu.Unlock()
 			return ErrWorkflowQuestionPending
 		}
 	}
@@ -80,7 +85,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		for _, locked := range running {
 			locked.prompts.mu.Unlock()
 		}
-		a.mu.Unlock()
 		return err
 	}
 	resolved := make([]struct {
@@ -97,6 +101,7 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		locked.prompts.mu.Unlock()
 	}
 	a.mu.Unlock()
+	unlocked = true
 	for _, item := range resolved {
 		for _, snapshot := range item.snapshots {
 			item.store.publishResolved(snapshot)

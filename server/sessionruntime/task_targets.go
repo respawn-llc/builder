@@ -81,6 +81,7 @@ func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]
 type WorkflowTaskExecutionState struct {
 	Running          int
 	WaitingQuestions int
+	WaitingApprovals int
 	Queued           int
 	Finalizing       int
 }
@@ -104,9 +105,22 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 		case executionPhaseQueued:
 			state.Queued++
 		case executionPhaseRunning:
-			if execution.prompts.hasPending() {
+			pending, err := execution.prompts.pendingReferences()
+			if err != nil {
+				return WorkflowTaskExecutionState{}, err
+			}
+			questionPending := false
+			for _, prompt := range pending {
+				switch prompt.Kind {
+				case PendingPromptKindQuestion:
+					questionPending = true
+				case PendingPromptKindSessionApproval:
+					state.WaitingApprovals++
+				}
+			}
+			if questionPending {
 				state.WaitingQuestions++
-			} else {
+			} else if len(pending) == 0 {
 				state.Running++
 			}
 		case executionPhaseFinalizing:

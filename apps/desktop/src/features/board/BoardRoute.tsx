@@ -243,12 +243,17 @@ function BoardContent({
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const initiatingAction = useTaskInitiatingActionController({
-    execute: async (action, selection) => executeTaskInitiatingAction(api, action, selection),
-    onApplied: async () => {
-      await actions.refresh();
-    },
-    onAppliedError: (error) => {
+  const refreshBoard = actions.refresh;
+  const executeInitiatingAction = useCallback(
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection) =>
+      executeTaskInitiatingAction(api, action, selection),
+    [api],
+  );
+  const onInitiatingActionApplied = useCallback(async () => {
+    await refreshBoard();
+  }, [refreshBoard]);
+  const onInitiatingActionAppliedError = useCallback(
+    (error: unknown) => {
       push({
         body: errorMessage(error),
         durationMs: Infinity,
@@ -257,9 +262,73 @@ function BoardContent({
         tone: "danger",
       });
     },
+    [push, t],
+  );
+  const initiatingAction = useTaskInitiatingActionController({
+    execute: executeInitiatingAction,
+    onApplied: onInitiatingActionApplied,
+    onAppliedError: onInitiatingActionAppliedError,
   });
+  const {
+    pending: initiatingActionPending,
+    run: runInitiatingAction,
+    running: initiatingActionRunning,
+  } = initiatingAction;
+  const reportActionError = useCallback(
+    (id: string, title: string, error: unknown) => {
+      const body = errorMessage(error);
+      push({ id, tone: "danger", title, body, durationMs: Infinity });
+    },
+    [push],
+  );
+  const reportStartError = useCallback(
+    (error: unknown) => {
+      reportActionError("board-start-error", t("board.startFailed"), error);
+    },
+    [reportActionError, t],
+  );
+  const reportMoveError = useCallback(
+    (error: unknown) => {
+      reportActionError("board-move-error", t("board.moveFailed"), error);
+    },
+    [reportActionError, t],
+  );
+  const reportMovePreviewBlocked = useCallback(
+    (reason: string) => {
+      push({
+        id: "board-move-preview-blocked",
+        tone: "warning",
+        title: t("board.moveBlocked"),
+        body: manualMoveBlockerCopy(reason, t),
+        durationMs: Infinity,
+      });
+    },
+    [push, t],
+  );
+  const clearPendingCardMove = useCallback((pendingMove: PendingBoardCardMove) => {
+    setPendingCardMove((current) =>
+      current?.taskID === pendingMove.taskID && current.targetColumnID === pendingMove.targetColumnID
+        ? null
+        : current,
+    );
+  }, []);
+  const runCardAction = useCallback(
+    (
+      action: TaskInitiatingAction,
+      pendingMove: PendingBoardCardMove,
+      selection?: WorkflowExecutionTargetSelection,
+    ): void => {
+      setPendingCardMove(pendingMove);
+      void runInitiatingAction(action, selection)
+        .catch(action.kind === "start" ? reportStartError : reportMoveError)
+        .finally(() => {
+          clearPendingCardMove(pendingMove);
+        });
+    },
+    [clearPendingCardMove, reportMoveError, reportStartError, runInitiatingAction],
+  );
   const actionsDisabled =
-    connection.phase !== "connected" || initiatingAction.running || initiatingAction.pending !== null;
+    connection.phase !== "connected" || initiatingActionRunning || initiatingActionPending !== null;
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,
@@ -295,13 +364,6 @@ function BoardContent({
       ? expandedEmptyColumns.ids
       : emptyExpandedEmptyColumnIDs;
   useWindowChromeTitle(board.selectedWorkflow.name || board.projectName);
-  const reportActionError = useCallback(
-    (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
-    },
-    [push],
-  );
   const reportCardsLoadError = useCallback(
     (error: unknown) => {
       reportActionError("board-cards-load-error", t("board.cardsLoadFailed"), error);
@@ -414,14 +476,6 @@ function BoardContent({
     }
   }
 
-  function reportStartError(error: unknown): void {
-    reportActionError("board-start-error", t("board.startFailed"), error);
-  }
-
-  function reportMoveError(error: unknown): void {
-    reportActionError("board-move-error", t("board.moveFailed"), error);
-  }
-
   function reportInterruptError(error: unknown): void {
     reportActionError("board-interrupt-error", t("board.interruptFailed"), error);
   }
@@ -471,29 +525,6 @@ function BoardContent({
     });
   }
 
-  function reportMovePreviewBlocked(reason: string): void {
-    push({
-      id: "board-move-preview-blocked",
-      tone: "warning",
-      title: t("board.moveBlocked"),
-      body: manualMoveBlockerCopy(reason, t),
-      durationMs: Infinity,
-    });
-  }
-
-  function runCardAction(
-    action: TaskInitiatingAction,
-    pendingMove: PendingBoardCardMove,
-    selection?: WorkflowExecutionTargetSelection,
-  ): void {
-    setPendingCardMove(pendingMove);
-    void initiatingAction
-      .run(action, selection)
-      .catch(action.kind === "start" ? reportStartError : reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
-  }
 
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {
@@ -516,14 +547,6 @@ function BoardContent({
         targetColumnID,
       },
       result.selection,
-    );
-  }
-
-  function clearPendingCardMove(pendingMove: PendingBoardCardMove): void {
-    setPendingCardMove((current) =>
-      current?.taskID === pendingMove.taskID && current.targetColumnID === pendingMove.targetColumnID
-        ? null
-        : current,
     );
   }
 

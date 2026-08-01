@@ -381,7 +381,7 @@ kent task move <task> <target-node-id> --values-file ./move-values.json
 
 Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
 
-Desktop shows the server's Transition choices and required values, including resolved values that can be edited. Confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
+Desktop shows the server's Transition choices and required values, including resolved values that can be edited. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
 
 ### Complete Work From The CLI
 
