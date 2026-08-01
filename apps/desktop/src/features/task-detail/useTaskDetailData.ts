@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { QuestionAnswerInput, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
@@ -27,33 +27,35 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
   const connection = useConnectionSnapshot();
   const connectionPhase = connection.phase;
   const connectionGeneration = connection.generation;
+  const taskID = detail.id;
+  const projectID = detail.projectID;
+  const relatedTaskIDs = useMemo(() => dependencyRelatedTaskIDs(detail), [detail]);
+  const relatedTaskIDsRef = useRef(relatedTaskIDs);
 
   useEffect(() => {
-    if (
-      !enabled ||
-      detail.id.length === 0 ||
-      detail.projectID.length === 0 ||
-      connectionPhase !== "connected"
-    ) {
+    relatedTaskIDsRef.current = relatedTaskIDs;
+  }, [relatedTaskIDs]);
+
+  useEffect(() => {
+    if (!enabled || taskID.length === 0 || projectID.length === 0 || connectionPhase !== "connected") {
       return;
     }
-    const relatedTaskIDs = dependencyRelatedTaskIDs(detail);
     const refresh = async (): Promise<void> => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: queryKeys.task(detail.id),
+          queryKey: queryKeys.task(taskID),
           refetchType: "active",
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.taskAttention(detail.id),
+          queryKey: queryKeys.taskAttention(taskID),
           refetchType: "active",
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.activity(detail.id),
+          queryKey: queryKeys.activity(taskID),
           refetchType: "active",
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.comments(detail.id),
+          queryKey: queryKeys.comments(taskID),
           refetchType: "active",
         }),
         queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
@@ -64,12 +66,12 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
         void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
       });
     };
-    const subscription = api.subscribeProject(detail.projectID, {
+    const subscription = api.subscribeProject(projectID, {
       onOpen() {
         refreshOrReport();
       },
       onEvent(event) {
-        if (!workflowProjectEventAffectsDependencyDetail(event, detail.id, relatedTaskIDs)) {
+        if (!workflowProjectEventAffectsDependencyDetail(event, taskID, relatedTaskIDsRef.current)) {
           return;
         }
         refreshOrReport();
@@ -84,7 +86,7 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
     return () => {
       subscription.close();
     };
-  }, [api, connectionGeneration, connectionPhase, detail, enabled, logger, queryClient]);
+  }, [api, connectionGeneration, connectionPhase, enabled, logger, projectID, queryClient, taskID]);
 }
 
 export function useTaskDetail(taskID: string, enabled: boolean) {

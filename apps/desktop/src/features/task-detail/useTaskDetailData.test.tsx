@@ -28,6 +28,8 @@ describe("Task Detail live refresh", () => {
 
     await waitForQuestionOptionCount(1);
     await waitForProjectSubscription(() => services.transport.subscriptions);
+    const subscriptionStarts = projectSubscriptionStartCount(services.transport.subscriptionStarts);
+    expect(subscriptionStarts).toBeGreaterThan(0);
     await services.api.answerQuestion({
       kind: "ordinary",
       clientRequestID: "request-1",
@@ -42,6 +44,7 @@ describe("Task Detail live refresh", () => {
     });
 
     await waitForQuestionOptionCount(2);
+    expect(projectSubscriptionStartCount(services.transport.subscriptionStarts)).toBe(subscriptionStarts);
   });
 
   it("revalidates an open Task Detail when a reconnected project subscription opens", async () => {
@@ -93,6 +96,12 @@ function taskAttention(askID: string, optionCount: number) {
     ],
     generated_at_unix_ms: 3,
   };
+}
+
+function projectSubscriptionStartCount(
+  subscriptions: readonly Readonly<{ method: string; params: unknown }>[],
+): number {
+  return subscriptions.filter((subscription) => subscription.method === "workflow.subscribeProject").length;
 }
 
 function taskQuestionWaitingEventFor(askID: string) {

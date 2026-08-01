@@ -17,6 +17,7 @@ export type FakeRoute = Readonly<{
 export class FakeRpcTransport implements RpcTransport {
   readonly connection = new ConnectionStore();
   readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
+  readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
   #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
@@ -54,6 +55,7 @@ export class FakeRpcTransport implements RpcTransport {
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     const entry = { method, params, handler };
+    this.subscriptionStarts.push({ method, params });
     this.#subscribers.push(entry);
     return {
       close: () => {
