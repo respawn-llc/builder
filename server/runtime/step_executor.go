@@ -706,17 +706,7 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 }
 
 func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
-	e := s.engine
-	execution, active := e.currentNodeExecutionConfig()
-	if !active || execution.Controller == nil {
-		return errors.New("current node execution is unavailable")
-	}
-	_, completeErr := execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      execution.ScopeID,
-		TransitionID: parsed.TransitionID,
-		OutputValues: parsed.OutputValues,
-		Commentary:   parsed.Commentary,
-	})
+	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, parsed)
 	return completeErr
 }
 

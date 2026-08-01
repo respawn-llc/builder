@@ -218,6 +218,11 @@ func NewCurrentNodeController(
 
 func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
 	_, err := c.completeLiveCurrentNode(ctx, req)
+	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) && req.SessionID != nil {
+		_, err = c.CompleteIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
+			SessionID: req.SessionID,
+		}, req.TransitionID, req.OutputValues, req.Commentary)
+	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}

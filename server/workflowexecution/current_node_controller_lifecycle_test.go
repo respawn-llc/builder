@@ -13,6 +13,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
@@ -29,6 +30,38 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 	if err := controller.EnsureTaskQuiescent(taskID); !errors.Is(err, cause) {
 		t.Fatalf("EnsureTaskQuiescent error = %v, want worker failure %v", err, cause)
+	}
+}
+
+func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	source := currentNodeReferenceForControllerTest(t, "task-retained-session-completion", "node-source")
+	sourceNode := workflow.CurrentNode{
+		Reference: source,
+		SessionID: &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+		ScopeID:      runtimeids.NewExecutionScopeID(),
+		SessionID:    &sessionID,
+		TransitionID: "next",
+	}); err != nil {
+		t.Fatalf("complete retained Session Current Node: %v", err)
+	}
+	if calls := store.completionCount(); calls != 1 {
+		t.Fatalf("completion calls = %d, want 1", calls)
 	}
 }
 
