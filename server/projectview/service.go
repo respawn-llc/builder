@@ -18,7 +18,7 @@ import (
 	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/filesystem"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -491,11 +491,11 @@ func (a projectSessionDeleteArtifacts) Recover(state workflowstore.ProjectDelete
 	if err != nil {
 		return false, err
 	}
-	sessionsExists, err := filesystem.PathExists(sessionsRoot)
+	sessionsExists, err := config.PathExists(sessionsRoot)
 	if err != nil {
 		return false, err
 	}
-	tombstoneExists, err := filesystem.PathExists(tombstoneRoot)
+	tombstoneExists, err := config.PathExists(tombstoneRoot)
 	if err != nil {
 		return false, err
 	}
@@ -546,12 +546,12 @@ func (a projectSessionDeleteArtifacts) Stage() error {
 	if err != nil {
 		return err
 	}
-	if exists, err := filesystem.PathExists(tombstoneRoot); err != nil {
+	if exists, err := config.PathExists(tombstoneRoot); err != nil {
 		return err
 	} else if exists {
 		return errors.New("project sessions delete tombstone already exists")
 	}
-	exists, err := filesystem.PathExists(sessionsRoot)
+	exists, err := config.PathExists(sessionsRoot)
 	if err != nil {
 		return err
 	}
@@ -569,14 +569,14 @@ func (a projectSessionDeleteArtifacts) Restore() error {
 	if err != nil {
 		return err
 	}
-	tombstoneExists, err := filesystem.PathExists(tombstoneRoot)
+	tombstoneExists, err := config.PathExists(tombstoneRoot)
 	if err != nil {
 		return err
 	}
 	if !tombstoneExists {
 		return nil
 	}
-	if sessionsExists, err := filesystem.PathExists(sessionsRoot); err != nil {
+	if sessionsExists, err := config.PathExists(sessionsRoot); err != nil {
 		return err
 	} else if sessionsExists {
 		return errors.New("project sessions root exists while restoring delete tombstone")

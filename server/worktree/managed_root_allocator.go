@@ -15,7 +15,6 @@ import (
 
 	"core/server/metadata"
 	"core/shared/config"
-	"core/shared/filesystem"
 )
 
 const (
@@ -334,7 +333,7 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 		candidate := workspacePathKeyCandidate(seed, suffix)
 		attempted = append(attempted, candidate)
 		parent := filepath.Join(base, candidate)
-		exists, err := filesystem.PathExists(parent)
+		exists, err := config.PathExists(parent)
 		if err != nil {
 			return "", fmt.Errorf("inspect managed workspace parent candidate %q: %w", parent, err)
 		}
