@@ -447,19 +447,11 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 
 func completeAgentStepBoundary(finalizer *agentStepBoundaryFinalizer, stepID string) error {
 	receipt, err := finalizer.Commit(stepID, nil)
-	finalizer.Complete(receipt)
-	entries := finalizer.TakeDetachedManual()
-	if receipt.Committed {
-		if compactor, ok := finalizer.engine.compactionFlow.(*defaultContextCompactor); ok {
-			compactor.drainPendingManualCompactions(stepID, entries)
+	err = finalizeAgentStepBoundaryCommit(finalizer, stepID, receipt, err)
+	if receipt.Committed && finalizer.engine.backgroundFlow != nil {
+		if _, flushErr := finalizer.engine.backgroundFlow.flushPendingNotices(stepID); flushErr != nil {
+			err = errors.Join(err, flushErr)
 		}
-		if finalizer.engine.backgroundFlow != nil {
-			if _, flushErr := finalizer.engine.backgroundFlow.flushPendingNotices(stepID); flushErr != nil {
-				err = errors.Join(err, flushErr)
-			}
-		}
-	} else {
-		finalizer.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(entries, err)
 	}
 	return err
 }

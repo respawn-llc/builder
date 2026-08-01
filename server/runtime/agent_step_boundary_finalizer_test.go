@@ -106,6 +106,39 @@ func TestRequestPreparationFailureDoesNotOpenAgentStepGeneration(t *testing.T) {
 	}
 }
 
+func TestRepeatedProviderDispatchKeepsOneManualBoundaryGeneration(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(), Config{})
+	finalizer := engine.openAgentStepBoundary("step-retry")
+	finalizer.MarkDispatched()
+	coordinator := engine.compactionRuntimeState().manualBoundaryCoordinator()
+
+	coordinator.mu.Lock()
+	if coordinator.current == nil {
+		coordinator.mu.Unlock()
+		t.Fatal("first provider dispatch did not open a manual boundary generation")
+	}
+	firstGenerationID := coordinator.current.id
+	coordinator.mu.Unlock()
+
+	entry, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+	if err != nil {
+		t.Fatalf("enqueue pending compaction: %v", err)
+	}
+	finalizer.MarkDispatched()
+
+	coordinator.mu.Lock()
+	current := coordinator.current
+	coordinator.mu.Unlock()
+	if current == nil || current.id != firstGenerationID {
+		t.Fatalf("retry dispatch replaced generation %d with %+v", firstGenerationID, current)
+	}
+	detached := coordinator.sealAndTake()
+	if len(detached) != 1 || detached[0] != entry {
+		t.Fatalf("detached retry-generation entries = %+v, want original pending entry", detached)
+	}
+	entry.complete(manualCompactionResult{err: errors.New("test cleanup")})
+}
+
 type agentBoundaryTestObserver struct {
 	err error
 }

@@ -72,9 +72,12 @@ func (f *agentStepBoundaryFinalizer) MarkDispatched() {
 	}
 	f.mu.Lock()
 	if f.open && !f.committed && !f.aborted {
+		firstDispatch := !f.dispatched
 		f.dispatched = true
 		f.capturing = true
-		f.engine.compactionRuntimeState().manualBoundaryCoordinator().beginGeneration()
+		if firstDispatch {
+			f.engine.compactionRuntimeState().manualBoundaryCoordinator().beginGeneration()
+		}
 	}
 	f.mu.Unlock()
 }

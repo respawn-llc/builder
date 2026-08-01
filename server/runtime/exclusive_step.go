@@ -269,15 +269,7 @@ func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
 	}
 	receipt, commitErr, committed := boundary.Committed()
 	if committed {
-		if receipt.Committed {
-			boundary.Complete(receipt)
-			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
-		} else {
-			finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
-			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
-			return finalizationErr
-		}
-		return commitErr
+		return finalizeAgentStepBoundaryCommit(boundary, stepID, receipt, commitErr)
 	}
 	if terminalErr != nil && !errors.Is(terminalErr, context.Canceled) {
 		entry := storedLocalEntry{
@@ -296,22 +288,36 @@ func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
 		}
 		receipt, commitErr := boundary.Commit(stepID, []session.EventRecordPayload{record})
 		if receipt.Committed {
-			boundary.Complete(receipt)
-			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
-			return errors.Join(commitErr, errTerminalRunErrorPersisted)
+			return errors.Join(
+				finalizeAgentStepBoundaryCommit(boundary, stepID, receipt, commitErr),
+				errTerminalRunErrorPersisted,
+			)
 		}
-		finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
-		s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
-		return finalizationErr
+		return finalizeAgentStepBoundaryCommit(boundary, stepID, receipt, commitErr)
 	}
 	receipt, commitErr = boundary.Commit(stepID, nil)
+	return finalizeAgentStepBoundaryCommit(boundary, stepID, receipt, commitErr)
+}
+
+func finalizeAgentStepBoundaryCommit(
+	boundary *agentStepBoundaryFinalizer,
+	stepID string,
+	receipt session.CommitReceipt,
+	commitErr error,
+) error {
+	if boundary == nil {
+		return commitErr
+	}
+	boundary.Complete(receipt)
+	entries := boundary.TakeDetachedManual()
 	if receipt.Committed {
-		boundary.Complete(receipt)
-		s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
+		if compactor, ok := boundary.engine.compactionFlow.(*defaultContextCompactor); ok {
+			compactor.drainPendingManualCompactions(stepID, entries)
+		}
 		return commitErr
 	}
 	finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
-	s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), finalizationErr)
+	boundary.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(entries, finalizationErr)
 	return finalizationErr
 }
 
