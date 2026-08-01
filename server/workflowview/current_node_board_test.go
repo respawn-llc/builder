@@ -225,7 +225,7 @@ func TestBoardListNodeCardsSupportsScalarSortsAndBidirectionalPagination(t *test
 		t.Run(tt.name, func(t *testing.T) {
 			request := serverapi.WorkflowBoardNodeCardsListRequest{
 				ProjectID:  fixture.binding.ProjectID,
-				WorkflowID: string(fixture.workflowID),
+				WorkflowID: fixture.workflowID,
 				NodeID:     string(fixture.agentNodeID),
 				PageSize:   2,
 				Sort:       &tt.sort,

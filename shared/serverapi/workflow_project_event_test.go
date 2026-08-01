@@ -95,7 +95,7 @@ func TestWorkflowProjectEventValidatesTypedResourceActionAndScope(t *testing.T) 
 			name: "catalog reorder forbids workflow and related identities",
 			event: WorkflowProjectEvent{
 				ProjectID:        eventID("project-1"),
-				WorkflowID:       eventID("workflow-1"),
+				WorkflowID:       workflowEventID(),
 				Resource:         WorkflowProjectEventResourceLabelCatalog,
 				Action:           WorkflowProjectEventActionReordered,
 				PrimaryEntityID:  "project-1",

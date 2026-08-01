@@ -3,14 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  errorMessage,
   hasSelectedWorkflow,
   type BoardColumn,
   type SelectedWorkflowBoard,
   type WorkflowExecutionTargetSelection,
 } from "@/api";
-import { errorMessage } from "@/api";
-import { useAppNavigation } from "@/app-facade";
-import { useConnectionSnapshot } from "@/app-facade";
+import { useAppNavigation, useConnectionSnapshot } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -53,7 +52,6 @@ import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLa
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
-
 export type BoardRouteProps = Readonly<{
   projectId: string;
   workflowId: string | undefined;
@@ -61,13 +59,6 @@ export type BoardRouteProps = Readonly<{
 }>;
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
-
-function boardFilterScopeKey(projectID: string, workflowID: string | undefined): string {
-  return workflowID === undefined
-    ? `project:${projectID}`
-    : `workflow:${projectID}:${workflowID}`;
-}
-
 export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const reportBoardLoadError = useBoardLoadErrorReporter();
   const membershipRefreshRef = useRef<BoardMembershipRefreshRef["current"]>(ignoreBoardMembershipRefresh);
@@ -88,7 +79,6 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
     </ProjectLabelsProvider>
   );
 }
-
 function BoardRouteWithLabels({
   membershipRefreshRef,
   onBackgroundError,
@@ -103,7 +93,7 @@ function BoardRouteWithLabels({
   const filter = useProjectLabelFilter();
   return (
     <BoardFilterGenerationProvider
-      key={boardFilterScopeKey(projectId, workflowId)}
+      key={workflowId === undefined ? `project:${projectId}` : `workflow:${projectId}:${workflowId}`}
       desiredFilter={filter.state.filter}
       initialFilter={filter.state.filter}
       onBackgroundError={onBackgroundError}

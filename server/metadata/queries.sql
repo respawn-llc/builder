@@ -311,7 +311,7 @@ LEFT JOIN tasks project_latest_task
         ORDER BY latest_task.updated_at_unix_ms DESC, latest_task.id DESC
         LIMIT 1
     )
-WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
+WHERE workflows.id = COALESCE(sqlc.narg(workflow_id), workflows.id)
   AND (
       sqlc.arg(search_query) = ''
       OR lower(workflows.name) LIKE '%' || lower(sqlc.arg(search_query)) || '%'
@@ -796,7 +796,7 @@ WHERE workflow_edges.id = sqlc.arg(edge_id)
 -- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
@@ -962,7 +962,7 @@ WHERE project_workflow_links.id = sqlc.arg(id)
 
 -- name: GetProjectWorkflowUnlinkState :one
 SELECT
-    COALESCE(p.default_project_workflow_link_id, '') AS default_project_workflow_link_id,
+    p.default_project_workflow_link_id AS default_project_workflow_link_id,
     (SELECT CAST(COUNT(*) AS INTEGER) FROM project_workflow_links active WHERE active.project_id = p.id) AS active_link_count
 FROM projects p
 WHERE p.id = sqlc.arg(project_id);
@@ -1012,7 +1012,7 @@ WHERE id IN (
 -- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
-    default_project_workflow_link_id = '',
+    default_project_workflow_link_id = NULL,
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE default_project_workflow_link_id IN (
     SELECT id
@@ -1416,7 +1416,7 @@ WITH
 args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-        CAST(sqlc.narg(workflow_id) AS TEXT) AS workflow_id,
+        sqlc.narg(workflow_id) AS workflow_id,
         CAST(sqlc.narg(visible_columns_json) AS TEXT) AS visible_columns_json,
         CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
         CAST(sqlc.narg(column_keys_json) AS TEXT) AS column_keys_json,
@@ -1762,7 +1762,7 @@ SELECT
     task.id,
     CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
     task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
     task.workflow_revision_seen,
     task.task_seq,
     task.short_id,
@@ -1862,7 +1862,7 @@ SELECT
     task.id,
     CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
     task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
     task.workflow_revision_seen,
     task.task_seq,
     task.short_id,
@@ -1957,7 +1957,7 @@ SELECT
     task.id,
     CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
     task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
     task.workflow_revision_seen,
     task.task_seq,
     task.short_id,
@@ -2057,7 +2057,7 @@ SELECT
     task.id,
     CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
     task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
     task.workflow_revision_seen,
     task.task_seq,
     task.short_id,
@@ -2855,9 +2855,9 @@ SELECT
     COALESCE(w.id, '') AS primary_workspace_id,
     COALESCE(w.canonical_root_path, '') AS primary_workspace_root_path,
     CAST(COALESCE(w.updated_at_unix_ms, p.updated_at_unix_ms) AS INTEGER) AS primary_workspace_updated_at_unix_ms,
-    COALESCE(default_workflow.id, '') AS default_workflow_id,
-    COALESCE(default_workflow.name, '') AS default_workflow_name,
-    CASE WHEN default_workflow.id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
+    default_workflow.workflow_id AS default_workflow_id,
+    COALESCE(default_workflow.workflow_name, '') AS default_workflow_name,
+    CASE WHEN default_workflow.workflow_id IS NULL THEN 0 ELSE 1 END AS default_workflow_valid,
     CAST(MAX(
         p.updated_at_unix_ms,
         COALESCE(w.updated_at_unix_ms, 0),
@@ -2886,10 +2886,7 @@ SELECT
     ) AS INTEGER) AS workflow_count
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
-LEFT JOIN project_workflow_links default_link
-    ON default_link.id = p.default_project_workflow_link_id
-   AND default_link.project_id = p.id
-LEFT JOIN workflows default_workflow ON default_workflow.id = default_link.workflow_id
+JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
 WHERE (sqlc.arg(project_id) = '' OR p.id = sqlc.arg(project_id))
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT sqlc.arg(limit_rows)
@@ -3895,3 +3892,461 @@ SELECT
 FROM task_pending_approval_branches
 WHERE approval_id = sqlc.arg(approval_id)
 ORDER BY transition_branch_key;
+-- name: GetTaskDependency :one
+SELECT blocker_task_id, blocked_task_id
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id)
+LIMIT 1;
+
+
+-- name: AcquireTaskDependencyWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = sqlc.arg(task_id)
+)
+RETURNING id;
+
+
+-- name: CountTaskDependenciesByBlocker :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id);
+
+
+-- name: CountTaskDependenciesByBlocked :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocked_task_id = sqlc.arg(blocked_task_id);
+
+
+-- name: InsertTaskDependency :exec
+INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
+
+
+-- name: DeleteTaskDependency :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id);
+
+
+-- name: ListTaskDependencyProjectionRows :many
+SELECT
+    CAST(
+        CASE
+            WHEN td.blocked_task_id = sqlc.arg(task_id) THEN 'blocked-by'
+            ELSE 'blocks'
+        END AS TEXT
+    ) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related
+  ON related.id = CASE
+      WHEN td.blocked_task_id = sqlc.arg(task_id) THEN td.blocker_task_id
+      ELSE td.blocked_task_id
+  END
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY direction ASC, related.short_id ASC, related.id ASC
+LIMIT 101;
+
+
+-- name: ListTaskDependencyBlockedByProjectionRows :many
+SELECT
+    CAST('blocked-by' AS TEXT) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related ON related.id = td.blocker_task_id
+WHERE td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY related.short_id ASC, related.id ASC
+LIMIT 51;
+
+
+-- name: ListTaskDependencyNeighborIDs :many
+SELECT DISTINCT
+    CAST(CASE
+        WHEN td.blocker_task_id = sqlc.arg(task_id) THEN td.blocked_task_id
+        ELSE td.blocker_task_id
+    END AS TEXT) AS task_id
+FROM task_dependencies td
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY task_id ASC
+LIMIT 100;
+
+
+-- name: DeleteTaskDependenciesByTask :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(task_id)
+   OR blocked_task_id = sqlc.arg(task_id);
+
+
+-- name: ListTaskDependencyProgressByTasks :many
+SELECT
+    td.blocked_task_id AS task_id,
+    CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+    CAST(SUM(CASE WHEN (
+        SELECT status.is_done
+        FROM workflow_task_status_records status
+        WHERE status.task_id = td.blocker_task_id
+        LIMIT 1
+    ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+WHERE td.blocked_task_id IN (sqlc.slice('task_ids'))
+GROUP BY td.blocked_task_id;
+
+
+-- name: TouchTasksUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (sqlc.slice('task_ids'));
+
+
+-- name: AcquireWorkflowDependencyWriteLock :execrows
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id IN (
+    SELECT DISTINCT task_records.project_id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
+
+-- name: TouchWorkflowDependencySurvivors :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (
+    SELECT DISTINCT CAST(
+        CASE
+            WHEN td.blocker_task_id IN (
+                SELECT id
+                FROM task_records
+                WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+            ) THEN td.blocked_task_id
+            ELSE td.blocker_task_id
+        END AS TEXT
+    ) AS task_id
+    FROM task_dependencies td
+    WHERE (
+        td.blocker_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+    AND (
+        td.blocker_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+);
+
+
+-- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+)
+OR blocked_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
+
+-- name: AnchorTaskSearchReadSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM task_search_documents
+) AS anchored;
+
+
+-- name: ListBoardNodeTasks :many
+WITH board_node_tasks AS (
+    SELECT
+        t.id,
+        t.project_id,
+        t.project_workflow_link_id,
+        t.workflow_id,
+        t.workflow_revision_seen,
+        t.task_seq,
+        t.short_id,
+        t.title,
+        t.body,
+        t.source_url,
+        t.source_workspace_id,
+        t.managed_worktree_id,
+        t.execution_target_mode,
+        t.execution_target_requested_ref,
+        t.execution_target_resolved_ref,
+        t.execution_target_commit_oid,
+        t.execution_target_provenance,
+        t.created_at_unix_ms,
+        t.updated_at_unix_ms,
+        t.metadata_json
+    FROM task_records t
+    WHERE t.project_id = sqlc.arg(project_id)
+      AND t.workflow_id = sqlc.arg(workflow_id)
+      AND (
+          sqlc.arg(label_filter_kind) = 'none'
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.narg(label_filter_mode) = 'any'
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                        ON assignment.label_id = selected_label.value
+                      WHERE assignment.task_id = t.id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                      WHERE NOT EXISTS (
+                          SELECT 1
+                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                          WHERE assignment.label_id = excluded_label.value
+                            AND assignment.task_id = t.id
+                      )
+                  )
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.narg(label_filter_mode) = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = excluded_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
+      AND (
+          EXISTS (
+              SELECT 1
+              FROM task_current_nodes current_node
+              WHERE current_node.task_id = t.id
+                AND current_node.node_id = sqlc.arg(node_id)
+          )
+      )
+),
+older_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'older'
+      AND (
+          sqlc.narg(cursor_updated_at_unix_ms) IS NULL
+          OR t.updated_at_unix_ms < sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id < sqlc.narg(cursor_task_id)
+          )
+      )
+    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
+    LIMIT sqlc.arg(limit_rows)
+),
+newer_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'newer'
+      AND sqlc.narg(cursor_updated_at_unix_ms) IS NOT NULL
+      AND (
+          t.updated_at_unix_ms > sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id > sqlc.narg(cursor_task_id)
+          )
+      )
+    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
+    LIMIT sqlc.arg(limit_rows)
+),
+dependency_progress AS (
+    SELECT
+        td.blocked_task_id AS task_id,
+        CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+        CAST(SUM(CASE WHEN (
+            SELECT status.is_done
+            FROM workflow_task_status_records status
+            WHERE status.task_id = td.blocker_task_id
+            LIMIT 1
+        ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+    FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+    WHERE td.blocked_task_id IN (
+        SELECT id FROM older_page
+        UNION ALL
+        SELECT id FROM newer_page
+    )
+    GROUP BY td.blocked_task_id
+)
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM older_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
+UNION ALL
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM newer_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
+
+
+-- name: CountWorktreesByWorkspace :one
+SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
+FROM worktrees
+WHERE workspace_id = sqlc.arg(workspace_id);
+
+
+-- name: ListTasksMissingSourceWorkspaceDisplayName :many
+SELECT metadata_json
+FROM tasks
+WHERE source_workspace_id = sqlc.arg(workspace_id)
+  AND json_valid(metadata_json)
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
+  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
+ORDER BY rowid ASC;
+
+
+-- name: CountSessionsMissingWorkspaceSnapshot :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND (
+      NOT json_valid(metadata_json)
+      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
+      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
+  );
+
+
+-- name: AcquireCurrentNodeResumeWriteLock :execrows
+UPDATE task_current_nodes
+SET scheduling_state = scheduling_state
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted';
+
+
+-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(sqlc.arg(project_ids_json))
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC;
+
+
+-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = sqlc.arg(document_id)
+LIMIT 1;
+
+
+-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
+LIMIT 1;

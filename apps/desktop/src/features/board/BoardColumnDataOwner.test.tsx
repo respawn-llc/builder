@@ -140,6 +140,7 @@ function cardsPage(): BoardNodeCardsPage {
           manualMoveTargetNodeIDs: [],
         },
         activeNodeIDs: ["node-1"],
+        dependencyProgress: null,
         id: "task-1",
         labelIDs: [],
         preview: { markdown: "", truncated: false },

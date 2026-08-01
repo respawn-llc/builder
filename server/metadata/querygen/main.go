@@ -21,7 +21,6 @@ type taskLabelFilterTemplateData struct {
 	TaskID           string
 }
 
-<<<<<<< HEAD
 type taskStatusProjectionTemplateData struct {
 	LiveTaskStatesJSON string
 	Indent             string
@@ -35,20 +34,6 @@ type boardNodeTasksUpdatedTemplateData struct {
 	Previous       bool
 }
 
-||||||| parent of abf0722e2 (fix: stabilize label reorder projection)
-=======
-type boardNodeTasksUpdatedTemplateData struct {
-	Name           string
-	CursorOperator string
-	OrderDirection string
-	Previous       bool
-}
-
-type queryTemplateData struct {
-	BoardNodeTasksUpdated []boardNodeTasksUpdatedTemplateData
-}
-
->>>>>>> abf0722e2 (fix: stabilize label reorder projection)
 func main() {
 	if err := runCommand(os.Args[1:]); err != nil {
 		exitWithError(err)

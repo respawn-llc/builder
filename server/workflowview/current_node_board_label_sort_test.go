@@ -76,7 +76,7 @@ func (f currentNodeBoardLabelSortFixture) list(
 	t.Helper()
 	request := serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:   f.binding.ProjectID,
-		WorkflowID:  string(f.workflowID),
+		WorkflowID:  f.workflowID,
 		NodeID:      string(f.agentNodeID),
 		LabelFilter: filter,
 		PageSize:    pageSize,
@@ -162,7 +162,7 @@ func TestCurrentNodeBoardLabelSortUsesProjectOrderAndBoundedCursors(t *testing.T
 			}
 			request := serverapi.WorkflowBoardNodeCardsListRequest{
 				ProjectID:   fixture.binding.ProjectID,
-				WorkflowID:  string(fixture.workflowID),
+				WorkflowID:  fixture.workflowID,
 				NodeID:      string(fixture.agentNodeID),
 				LabelFilter: filter,
 				PageSize:    2,

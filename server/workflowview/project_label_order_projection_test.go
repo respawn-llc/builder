@@ -55,11 +55,10 @@ func TestProjectLabelOrderFlowsThroughTaskReadModels(t *testing.T) {
 	}
 
 	projectID := fixture.binding.ProjectID
-	workflowIDString := string(fixture.workflowID)
 	limit := 20
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
-		WorkflowID: &workflowIDString,
+		WorkflowID: &workflowID,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
 			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
 		},
@@ -84,7 +83,7 @@ func TestProjectLabelOrderFlowsThroughTaskReadModels(t *testing.T) {
 
 	cards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: string(fixture.workflowID),
+		WorkflowID: fixture.workflowID,
 		NodeID:     string(fixture.agentNodeID),
 		PageSize:   20,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
