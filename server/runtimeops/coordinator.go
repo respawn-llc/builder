@@ -135,7 +135,7 @@ type Attempt struct {
 	ctx                context.Context
 	acceptanceOrder    uint64
 	hasAcceptanceOrder bool
-	acceptanceBaseline func() uint64
+	acceptanceBaseline uint64
 }
 
 func (a Attempt) Context() context.Context {
@@ -153,10 +153,7 @@ func (a Attempt) AcceptanceBaseline() (uint64, bool) {
 	if !a.hasAcceptanceOrder {
 		return 0, false
 	}
-	if a.acceptanceBaseline == nil {
-		return 0, true
-	}
-	return a.acceptanceBaseline(), true
+	return a.acceptanceBaseline, true
 }
 
 func Do[Req any, Resp any](
@@ -168,12 +165,44 @@ func Do[Req any, Resp any](
 	same func(Req, Req) bool,
 	run func(context.Context, Attempt) (Resp, error),
 ) (Resp, error) {
+	return do(coord, ctx, sessionID, ref, req, same, nil, run)
+}
+
+func DoWithAcceptance[Req any, Resp any](
+	coord *Coordinator,
+	ctx context.Context,
+	sessionID string,
+	ref clientui.RuntimeOperationRef,
+	req Req,
+	same func(Req, Req) bool,
+	beforeRun func(Attempt) error,
+	run func(context.Context, Attempt) (Resp, error),
+) (Resp, error) {
+	return do(coord, ctx, sessionID, ref, req, same, beforeRun, run)
+}
+
+func do[Req any, Resp any](
+	coord *Coordinator,
+	ctx context.Context,
+	sessionID string,
+	ref clientui.RuntimeOperationRef,
+	req Req,
+	same func(Req, Req) bool,
+	beforeRun func(Attempt) error,
+	run func(context.Context, Attempt) (Resp, error),
+) (Resp, error) {
 	var zero Resp
 	if run == nil {
 		return zero, nil
 	}
 	if coord == nil {
-		return run(ctx, Attempt{ctx: ctx})
+		attempt := Attempt{ctx: ctx}
+		if beforeRun != nil {
+			if err := beforeRun(attempt); err != nil {
+				return zero, err
+			}
+		}
+		return run(ctx, attempt)
 	}
 	if err := ref.Validate(); err != nil {
 		return zero, err
@@ -235,18 +264,35 @@ func Do[Req any, Resp any](
 		}
 		ledger.operations[key] = entry
 		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, false, coord.now())
-		coord.mu.Unlock()
-
-		resp, err := run(ctx, Attempt{
+		attempt := Attempt{
 			ctx:                attemptCtx,
 			acceptanceOrder:    acceptanceOrder,
 			hasAcceptanceOrder: hasAcceptanceOrder,
-			acceptanceBaseline: func() uint64 {
-				coord.mu.Lock()
-				defer coord.mu.Unlock()
-				return ledger.settledCompactAcceptanceOrder
-			},
-		})
+			acceptanceBaseline: ledger.settledCompactAcceptanceOrder,
+		}
+		if beforeRun != nil {
+			if beforeRunErr := beforeRun(attempt); beforeRunErr != nil {
+				entry.err = beforeRunErr
+				entry.completed = true
+				entry.retained = errors.As(beforeRunErr, new(retainedTerminalOutcome))
+				entry.completedAt = coord.now()
+				if hasAcceptanceOrder {
+					markCompactAcceptanceSettledLocked(ledger, acceptanceOrder)
+				}
+				coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationFailedWithRestore, true, coord.now())
+				if !entry.retained {
+					delete(ledger.operations, key)
+					ledger.failedReqs[key] = req
+				}
+				ledger.markTerminalEvictableLocked(key, coord.now())
+				close(entry.done)
+				coord.mu.Unlock()
+				return zero, beforeRunErr
+			}
+		}
+		coord.mu.Unlock()
+
+		resp, err := run(ctx, attempt)
 
 		coord.mu.Lock()
 		_, tombstoned := ledger.tombstones[key]

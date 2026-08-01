@@ -88,6 +88,13 @@ func (e *Engine) CompactContextWithActiveHookAtAcceptanceOrder(
 	return e.compactionFlow.CompactContextWithActiveHookAtAcceptanceOrder(ctx, args, onActive, acceptanceOrder, acceptanceBaseline)
 }
 
+func (e *Engine) RegisterManualCompactionAcceptance(order, settledThrough *uint64) {
+	if e == nil {
+		return
+	}
+	e.compactionRuntimeState().manualBoundaryCoordinator().registerAcceptance(order, settledThrough)
+}
+
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
 	e.ensureOrchestrationCollaborators()
 	_, err := e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, nil)

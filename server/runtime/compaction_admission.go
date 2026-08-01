@@ -6,35 +6,23 @@ import (
 	"sync"
 
 	"core/shared/invariant"
+	"core/shared/serverapi"
 )
 
 var (
-	ErrManualCompactionAdmission    = errors.New("manual compaction admission rejected")
+	ErrManualCompactionAdmission    = serverapi.ErrManualCompactionAdmission
 	ErrCompactionInvariantViolation = errors.New("compaction execution invariant violated")
 )
 
-type ManualCompactionAdmissionReason string
+type ManualCompactionAdmissionReason = serverapi.ManualCompactionAdmissionReason
 
 const (
-	ManualCompactionAdmissionReasonActive   ManualCompactionAdmissionReason = "active"
-	ManualCompactionAdmissionReasonDisabled ManualCompactionAdmissionReason = "disabled"
-	ManualCompactionAdmissionReasonTooSoon  ManualCompactionAdmissionReason = "too_soon"
+	ManualCompactionAdmissionReasonActive   = serverapi.ManualCompactionAdmissionActive
+	ManualCompactionAdmissionReasonDisabled = serverapi.ManualCompactionAdmissionDisabled
+	ManualCompactionAdmissionReasonTooSoon  = serverapi.ManualCompactionAdmissionTooSoon
 )
 
-type ManualCompactionAdmissionError struct {
-	Reason ManualCompactionAdmissionReason
-}
-
-func (e *ManualCompactionAdmissionError) Error() string {
-	if e == nil {
-		return ErrManualCompactionAdmission.Error()
-	}
-	return fmt.Sprintf("%s: %s", ErrManualCompactionAdmission, e.Reason)
-}
-
-func (e *ManualCompactionAdmissionError) Is(target error) bool {
-	return target == ErrManualCompactionAdmission
-}
+type ManualCompactionAdmissionError = serverapi.ManualCompactionAdmissionError
 
 type compactionGateLease struct {
 	state *compactionRuntimeState

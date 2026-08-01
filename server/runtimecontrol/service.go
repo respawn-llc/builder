@@ -533,7 +533,21 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+	_, err := runtimeops.DoWithAcceptance(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(attempt runtimeops.Attempt) error {
+		order, ok := attempt.AcceptanceOrder()
+		if !ok {
+			return nil
+		}
+		baseline, _ := attempt.AcceptanceBaseline()
+		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+			engine.RegisterManualCompactionAcceptance(&order, &baseline)
+			return nil
+		})
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return nil
+		}
+		return err
+	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
 		var acceptanceOrder *uint64
 		var acceptanceBaseline *uint64
 		if order, ok := attempt.AcceptanceOrder(); ok {
@@ -548,7 +562,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 				s.markManualCompactionActive(memoReq.SessionID, req.OperationRef, engine)
 			}, acceptanceOrder, acceptanceBaseline)
 			receipt = compactReceipt
-			return mapManualCompactionAdmissionError(compactErr)
+			return compactErr
 		})
 		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
 		return struct{}{}, err
@@ -790,28 +804,6 @@ func (s *Service) rejectWorkflowAutoCompactionDisable(ctx context.Context, sessi
 		return errWorkflowTaskSessionAutoCompactionDisable
 	}
 	return nil
-}
-
-func mapManualCompactionAdmissionError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var admission *runtime.ManualCompactionAdmissionError
-	if !errors.As(err, &admission) {
-		return err
-	}
-	var reason serverapi.ManualCompactionAdmissionReason
-	switch admission.Reason {
-	case runtime.ManualCompactionAdmissionReasonActive:
-		reason = serverapi.ManualCompactionAdmissionActive
-	case runtime.ManualCompactionAdmissionReasonDisabled:
-		reason = serverapi.ManualCompactionAdmissionDisabled
-	case runtime.ManualCompactionAdmissionReasonTooSoon:
-		reason = serverapi.ManualCompactionAdmissionTooSoon
-	default:
-		return fmt.Errorf("manual compaction admission reason is invalid: %q", admission.Reason)
-	}
-	return &serverapi.ManualCompactionAdmissionError{Reason: reason}
 }
 
 func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, engine *runtime.Engine) (bool, error) {
