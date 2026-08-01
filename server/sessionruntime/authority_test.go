@@ -2120,15 +2120,6 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
-	promptStart := make(chan struct{})
-	runnerStarted := make(chan struct{})
-	runnerRelease := make(chan struct{})
-	runnerReleased := false
-	t.Cleanup(func() {
-		if !runnerReleased {
-			close(runnerRelease)
-		}
-	})
 	responseDone := make(chan executionPromptResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
@@ -2136,19 +2127,8 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
-			close(runnerStarted)
-			select {
-			case <-promptStart:
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
 			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
 			responseDone <- executionPromptResult{response: response, err: askErr}
-			select {
-			case <-runnerRelease:
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
 			return askErr
 		},
 	})
@@ -2157,26 +2137,9 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 
 	resource, _ := handle.Scope().Resource()
-	<-runnerStarted
-	_, revisionBeforePendingPrompt, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot before pending prompt: %v", err)
-	}
-	close(promptStart)
 	pending := <-feed
 	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
-	}
-	_, revisionWithPendingPrompt, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot with pending prompt: %v", err)
-	}
-	if revisionWithPendingPrompt <= revisionBeforePendingPrompt {
-		t.Fatalf(
-			"pending prompt revision = %d, want greater than pre-prompt revision %d",
-			revisionWithPendingPrompt,
-			revisionBeforePendingPrompt,
-		)
 	}
 	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
 	if err != nil {
@@ -2199,22 +2162,9 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
 		t.Fatalf("resolved prompt = %+v, want exact resource %v scope %s ask %s", resolved, resource, handle.Scope().ID(), askID)
 	}
-	_, revisionAfterPromptResolution, err := authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
-	if err != nil {
-		t.Fatalf("snapshot after prompt resolution: %v", err)
-	}
-	if revisionAfterPromptResolution <= revisionWithPendingPrompt {
-		t.Fatalf(
-			"resolved prompt revision = %d, want greater than pending revision %d",
-			revisionAfterPromptResolution,
-			revisionWithPendingPrompt,
-		)
-	}
 	if result := <-responseDone; result.err != nil || result.response != want {
 		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, want)
 	}
-	close(runnerRelease)
-	runnerReleased = true
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}

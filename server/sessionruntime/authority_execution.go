@@ -321,16 +321,14 @@ type executionPromptStore struct {
 	mu      sync.RWMutex
 	scope   ExecutionScope
 	feed    ExecutionPromptFeed
-	changed func(func() bool) bool
 	closed  bool
 	pending map[string]*executionPromptEntry
 }
 
-func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed, changed func(func() bool) bool) executionPromptStore {
+func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
 	return executionPromptStore{
 		scope:   scope,
 		feed:    feed,
-		changed: changed,
 		pending: make(map[string]*executionPromptEntry),
 	}
 }
@@ -352,37 +350,26 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		snapshot: snapshot,
 		response: make(chan executionPromptResult, 1),
 	}
-	var stateErr error
-	if !s.mutate(func() bool {
-		if s.closed {
-			stateErr = context.Canceled
-			return false
-		}
-		if _, exists := s.pending[requestID]; exists {
-			stateErr = fmt.Errorf("prompt %q is already pending", requestID)
-			return false
-		}
-		s.pending[requestID] = entry
-		return true
-	}) {
-		if stateErr == nil {
-			stateErr = context.Canceled
-		}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return tools.AskQuestionResponse{}, context.Canceled
 	}
-	if stateErr != nil {
-		return tools.AskQuestionResponse{}, stateErr
+	if _, exists := s.pending[requestID]; exists {
+		s.mu.Unlock()
+		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
+	s.pending[requestID] = entry
+	s.mu.Unlock()
 	s.publishPending(snapshot)
 	defer func() {
-		removed := s.mutate(func() bool {
-			current := s.pending[requestID]
-			if current != entry {
-				return false
-			}
+		s.mu.Lock()
+		current := s.pending[requestID]
+		if current == entry {
 			delete(s.pending, requestID)
-			return true
-		})
-		if removed {
+		}
+		s.mu.Unlock()
+		if current == entry {
 			s.publishResolved(snapshot)
 		}
 	}()
@@ -399,33 +386,20 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	if requestID == "" {
 		return errors.New("prompt response request id is required")
 	}
-	var (
-		entry      *executionPromptEntry
-		stateErr   error
-		wasRemoved bool
-	)
-	s.mutate(func() bool {
-		entry = s.pending[requestID]
-		if entry == nil {
-			stateErr = fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
-			return false
-		}
-		if submitErr == nil {
-			if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
-				stateErr = err
-				return false
-			}
-		}
-		delete(s.pending, requestID)
-		wasRemoved = true
-		return true
-	})
-	if stateErr != nil {
-		return stateErr
+	s.mu.Lock()
+	entry := s.pending[requestID]
+	if entry == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
 	}
-	if !wasRemoved || entry == nil {
-		return serverapi.ErrPromptNotFound
+	if submitErr == nil {
+		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
+			s.mu.Unlock()
+			return err
+		}
 	}
+	delete(s.pending, requestID)
+	s.mu.Unlock()
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	s.publishResolved(entry.snapshot)
 	return nil
@@ -435,38 +409,22 @@ func (s *executionPromptStore) Close(err error) {
 	if err == nil {
 		err = context.Canceled
 	}
-	var entries []*executionPromptEntry
-	s.mutate(func() bool {
-		if s.closed {
-			return false
-		}
-		s.closed = true
-		entries = make([]*executionPromptEntry, 0, len(s.pending))
-		for requestID, entry := range s.pending {
-			entries = append(entries, entry)
-			delete(s.pending, requestID)
-		}
-		return len(entries) != 0
-	})
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	entries := make([]*executionPromptEntry, 0, len(s.pending))
+	for requestID, entry := range s.pending {
+		entries = append(entries, entry)
+		delete(s.pending, requestID)
+	}
+	s.mu.Unlock()
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)
 	}
-}
-
-func (s *executionPromptStore) mutate(mutation func() bool) bool {
-	if mutation == nil {
-		return false
-	}
-	// Workflow snapshots acquire Authority before the prompt lock. Route
-	// mutations through the same order so prompt visibility and its Authority
-	// revision are published as one atomic state change.
-	if s.changed != nil {
-		return s.changed(mutation)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return mutation()
 }
 
 func (s *executionPromptStore) hasPending() bool {
