@@ -83,7 +83,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	reviewerReq, err := eng.buildReviewerRequestForStep(context.Background(), "", reviewerClient)
+	reviewerReq, err := eng.buildReviewerRequestForStep(context.Background(), nil, reviewerClient)
 	if err != nil {
 		t.Fatalf("build reviewer before compaction: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if mainLocked == nil || mainLocked.HasSystemPrompt || mainLocked.HasReviewerPrompt {
 		t.Fatalf("locked prompts after compaction = %+v, want both stale", mainLocked)
 	}
-	reviewerReq, err = eng.buildReviewerRequestForStep(context.Background(), "", reviewerClient)
+	reviewerReq, err = eng.buildReviewerRequestForStep(context.Background(), nil, reviewerClient)
 	if err != nil {
 		t.Fatalf("build reviewer after compaction: %v", err)
 	}

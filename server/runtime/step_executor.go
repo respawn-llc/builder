@@ -451,8 +451,7 @@ func (s *defaultStepExecutor) pendingBoundaryFlush() bool {
 	if s == nil || s.engine == nil {
 		return false
 	}
-	return s.messages.HasPendingUserInjections() ||
-		(s.engine.backgroundFlow != nil && s.engine.backgroundFlow.HasPendingNotices())
+	return s.messages.HasPendingUserInjections()
 }
 
 func completeAgentStepBoundary(finalizer *agentStepBoundaryFinalizer, stepID string) error {

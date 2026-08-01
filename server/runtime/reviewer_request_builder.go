@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"core/server/llm"
 	"core/shared/transcript"
@@ -27,12 +29,17 @@ func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 	}
 }
 
-func (e *Engine) buildReviewerRequestForStep(ctx context.Context, stepID string, reviewerClient llm.Client) (llm.Request, error) {
+func (e *Engine) buildReviewerRequestForStep(ctx context.Context, stepID *string, reviewerClient llm.Client) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
 	items := e.transcriptRuntimeState().SnapshotItems()
-	if boundary := e.agentStepBoundary(stepID); boundary != nil {
-		if finalAssistant := boundary.StagedFinalAssistantMessage(); finalAssistant != nil {
-			items = append(items, llm.ItemsFromMessages([]llm.Message{*finalAssistant})...)
+	if stepID != nil {
+		if strings.TrimSpace(*stepID) == "" {
+			return llm.Request{}, fmt.Errorf("reviewer step identity must not be empty when provided")
+		}
+		if boundary := e.agentStepBoundary(*stepID); boundary != nil {
+			if finalAssistant := boundary.StagedFinalAssistantMessage(); finalAssistant != nil {
+				items = append(items, llm.ItemsFromMessages([]llm.Message{*finalAssistant})...)
+			}
 		}
 	}
 	reviewerItems, err := buildReviewerRequestItemsWithBuilder(items, newActiveMetaContextBuilder(e.store.Meta(), e.transcriptWorkingDir(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)

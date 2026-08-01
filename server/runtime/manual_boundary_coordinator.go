@@ -175,14 +175,6 @@ func (c *manualBoundaryCoordinator) abortArmedGeneration(err error) {
 	c.mu.Unlock()
 }
 
-func (c *manualBoundaryCoordinator) enqueueForGeneration(
-	ctx context.Context,
-	instructions compactionInstructionsInput,
-	onActive func(),
-) (*pendingManualCompaction, error) {
-	return c.enqueueForGenerationOrdered(ctx, instructions, onActive, nil)
-}
-
 func (c *manualBoundaryCoordinator) enqueueForGenerationOrdered(
 	ctx context.Context,
 	instructions compactionInstructionsInput,

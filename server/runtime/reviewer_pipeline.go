@@ -66,7 +66,8 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 	if reviewerClient == nil {
 		return reviewerSuggestionsResult{}, nil
 	}
-	req, err := e.buildReviewerRequestForStep(ctx, stepID, reviewerClient)
+	reviewerStepID := stepID
+	req, err := e.buildReviewerRequestForStep(ctx, &reviewerStepID, reviewerClient)
 	if err != nil {
 		return reviewerSuggestionsResult{}, fmt.Errorf("build reviewer request: %w", err)
 	}

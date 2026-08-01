@@ -562,7 +562,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("main before prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerBeforeReq, err := eng.buildReviewerRequestForStep(context.Background(), "", engineClient)
+	reviewerBeforeReq, err := eng.buildReviewerRequestForStep(context.Background(), nil, engineClient)
 	if err != nil {
 		t.Fatalf("build reviewer before request: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("main after prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerAfterReq, err := eng.buildReviewerRequestForStep(context.Background(), "", engineClient)
+	reviewerAfterReq, err := eng.buildReviewerRequestForStep(context.Background(), nil, engineClient)
 	if err != nil {
 		t.Fatalf("build reviewer after request: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("reopened main prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reopenedReviewerReq, err := reopenedEng.buildReviewerRequestForStep(context.Background(), "", engineClient)
+	reopenedReviewerReq, err := reopenedEng.buildReviewerRequestForStep(context.Background(), nil, engineClient)
 	if err != nil {
 		t.Fatalf("build reopened reviewer request: %v", err)
 	}

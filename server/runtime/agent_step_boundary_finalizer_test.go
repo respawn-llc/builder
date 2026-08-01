@@ -120,7 +120,7 @@ func TestRepeatedProviderDispatchKeepsOneManualBoundaryGeneration(t *testing.T) 
 	firstGenerationID := coordinator.current.id
 	coordinator.mu.Unlock()
 
-	entry, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+	entry, err := coordinator.enqueueForGenerationOrdered(context.Background(), compactionInstructionsInput{}, nil, nil)
 	if err != nil {
 		t.Fatalf("enqueue pending compaction: %v", err)
 	}

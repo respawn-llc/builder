@@ -65,9 +65,10 @@ func TestExclusiveStepLifecycleWaitsForInlineCompactionBeforeTerminalPublication
 			func(_ context.Context, stepID string) error {
 				engine.agentStepBoundary(stepID).MarkDispatched()
 				var enqueueErr error
-				entry, enqueueErr = engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGeneration(
+				entry, enqueueErr = engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGenerationOrdered(
 					context.Background(),
 					compactionInstructionsInput{},
+					nil,
 					nil,
 				)
 				if enqueueErr != nil {

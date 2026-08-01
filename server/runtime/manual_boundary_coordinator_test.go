@@ -12,7 +12,7 @@ import (
 func TestManualBoundaryCoordinatorSealsOneGenerationAndFencesLateAdmission(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
 	coordinator.beginGeneration()
-	first, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+	first, err := coordinator.enqueueForGenerationOrdered(context.Background(), compactionInstructionsInput{}, nil, nil)
 	if err != nil {
 		t.Fatalf("enqueue first: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestManualBoundaryCoordinatorSealsOneGenerationAndFencesLateAdmission(t *te
 	defer cancel()
 	lateDone := make(chan error, 1)
 	go func() {
-		_, err := coordinator.enqueueForGeneration(lateCtx, compactionInstructionsInput{}, nil)
+		_, err := coordinator.enqueueForGenerationOrdered(lateCtx, compactionInstructionsInput{}, nil, nil)
 		lateDone <- err
 	}()
 	select {
@@ -48,7 +48,7 @@ func TestManualBoundaryCoordinatorSealsOneGenerationAndFencesLateAdmission(t *te
 
 func TestManualBoundaryCoordinatorRejectsAdmissionWithoutDispatchedGeneration(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
-	_, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+	_, err := coordinator.enqueueForGenerationOrdered(context.Background(), compactionInstructionsInput{}, nil, nil)
 	if !errors.Is(err, errManualBoundaryNoGeneration) {
 		t.Fatalf("admission without generation error = %v, want no-generation error", err)
 	}
@@ -162,7 +162,7 @@ func TestManualBoundaryCoordinatorMovesLateAdmissionToNextGeneration(t *testing.
 
 	entryDone := make(chan *pendingManualCompaction, 1)
 	go func() {
-		entry, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+		entry, err := coordinator.enqueueForGenerationOrdered(context.Background(), compactionInstructionsInput{}, nil, nil)
 		if err != nil {
 			t.Errorf("late admission: %v", err)
 			return
@@ -196,7 +196,7 @@ func TestManualBoundaryCoordinatorCancellationOnlyRemovesQueuedGenerationEntry(t
 	defer cancel()
 	coordinator := newManualBoundaryCoordinator()
 	coordinator.beginGeneration()
-	entry, err := coordinator.enqueueForGeneration(ctx, compactionInstructionsInput{}, nil)
+	entry, err := coordinator.enqueueForGenerationOrdered(ctx, compactionInstructionsInput{}, nil, nil)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestManualBoundaryCoordinatorCancellationOnlyRemovesQueuedGenerationEntry(t
 func TestManualBoundaryCoordinatorExecutionOwnershipIsOneShot(t *testing.T) {
 	coordinator := newManualBoundaryCoordinator()
 	coordinator.beginGeneration()
-	entry, err := coordinator.enqueueForGeneration(context.Background(), compactionInstructionsInput{}, nil)
+	entry, err := coordinator.enqueueForGenerationOrdered(context.Background(), compactionInstructionsInput{}, nil, nil)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
