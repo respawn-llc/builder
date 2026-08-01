@@ -89,7 +89,7 @@ describe("VerticalReorder", () => {
     view.unmount();
   });
 
-  it("does not commit a pointer activation while the pointer remains in the source row", async () => {
+  it("keeps pointer projection anchored inside a variable-height source row", async () => {
     const onCommit = vi.fn();
     mockRowGeometry({ secondHeight: 80 });
 
@@ -118,6 +118,8 @@ describe("VerticalReorder", () => {
       pointerId: 1,
     });
     expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
+    expect(screen.getByTestId("row-second")).not.toBeVisible();
+    expect(screen.getByTestId("row-third")).toBeVisible();
     fireEvent.pointerUp(screen.getByTestId("row-third"), {
       clientX: 20,
       clientY: 119,
@@ -180,6 +182,7 @@ describe("VerticalReorder", () => {
       pointerId: 1,
     });
     expect(screen.getByTestId("reorder-overlay")).toBeInTheDocument();
+    expect(within(screen.getByRole("list")).getByRole("presentation", { hidden: true })).toBeInTheDocument();
 
     fireEvent.pointerUp(destination, {
       clientX: 20,
@@ -233,6 +236,7 @@ describe("VerticalReorder", () => {
     await waitFor(() => {
       expect(screen.getByTestId("reorder-overlay")).toHaveTextContent("Second");
     });
+    expect(within(screen.getByRole("list")).getByRole("presentation", { hidden: true })).toBeInTheDocument();
     expect(screen.getByTestId("row-second")).not.toBeVisible();
     await user.keyboard("[Space]");
     await waitFor(() => {
