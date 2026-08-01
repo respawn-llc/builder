@@ -388,7 +388,7 @@ func renderPatchTool(
 		if mode == ModeDetailExpanded {
 			return renderDetailedToolTextBlock(role, text, result, width, meta)
 		}
-		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
+		return renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)
 	}
 	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
@@ -411,7 +411,7 @@ func renderPatchTool(
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{roleSpan(text, role)}}}
 	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, meta)
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, "", mode, meta)
 }
 
 const (
