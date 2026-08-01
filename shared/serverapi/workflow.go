@@ -1288,13 +1288,13 @@ type WorkflowBoardResponse struct {
 }
 
 type WorkflowBoardNodeCardsListRequest struct {
-	ProjectID   string                  `json:"project_id"`
-	WorkflowID  runtimeids.WorkflowID   `json:"workflow_id"`
-	NodeID      string                  `json:"node_id"`
-	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
+	ProjectID   string                      `json:"project_id"`
+	WorkflowID  runtimeids.WorkflowID       `json:"workflow_id"`
+	NodeID      string                      `json:"node_id"`
+	LabelFilter WorkflowTaskLabelFilter     `json:"label_filter"`
 	Sort        *WorkflowBoardNodeCardsSort `json:"sort,omitempty"`
-	PageSize    int                     `json:"page_size"`
-	PageToken   *string                 `json:"page_token"`
+	PageSize    int                         `json:"page_size"`
+	PageToken   *string                     `json:"page_token"`
 }
 
 type WorkflowBoardNodeCardsSortField string
