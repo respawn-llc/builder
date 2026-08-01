@@ -31,14 +31,23 @@ type controllerBackedTaskStatusRunner struct {
 }
 
 type controllerBackedTaskStatusExecution struct {
+	targetKind       controllerBackedTaskStatusTargetKind
 	sessionID        runtimeids.SessionID
 	plan             sessionruntime.AgentRuntimePlan
 	request          *tools.AskQuestionRequest
+	scriptPath       string
 	queued           bool
 	admissionRelease <-chan struct{}
 	executionRelease <-chan struct{}
 	started          chan<- sessionruntime.ExecutionHandle
 }
+
+type controllerBackedTaskStatusTargetKind uint8
+
+const (
+	controllerBackedAgentTarget controllerBackedTaskStatusTargetKind = iota + 1
+	controllerBackedScriptTarget
+)
 
 func newControllerBackedTaskStatusRunner(authority *sessionruntime.Authority) *controllerBackedTaskStatusRunner {
 	return &controllerBackedTaskStatusRunner{
@@ -69,6 +78,24 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	r.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("no test execution configured for Task %q", reference.TaskID)
+	}
+	if config.targetKind == controllerBackedScriptTarget {
+		lease.Release()
+		handle, err := r.authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+			Workflow: &lease,
+			Command: sessionruntime.ScriptCommand{
+				Path: config.scriptPath,
+				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+			},
+		})
+		if err != nil {
+			return err
+		}
+		config.started <- handle
+		return nil
+	}
+	if config.targetKind != controllerBackedAgentTarget {
+		return fmt.Errorf("unsupported test execution target kind %d", config.targetKind)
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(config.sessionID)
 	if err != nil {
@@ -184,9 +211,10 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 }
 
 type realTaskStatusExecution struct {
-	handle    sessionruntime.ExecutionHandle
-	release   chan struct{}
-	sessionID string
+	handle     sessionruntime.ExecutionHandle
+	release    chan struct{}
+	sessionID  string
+	scriptPath string
 }
 
 func startRealTaskStatusExecution(
@@ -196,20 +224,46 @@ func startRealTaskStatusExecution(
 	queued bool,
 	request *tools.AskQuestionRequest,
 ) (startedCurrentNodeViewTask, realTaskStatusExecution) {
+	return startControllerBackedTaskStatusExecution(t, surfaces, backlog, controllerBackedTaskStatusExecution{
+		targetKind: controllerBackedAgentTarget,
+		queued:     queued,
+		request:    request,
+	})
+}
+
+func startRealTaskStatusScriptExecution(
+	t *testing.T,
+	surfaces realTaskStatusSurfaces,
+	backlog startedCurrentNodeViewTask,
+	scriptPath string,
+) (startedCurrentNodeViewTask, realTaskStatusExecution) {
 	t.Helper()
-	sessionID := surfaces.fixture.newCurrentNodeViewSession(t)
+	return startControllerBackedTaskStatusExecution(t, surfaces, backlog, controllerBackedTaskStatusExecution{
+		targetKind: controllerBackedScriptTarget,
+		scriptPath: scriptPath,
+	})
+}
+
+func startControllerBackedTaskStatusExecution(
+	t *testing.T,
+	surfaces realTaskStatusSurfaces,
+	backlog startedCurrentNodeViewTask,
+	options controllerBackedTaskStatusExecution,
+) (startedCurrentNodeViewTask, realTaskStatusExecution) {
+	t.Helper()
+	var sessionID runtimeids.SessionID
+	if options.targetKind == controllerBackedAgentTarget {
+		sessionID = surfaces.fixture.newCurrentNodeViewSession(t)
+	}
 	release := make(chan struct{})
 	admissionRelease := make(chan struct{})
 	startedHandle := make(chan sessionruntime.ExecutionHandle, 1)
-	surfaces.runner.configure(backlog.task.ID, controllerBackedTaskStatusExecution{
-		sessionID:        sessionID,
-		plan:             surfaces.fixture.newAgentRuntimePlan(t),
-		request:          request,
-		queued:           queued,
-		admissionRelease: admissionRelease,
-		executionRelease: release,
-		started:          startedHandle,
-	})
+	options.sessionID = sessionID
+	options.plan = surfaces.fixture.newAgentRuntimePlan(t)
+	options.admissionRelease = admissionRelease
+	options.executionRelease = release
+	options.started = startedHandle
+	surfaces.runner.configure(backlog.task.ID, options)
 	startedResult, err := surfaces.controller.StartTaskWithExecutionTarget(t.Context(), backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
@@ -230,14 +284,16 @@ func startRealTaskStatusExecution(
 		task:        backlog.task,
 		currentNode: startedResult.Mutation.Created[0].Reference,
 	}
-	if _, err := surfaces.fixture.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
-		Association: workflowstore.TaskSessionAssociationRequest{
-			SessionID:    sessionID,
-			CurrentNode:  task.currentNode,
-			AssociatedAt: time.Now().UTC(),
-		},
-	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	if options.targetKind == controllerBackedAgentTarget {
+		if _, err := surfaces.fixture.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
+			Association: workflowstore.TaskSessionAssociationRequest{
+				SessionID:    sessionID,
+				CurrentNode:  task.currentNode,
+				AssociatedAt: time.Now().UTC(),
+			},
+		}); err != nil {
+			t.Fatalf("BindSessionToCurrentNode: %v", err)
+		}
 	}
 	var handle sessionruntime.ExecutionHandle
 	select {
@@ -264,22 +320,26 @@ func startRealTaskStatusExecution(
 		if len(executions) != 1 {
 			return false
 		}
-		if executions[0].Queued != queued {
+		if executions[0].Queued != options.queued {
 			return false
 		}
-		if request == nil {
+		if options.targetKind == controllerBackedScriptTarget {
+			return executions[0].Script != nil && executions[0].Script.Path == options.scriptPath
+		}
+		if options.request == nil {
 			return true
 		}
 		kind := sessionruntime.PendingPromptKindQuestion
-		if request.Approval {
+		if options.request.Approval {
 			kind = sessionruntime.PendingPromptKindSessionApproval
 		}
 		return executions[0].HasPendingPromptKind(kind)
 	}, "timed out waiting for stable live Task status execution")
 	return task, realTaskStatusExecution{
-		handle:    handle,
-		release:   release,
-		sessionID: sessionID.String(),
+		handle:     handle,
+		release:    release,
+		sessionID:  sessionID.String(),
+		scriptPath: options.scriptPath,
 	}
 }
 
