@@ -317,6 +317,14 @@ func finalizeAgentStepBoundaryCommit(
 		return commitErr
 	}
 	finalizationErr := uncommittedBoundaryFinalizationError(commitErr)
+	if cleanup := boundary.TakeDeferredStreamCleanup(); cleanup != nil {
+		finalizationErr = errors.Join(finalizationErr, boundary.engine.emitStreamingAssistantCleanupEventsRaw(
+			stepID,
+			cleanup.metadata,
+			cleanup.streamID,
+			cleanup.abortReason,
+		))
+	}
 	boundary.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(entries, finalizationErr)
 	return finalizationErr
 }

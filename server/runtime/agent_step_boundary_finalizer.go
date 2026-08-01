@@ -285,3 +285,23 @@ func (f *agentStepBoundaryFinalizer) TakeDetachedManual() []*pendingManualCompac
 	f.detachedManual = nil
 	return entries
 }
+
+func (f *agentStepBoundaryFinalizer) TakeDeferredStreamCleanup() *deferredAssistantStreamCleanup {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cleanup := f.deferredStream
+	f.deferredStream = nil
+	if cleanup == nil {
+		return nil
+	}
+	return &deferredAssistantStreamCleanup{
+		metadata:            cloneAssistantStreamMetadata(cleanup.metadata),
+		streamID:            cloneTranscriptStreamID(cleanup.streamID),
+		abortReason:         cloneAssistantStreamAbortReason(cleanup.abortReason),
+		finalizeAssistant:   cleanup.finalizeAssistant,
+		committedEntryStart: cleanup.committedEntryStart,
+	}
+}
