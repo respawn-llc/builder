@@ -227,19 +227,19 @@ func (a *Authority) advanceWorkflowRevisionLocked() {
 	}
 }
 
-func (a *Authority) workflowPromptStateChanged(scope ExecutionScope) {
-	if a == nil {
-		return
-	}
-	if _, workflowScoped := scope.Workflow(); !workflowScoped {
-		return
+func (a *Authority) workflowPromptStateChanged(scope ExecutionScope, mutation func() bool) bool {
+	if a == nil || mutation == nil {
+		return false
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.byScope[scope.ID()] == nil {
-		return
+	changed := mutation()
+	if changed {
+		if _, workflowScoped := scope.Workflow(); workflowScoped && a.byScope[scope.ID()] != nil {
+			a.advanceWorkflowRevisionLocked()
+		}
 	}
-	a.advanceWorkflowRevisionLocked()
+	return changed
 }
 
 func (a *Authority) forEachWorkflowExecutionLocked(fn func(*execution)) {
@@ -419,8 +419,10 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		ctx:       runCtx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		prompts:   newExecutionPromptStore(scope, a.promptFeed, a.workflowPromptStateChanged),
-		phase:     executionPhaseRunning,
+		prompts: newExecutionPromptStore(scope, a.promptFeed, func(mutation func() bool) bool {
+			return a.workflowPromptStateChanged(scope, mutation)
+		}),
+		phase: executionPhaseRunning,
 	}
 	if workflowRef != nil {
 		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}

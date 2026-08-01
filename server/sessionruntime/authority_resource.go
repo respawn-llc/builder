@@ -746,14 +746,16 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
 	execution := &execution{
-		authority:     a,
-		resource:      resource,
-		scope:         scope,
-		workflow:      workflowBinding,
-		ctx:           runCtx,
-		cancel:        cancel,
-		done:          make(chan struct{}),
-		prompts:       newExecutionPromptStore(scope, a.promptFeed, a.workflowPromptStateChanged),
+		authority: a,
+		resource:  resource,
+		scope:     scope,
+		workflow:  workflowBinding,
+		ctx:       runCtx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		prompts: newExecutionPromptStore(scope, a.promptFeed, func(mutation func() bool) bool {
+			return a.workflowPromptStateChanged(scope, mutation)
+		}),
 		closeResource: closeResource,
 		phase:         executionPhaseRunning,
 	}

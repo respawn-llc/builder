@@ -312,8 +312,18 @@ func (f currentNodeViewFixture) newAgentAuthority(t *testing.T) (*sessionruntime
 
 func (f currentNodeViewFixture) startCurrentNodeQuestion(t *testing.T, started startedCurrentNodeViewTask) currentNodeViewQuestion {
 	t.Helper()
-	sessionID := f.bindCurrentNodeSession(t, started)
 	authority, plan := f.newAgentAuthority(t)
+	return f.startCurrentNodeQuestionOnAuthority(t, started, authority, plan)
+}
+
+func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
+	t *testing.T,
+	started startedCurrentNodeViewTask,
+	authority *sessionruntime.Authority,
+	plan sessionruntime.AgentRuntimePlan,
+) currentNodeViewQuestion {
+	t.Helper()
+	sessionID := f.bindCurrentNodeSession(t, started)
 	request := tools.AskQuestionRequest{
 		ID:                     uuid.NewString(),
 		StepID:                 uuid.NewString(),

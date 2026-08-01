@@ -234,6 +234,62 @@ func TestTaskSearchStableReadCaptureRetriesAuthorityChangeDuringAnchor(t *testin
 	}
 }
 
+func TestTaskSearchStableReadCaptureRetriesPromptMutationDuringAnchor(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	task := createTaskSearchTask(t, fixture, "Prompt capture", "needle")
+	started := startTaskSearchTask(t, fixture, task)
+	question := currentNodeViewQuestion{}
+	questionStarted := false
+	t.Cleanup(func() {
+		if questionStarted {
+			question.resolve(t, context.Background())
+		}
+	})
+
+	plan := fixture.newAgentRuntimePlan(t)
+	opened := 0
+	closed := 0
+	snapshot, err := taskSearchStableReadCapture(
+		fixture.ctx,
+		func() (taskSearchLiveSnapshot, error) {
+			executions, revision, snapshotErr := fixture.authority.CurrentWorkflowTaskExecutionSnapshotsWithRevision()
+			return taskSearchLiveSnapshot{executions: executions, revision: revision}, snapshotErr
+		},
+		func(context.Context) (*taskSearchReadSnapshot, error) {
+			opened++
+			return &taskSearchReadSnapshot{
+				anchor: func(context.Context) error {
+					if opened == 1 {
+						question = fixture.startCurrentNodeQuestionOnAuthority(t, started, fixture.authority, plan)
+						questionStarted = true
+					}
+					return nil
+				},
+				close: func() error {
+					closed++
+					return nil
+				},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("capture stable Task Search read snapshot: %v", err)
+	}
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			t.Errorf("close stable Task Search read snapshot: %v", closeErr)
+		}
+	}()
+
+	if opened != 2 || closed != 1 {
+		t.Fatalf("stable capture attempts = opened:%d closed:%d, want 2/1 after prompt mutation during anchor", opened, closed)
+	}
+	executions := snapshot.live.executions[task.ID].Executions
+	if len(executions) != 1 || !executions[0].WaitingQuestion {
+		t.Fatalf("stable capture live state = %+v, want the post-mutation waiting-question execution", snapshot.live.executions)
+	}
+}
+
 func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 	tests := []struct {
 		name             string
