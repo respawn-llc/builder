@@ -293,6 +293,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     }
     if (failure !== null) {
       this.#onReorderFailure(failure);
+      if (!ownsCurrentState && this.#pendingReorder === null && this.#latestOrderIntent !== null) {
+        this.#pendingReorder = this.#latestOrderIntent;
+      }
     }
     if (ownsCurrentState && failure !== null) {
       this.#restoreCurrentReorderRollback(intent);

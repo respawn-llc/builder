@@ -1,6 +1,7 @@
 const defaultFrameDeltaMs = 16;
 const maxFrameDeltaMs = 48;
 const maxVelocityPixelsPerSecond = 900;
+const edgeActivationDistancePixels = 72;
 
 export type EdgeScrollAxis = "x" | "y";
 
@@ -14,6 +15,33 @@ export type EdgeScrollDriver = Readonly<{
   refresh(): void;
   stop(): void;
 }>;
+
+export function edgeScrollVelocity(position: number, start: number, end: number): number {
+  if (start >= end) {
+    return 0;
+  }
+  const distanceFromStart = position - start;
+  if (distanceFromStart >= 0 && distanceFromStart < edgeActivationDistancePixels) {
+    return -edgeScrollVelocityMagnitude(distanceFromStart);
+  }
+  const distanceFromEnd = end - position;
+  if (distanceFromEnd >= 0 && distanceFromEnd < edgeActivationDistancePixels) {
+    return edgeScrollVelocityMagnitude(distanceFromEnd);
+  }
+  return 0;
+}
+
+export function canScrollEdge(element: HTMLElement, axis: EdgeScrollAxis, velocity: number): boolean {
+  if (velocity === 0) {
+    return false;
+  }
+  const position = axis === "x" ? element.scrollLeft : element.scrollTop;
+  const maximum =
+    axis === "x"
+      ? Math.max(0, element.scrollWidth - element.clientWidth)
+      : Math.max(0, element.scrollHeight - element.clientHeight);
+  return velocity < 0 ? position > 0 : position < maximum;
+}
 
 export function createEdgeScrollDriver(
   getMotion: () => readonly EdgeScrollMotion[] | null,
@@ -81,4 +109,9 @@ function applyScroll(motion: EdgeScrollMotion, elapsedMs: number): boolean {
     motion.element.scrollTop = next;
   }
   return next !== position;
+}
+
+function edgeScrollVelocityMagnitude(distanceFromEdge: number): number {
+  const proximity = 1 - distanceFromEdge / edgeActivationDistancePixels;
+  return maxVelocityPixelsPerSecond * proximity * proximity;
 }

@@ -4,7 +4,12 @@ import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VerticalReorder } from "./VerticalReorder";
-import { createEdgeScrollDriver, type EdgeScrollMotion } from "./edgeScroll";
+import {
+  canScrollEdge,
+  createEdgeScrollDriver,
+  edgeScrollVelocity,
+  type EdgeScrollMotion,
+} from "./edgeScroll";
 import { projectVerticalReorder } from "./reorderProjection";
 
 type ReorderItem = Readonly<{ id: string; label: string }>;
@@ -31,6 +36,23 @@ describe("projectVerticalReorder", () => {
       "third",
       "second",
     ]);
+  });
+});
+
+describe("edge scroll calculations", () => {
+  it("uses one quadratic edge velocity curve for both scroll directions", () => {
+    expect(edgeScrollVelocity(0, 0, 200)).toBe(-900);
+    expect(edgeScrollVelocity(36, 0, 200)).toBe(-225);
+    expect(edgeScrollVelocity(128, 0, 200)).toBe(0);
+    expect(edgeScrollVelocity(164, 0, 200)).toBe(225);
+  });
+
+  it("reports whether an edge motion can move its scrollport", () => {
+    const element = edgeScrollTestScrollport();
+    expect(canScrollEdge(element, "y", -900)).toBe(false);
+    expect(canScrollEdge(element, "y", 900)).toBe(true);
+    element.scrollTop = element.scrollHeight - element.clientHeight;
+    expect(canScrollEdge(element, "y", 900)).toBe(false);
   });
 });
 

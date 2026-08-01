@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState, type DragEvent as ReactDragEvent, type RefObject } from "react";
 
-import { createEdgeScrollDriver, type EdgeScrollDriver, type EdgeScrollMotion } from "@app/ui-kit";
-
-const BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX = 72;
-const BOARD_DRAG_AUTOSCROLL_MAX_SPEED_PX_PER_SECOND = 900;
+import {
+  canScrollEdge,
+  createEdgeScrollDriver,
+  edgeScrollVelocity,
+  type EdgeScrollDriver,
+  type EdgeScrollMotion,
+} from "@app/ui-kit";
 
 type DragPointer = Readonly<{ clientX: number; clientY: number }>;
 type PointContainment = "inclusive" | "strict";
@@ -68,22 +71,22 @@ class BoardDragAutoScrollController {
       return null;
     }
     const rootRect = this.#root.getBoundingClientRect();
-    const horizontalVelocity = boardDragEdgeVelocity(this.#pointer.clientX, rootRect.left, rootRect.right);
+    const horizontalVelocity = edgeScrollVelocity(this.#pointer.clientX, rootRect.left, rootRect.right);
     const verticalTarget = this.#verticalTarget(this.#pointer);
     const verticalVelocity =
       verticalTarget === null
         ? 0
-        : boardDragEdgeVelocity(
+        : edgeScrollVelocity(
             this.#pointer.clientY,
             verticalTarget.getBoundingClientRect().top,
             verticalTarget.getBoundingClientRect().bottom,
           );
-    const horizontalCanMove = canScroll(this.#root, "x", horizontalVelocity);
+    const horizontalCanMove = canScrollEdge(this.#root, "x", horizontalVelocity);
     const motion: EdgeScrollMotion[] = [];
     if (horizontalCanMove) {
       motion.push({ element: this.#root, axis: "x", velocity: horizontalVelocity });
     }
-    if (verticalTarget !== null && canScroll(verticalTarget, "y", verticalVelocity)) {
+    if (verticalTarget !== null && canScrollEdge(verticalTarget, "y", verticalVelocity)) {
       motion.push({ element: verticalTarget, axis: "y", velocity: verticalVelocity });
     }
     return motion.length === 0 ? null : motion;
@@ -97,21 +100,6 @@ class BoardDragAutoScrollController {
     }
     return null;
   }
-}
-
-function boardDragEdgeVelocity(position: number, start: number, end: number): number {
-  if (start >= end) {
-    return 0;
-  }
-  const distanceFromStart = position - start;
-  if (distanceFromStart >= 0 && distanceFromStart < BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX) {
-    return -edgeVelocityMagnitude(distanceFromStart);
-  }
-  const distanceFromEnd = end - position;
-  if (distanceFromEnd >= 0 && distanceFromEnd < BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX) {
-    return edgeVelocityMagnitude(distanceFromEnd);
-  }
-  return 0;
 }
 
 export function useBoardDragAutoScroll({
@@ -217,19 +205,4 @@ function pointIsInsideElement(
     point.clientY > rect.top &&
     point.clientY < rect.bottom
   );
-}
-
-function edgeVelocityMagnitude(distanceFromEdge: number): number {
-  const proximity = 1 - distanceFromEdge / BOARD_DRAG_AUTOSCROLL_EDGE_ZONE_PX;
-  return BOARD_DRAG_AUTOSCROLL_MAX_SPEED_PX_PER_SECOND * proximity * proximity;
-}
-
-function canScroll(element: HTMLElement, axis: "x" | "y", velocity: number): boolean {
-  if (velocity === 0) {
-    return false;
-  }
-  const position = axis === "x" ? element.scrollLeft : element.scrollTop;
-  const max =
-    axis === "x" ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight;
-  return velocity < 0 ? position > 0 : position < max;
 }

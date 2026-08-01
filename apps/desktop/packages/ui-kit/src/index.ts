@@ -4,7 +4,7 @@ export type {
   VerticalReorderDragSource,
   VerticalReorderRow,
 } from "./VerticalReorder";
-export { createEdgeScrollDriver } from "./edgeScroll";
+export { canScrollEdge, createEdgeScrollDriver, edgeScrollVelocity } from "./edgeScroll";
 export type {
   EdgeScrollAxis,
   EdgeScrollDriver,

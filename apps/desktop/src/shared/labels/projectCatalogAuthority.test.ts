@@ -736,10 +736,11 @@ describe("Project catalog authority", () => {
     expect(failures).toEqual([failure]);
   });
 
-  it("rolls back a failed reorder after rename without restoring the old name", async () => {
-    const reorder = deferred<ProjectLabelCatalog>();
+  it("reschedules a failed reorder after rename without restoring the old name", async () => {
+    const firstReorder = deferred<ProjectLabelCatalog>();
+    const secondReorder = deferred<ProjectLabelCatalog>();
     const refreshed = deferred<ProjectLabelCatalog>();
-    const finalRefresh = deferred<ProjectLabelCatalog>();
+    const calls: string[][] = [];
     const failures: unknown[] = [];
     let readCount = 0;
     const queryClient = new QueryClient({
@@ -750,12 +751,15 @@ describe("Project catalog authority", () => {
       queryClient,
       listCatalog: async () => {
         readCount += 1;
-        return readCount === 1 ? refreshed.promise : finalRefresh.promise;
+        return refreshed.promise;
       },
       onReorderFailure: (error) => {
         failures.push(error);
       },
-      reorderCatalog: async () => reorder.promise,
+      reorderCatalog: async (labelIDs) => {
+        calls.push([...labelIDs]);
+        return calls.length === 1 ? firstReorder.promise : secondReorder.promise;
+      },
     });
     const key = queryKeys.projectLabels("project-1");
     queryClient.setQueryData<ProjectLabelCatalog>(
@@ -785,7 +789,7 @@ describe("Project catalog authority", () => {
     });
 
     const failure = new Error("renamed reorder failed");
-    reorder.reject(failure);
+    firstReorder.reject(failure);
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Beta" },
@@ -793,9 +797,12 @@ describe("Project catalog authority", () => {
       ]);
     });
     await waitFor(() => {
-      expect(readCount).toBe(2);
+      expect(calls).toEqual([
+        [secondLabelID, labelID],
+        [secondLabelID, labelID],
+      ]);
     });
-    finalRefresh.resolve(
+    secondReorder.resolve(
       catalog([
         [secondLabelID, "Beta"],
         [labelID, "Renamed"],

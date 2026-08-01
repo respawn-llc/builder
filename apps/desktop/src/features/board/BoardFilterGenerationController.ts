@@ -8,6 +8,7 @@ import {
   type TaskLabelFilter,
   type WorkflowBoard,
 } from "@/api";
+import { boardNodeCardsSortEqual } from "./BoardSortModel";
 
 export type BoardFilterGeneration = Readonly<{
   generation: number;
@@ -290,10 +291,6 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
       listener();
     }
   }
-}
-
-function boardNodeCardsSortEqual(left: BoardNodeCardsSort, right: BoardNodeCardsSort): boolean {
-  return left.field === right.field && left.direction === right.direction;
 }
 
 class OperationLeaseRegistry<T> {

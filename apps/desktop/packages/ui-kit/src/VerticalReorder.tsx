@@ -38,7 +38,7 @@ import {
   type RefAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { createEdgeScrollDriver } from "./edgeScroll";
+import { canScrollEdge, createEdgeScrollDriver, edgeScrollVelocity } from "./edgeScroll";
 import { indexesByID, projectVerticalReorder } from "./reorderProjection";
 
 export type VerticalReorderDragSource = "keyboard" | "pointer";
@@ -453,8 +453,8 @@ function useBoundedVerticalEdgeScroll(): Readonly<{
       ) {
         return null;
       }
-      const velocity = verticalEdgeScrollVelocity(position.y, rect.top, rect.bottom);
-      if (velocity === 0 || !canScrollVertically(current, velocity)) {
+      const velocity = edgeScrollVelocity(position.y, rect.top, rect.bottom);
+      if (velocity === 0 || !canScrollEdge(current, "y", velocity)) {
         return null;
       }
       return [{ axis: "y", element: current, velocity }];
@@ -486,27 +486,6 @@ function useBoundedVerticalEdgeScroll(): Readonly<{
   );
   useEffect(() => stop, [stop]);
   return useMemo(() => ({ move, start, stop }), [move, start, stop]);
-}
-
-function verticalEdgeScrollVelocity(pointerY: number, top: number, bottom: number): number {
-  const edgeActivationDistance = 72;
-  const maxVelocity = 900;
-  const distanceFromTop = pointerY - top;
-  const distanceFromBottom = bottom - pointerY;
-  if (distanceFromTop >= 0 && distanceFromTop < edgeActivationDistance) {
-    const proximity = 1 - distanceFromTop / edgeActivationDistance;
-    return -maxVelocity * proximity * proximity;
-  }
-  if (distanceFromBottom >= 0 && distanceFromBottom < edgeActivationDistance) {
-    const proximity = 1 - distanceFromBottom / edgeActivationDistance;
-    return maxVelocity * proximity * proximity;
-  }
-  return 0;
-}
-
-function canScrollVertically(element: HTMLElement, velocity: number): boolean {
-  const maximum = Math.max(0, element.scrollHeight - element.clientHeight);
-  return velocity < 0 ? element.scrollTop > 0 : element.scrollTop < maximum;
 }
 
 function nearestVerticalScrollContainer(anchor: HTMLElement | null): HTMLElement | null {

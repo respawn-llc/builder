@@ -17,6 +17,7 @@ import {
 } from "@/ui";
 import { AnimatedBoardSummary } from "./BoardChromeSummary";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
+import { boardNodeCardsSortEqual } from "./BoardSortModel";
 
 const boardSortFields = ["updated", "created", "labels", "title", "short_id"] as const satisfies readonly BoardNodeCardsSortField[];
 
@@ -94,10 +95,6 @@ function boardSortField(value: string): BoardNodeCardsSortField {
     throw new Error(`Board Sort received unknown field "${value}".`);
   }
   return field;
-}
-
-function boardNodeCardsSortEqual(left: BoardNodeCardsSort, right: BoardNodeCardsSort): boolean {
-  return left.field === right.field && left.direction === right.direction;
 }
 
 function sortFieldLabel(t: ReturnType<typeof useTranslation>["t"], field: BoardNodeCardsSortField): string {

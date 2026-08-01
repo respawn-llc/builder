@@ -154,7 +154,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if pageSize == 0 {
 		pageSize = serverapi.WorkflowBoardNodeCardsMaxPageSize
 	}
-	sort := normalizeBoardNodeCardsSort(req.Sort)
+	sort := req.CanonicalSort()
 	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowIDString, nodeID, labelFilter, sort)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
@@ -597,16 +597,6 @@ type boardNodeCardsPageTokenPayload struct {
 	Title           *string                              `json:"title,omitempty"`
 	TaskSeq         int64                                `json:"task_seq"`
 	Direction       boardNodeCardsPageDirection          `json:"direction"`
-}
-
-func normalizeBoardNodeCardsSort(sort *serverapi.WorkflowBoardNodeCardsSort) serverapi.WorkflowBoardNodeCardsSort {
-	if sort == nil {
-		return serverapi.WorkflowBoardNodeCardsSort{
-			Field:     serverapi.WorkflowBoardNodeCardsSortFieldUpdated,
-			Direction: serverapi.WorkflowTaskListSortDirectionDesc,
-		}
-	}
-	return *sort
 }
 
 func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID string, nodeID string, labelFilter workflowTaskLabelFilterFacts, sort serverapi.WorkflowBoardNodeCardsSort) (boardNodeCardsPageCursor, error) {
