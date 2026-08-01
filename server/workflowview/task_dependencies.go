@@ -15,10 +15,15 @@ import (
 )
 
 type TaskDependencies struct {
-	queries    *sqlitegen.Queries
-	projection *TaskStatusProjection
-	projector  *TaskProjector
-	policy     workflow.TaskDependencyPolicy
+	queries      *sqlitegen.Queries
+	projection   *TaskStatusProjection
+	satisfaction taskDependencySatisfaction
+	policy       workflow.TaskDependencyPolicy
+}
+
+type taskDependencySatisfaction struct {
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
 }
 
 type taskDependencyFactRow struct {
@@ -47,15 +52,17 @@ func NewTaskDependencies(
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	projector := NewTaskProjector()
-	if projection != nil {
-		projector = projection.projector
+	if projection == nil {
+		return nil, errors.New("task status projection is required")
 	}
 	return &TaskDependencies{
 		queries:    metadataStore.Queries(),
 		projection: projection,
-		projector:  projector,
-		policy:     workflow.TaskDependencyPolicy{},
+		satisfaction: taskDependencySatisfaction{
+			queries:   metadataStore.Queries(),
+			projector: projection.projector,
+		},
+		policy: workflow.TaskDependencyPolicy{},
 	}, nil
 }
 
@@ -82,28 +89,7 @@ func (d *TaskDependencies) CountUnsatisfiedBlockers(ctx context.Context, taskID 
 	if trimmedTaskID == "" {
 		return 0, errors.New("task id is required")
 	}
-	rows, err := d.relationshipRows(ctx, trimmedTaskID, true)
-	if err != nil {
-		return 0, err
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	taskIDs := make([]string, 0, len(rows))
-	for _, row := range rows {
-		taskIDs = append(taskIDs, row.TaskID)
-	}
-	statuses, err := loadWorkflowTaskStatusFacts(ctx, d.queries, d.projector, taskIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, taskID := range taskIDs {
-		if !statuses[taskID].Done {
-			count++
-		}
-	}
-	return count, nil
+	return d.satisfaction.CountUnsatisfiedBlockers(ctx, trimmedTaskID)
 }
 
 func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID string, requestedDirection *serverapi.WorkflowTaskDependencyDirection) (serverapi.WorkflowTaskDependencyListResponse, error) {
@@ -303,24 +289,7 @@ func (d *TaskDependencies) relationshipRowsWithQueries(
 		return nil, errors.New("workflow queries are required")
 	}
 	if blockedOnly {
-		rows, err := queries.ListTaskDependencyBlockedByProjectionRows(ctx, taskID)
-		if err != nil {
-			return nil, fmt.Errorf("list blocked-by task dependencies for %q: %w", taskID, err)
-		}
-		if len(rows) > workflow.MaxTaskDependencies {
-			return nil, fmt.Errorf("task %q has %d blocked-by dependencies, exceeding invariant limit %d", taskID, len(rows), workflow.MaxTaskDependencies)
-		}
-		out := make([]sqlitegen.ListTaskDependencyProjectionRowsRow, len(rows))
-		for index, row := range rows {
-			out[index] = sqlitegen.ListTaskDependencyProjectionRowsRow{
-				Direction:  row.Direction,
-				TaskID:     row.TaskID,
-				ShortID:    row.ShortID,
-				Title:      row.Title,
-				WorkflowID: row.WorkflowID,
-			}
-		}
-		return out, nil
+		return listDependencyBlockerRows(ctx, queries, taskID)
 	}
 	rows, err := queries.ListTaskDependencyProjectionRows(ctx, taskID)
 	if err != nil {
@@ -330,6 +299,59 @@ func (d *TaskDependencies) relationshipRowsWithQueries(
 		return nil, fmt.Errorf("task %q has %d direct dependencies, exceeding invariant limit %d per direction", taskID, len(rows), workflow.MaxTaskDependencies)
 	}
 	return rows, nil
+}
+
+func listDependencyBlockerRows(
+	ctx context.Context,
+	queries *sqlitegen.Queries,
+	taskID string,
+) ([]sqlitegen.ListTaskDependencyProjectionRowsRow, error) {
+	rows, err := queries.ListTaskDependencyBlockedByProjectionRows(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list blocked-by task dependencies for %q: %w", taskID, err)
+	}
+	if len(rows) > workflow.MaxTaskDependencies {
+		return nil, fmt.Errorf("task %q has %d blocked-by dependencies, exceeding invariant limit %d", taskID, len(rows), workflow.MaxTaskDependencies)
+	}
+	out := make([]sqlitegen.ListTaskDependencyProjectionRowsRow, len(rows))
+	for index, row := range rows {
+		out[index] = sqlitegen.ListTaskDependencyProjectionRowsRow{
+			Direction:  row.Direction,
+			TaskID:     row.TaskID,
+			ShortID:    row.ShortID,
+			Title:      row.Title,
+			WorkflowID: row.WorkflowID,
+		}
+	}
+	return out, nil
+}
+
+func (s taskDependencySatisfaction) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
+	if s.queries == nil || s.projector == nil {
+		return 0, errors.New("task dependency satisfaction is required")
+	}
+	rows, err := listDependencyBlockerRows(ctx, s.queries, taskID)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	taskIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		taskIDs = append(taskIDs, row.TaskID)
+	}
+	statuses, err := loadWorkflowTaskStatusFacts(ctx, s.queries, s.projector, taskIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, relatedTaskID := range taskIDs {
+		if !statuses[relatedTaskID].Done {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (d *TaskDependencies) projectFacts(facts taskDependencyFacts) (serverapi.WorkflowTaskDependencies, error) {

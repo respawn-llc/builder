@@ -177,7 +177,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
-	dependencyCounter, err := workflowview.NewTaskDependencies(metadataStore, nil)
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
 		t.Fatalf("new Task dependency counter: %v", err)
 	}

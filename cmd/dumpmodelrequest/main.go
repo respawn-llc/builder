@@ -297,7 +297,7 @@ func resolvePersistedWorkflowInspection(ctx context.Context, app config.App, met
 	if err != nil {
 		return workflowrunner.PersistedWorkflowInspection{}, err
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, nil)
+	dependencies, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
 		return workflowrunner.PersistedWorkflowInspection{}, err
 	}

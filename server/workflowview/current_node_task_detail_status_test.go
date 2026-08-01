@@ -14,15 +14,36 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
+
+	"github.com/google/uuid"
 )
 
 func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 	surfaces := newRealTaskStatusSurfaces(t, false)
 	fixture := surfaces.fixture
-	started := fixture.startTask(t, "Cross surface question")
-	question := fixture.startCurrentNodeQuestionOnAuthority(t, started, fixture.authority, fixture.newAgentRuntimePlan(t))
-	defer question.resolve(t, fixture.ctx)
+	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Cross surface question")}
+	request := tools.AskQuestionRequest{
+		ID:                     uuid.NewString(),
+		StepID:                 uuid.NewString(),
+		Question:               "Proceed?",
+		Suggestions:            []string{"Yes", "No"},
+		RecommendedOptionIndex: 1,
+	}
+	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
+	defer func() {
+		sessionID, err := runtimeids.ParseSessionID(execution.sessionID)
+		if err != nil {
+			t.Fatalf("ParseSessionID: %v", err)
+		}
+		if err := fixture.authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
+			RequestID: request.ID,
+			Answer:    "Yes",
+		}, nil); err != nil {
+			t.Fatalf("SubmitPromptResponse: %v", err)
+		}
+	}()
 
 	detail, err := surfaces.detail.GetTask(fixture.ctx, string(started.task.ID))
 	if err != nil {
@@ -80,8 +101,9 @@ func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
 		detail.AttentionCount != 1 ||
 		detail.Actions.CanInterrupt ||
+		detail.Actions.CanDelete ||
 		len(detail.LiveSessionIDs) != 1 ||
-		detail.LiveSessionIDs[0] != question.sessionID.String() {
+		detail.LiveSessionIDs[0] != execution.sessionID {
 		t.Fatalf("cross-surface detail = %+v", detail)
 	}
 	if !reflect.DeepEqual(detail.Actions, cards.Cards[0].Actions) ||
@@ -99,21 +121,26 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 		requiresApproval bool
 		wantStatus       serverapi.WorkflowTaskStatusKind
 		wantAttention    int
+		wantCanInterrupt bool
+		wantCanDelete    bool
 		setup            func(*testing.T, realTaskStatusSurfaces, startedCurrentNodeViewTask) (string, string)
 	}{
 		{
-			name:       "queued",
-			wantStatus: serverapi.WorkflowTaskStatusKindQueued,
+			name:          "queued",
+			wantStatus:    serverapi.WorkflowTaskStatusKindQueued,
+			wantCanDelete: false,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
-				execution := startRealTaskStatusExecution(t, surfaces, task, true, nil)
+				_, execution := startRealTaskStatusExecution(t, surfaces, task, true, nil)
 				return string(surfaces.fixture.agentNodeID), execution.sessionID
 			},
 		},
 		{
-			name:       "running",
-			wantStatus: serverapi.WorkflowTaskStatusKindRunning,
+			name:             "running",
+			wantStatus:       serverapi.WorkflowTaskStatusKindRunning,
+			wantCanInterrupt: true,
+			wantCanDelete:    false,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
-				execution := startRealTaskStatusExecution(t, surfaces, task, false, nil)
+				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, nil)
 				return string(surfaces.fixture.agentNodeID), execution.sessionID
 			},
 		},
@@ -121,29 +148,37 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			name:          "ordinary question",
 			wantStatus:    serverapi.WorkflowTaskStatusKindWaitingQuestion,
 			wantAttention: 1,
+			wantCanDelete: false,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
-				question := surfaces.fixture.startCurrentNodeQuestionOnAuthority(
-					t,
-					task,
-					surfaces.fixture.authority,
-					surfaces.fixture.newAgentRuntimePlan(t),
-				)
+				request := tools.AskQuestionRequest{
+					ID:       uuid.NewString(),
+					StepID:   uuid.NewString(),
+					Question: "Proceed?",
+				}
+				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, &request)
 				t.Cleanup(func() {
-					_ = question.authority.SubmitPromptResponse(question.sessionID, tools.AskQuestionResponse{
-						RequestID: question.request.ID,
+					sessionID, err := runtimeids.ParseSessionID(execution.sessionID)
+					if err != nil {
+						t.Errorf("ParseSessionID: %v", err)
+						return
+					}
+					if err := surfaces.fixture.authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
+						RequestID: request.ID,
 						Answer:    "Yes",
-					}, nil)
-					_, _ = question.handle.Wait(context.Background())
+					}, nil); err != nil {
+						t.Errorf("SubmitPromptResponse: %v", err)
+					}
 				})
-				return string(surfaces.fixture.agentNodeID), question.sessionID.String()
+				return string(surfaces.fixture.agentNodeID), execution.sessionID
 			},
 		},
 		{
 			name:          "live session approval",
 			wantStatus:    serverapi.WorkflowTaskStatusKindWaitingApproval,
 			wantAttention: 1,
+			wantCanDelete: false,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
-				execution := startRealTaskStatusExecution(t, surfaces, task, false, func() *tools.AskQuestionRequest {
+				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, func() *tools.AskQuestionRequest {
 					request := realTaskStatusApprovalRequest()
 					return &request
 				}())
@@ -155,6 +190,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			requiresApproval: true,
 			wantStatus:       serverapi.WorkflowTaskStatusKindWaitingApproval,
 			wantAttention:    1,
+			wantCanDelete:    true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
 				completed, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       task.currentNode,
@@ -170,6 +206,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			name:          "interrupted",
 			wantStatus:    serverapi.WorkflowTaskStatusKindInterrupted,
 			wantAttention: 1,
+			wantCanDelete: true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
 				if err := surfaces.fixture.store.InterruptCurrentNode(
 					surfaces.fixture.ctx,
@@ -183,8 +220,9 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:       "completed",
-			wantStatus: serverapi.WorkflowTaskStatusKindDone,
+			name:          "completed",
+			wantStatus:    serverapi.WorkflowTaskStatusKindDone,
+			wantCanDelete: true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) (string, string) {
 				if _, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       task.currentNode,
@@ -203,9 +241,14 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			surfaces := newRealTaskStatusSurfaces(t, test.requiresApproval)
-			task := surfaces.fixture.startTask(t, "Lifecycle "+test.name)
+			task := startedCurrentNodeViewTask{
+				task: surfaces.fixture.createBacklogTask(t, "Lifecycle "+test.name),
+			}
+			if test.name == "durable transition approval" || test.name == "interrupted" || test.name == "completed" {
+				task = surfaces.fixture.startExistingTask(t, task.task)
+			}
 			nodeID, sessionID := test.setup(t, surfaces, task)
-			assertRealTaskStatusAcrossSurfaces(t, surfaces, task, nodeID, sessionID, test.wantStatus, test.wantAttention)
+			assertRealTaskStatusAcrossSurfaces(t, surfaces, task, nodeID, sessionID, test.wantStatus, test.wantAttention, test.wantCanInterrupt, test.wantCanDelete)
 		})
 	}
 }
@@ -278,8 +321,18 @@ func assertRealTaskStatusAcrossSurfaces(
 	sessionID string,
 	wantStatus serverapi.WorkflowTaskStatusKind,
 	wantAttention int,
+	wantCanInterrupt bool,
+	wantCanDelete bool,
 ) {
 	t.Helper()
+	observation, err := surfaces.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{task.task.ID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	wantQuiescent := sessionID == ""
+	if got := observation.Quiescence[task.task.ID]; got != wantQuiescent {
+		t.Fatalf("Controller quiescence = %t, want %t for session %q", got, wantQuiescent, sessionID)
+	}
 	detail, err := surfaces.detail.GetTask(surfaces.fixture.ctx, string(task.task.ID))
 	if err != nil {
 		t.Fatalf("TaskDetail.GetTask: %v", err)
@@ -341,8 +394,14 @@ func assertRealTaskStatusAcrossSurfaces(
 	if detail.Status.Kind != wantStatus || detail.AttentionCount != wantAttention {
 		t.Fatalf("detail status/attention = %s/%d, want %s/%d", detail.Status.Kind, detail.AttentionCount, wantStatus, wantAttention)
 	}
+	if detail.Actions.CanInterrupt != wantCanInterrupt || detail.Actions.CanDelete != wantCanDelete {
+		t.Fatalf("detail actions = %+v, want can_interrupt=%t can_delete=%t", detail.Actions, wantCanInterrupt, wantCanDelete)
+	}
 	if !reflect.DeepEqual(detail.Actions, cards.Cards[0].Actions) {
 		t.Fatalf("detail/board actions differ: detail=%+v board=%+v", detail.Actions, cards.Cards[0].Actions)
+	}
+	if sessionID != "" && (len(detail.CurrentNodes) != 1 || detail.CurrentNodes[0].NodeID != nodeID) {
+		t.Fatalf("detail current nodes = %+v, want node %q", detail.CurrentNodes, nodeID)
 	}
 	activeNodeIDs := make([]string, 0, len(detail.CurrentNodes))
 	for _, currentNode := range detail.CurrentNodes {

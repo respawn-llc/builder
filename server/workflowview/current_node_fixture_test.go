@@ -193,13 +193,19 @@ func (f currentNodeViewFixture) startTask(t *testing.T, title string) startedCur
 	t.Helper()
 	workflowID := f.workflowID
 	task, err := f.store.CreateTask(f.ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  f.binding.ProjectID,
-		WorkflowID: &workflowID,
-		Title:      title,
+		ProjectID:         f.binding.ProjectID,
+		WorkflowID:        &workflowID,
+		Title:             title,
+		SourceWorkspaceID: f.binding.WorkspaceID,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	return f.startExistingTask(t, task)
+}
+
+func (f currentNodeViewFixture) startExistingTask(t *testing.T, task workflowstore.TaskRecord) startedCurrentNodeViewTask {
+	t.Helper()
 	started, err := f.store.StartTask(f.ctx, task.ID)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
@@ -214,9 +220,10 @@ func (f currentNodeViewFixture) createBacklogTask(t *testing.T, title string) wo
 	t.Helper()
 	workflowID := f.workflowID
 	task, err := f.store.CreateTask(f.ctx, workflowstore.CreateTaskRequest{
-		ProjectID:  f.binding.ProjectID,
-		WorkflowID: &workflowID,
-		Title:      title,
+		ProjectID:         f.binding.ProjectID,
+		WorkflowID:        &workflowID,
+		Title:             title,
+		SourceWorkspaceID: f.binding.WorkspaceID,
 	})
 	if err != nil {
 		t.Fatalf("CreateTask backlog: %v", err)
@@ -225,6 +232,21 @@ func (f currentNodeViewFixture) createBacklogTask(t *testing.T, title string) wo
 }
 
 func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started startedCurrentNodeViewTask) runtimeids.SessionID {
+	t.Helper()
+	sessionID := f.newCurrentNodeViewSession(t)
+	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  started.currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	return sessionID
+}
+
+func (f currentNodeViewFixture) newCurrentNodeViewSession(t *testing.T) runtimeids.SessionID {
 	t.Helper()
 	sessionRoot := filepath.Join(f.cfg.PersistenceRoot, "projects", f.binding.ProjectID, "sessions")
 	sessionStore, err := session.Create(
@@ -249,15 +271,6 @@ func (f currentNodeViewFixture) bindCurrentNodeSession(t *testing.T, started sta
 	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
-	}
-	if _, err := f.store.BindSessionToCurrentNode(f.ctx, workflowstore.CurrentNodeSessionBindingRequest{
-		Association: workflowstore.TaskSessionAssociationRequest{
-			SessionID:    sessionID,
-			CurrentNode:  started.currentNode,
-			AssociatedAt: time.Now().UTC(),
-		},
-	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	return sessionID
 }

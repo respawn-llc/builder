@@ -2,6 +2,8 @@ package workflowview
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,8 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +23,87 @@ import (
 type taskStatusProjectionTestRunner struct{}
 
 type taskStatusProjectionTestAssignmentSteerer struct{}
+
+type controllerBackedTaskStatusRunner struct {
+	authority *sessionruntime.Authority
+	mu        sync.Mutex
+	configs   map[workflow.TaskID]controllerBackedTaskStatusExecution
+}
+
+type controllerBackedTaskStatusExecution struct {
+	sessionID        runtimeids.SessionID
+	plan             sessionruntime.AgentRuntimePlan
+	request          *tools.AskQuestionRequest
+	queued           bool
+	admissionRelease <-chan struct{}
+	executionRelease <-chan struct{}
+	started          chan<- sessionruntime.ExecutionHandle
+}
+
+func newControllerBackedTaskStatusRunner(authority *sessionruntime.Authority) *controllerBackedTaskStatusRunner {
+	return &controllerBackedTaskStatusRunner{
+		authority: authority,
+		configs:   make(map[workflow.TaskID]controllerBackedTaskStatusExecution),
+	}
+}
+
+func (r *controllerBackedTaskStatusRunner) configure(
+	taskID workflow.TaskID,
+	config controllerBackedTaskStatusExecution,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configs[taskID] = config
+}
+
+func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ workflowexecution.CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	r.mu.Lock()
+	config, ok := r.configs[reference.TaskID]
+	r.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no test execution configured for Task %q", reference.TaskID)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(config.sessionID)
+	if err != nil {
+		return err
+	}
+	if !config.queued {
+		lease.Release()
+	}
+	handle, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Runtime:    &config.plan,
+		Workflow:   &lease,
+		Resource:   sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			if config.request != nil {
+				_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
+				return err
+			}
+			<-config.executionRelease
+			return nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	config.started <- handle
+	if config.queued {
+		select {
+		case <-config.admissionRelease:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return nil
+}
 
 func (taskStatusProjectionTestAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	return taskStatusProjectionTestAssignmentSteer{}, nil
@@ -33,6 +118,7 @@ func (taskStatusProjectionTestAssignmentSteer) Wait(context.Context) (session.Co
 type realTaskStatusSurfaces struct {
 	fixture    currentNodeViewFixture
 	controller *workflowexecution.CurrentNodeController
+	runner     *controllerBackedTaskStatusRunner
 	detail     *TaskDetail
 	list       *TaskList
 	search     *TaskSearch
@@ -42,9 +128,10 @@ type realTaskStatusSurfaces struct {
 func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStatusSurfaces {
 	t.Helper()
 	fixture := newCurrentNodeViewFixture(t, requiresApproval)
+	runner := newControllerBackedTaskStatusRunner(fixture.authority)
 	controller, err := workflowexecution.NewCurrentNodeController(
 		fixture.store,
-		taskStatusProjectionTestRunner{},
+		runner,
 		fixture.authority,
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
@@ -88,6 +175,7 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 	return realTaskStatusSurfaces{
 		fixture:    fixture,
 		controller: controller,
+		runner:     runner,
 		detail:     detail,
 		list:       list,
 		search:     search,
@@ -97,7 +185,6 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 
 type realTaskStatusExecution struct {
 	handle    sessionruntime.ExecutionHandle
-	lease     sessionruntime.WorkflowExecutionLease
 	release   chan struct{}
 	sessionID string
 }
@@ -105,58 +192,75 @@ type realTaskStatusExecution struct {
 func startRealTaskStatusExecution(
 	t *testing.T,
 	surfaces realTaskStatusSurfaces,
-	task startedCurrentNodeViewTask,
+	backlog startedCurrentNodeViewTask,
 	queued bool,
 	request *tools.AskQuestionRequest,
-) realTaskStatusExecution {
+) (startedCurrentNodeViewTask, realTaskStatusExecution) {
 	t.Helper()
-	sessionID := surfaces.fixture.bindCurrentNodeSession(t, task)
-	plan := surfaces.fixture.newAgentRuntimePlan(t)
-	lease, err := surfaces.fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   surfaces.fixture.binding.ProjectID,
-		WorkflowID:  surfaces.fixture.workflowID,
-		CurrentNode: task.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	if !queued {
-		lease.Release()
-	}
+	sessionID := surfaces.fixture.newCurrentNodeViewSession(t)
 	release := make(chan struct{})
-	handle, err := surfaces.fixture.authority.StartAgentExecution(t.Context(), sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			if request != nil {
-				_, err := surfaces.fixture.authority.AwaitPromptResponse(ctx, scope.ID(), *request)
-				return err
-			}
-			<-release
-			return nil
+	admissionRelease := make(chan struct{})
+	startedHandle := make(chan sessionruntime.ExecutionHandle, 1)
+	surfaces.runner.configure(backlog.task.ID, controllerBackedTaskStatusExecution{
+		sessionID:        sessionID,
+		plan:             surfaces.fixture.newAgentRuntimePlan(t),
+		request:          request,
+		queued:           queued,
+		admissionRelease: admissionRelease,
+		executionRelease: release,
+		started:          startedHandle,
+	})
+	startedResult, err := surfaces.controller.StartTaskWithExecutionTarget(t.Context(), backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   surfaces.fixture.binding.WorkspaceID,
+			SourceWorkspaceRoot: surfaces.fixture.binding.CanonicalRoot,
 		},
 	})
 	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	if len(startedResult.Mutation.Created) != 1 {
+		t.Fatalf("StartTaskWithExecutionTarget mutation = %+v, want one Current Node", startedResult.Mutation)
+	}
+	task := startedCurrentNodeViewTask{
+		task:        backlog.task,
+		currentNode: startedResult.Mutation.Created[0].Reference,
+	}
+	if _, err := surfaces.fixture.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  task.currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	var handle sessionruntime.ExecutionHandle
+	select {
+	case handle = <-startedHandle:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Controller-admitted execution")
 	}
 	t.Cleanup(func() {
-		lease.Release()
+		close(admissionRelease)
 		close(release)
 		if err := handle.Stop(context.Background()); err != nil {
 			t.Errorf("stop real status execution: %v", err)
 		}
 	})
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, err := surfaces.fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(
-			surfaces.fixture.binding.ProjectID,
-			surfaces.fixture.workflowID,
-		)
+		observation, err := surfaces.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{task.task.ID})
 		if err != nil {
 			return false
 		}
-		executions := snapshots[task.task.ID].Executions
+		if observation.Quiescence[task.task.ID] {
+			return false
+		}
+		executions := observation.Executions[task.task.ID].Executions
 		if len(executions) != 1 {
 			return false
 		}
@@ -172,9 +276,8 @@ func startRealTaskStatusExecution(
 		}
 		return executions[0].HasPendingPromptKind(kind)
 	}, "timed out waiting for stable live Task status execution")
-	return realTaskStatusExecution{
+	return task, realTaskStatusExecution{
 		handle:    handle,
-		lease:     lease,
 		release:   release,
 		sessionID: sessionID.String(),
 	}

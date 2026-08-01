@@ -8,6 +8,13 @@ import (
 	"core/shared/serverapi"
 )
 
+func TestNewTaskDependenciesRequiresTaskStatusProjection(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	if _, err := NewTaskDependencies(fixture.metadata, nil); err == nil {
+		t.Fatal("NewTaskDependencies accepted a nil TaskStatusProjection")
+	}
+}
+
 func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
