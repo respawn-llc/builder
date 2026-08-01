@@ -17,10 +17,11 @@ func TestBackgroundTransitionRegistersBeforePresentationFailureAndTerminalExit(t
 		HookPath: &hookPath,
 	}))
 	events := make(chan Event, 2)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type == EventBackgrounded || event.Type == EventCompleted || event.Type == EventKilled {
 			events <- event
 		}
+		return true
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)

@@ -18,7 +18,8 @@ Area specs:
 - `tui-onboarding.md`: first-time setup wizard, navigation, completion, and cancellation.
 - `tui-terminal-environment.md`: resize, too-small guard, theming, color roles, terminal control modes.
 - `tui-ask-prompts.md`: agent question/approval prompt UI — lifecycle, prompt kinds, keys.
-- `workflow-orchestration.md`: workflow behavior, task lifecycle, execution, concurrency, worktrees, search, and CLI contracts.
+- `workflow-orchestration.md`: workflow behavior, task lifecycle, execution, concurrency, worktrees, and workflow/task CLI contracts.
+- `task-search.md`: global Task search queries, matching, ranking, pagination, output, consistency, and compatibility.
 - `desktop-gui.md`: desktop navigation, projects, workflow boards, task detail, connection loss, and native capabilities.
 - `workflow-editor.md`: workflow editor, draft editing, library/linking, sidebar, and save/conflict decisions.
 - `release-distribution.md`: supported releases, installers, update channels, and compatibility behavior.

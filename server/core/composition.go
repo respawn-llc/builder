@@ -241,6 +241,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
 	}
+	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, runtimeAuthority)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
+	}
 	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowTaskProjector)
 	if err != nil {
 		cleanupNewFailure()
@@ -261,6 +266,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
+	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, RuntimeAuthority: runtimeAuthority, MutationPermit: workflowMutationPermit})
 	if err != nil {
@@ -275,6 +281,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowexecution.CurrentNodeControllerConfig{
 			AutomaticConcurrency: cfg.Settings.Workflow.Concurrency,
 			Attention:            workflowAttentionFinalizer,
+			AssignmentSteerer:    workflowRuntimeStarter,
 		},
 	)
 	if err != nil {
@@ -300,6 +307,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Definitions: workflowDefinitions,
 		Board:       workflowBoard,
 		TaskList:    workflowTaskList,
+		TaskSearch:  workflowTaskSearch,
 		TaskDetail:  workflowTaskDetail,
 		Activity:    workflowActivity,
 		Attention:   workflowAttention,

@@ -22,6 +22,10 @@ type WorkflowTaskListReadModel interface {
 	List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
 }
 
+type WorkflowTaskSearchReadModel interface {
+	Search(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
+}
+
 type WorkflowTaskDetailReadModel interface {
 	GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 	GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error)
@@ -41,6 +45,7 @@ type ReadModels struct {
 	Definitions WorkflowDefinitionReadModel
 	Board       WorkflowBoardReadModel
 	TaskList    WorkflowTaskListReadModel
+	TaskSearch  WorkflowTaskSearchReadModel
 	TaskDetail  WorkflowTaskDetailReadModel
 	Activity    WorkflowActivityReadModel
 	Attention   WorkflowAttentionReadModel
@@ -54,6 +59,8 @@ func (r ReadModels) validate() error {
 		return errors.New("workflow board read model is required")
 	case r.TaskList == nil:
 		return errors.New("workflow task list read model is required")
+	case r.TaskSearch == nil:
+		return errors.New("workflow task search read model is required")
 	case r.TaskDetail == nil:
 		return errors.New("workflow task detail read model is required")
 	case r.Activity == nil:

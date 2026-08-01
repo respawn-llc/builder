@@ -637,10 +637,191 @@ func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "62"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "76"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
 		t.Fatalf("expected previous protocol generation rejection, got %+v", respErr)
 	}
+}
+
+func TestGatewayTaskSearchDispatchesIndexedResponseAndTypedValidationError(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	task := createGatewaySearchableTask(t, appCore)
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	request := serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	}
+	var response serverapi.TaskSearchResponse
+	callGateway(t, conn, "search", protocol.MethodWorkflowTaskSearch, request, &response)
+	if err := response.Validate(); err != nil {
+		t.Fatalf("search response validation: %v", err)
+	}
+	if response.Mode != request.Mode ||
+		len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != task.ID ||
+		response.Groups[0].TotalHitCount != 1 ||
+		len(response.Groups[0].Hits) != 1 ||
+		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody ||
+		response.Groups[0].Hits[0].Literal == nil ||
+		response.NextOffset != nil {
+		t.Fatalf("indexed search response = %+v", response)
+	}
+
+	responseError := callGatewayExpectError(t, conn, "short", protocol.MethodWorkflowTaskSearch, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeLiteral,
+		Query:    "ab",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if responseError.Code != protocol.ErrCodeWorkflowTaskSearch {
+		t.Fatalf("short literal error = %+v, want task search code", responseError)
+	}
+	decoded := serverapi.DecodeTaskSearchError(responseError.Data, responseError.Message)
+	var typed *serverapi.TaskSearchError
+	if !errors.As(decoded, &typed) || typed.Reason != serverapi.TaskSearchErrorReasonNormalizedTooShort {
+		t.Fatalf("short literal decoded error = %T %v", decoded, decoded)
+	}
+}
+
+func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	task := createGatewaySearchableTask(t, appCore)
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	response, err := remote.SearchWorkflowTasks(context.Background(), serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    "body:needle",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("SearchWorkflowTasks: %v", err)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("validate remote task-search response: %v", err)
+	}
+	if response.Mode != serverapi.TaskSearchModeFTS5 ||
+		len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != task.ID ||
+		len(response.Groups[0].Hits) != 1 ||
+		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody ||
+		response.Groups[0].Hits[0].FTS5 == nil {
+		t.Fatalf("remote indexed task-search response = %+v", response)
+	}
+}
+
+func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.WorkflowTaskSummary {
+	t.Helper()
+	ctx := context.Background()
+	workflows := appCore.WorkflowClient()
+	created, err := workflows.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Search Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	definition, err := workflows.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	startID, terminalID := "", ""
+	for _, node := range definition.Definition.Nodes {
+		switch node.Kind {
+		case "start":
+			startID = node.ID
+		case "terminal":
+			terminalID = node.ID
+		}
+	}
+	if startID == "" || terminalID == "" {
+		t.Fatalf("workflow definition lacks start/terminal Nodes: %+v", definition.Definition.Nodes)
+	}
+	workflowID := created.Workflow.ID.String()
+	agentID := "node-agent-" + workflowID
+	startGroupID := "group-start-" + workflowID
+	doneGroupID := "group-done-" + workflowID
+	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
+		WorkflowID:   created.Workflow.ID,
+		NodeID:       agentID,
+		Key:          "agent",
+		Kind:         "agent",
+		DisplayName:  "Agent",
+		SubagentRole: "coder",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNode: %v", err)
+	}
+	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
+		WorkflowID:   created.Workflow.ID,
+		GroupID:      startGroupID,
+		SourceNodeID: startID,
+		TransitionID: "start",
+		DisplayName:  "Start",
+	}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
+	}
+	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
+		WorkflowID:        created.Workflow.ID,
+		EdgeID:            "edge-start-" + workflowID,
+		TransitionGroupID: startGroupID,
+		Key:               "start",
+		TargetNodeID:      agentID,
+		ContextMode:       "new_session",
+		PromptTemplate:    "Search work.",
+	}); err != nil {
+		t.Fatalf("AddWorkflowEdge start: %v", err)
+	}
+	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
+		WorkflowID:   created.Workflow.ID,
+		GroupID:      doneGroupID,
+		SourceNodeID: agentID,
+		TransitionID: "done",
+		DisplayName:  "Done",
+	}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
+	}
+	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
+		WorkflowID:        created.Workflow.ID,
+		EdgeID:            "edge-done-" + workflowID,
+		TransitionGroupID: doneGroupID,
+		Key:               "done",
+		TargetNodeID:      terminalID,
+		ContextMode:       "new_session",
+	}); err != nil {
+		t.Fatalf("AddWorkflowEdge done: %v", err)
+	}
+	if _, err := workflows.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     appCore.ProjectID(),
+		WorkflowID:    created.Workflow.ID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultAlways,
+	}); err != nil {
+		t.Fatalf("LinkWorkflowToProject: %v", err)
+	}
+	task, err := workflows.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: appCore.ProjectID(),
+		Title:     "Search Task",
+		Body:      "needle body",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	return task.Task
 }
 
 func TestGatewayRejectsMethodsBeforeHandshake(t *testing.T) {

@@ -510,25 +510,7 @@ func (e *Engine) steerGoalNoticeAndStatus(
 	if e == nil || e.closed.Load() {
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	receipt := session.CommitReceipt{}
-	notice := steeringItem{
-		message: &steeringMessage{
-			message:     message,
-			eventPolicy: steeringMessageEventDefault,
-			persist:     true,
-		},
-		commitReceipt: &receipt,
-	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
-	noticeErr := e.applySteeringItem(stepID, notice)
-	if !receipt.Committed {
-		return receipt, noticeErr
-	}
-	statusErr := e.applySteeringItem(stepID, steeringItem{
-		event: &Event{Kind: EventGoalStatusUpdated, GoalStatus: &update},
-	})
-	return receipt, errors.Join(noticeErr, statusErr)
+	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
 }
 
 func (e *Engine) StartGoalLoop() error {

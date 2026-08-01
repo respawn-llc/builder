@@ -680,10 +680,45 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.mu.Unlock()
 		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
 	}
+	var workflowBinding *runtime.CurrentNodeExecutionBinding
+	closeWorkflowBinding := func() error {
+		if workflowBinding == nil {
+			return nil
+		}
+		closeErr := workflowBinding.Close()
+		workflowBinding = nil
+		return closeErr
+	}
+	if workflowRef != nil &&
+		request.Runtime != nil &&
+		request.Runtime.options.CurrentNodeExecution != nil {
+		workflowConfig := request.Runtime.options.CurrentNodeExecution
+		if workflowConfig.ScopeID != scopeID {
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, fmt.Errorf(
+				"workflow execution scope %s does not match runtime config scope %s",
+				scopeID,
+				workflowConfig.ScopeID,
+			)
+		}
+		if !workflowConfig.Instructions.CurrentNode.Equal(workflowRef.CurrentNode) {
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, errors.New("workflow runtime config does not match execution current node")
+		}
+		workflowBinding, err = resource.engine.BindCurrentNodeExecution(workflowConfig)
+		if err != nil {
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, fmt.Errorf("bind workflow current node execution: %w", err)
+		}
+	}
 	if err := resource.pinLocked(); err != nil {
+		bindingErr := closeWorkflowBinding()
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		return nil, err
+		return nil, errors.Join(err, bindingErr)
 	}
 	if scopeID.IsZero() {
 		scopeID = runtimeids.NewExecutionScopeID()
@@ -692,19 +727,21 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	scope := newAgentExecutionScope(scopeID, executionGeneration, resource.ref, workflowRef)
 	correlation, err := runtimeids.NewExecutionCorrelation(scope.ID(), resource.ref.Generation())
 	if err != nil {
+		bindingErr := closeWorkflowBinding()
 		resource.pins--
 		resource.signalLocked()
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		panic(fmt.Sprintf("new agent execution correlation: %v", err))
+		panic(fmt.Sprintf("new agent execution correlation: %v", errors.Join(err, bindingErr)))
 	}
 	if resource.localTools != nil {
 		if err := resource.localTools.BindExecutionCorrelation(&correlation); err != nil {
+			bindingErr := closeWorkflowBinding()
 			resource.pins--
 			resource.signalLocked()
 			resource.mu.Unlock()
 			a.mu.Unlock()
-			return nil, fmt.Errorf("bind agent execution correlation: %w", err)
+			return nil, errors.Join(fmt.Errorf("bind agent execution correlation: %w", err), bindingErr)
 		}
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
@@ -712,6 +749,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		authority:     a,
 		resource:      resource,
 		scope:         scope,
+		workflow:      workflowBinding,
 		ctx:           runCtx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
@@ -975,6 +1013,9 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
+	if a.options.background != nil {
+		a.options.background.RetryTerminalEvents(sessionID.String())
+	}
 	return resource, nil
 }
 

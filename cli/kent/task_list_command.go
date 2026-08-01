@@ -212,7 +212,9 @@ func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writ
 		}
 	}
 	if resp.NextOffset != nil {
-		fmt.Fprintf(stderr, "Next offset: `%d`\n", *resp.NextOffset)
+		if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
+			return 1
+		}
 	}
 	return 0
 }

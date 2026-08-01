@@ -1214,6 +1214,12 @@ FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id ASC;
 
+-- name: AnchorTaskSearchReadSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM task_search_documents
+) AS anchored;
+
 -- name: GetTaskByProjectShortID :one
 SELECT
     id,
@@ -1405,49 +1411,7 @@ column_facts AS (
     )
     GROUP BY task_id
 ),
-live_task_states AS (
-    SELECT
-        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
-        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-    FROM args, json_each(args.live_task_states_json)
-),
-effective_status AS (
-    SELECT
-        durable.task_id,
-        durable.is_done,
-        CASE
-            WHEN durable.is_done != 0 THEN 'done'
-            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
-            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
-            ELSE durable.kind
-        END AS kind,
-        CASE
-            WHEN durable.is_done != 0 THEN 1
-            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN durable.kind = 'waiting_approval' THEN 3
-            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
-            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
-            ELSE durable.primary_status_rank
-        END AS primary_status_rank,
-        durable.node_ids_json,
-        CASE
-            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-            WHEN EXISTS (
-                SELECT 1
-                FROM json_each(durable.attention_types_json) existing_attention
-                WHERE existing_attention.value = 'question'
-            ) THEN durable.attention_types_json
-            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
-        END AS attention_types_json
-    FROM workflow_task_status_records durable
-    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
-),
+{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
 selected_rows AS (
     SELECT
         t.id,
@@ -2969,6 +2933,17 @@ WHERE task_id = sqlc.arg(task_id)
         AND approval.source_transition_branch_key = task_current_nodes.transition_branch_key
   );
 
+-- name: AcquireCurrentNodeResumeWriteLock :execrows
+UPDATE task_current_nodes
+SET scheduling_state = scheduling_state
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted';
+
 -- name: InterruptSerialAdmittedCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
@@ -3220,3 +3195,390 @@ SELECT
 FROM task_pending_approval_branches
 WHERE approval_id = sqlc.arg(approval_id)
 ORDER BY transition_branch_key;
+
+-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(sqlc.arg(project_ids_json))
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC;
+
+-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = sqlc.arg(document_id)
+LIMIT 1;
+
+-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
+LIMIT 1;
+
+{{define "taskSearchSchemaContract"}}
+WITH
+required_objects(object_kind, object_name, owner_name) AS (
+    VALUES
+        ('table', 'task_search_documents', 'task_search_documents'),
+        ('table', 'task_search_fts', 'task_search_fts'),
+        ('view', 'task_search_content', 'task_search_content'),
+        ('index', 'task_search_documents_task_title_unique', 'task_search_documents'),
+        ('index', 'task_search_documents_task_body_unique', 'task_search_documents'),
+        ('index', 'task_search_documents_comment_unique', 'task_search_documents'),
+        ('trigger', 'task_search_document_insert', 'task_search_documents'),
+        ('trigger', 'task_search_document_delete', 'task_search_documents'),
+        ('trigger', 'task_search_task_insert', 'tasks'),
+        ('trigger', 'task_search_comment_insert', 'task_comments'),
+        ('trigger', 'task_search_task_title_before_update', 'tasks'),
+        ('trigger', 'task_search_task_title_after_update', 'tasks'),
+        ('trigger', 'task_search_task_body_before_update', 'tasks'),
+        ('trigger', 'task_search_task_body_after_update', 'tasks'),
+        ('trigger', 'task_search_comment_body_before_update', 'task_comments'),
+        ('trigger', 'task_search_comment_body_after_update', 'task_comments'),
+        ('trigger', 'task_search_comment_delete', 'task_comments'),
+        ('trigger', 'task_search_task_delete', 'tasks')
+),
+object_contract_failures AS (
+    SELECT 'objects' AS failure
+    WHERE EXISTS (
+        SELECT 1
+        FROM required_objects required
+        LEFT JOIN sqlite_schema actual
+          ON actual.type = required.object_kind
+         AND actual.name = required.object_name
+         AND actual.tbl_name = required.owner_name
+        WHERE actual.name IS NULL
+    )
+),
+expected_mapping_columns(position, column_name, column_type, not_null, primary_key) AS (
+    VALUES
+        (0, 'document_id', 'INTEGER', 0, 1),
+        (1, 'source_kind', 'TEXT', 1, 0),
+        (2, 'task_id', 'TEXT', 0, 0),
+        (3, 'comment_id', 'TEXT', 0, 0)
+),
+mapping_columns AS (
+    SELECT cid AS position, name AS column_name, type AS column_type, "notnull" AS not_null, pk AS primary_key
+    FROM pragma_table_info('task_search_documents')
+),
+mapping_column_contract_failures AS (
+    SELECT 'mapping_columns' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_columns) != 4
+       OR EXISTS (
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM expected_mapping_columns
+            EXCEPT
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM mapping_columns
+       )
+       OR EXISTS (
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM mapping_columns
+            EXCEPT
+            SELECT position, column_name, column_type, not_null, primary_key
+            FROM expected_mapping_columns
+       )
+),
+expected_mapping_foreign_keys(parent_table, child_column, parent_column, on_delete) AS (
+    VALUES
+        ('tasks', 'task_id', 'id', 'CASCADE'),
+        ('task_comments', 'comment_id', 'id', 'CASCADE')
+),
+mapping_foreign_keys AS (
+    SELECT "table" AS parent_table, "from" AS child_column, "to" AS parent_column, on_delete
+    FROM pragma_foreign_key_list('task_search_documents')
+),
+mapping_foreign_key_contract_failures AS (
+    SELECT 'mapping_foreign_keys' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_foreign_keys) != 2
+       OR EXISTS (
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM expected_mapping_foreign_keys
+            EXCEPT
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM mapping_foreign_keys
+       )
+       OR EXISTS (
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM mapping_foreign_keys
+            EXCEPT
+            SELECT parent_table, child_column, parent_column, on_delete
+            FROM expected_mapping_foreign_keys
+       )
+),
+expected_mapping_indexes(index_name, column_name) AS (
+    VALUES
+        ('task_search_documents_task_title_unique', 'task_id'),
+        ('task_search_documents_task_body_unique', 'task_id'),
+        ('task_search_documents_comment_unique', 'comment_id')
+),
+mapping_indexes AS (
+    SELECT index_list.name AS index_name, index_list."unique" AS is_unique, index_list.partial AS is_partial
+    FROM pragma_index_list('task_search_documents') index_list
+),
+mapping_index_columns AS (
+    SELECT index_list.name AS index_name, index_columns.name AS column_name
+    FROM pragma_index_list('task_search_documents') index_list
+    JOIN pragma_index_xinfo(index_list.name) index_columns
+      ON index_columns.key = 1
+),
+mapping_index_contract_failures AS (
+    SELECT 'mapping_indexes' AS failure
+    WHERE (SELECT COUNT(*) FROM mapping_indexes) != 3
+       OR EXISTS (
+            SELECT 1
+            FROM mapping_indexes
+            WHERE is_unique != 1
+               OR is_partial != 1
+       )
+       OR EXISTS (
+            SELECT index_name, column_name
+            FROM expected_mapping_indexes
+            EXCEPT
+            SELECT index_name, column_name
+            FROM mapping_index_columns
+       )
+       OR EXISTS (
+            SELECT index_name, column_name
+            FROM mapping_index_columns
+            EXCEPT
+            SELECT index_name, column_name
+            FROM expected_mapping_indexes
+       )
+),
+expected_fts_columns(position, column_name, hidden) AS (
+    VALUES
+        (0, 'title', 0),
+        (1, 'body', 0),
+        (2, 'comment', 0),
+        (3, 'task_search_fts', 1),
+        (4, 'rank', 1)
+),
+fts_columns AS (
+    SELECT cid AS position, name AS column_name, hidden
+    FROM pragma_table_xinfo('task_search_fts')
+),
+fts_virtual_table_contract_failures AS (
+    SELECT 'fts_table' AS failure
+    WHERE (SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = 'task_search_fts') != 'virtual'
+       OR (SELECT COUNT(*) FROM fts_columns) != 5
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM expected_fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM fts_columns
+       )
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM expected_fts_columns
+       )
+)
+SELECT failure FROM object_contract_failures
+UNION ALL
+SELECT failure FROM mapping_column_contract_failures
+UNION ALL
+SELECT failure FROM mapping_foreign_key_contract_failures
+UNION ALL
+SELECT failure FROM mapping_index_contract_failures
+UNION ALL
+SELECT failure FROM fts_virtual_table_contract_failures
+ORDER BY failure ASC;
+{{end}}
+
+{{define "taskSearchPageDescriptors"}}
+WITH RECURSIVE
+args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS mode,
+        CAST(?2 AS TEXT) AS candidate_expression,
+        CAST(?3 AS TEXT) AS literal_query,
+        CAST(?4 AS INTEGER) AS case_mode,
+        CAST(?5 AS INTEGER) AS include_comments,
+        CAST(?6 AS TEXT) AS project_ids_json,
+        CAST(?7 AS TEXT) AS status_kinds_json,
+        CAST(?8 AS INTEGER) AS context_clusters,
+        CAST(?9 AS INTEGER) AS offset_rows,
+        CAST(?10 AS INTEGER) AS limit_rows,
+        CAST(?11 AS TEXT) AS live_task_states_json
+),
+{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
+matching_sources AS (
+    SELECT
+        task.id AS task_id,
+        task.project_id,
+        project.project_key,
+        task.short_id,
+        task.workflow_id,
+        task.title AS task_title,
+        status.is_done,
+        status.kind AS status_kind,
+        status.node_ids_json,
+        status.attention_types_json,
+        document.document_id,
+        document.source_kind,
+        document.comment_id,
+        CASE document.source_kind
+            WHEN 'comment' THEN comment.created_at_unix_ms
+            ELSE NULL
+        END AS comment_created_at_unix_ms,
+        CAST(
+            -task_search_fts.rank * CASE document.source_kind
+                WHEN 'title' THEN 10.0
+                WHEN 'body' THEN 1.0
+                ELSE 0.75
+            END
+            AS REAL
+        ) AS weighted_rank,
+        CAST(
+            CASE args.mode
+                WHEN 'literal' THEN kent_task_search_occurrence_count_v1(
+                    COALESCE(content.title, content.body, content.comment),
+                    args.literal_query,
+                    args.case_mode
+                )
+                WHEN 'fts5' THEN 1
+            END
+            AS INTEGER
+        ) AS source_hit_count,
+        CASE args.mode
+            WHEN 'fts5' THEN snippet(
+                task_search_fts,
+                CASE document.source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END,
+                '',
+                '',
+                '',
+                args.context_clusters
+            )
+        END AS raw_snippet
+    FROM task_search_fts
+    CROSS JOIN args
+    JOIN task_search_documents document
+      ON document.document_id = task_search_fts.rowid
+    LEFT JOIN task_comments comment
+      ON comment.id = document.comment_id
+    JOIN task_records task
+      ON task.id = COALESCE(document.task_id, comment.task_id)
+    JOIN projects project
+      ON project.id = task.project_id
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    JOIN effective_status status
+      ON status.task_id = task.id
+    WHERE task_search_fts MATCH ?2
+      AND (args.include_comments != 0 OR document.source_kind != 'comment')
+      AND (
+          args.project_ids_json IS NULL
+          OR task.project_id IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.project_ids_json)
+          )
+      )
+      AND (
+          args.status_kinds_json IS NULL
+          OR status.kind IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.status_kinds_json)
+          )
+      )
+      AND (
+          args.mode = 'fts5'
+          OR kent_task_search_occurrence_count_v1(
+              COALESCE(content.title, content.body, content.comment),
+              args.literal_query,
+              args.case_mode
+          ) > 0
+      )
+),
+ranked_sources AS (
+    SELECT
+        matching_sources.*,
+        CAST(MAX(weighted_rank) OVER (
+            PARTITION BY task_id
+        ) AS REAL) AS task_weighted_rank,
+        CAST(SUM(source_hit_count) OVER (
+            PARTITION BY task_id
+        ) AS INTEGER) AS total_hit_count,
+        CAST(COALESCE(SUM(source_hit_count) OVER (
+            PARTITION BY task_id
+            ORDER BY
+                CASE source_kind
+                    WHEN 'title' THEN 0
+                    WHEN 'body' THEN 1
+                    WHEN 'comment' THEN 2
+                END ASC,
+                CASE source_kind
+                    WHEN 'comment' THEN weighted_rank
+                END DESC,
+                comment_created_at_unix_ms DESC,
+                comment_id DESC,
+                document_id ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS INTEGER) AS source_ordinal_before
+    FROM matching_sources
+),
+rounds AS (
+    SELECT
+        1 AS ordinal
+    FROM args
+    UNION ALL
+    SELECT
+        rounds.ordinal + 1
+    FROM rounds
+    CROSS JOIN args
+    WHERE rounds.ordinal < args.offset_rows + args.limit_rows
+)
+SELECT
+    ranked_sources.task_id,
+    ranked_sources.project_id,
+    ranked_sources.project_key,
+    ranked_sources.short_id,
+    ranked_sources.workflow_id,
+    ranked_sources.task_title,
+    ranked_sources.is_done,
+    ranked_sources.status_kind,
+    ranked_sources.node_ids_json,
+    ranked_sources.attention_types_json,
+    ranked_sources.document_id,
+    ranked_sources.source_kind,
+    ranked_sources.comment_id,
+    ranked_sources.total_hit_count,
+    CAST(rounds.ordinal AS INTEGER) AS ordinal,
+    CAST(rounds.ordinal - ranked_sources.source_ordinal_before AS INTEGER) AS source_ordinal,
+    ranked_sources.task_weighted_rank,
+    ranked_sources.raw_snippet
+FROM rounds
+JOIN ranked_sources
+  ON rounds.ordinal > ranked_sources.source_ordinal_before
+ AND rounds.ordinal <= ranked_sources.source_ordinal_before + ranked_sources.source_hit_count
+CROSS JOIN args
+ORDER BY
+    rounds.ordinal ASC,
+    ranked_sources.task_weighted_rank DESC,
+    ranked_sources.task_id ASC
+LIMIT (SELECT limit_rows FROM args)
+OFFSET (SELECT offset_rows FROM args);
+{{end}}
+{{if .IncludeTaskSearchPageDescriptors}}{{template "taskSearchPageDescriptors" .}}{{end}}

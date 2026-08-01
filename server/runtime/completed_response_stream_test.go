@@ -839,7 +839,9 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 	}
 	violation := controller.violations[0]
 	if violation.Kind != workflowruntime.ViolationKindInvalidCompletion ||
-		violation.MaxCount != 1 {
+		violation.MaxCount != 1 ||
+		violation.SessionID == nil ||
+		violation.SessionID.String() != engine.SessionID() {
 		t.Fatalf("workflow protocol violation = %+v", violation)
 	}
 	if controller.result.Count != 1 || !controller.result.Interrupted {

@@ -137,13 +137,14 @@ func (m *Manager) entry(id string) (*processEntry, error) {
 	return entry, nil
 }
 
-func (m *Manager) emitEvent(evt Event) {
+func (m *Manager) emitEvent(evt Event) bool {
 	m.mu.Lock()
 	handler := m.onEvent
 	m.mu.Unlock()
-	if handler != nil {
-		handler(evt)
+	if handler == nil {
+		return false
 	}
+	return handler(evt)
 }
 
 func (m *Manager) waitForExit(entry *processEntry) {
@@ -160,51 +161,45 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	if state == "killed" {
 		eventType = EventKilled
 	}
+	event := m.buildTerminalEvent(entry, eventType, snapshot)
+	m.emitCompletionEvent(entry, event)
+	entry.finalizeClosedExit()
+}
+
+func (m *Manager) buildTerminalEvent(entry *processEntry, eventType EventType, snapshot Snapshot) Event {
 	fullOutput, readErr := readOutputFileLimited(entry.logPath, maxFullLogPostprocessBytes)
 	if readErr == nil {
 		processed, postprocessErr := m.applyPostprocessing(context.Background(), entry, fullOutput, snapshot.ExitCode, true, defaultLimit)
 		if postprocessErr == nil && processed.Processed && strings.TrimSpace(processed.UnrecoverableError) == "" {
-			m.emitCompletionEvent(entry, newFinalizedBackgroundEvent(eventType, snapshot, processed.Output, processed.Warning, false))
-			entry.finalizeClosedExit()
-			return
+			return newFinalizedBackgroundEvent(eventType, snapshot, processed.Output, processed.Warning, false)
 		}
 		warning := processed.Warning
 		if postprocessErr != nil {
 			warning, postprocessErr = mergeOperationalWarning(warning, fmt.Sprintf("background postprocess failed: %v", postprocessErr))
 			if postprocessErr != nil {
-				m.emitCompletionEvent(entry, Event{Type: eventType, Snapshot: snapshot})
-				entry.finalizeClosedExit()
-				return
+				return Event{Type: eventType, Snapshot: snapshot}
 			}
 		} else if strings.TrimSpace(processed.UnrecoverableError) != "" {
 			warning, postprocessErr = mergeOperationalWarning(warning, processed.UnrecoverableError)
 			if postprocessErr != nil {
-				m.emitCompletionEvent(entry, Event{Type: eventType, Snapshot: snapshot})
-				entry.finalizeClosedExit()
-				return
+				return Event{Type: eventType, Snapshot: snapshot}
 			}
 		}
-		m.emitFallbackBackgroundEvent(entry, eventType, snapshot, warning)
-		entry.finalizeClosedExit()
-		return
+		return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning)
 	}
 	warning, warningErr := mergeOperationalWarning(nil, fmt.Sprintf("full output log skipped: %v", readErr))
 	if warningErr != nil {
-		m.emitCompletionEvent(entry, Event{Type: eventType, Snapshot: snapshot})
-		entry.finalizeClosedExit()
-		return
+		return Event{Type: eventType, Snapshot: snapshot}
 	}
-	m.emitFallbackBackgroundEvent(entry, eventType, snapshot, warning)
-	entry.finalizeClosedExit()
+	return m.fallbackOrBareBackgroundEvent(eventType, snapshot, warning)
 }
 
-func (m *Manager) emitFallbackBackgroundEvent(entry *processEntry, eventType EventType, snapshot Snapshot, warning postprocess.Warning) {
+func (m *Manager) fallbackOrBareBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning) Event {
 	fallback, fallbackErr := m.fallbackBackgroundEvent(eventType, snapshot, warning)
 	if fallbackErr != nil {
-		m.emitCompletionEvent(entry, Event{Type: eventType, Snapshot: snapshot})
-	} else {
-		m.emitCompletionEvent(entry, fallback)
+		return Event{Type: eventType, Snapshot: snapshot}
 	}
+	return fallback
 }
 
 func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot, warning postprocess.Warning) (Event, error) {
@@ -226,7 +221,57 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 func (m *Manager) emitCompletionEvent(entry *processEntry, event Event) {
 	entry.interactMu.Lock()
 	defer entry.interactMu.Unlock()
-	m.emitEvent(event)
+	entry.mu.Lock()
+	eventType := event.Type
+	entry.terminalEventType = &eventType
+	entry.mu.Unlock()
+	delivered := m.emitEvent(event)
+	entry.mu.Lock()
+	entry.terminalDelivered = entry.terminalDelivered || delivered
+	entry.mu.Unlock()
+}
+
+func (m *Manager) RetryTerminalEvents(ownerSessionID string) {
+	ownerSessionID = strings.TrimSpace(ownerSessionID)
+	if ownerSessionID == "" {
+		return
+	}
+	m.mu.Lock()
+	entries := make([]*processEntry, 0, len(m.entries))
+	for _, entry := range m.entries {
+		entries = append(entries, entry)
+	}
+	m.mu.Unlock()
+	for _, entry := range entries {
+		entry.mu.Lock()
+		pending := entry.ownerSessionID == ownerSessionID &&
+			entry.terminalEventType != nil &&
+			!entry.terminalDelivered
+		entry.mu.Unlock()
+		if pending {
+			m.retryTerminalEvent(entry, ownerSessionID)
+		}
+	}
+}
+
+func (m *Manager) retryTerminalEvent(entry *processEntry, ownerSessionID string) {
+	entry.interactMu.Lock()
+	defer entry.interactMu.Unlock()
+	entry.mu.Lock()
+	if entry.ownerSessionID != ownerSessionID ||
+		entry.terminalEventType == nil ||
+		entry.terminalDelivered {
+		entry.mu.Unlock()
+		return
+	}
+	eventType := *entry.terminalEventType
+	snapshot := entry.snapshotLocked()
+	entry.mu.Unlock()
+	event := m.buildTerminalEvent(entry, eventType, snapshot)
+	delivered := m.emitEvent(event)
+	entry.mu.Lock()
+	entry.terminalDelivered = entry.terminalDelivered || delivered
+	entry.mu.Unlock()
 }
 
 func (m *Manager) collectUntil(ctx context.Context, entry *processEntry, deadline time.Time) ([]byte, error) {

@@ -564,13 +564,33 @@ func TestContextSourceValidation(t *testing.T) {
 				})
 			}
 			result := validateForTask(def)
-			if tt.valid {
+			if tt.roleMismatch && tt.mode == workflow.ContextModeContinueSession {
+				assertHasCodes(t, result, workflow.CodeInvalidContinueSessionRole)
+				assertNoCode(t, result, workflow.CodeInvalidContextSource)
+			} else if tt.valid {
 				assertNoCode(t, result, workflow.CodeInvalidContextSource)
 			} else {
 				assertHasCodes(t, result, workflow.CodeInvalidContextSource)
 			}
 		})
 	}
+
+	t.Run("continuation normalized role identity matches", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implementation"}
+		updateNodeByKeyForValidationTest(t, &def, "implementation", func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
+			fields.SubagentRole = " Coder "
+		})
+
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+			Context:      workflow.ValidationContextTaskCreation,
+			RoleResolver: testsetup.QuestionsEnabled("Coder", "coder"),
+		})
+
+		assertNoCode(t, result, workflow.CodeInvalidContinueSessionRole)
+	})
 
 	t.Run("rework loop remains statically valid", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow(t)

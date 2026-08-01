@@ -8,9 +8,70 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/server/workflow"
+	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
+
+func TestPersistedWorkflowAssignmentReportsCommitReceiptThroughCompletion(t *testing.T) {
+	t.Run("uncommitted append failure", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		mustBlockTestEventLogAppends(t, store)
+
+		steer, err := SteerPersistedWorkflowAssignment(store, workflowAssignmentForCommitReceiptTest())
+		if err != nil {
+			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
+		}
+		receipt, waitErr := steer.Wait(t.Context())
+		if waitErr == nil {
+			t.Fatal("workflow assignment completion did not surface append failure")
+		}
+		if receipt.Committed {
+			t.Fatalf("workflow assignment receipt = %+v, want uncommitted", receipt)
+		}
+	})
+
+	t.Run("committed observer failure", func(t *testing.T) {
+		observerErr := errors.New("workflow assignment observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+		gate.FailNext(observerErr)
+
+		steer, err := SteerPersistedWorkflowAssignment(store, workflowAssignmentForCommitReceiptTest())
+		if err != nil {
+			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
+		}
+		receipt, waitErr := steer.Wait(t.Context())
+		if !errors.Is(waitErr, observerErr) {
+			t.Fatalf("workflow assignment completion error = %v, want %v", waitErr, observerErr)
+		}
+		if !receipt.Committed {
+			t.Fatalf("workflow assignment receipt = %+v, want committed", receipt)
+		}
+	})
+}
+
+func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
+	reference := workflow.CurrentNodeReference{
+		TaskID: "task-assignment-receipt",
+		NodeID: "node-assignment-receipt",
+	}
+	return WorkflowAssignment{
+		ContextMode:    workflow.ContextModeNewSession,
+		CompletionMode: workflowruntime.CompletionModeTool,
+		Prompt: workflowruntime.PromptContract{
+			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: reference,
+				WorkflowID:  runtimeids.NewWorkflowID(),
+				NodePrompt:  "Perform the assigned workflow step.",
+			},
+		},
+	}
+}
 
 func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 	t.Parallel()

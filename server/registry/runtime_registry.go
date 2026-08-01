@@ -33,6 +33,7 @@ type RuntimeRegistry struct {
 	pendingPrompts            *pendingPromptStore
 	attentionBroker           *attentionnotify.Broker
 	questionBatches           *attentionnotify.QuestionBatchTracker
+	workflowEventPublisher    func(context.Context, serverapi.WorkflowProjectEvent) error
 	workflowAttentionSnapshot WorkflowAttentionNotificationSnapshotSource
 	executionTargetResolver   func(context.Context, string) (clientui.SessionExecutionTarget, error)
 }
@@ -648,6 +649,7 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 		return r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt, func(snapshot PendingPromptSnapshot) {
 			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 			r.publishAttentionPending(id, snapshot)
+			r.publishTaskQuestionWaiting(id, snapshot)
 		})
 	})
 	if projected {

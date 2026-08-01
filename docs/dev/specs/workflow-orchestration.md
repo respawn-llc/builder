@@ -231,6 +231,10 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
+- Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
+- Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
+- When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
+- Resume must not steer or append a Current Node assignment.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -291,7 +295,8 @@
 - During parallel work, each Context Source selection stays within the source Current Node's Transition Branch Key.
 - Manual movement through a concrete Transition Branch supports `previous_target` and `previous_target_or_new`. Kent resolves the Context Source when it applies the move and freezes that choice before pending Approval. Manual movement does not support a selected prior-Node Context Source.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
-- Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
+- `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Agent Node's normalized Assignee identity. Workflow validation rejects statically known source/target identity mismatches, runtime rejects retained-Session mismatches, and a valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
+- `compact_and_continue_session` compacts the reused Session and establishes the target Agent Node's Assignee in a fresh contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
@@ -376,32 +381,8 @@
 
 ## Task Search
 
-- Task search covers every Task in one persistence root. With no Project filter, search is global. Repeated Project selectors search the union of those Projects.
-- Task titles and complete bodies are searchable. Comments are excluded by default and `--include-comments` adds them.
-- Search includes every Task lifecycle status by default. Repeatable/comma-separated typed `--status` filters use the same primary Task-status values as task listing.
-- The default positional query is one literal substring. Search operators and punctuation have no special meaning in this mode. Literal hits are non-overlapping occurrences ordered from left to right in their source.
-- Default literal matching ignores case and removable diacritics according to the FTS5 trigram search contract. It does not promise universal Unicode case folding or universal diacritic equivalence. `--case-sensitive` requires exact original case and diacritics.
-- `--fts5` interprets the positional query as a raw FTS5 expression with public `title`, `body`, and `comment` columns. One raw-mode hit represents one matching title, Task-body, or Comment-body source document with one selected snippet, not one phrase occurrence. `--case-sensitive` is invalid with `--fts5`.
-- Raw boolean terms must match within one source document; terms split between a Task title and body do not jointly satisfy one expression.
-- Literal search requires at least one trigram after search normalization. Kent provides no one-character or two-character fallback.
-- `--context` defaults to `20` and accepts `1..64`. Literal mode returns that many Unicode grapheme clusters on each side of an occurrence. Raw FTS5 mode uses it as the snippet token budget.
-- Literal results separate original `before`, `match`, and `after` text and identify truncation on each side. Clients add one `…` on each side where text was omitted.
-- A normalized literal match includes every complete original grapheme cluster that contributed to the match, including removed combining marks. `match` never splits an original grapheme. Case-sensitive mode requires exact original code points and does not equate NFC and NFD spellings.
-- A successful Task or Comment creation, edit, or deletion is reflected in search immediately. If Kent cannot update search, the source change fails and remains unapplied.
-- Search ranks each Task by its strongest matching title, body, or Comment under the requested mode. A case-insensitive candidate without a case-sensitive occurrence cannot retain or rank a Task in case-sensitive mode.
-- Ranking weights title, body, and Comment sources. A strong body match can outrank another Task's weaker title match. Title-before-body-before-Comment is absolute only for hit order within one Task.
-- Within one Task, title occurrences precede body occurrences. Task title and body results precede Comment results. Remaining ties are deterministic.
-- Search pagination is breadth-first by per-Task hit ordinal: every matching Task's first hit precedes any Task's second hit, and so on. Later pages may repeat a Task with later hits.
-- Each page selects hits in that breadth-first order and then groups the selected hits by Task. Task groups follow the order of their first selected hit. Hits inside a group retain their absolute per-Task order.
-- `--page-size` defaults to `100` and cannot exceed `100` hits. `--page-token` is an opaque cursor tied to every search choice and to the matching, status, source, and ranking contracts.
-- Plain output renders `SHORT-ID: title`, unlabeled title/body hit lines, a lowercase `comments:` heading only when the page contains Comment hits for that Task, Comment hit lines, and `[N more hits]` when later hits remain. It exposes no line numbers, persistent Comment IDs, status, workflow, score, author, or date.
-- Plain literal hits use `…` only on a side with omitted source text. Plain output folds a hit to one physical terminal line; structured output preserves the original segments.
-- A valid empty search prints `No matches.` and succeeds.
-- JSON output is grouped by Task and distinguishes literal mode from raw FTS5 mode. It includes Project, Task, and Workflow identity, title, canonical Task status, total hit count, absolute per-Task hit positions, title/body/Comment source identity, complete Comment ID for Comment hits, mode-specific context or snippet data, and an optional continuation token. Empty results use `groups: []`; an absent continuation token is omitted. It does not expose ranking scores.
-- Query validation trims one positional argument and limits it to `4096` Unicode code points. A literal query must contain at least one searchable trigram after search normalization. A raw expression follows FTS5 behavior for shorter terms. Kent reports distinct too-short, malformed-expression, and invalid-cursor errors.
-- Search uses the same authoritative Task status as Task lists and Task detail.
-- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata, and combines that data with one current view of live Task activity. A concurrent change appears wholly before or after the response, never as mixed state.
-- Search does not retain all matching Tasks, sources, or occurrences in memory.
+- Task search reuses the authoritative Task status defined above.
+- [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
 
 ## Execution Targets And Worktrees
 
@@ -506,6 +487,8 @@
 - Task Short ID remains durable product data.
 - Context Source selection uses retained Sessions and does not depend on discarded execution records.
 - Pending Approval retains the exact Transition facts that the operator is approving. Ordinary work uses current inputs and the latest Workflow definition.
+- When legacy serial state contains a persisted pending Approval and a conflicting serial current position, Kent retains the Approval source as the Task's only Current Node.
+- When legacy serial state has no pending Approval and contains several active Start or Terminal Nodes, Kent retains the placement with the latest update time, then latest creation time, then greatest identifier.
 - Task Comments retain their author identity when available.
 - Session listings retain the first prompt preview.
 - Sessions retain unsent input drafts for recovery.
@@ -516,7 +499,8 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
-- Except for Task Search, every paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
+- Task Search pagination is defined exclusively by the owning Task Search specification.
+- Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
 - An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
 - `--limit` defaults to `100` and accepts values from `1` through `100`.
 - Callers may change the limit between requests. An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
@@ -526,7 +510,6 @@
 - Each request applies its offset to the current results for that request's Project, Workflow, selectors, filters, and sorting. Callers repeat those query choices when continuing. Kent does not bind an offset to a previous query.
 - If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
 - The server keeps pagination memory bounded by the requested limit. It does not retain page contents or pagination state between requests and does not persist pagination state.
-- Task Search retains its specified opaque cursor contract.
 - `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.

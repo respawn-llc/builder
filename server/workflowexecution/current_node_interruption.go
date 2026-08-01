@@ -11,7 +11,7 @@ import (
 	"core/server/workflow"
 )
 
-const interruptCleanupTimeout = 30 * time.Second
+const interruptCleanupTimeout = 300 * time.Second
 
 type currentNodeAdmissionWait struct {
 	key  workflow.CurrentNodeReferenceKey
@@ -124,17 +124,17 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			c.explicitQueue = explicitQueue
 
 			automaticQueue := c.automaticQueue[:0]
-			for _, intent := range c.automaticQueue {
-				if intent.CurrentNode.TaskID == selector.TaskID {
-					key, keyErr := intent.CurrentNode.Key()
+			for _, start := range c.automaticQueue {
+				if start.reference.TaskID == selector.TaskID {
+					key, keyErr := start.reference.Key()
 					if keyErr != nil {
 						return keyErr
 					}
 					delete(c.queued, key)
-					references = append(references, intent.CurrentNode)
+					references = append(references, start.reference)
 					continue
 				}
-				automaticQueue = append(automaticQueue, intent)
+				automaticQueue = append(automaticQueue, start)
 			}
 			c.automaticQueue = automaticQueue
 
@@ -203,12 +203,16 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		handle.RequestStop()
 	}
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		return interruptCurrentNodeReferences(
+		_, err := interruptCurrentNodeReferences(
 			ctx,
 			c.store.InterruptCurrentNode,
 			references,
 			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.CurrentNodeInterruptionDetail{
+				Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+			},
 		)
+		return err
 	})
 	var waitErrs []error
 	for _, handle := range waitHandles {
@@ -259,23 +263,31 @@ func interruptCurrentNodeReferences(
 	interrupt func(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error,
 	references []workflow.CurrentNodeReference,
 	reason workflow.CurrentNodeInterruptionReason,
-) error {
+	detail workflow.CurrentNodeInterruptionDetail,
+) ([]workflow.CurrentNodeReference, error) {
 	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
+	interrupted := make([]workflow.CurrentNodeReference, 0, len(references))
+	var interruptErrs []error
 	for _, reference := range references {
 		key, err := reference.Key()
 		if err != nil {
-			return err
+			return interrupted, err
 		}
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		err = interrupt(ctx, reference, reason, workflow.CurrentNodeInterruptionDetail{Code: string(reason)})
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
+		err = interrupt(ctx, reference, reason, detail)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
 		}
+		if err != nil {
+			interruptErrs = append(interruptErrs, err)
+			continue
+		}
+		interrupted = append(interrupted, reference)
 	}
-	return nil
+	return interrupted, errors.Join(interruptErrs...)
 }
 
 func (c *CurrentNodeController) finishTaskInterruptAdmission(reference workflow.CurrentNodeReference) {

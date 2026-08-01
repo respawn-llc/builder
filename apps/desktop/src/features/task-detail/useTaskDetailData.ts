@@ -27,20 +27,29 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
     if (!enabled || taskID.length === 0 || projectID.length === 0 || connectionPhase !== "connected") {
       return;
     }
+    const refresh = async (): Promise<void> => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID), refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskID), refetchType: "active" }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
+      ]);
+    };
+    const refreshOrReport = (): void => {
+      void refresh().catch((error: unknown) => {
+        void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
+      });
+    };
     const subscription = api.subscribeProject(projectID, {
+      onOpen() {
+        refreshOrReport();
+      },
       onEvent(event) {
         if (!workflowProjectEventAffectsTask(event, taskID)) {
           return;
         }
-        void Promise.all([
-          queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskID), refetchType: "active" }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
-        ]).catch((error: unknown) => {
-          void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
-        });
+        refreshOrReport();
       },
       onComplete() {
         return;
@@ -120,10 +129,7 @@ type TaskMutationCallbacks = Readonly<{
   onActionError?: ((action: TaskLifecycleAction, error: unknown) => void) | undefined;
 }>;
 
-export function useTaskMutations(
-  taskID: string,
-  { onActionError, onChanged }: TaskMutationCallbacks = {},
-) {
+export function useTaskMutations(taskID: string, { onActionError, onChanged }: TaskMutationCallbacks = {}) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   async function refresh(): Promise<void> {

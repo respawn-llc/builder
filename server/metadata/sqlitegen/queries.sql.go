@@ -13,6 +13,33 @@ import (
 	"core/shared/runtimeids"
 )
 
+const acquireCurrentNodeResumeWriteLock = `-- name: AcquireCurrentNodeResumeWriteLock :execrows
+UPDATE task_current_nodes
+SET scheduling_state = scheduling_state
+WHERE task_id = ?1
+  AND node_id = ?2
+  AND (
+      (transition_branch_key IS NULL AND ?3 IS NULL)
+      OR transition_branch_key = ?3
+  )
+  AND scheduling_state = 'interrupted'
+`
+
+type AcquireCurrentNodeResumeWriteLockParams struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey interface{}
+}
+
+func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg AcquireCurrentNodeResumeWriteLockParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireCurrentNodeResumeWriteLock, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	err = recordQueryError(ctx, err, acquireCurrentNodeResumeWriteLock, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const acquireProjectDeleteWriteLock = `-- name: AcquireProjectDeleteWriteLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -184,6 +211,21 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	err := recordQueryError(ctx, row.Scan(&i.ProjectKey, &i.NextTaskSeq), allocateProjectTaskSequence, 2)
 
 	return i, err
+}
+
+const anchorTaskSearchReadSnapshot = `-- name: AnchorTaskSearchReadSnapshot :one
+SELECT EXISTS(
+    SELECT 1
+    FROM task_search_documents
+) AS anchored
+`
+
+func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, anchorTaskSearchReadSnapshot)
+	var anchored bool
+	err := recordQueryError(ctx, row.Scan(&anchored), anchorTaskSearchReadSnapshot, 0)
+
+	return anchored, err
 }
 
 const bindSessionToBranchCurrentNode = `-- name: BindSessionToBranchCurrentNode :execrows
@@ -1937,6 +1979,48 @@ func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) 
 	row := q.db.QueryRowContext(ctx, getTaskProjectWorkflowIDs, taskID)
 	var i GetTaskProjectWorkflowIDsRow
 	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID), getTaskProjectWorkflowIDs, 1)
+
+	return i, err
+}
+
+const getTaskSearchSourceByDocumentID = `-- name: GetTaskSearchSourceByDocumentID :one
+SELECT
+    document.document_id,
+    document.source_kind,
+    document.task_id,
+    document.comment_id,
+    content.title,
+    content.body,
+    content.comment
+FROM task_search_documents document
+JOIN task_search_content content
+  ON content.document_id = document.document_id
+WHERE document.document_id = ?1
+LIMIT 1
+`
+
+type GetTaskSearchSourceByDocumentIDRow struct {
+	DocumentID int64
+	SourceKind string
+	TaskID     sql.NullString
+	CommentID  sql.NullString
+	Title      interface{}
+	Body       interface{}
+	Comment    interface{}
+}
+
+func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentID int64) (GetTaskSearchSourceByDocumentIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getTaskSearchSourceByDocumentID, documentID)
+	var i GetTaskSearchSourceByDocumentIDRow
+	err := recordQueryError(ctx, row.Scan(
+		&i.DocumentID,
+		&i.SourceKind,
+		&i.TaskID,
+		&i.CommentID,
+		&i.Title,
+		&i.Body,
+		&i.Comment,
+	), getTaskSearchSourceByDocumentID, 1)
 
 	return i, err
 }
@@ -5508,6 +5592,42 @@ func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]Lis
 	return items, nil
 }
 
+const listUnknownTaskSearchProjectIDs = `-- name: ListUnknownTaskSearchProjectIDs :many
+WITH requested_projects AS (
+    SELECT CAST(value AS TEXT) AS project_id
+    FROM json_each(?1)
+)
+SELECT requested_projects.project_id
+FROM requested_projects
+LEFT JOIN projects ON projects.id = requested_projects.project_id
+WHERE projects.id IS NULL
+ORDER BY requested_projects.project_id ASC
+`
+
+func (q *Queries) ListUnknownTaskSearchProjectIDs(ctx context.Context, projectIdsJson interface{}) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listUnknownTaskSearchProjectIDs, projectIdsJson)
+	err = recordQueryError(ctx, err, listUnknownTaskSearchProjectIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var project_id string
+		if err := recordQueryError(ctx, rows.Scan(&project_id), listUnknownTaskSearchProjectIDs, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, project_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listUnknownTaskSearchProjectIDs, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listUnknownTaskSearchProjectIDs, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkflowDurableAttentionCandidates = `-- name: ListWorkflowDurableAttentionCandidates :many
 WITH durable_attention (
     kind,
@@ -6264,7 +6384,7 @@ live_task_states AS (
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
-    FROM args, json_each(args.live_task_states_json)
+    FROM json_each((SELECT live_task_states_json FROM args))
 ),
 effective_status AS (
     SELECT
@@ -6301,6 +6421,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 selected_rows AS (
     SELECT
         t.id,
@@ -8601,6 +8722,39 @@ func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) 
 	err = recordQueryError(ctx, err, upsertWorktree, 10)
 
 	return err
+}
+
+const validateTaskSearchFTS5Expression = `-- name: ValidateTaskSearchFTS5Expression :many
+SELECT document.document_id
+FROM task_search_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_fts.rowid
+WHERE task_search_fts MATCH ?1
+LIMIT 1
+`
+
+func (q *Queries) ValidateTaskSearchFTS5Expression(ctx context.Context, fts5Expression sql.NullString) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, validateTaskSearchFTS5Expression, fts5Expression)
+	err = recordQueryError(ctx, err, validateTaskSearchFTS5Expression, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var document_id int64
+		if err := recordQueryError(ctx, rows.Scan(&document_id), validateTaskSearchFTS5Expression, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, document_id)
+	}
+	if err := recordQueryError(ctx, rows.Close(), validateTaskSearchFTS5Expression, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), validateTaskSearchFTS5Expression, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const workflowHasContinueSessionEdge = `-- name: WorkflowHasContinueSessionEdge :one

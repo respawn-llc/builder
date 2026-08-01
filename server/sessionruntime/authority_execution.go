@@ -65,6 +65,7 @@ type execution struct {
 	resource  *agentResource
 	scope     ExecutionScope
 	script    *TaskScriptExecutionTarget
+	workflow  *runtime.CurrentNodeExecutionBinding
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -260,21 +261,29 @@ func (e *execution) retireWorkflowLocked() {
 
 func (e *execution) cleanup() error {
 	e.prompts.Close(context.Canceled)
+	var bindingErr error
+	if e.workflow != nil {
+		bindingErr = e.workflow.Close()
+		e.workflow = nil
+	}
 	if e.resource == nil {
-		return nil
+		return bindingErr
 	}
 	resource := e.resource
 	resource.mu.Lock()
 	defer resource.mu.Unlock()
 	if resource.current != e {
-		return fmt.Errorf(
-			"agent execution scope %s is not current for resource %s generation %d",
-			e.scope.ID(),
-			resource.ref.SessionID(),
-			resource.ref.Generation(),
+		return errors.Join(
+			bindingErr,
+			fmt.Errorf(
+				"agent execution scope %s is not current for resource %s generation %d",
+				e.scope.ID(),
+				resource.ref.SessionID(),
+				resource.ref.Generation(),
+			),
 		)
 	}
-	var cleanupErr error
+	cleanupErr := bindingErr
 	if resource.askBroker != nil {
 		switch {
 		case resource.askScope == nil:

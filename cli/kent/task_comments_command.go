@@ -136,7 +136,9 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		writeTaskCommentList(stdout, resp.Comments)
 		if resp.NextOffset != nil {
-			fmt.Fprintf(stderr, "Next offset: `%d`\n", *resp.NextOffset)
+			if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})

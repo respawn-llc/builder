@@ -1424,6 +1424,27 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesTaskSearchError(t *testing.T) {
+	source := &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonNormalizedTooShort}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskSearch,
+		Message: source.Error(),
+		Data:    mustRPCErrorData(t, source),
+	})
+	var decoded *serverapi.TaskSearchError
+	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
+		t.Fatalf("decoded error = %T %v, want %+v", err, err, source)
+	}
+	malformed := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskSearch,
+		Message: "fallback",
+		Data:    json.RawMessage(`{"type":"task_search_error","reason":"other"}`),
+	})
+	if errors.As(malformed, &decoded) {
+		t.Fatalf("malformed task search error decoded as typed: %+v", decoded)
+	}
+}
+
 func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskCreateSelectionError{
