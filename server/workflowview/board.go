@@ -14,7 +14,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -25,12 +24,10 @@ type Board struct {
 	queries      *sqlitegen.Queries
 	definitions  *DefinitionProjection
 	roleResolver workflow.RoleResolver
-	projector    *TaskProjector
-	authority    *sessionruntime.Authority
-	quiescence   TaskQuiescenceSource
+	projection   *TaskStatusProjection
 }
 
-func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource) (*Board, error) {
+func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, projection *TaskStatusProjection) (*Board, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -40,23 +37,15 @@ func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, 
 	if roleResolver == nil {
 		return nil, errors.New("role resolver is required")
 	}
-	if projector == nil {
-		return nil, errors.New("task projector is required")
-	}
-	if authority == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
-	if quiescence == nil {
-		return nil, errors.New("task quiescence source is required")
+	if projection == nil {
+		return nil, errors.New("task status projection is required")
 	}
 	return &Board{
 		metadata:     metadataStore,
 		queries:      metadataStore.Queries(),
 		definitions:  definitions,
 		roleResolver: roleResolver,
-		projector:    projector,
-		authority:    authority,
-		quiescence:   quiescence,
+		projection:   projection,
 	}, nil
 }
 
@@ -133,14 +122,6 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	snapshot, err := b.definitions.snapshot(ctx, workflowID)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	definition := snapshot.api
-	if _, ok := workflowNodesByID(definition)[nodeID]; !ok {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("node_id is invalid for workflow")
-	}
 	pageSize := req.PageSize
 	if pageSize == 0 {
 		pageSize = serverapi.WorkflowBoardNodeCardsMaxPageSize
@@ -155,71 +136,74 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		cursorUpdatedAtUnixMs = sql.NullInt64{Int64: cursor.anchor.updatedAtUnixMs, Valid: true}
 		cursorTaskID = sql.NullString{String: cursor.anchor.taskID, Valid: true}
 	}
-	rows, err := b.queries.ListBoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-		ProjectID:             projectID,
-		WorkflowID:            workflowID,
-		CursorDirection:       string(cursor.direction),
-		CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
-		CursorTaskID:          cursorTaskID,
-		NodeID:                nodeID,
-		LabelFilterKind:       labelFilterArgs.kind,
-		LabelFilterMode:       labelFilterArgs.mode,
-		LabelIdsJson:          labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
-		LimitRows:             int64(pageSize + 1),
+	workspaceContext := boardProjectWorkspaceContext(project)
+	var definition definitionSnapshot
+	var tasks []sqlitegen.TaskRecord
+	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
+	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
+	var hasExtra bool
+	err = b.projection.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
+		var err error
+		definition, err = durable.Definition(ctx, workflowID)
+		if err != nil {
+			return err
+		}
+		if _, ok := workflowNodesByID(definition.api)[nodeID]; !ok {
+			return errors.New("node_id is invalid for workflow")
+		}
+		rows, err := durable.BoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
+			ProjectID:             projectID,
+			WorkflowID:            workflowID,
+			CursorDirection:       string(cursor.direction),
+			CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+			CursorTaskID:          cursorTaskID,
+			NodeID:                nodeID,
+			LabelFilterKind:       labelFilterArgs.kind,
+			LabelFilterMode:       labelFilterArgs.mode,
+			LabelIdsJson:          labelFilterArgs.labelIDsJSON,
+			ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
+			LimitRows:             int64(pageSize + 1),
+		})
+		if err != nil {
+			return err
+		}
+		dependencyProgressByTaskID, err = boardDependencyProgressByTaskID(rows)
+		if err != nil {
+			return err
+		}
+		tasks = boardNodeTaskRecords(rows)
+		hasExtra = len(tasks) > pageSize
+		if hasExtra {
+			tasks = tasks[:pageSize]
+		}
+		if cursor.direction == boardNodeCardsPageDirectionNewer {
+			slices.Reverse(tasks)
+		}
+		taskIDs := workflowTaskIDs(taskIDs(tasks))
+		observation, err := b.projection.Observe(taskIDs)
+		if err != nil {
+			return err
+		}
+		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, taskIDs)
+		return err
 	})
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	dependencyProgressByTaskID, err := boardDependencyProgressByTaskID(rows)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	tasks := boardNodeTaskRecords(rows)
-	hasExtra := len(tasks) > pageSize
-	if hasExtra {
-		tasks = tasks[:pageSize]
-	}
-	if cursor.direction == boardNodeCardsPageDirectionNewer {
-		slices.Reverse(tasks)
-	}
-	workspaceContext := boardProjectWorkspaceContext(project)
-	currentNodesByTaskID, err := b.currentNodesByTask(ctx, tasks)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	taskIDs := taskIDs(tasks)
-	statusesByTaskID, err := loadWorkflowTaskStatusFacts(ctx, b.queries, b.projector, taskIDs)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	liveExecutionsByTaskID, err := b.liveExecutionsByTask(ctx, projectID, workflowID, taskIDs)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	quiescenceByTaskID, err := b.quiescence.CurrentTaskQuiescence(workflowTaskIDs(taskIDs))
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, b.queries, taskIDs)
+	taskIDStrings := taskIDs(tasks)
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, b.queries, taskIDStrings)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
 	for _, task := range tasks {
-		canDelete, exists := quiescenceByTaskID[workflow.TaskID(task.ID)]
+		projected, exists := projectedByTaskID[workflow.TaskID(task.ID)]
 		if !exists {
-			return serverapi.WorkflowBoardNodeCardsListResponse{}, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", task.ID)
+			return serverapi.WorkflowBoardNodeCardsListResponse{}, fmt.Errorf("task status projection omitted Task %q", task.ID)
 		}
-		status := taskDetailStatusFact(statusesByTaskID[task.ID], liveExecutionsByTaskID[task.ID])
 		card, _ := b.card(
-			task,
-			status,
-			currentNodesByTaskID[task.ID],
-			liveExecutionsByTaskID[task.ID],
-			canDelete,
+			projected,
 			labelIDsByTask[task.ID],
-			snapshot,
 			sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary),
 			dependencyProgressByTaskID[task.ID],
 		)
@@ -240,62 +224,22 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	}, nil
 }
 
-func (b *Board) liveExecutionsByTask(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, taskIDs []string) (map[string][]sessionruntime.TaskExecution, error) {
-	if len(taskIDs) == 0 {
-		return map[string][]sessionruntime.TaskExecution{}, nil
-	}
-	snapshots, err := b.authority.CurrentScopedTaskExecutionSnapshots(
-		projectID, workflowID, workflowTaskIDs(taskIDs),
-	)
-	if err != nil {
-		return nil, err
-	}
-	currentByTaskID := make(map[string][]sessionruntime.TaskExecution, len(taskIDs))
-	for _, taskID := range taskIDs {
-		currentByTaskID[taskID] = currentTaskExecutions(snapshots[workflow.TaskID(taskID)].Executions)
-	}
-	return currentByTaskID, nil
-}
-
-func (b *Board) currentNodesByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]workflow.CurrentNode, error) {
-	taskIDs := taskIDs(tasks)
-	if len(taskIDs) == 0 {
-		return map[string][]workflow.CurrentNode{}, nil
-	}
-	currentNodes, err := b.definitions.CurrentNodesByTask(ctx, workflowTaskIDs(taskIDs))
-	if err != nil {
-		return nil, err
-	}
-	byTaskID := make(map[string][]workflow.CurrentNode, len(tasks))
-	for _, taskID := range taskIDs {
-		byTaskID[taskID] = currentNodes[workflow.TaskID(taskID)]
-	}
-	return byTaskID, nil
-}
-
-func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary, dependencyProgress *serverapi.WorkflowTaskDependencyProgress) (serverapi.WorkflowBoardTaskCard, bool) {
-	facts := b.projector.ProjectTaskFacts(TaskFactsInput{
-		Task:           task,
-		Status:         status,
-		CurrentNodes:   currentNodes,
-		LiveExecutions: liveExecutions,
-		Definition:     definition,
-		CanDelete:      canDelete,
-	})
+func (b *Board) card(projected TaskStatusProjectionResult, labelIDs []string, sourceWorkspace serverapi.ProjectWorkspaceSummary, dependencyProgress *serverapi.WorkflowTaskDependencyProgress) (serverapi.WorkflowBoardTaskCard, bool) {
+	task := projected.Task
 	return serverapi.WorkflowBoardTaskCard{
 		TaskID:             task.ID,
 		ShortID:            task.ShortID,
 		Title:              task.Title,
 		Preview:            markdownPreview(task.Body),
 		WorkflowID:         task.WorkflowID,
-		ActiveNodeIDs:      append([]string(nil), facts.Status.NodeIDs...),
+		ActiveNodeIDs:      append([]string(nil), projected.Status.NodeIDs...),
 		SourceWorkspace:    sourceWorkspace,
-		Status:             facts.Status,
-		Actions:            facts.Actions,
+		Status:             projected.Status,
+		Actions:            projected.Actions,
 		LabelIDs:           labelIDs,
 		DependencyProgress: dependencyProgress,
 		UpdatedAtUnixMs:    task.UpdatedAtUnixMs,
-	}, facts.Done
+	}, projected.Done
 }
 
 func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {

@@ -25,6 +25,19 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 // requested Task. It preserves the store's canonical Current Node decoding so
 // read models never infer workflow state from SQL row shapes.
 func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+	if s == nil {
+		return nil, errors.New("workflow store is required")
+	}
+	return ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+}
+
+// ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
+// generated queries. A read-only transaction can therefore own the query
+// generation without duplicating the canonical Current Node decoder.
+func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+	if q == nil {
+		return nil, errors.New("workflow queries are required")
+	}
 	if len(taskIDs) == 0 {
 		return map[workflow.TaskID][]workflow.CurrentNode{}, nil
 	}
@@ -40,7 +53,7 @@ func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.T
 		ids = append(ids, string(taskID))
 		nodesByTask[taskID] = []workflow.CurrentNode{}
 	}
-	rows, err := s.queries.ListTaskCurrentNodesByTasks(ctx, ids)
+	rows, err := q.ListTaskCurrentNodesByTasks(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

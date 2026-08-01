@@ -2327,7 +2327,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		snapshot.Executions[0].Agent == nil ||
 		snapshot.Executions[0].Agent.SessionID != sessionID ||
 		snapshot.Executions[0].Script != nil ||
-		!snapshot.Executions[0].WaitingQuestion {
+		!snapshot.Executions[0].HasPendingPromptKind(PendingPromptKindQuestion) {
 		t.Fatalf("pending question snapshot = %+v", snapshot)
 	}
 
@@ -2344,6 +2344,228 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
+	}
+}
+
+func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	sessionID := runtimeids.NewSessionID()
+	resource, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+	if err != nil {
+		t.Fatalf("new session resource ref: %v", err)
+	}
+	workflowRef := workflowExecutionRefForTest(t, "task-prompt-lock", "node-prompt-lock", nil)
+	scope := newAgentExecutionScope(
+		runtimeids.NewExecutionScopeID(),
+		1,
+		resource,
+		&workflowRef,
+	)
+	feed := make(authorityPromptFeed, 2)
+	store := newExecutionPromptStore(authority, scope, feed)
+	request := tools.AskQuestionRequest{
+		ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
+	}
+	response := tools.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}
+
+	authority.mu.Lock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			authority.mu.Unlock()
+		}
+	}()
+
+	awaitDone := make(chan executionPromptResult, 1)
+	go func() {
+		answer, awaitErr := store.Await(context.Background(), request)
+		awaitDone <- executionPromptResult{response: answer, err: awaitErr}
+	}()
+	select {
+	case pending := <-feed:
+		if pending.requestID != request.ID || pending.resolved {
+			t.Fatalf("pending prompt event = %+v, want pending request %q", pending, request.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt registration waited for the Authority lock")
+	}
+
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- store.Submit(response, nil)
+	}()
+	select {
+	case submitErr := <-submitDone:
+		if submitErr != nil {
+			t.Fatalf("submit prompt response: %v", submitErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt response waited for the Authority lock")
+	}
+	select {
+	case result := <-awaitDone:
+		if result.err != nil || result.response != response {
+			t.Fatalf("prompt result = %+v, error = %v, want %+v", result.response, result.err, response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt cleanup waited for the Authority lock")
+	}
+	authority.mu.Unlock()
+	unlocked = true
+}
+
+func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 2)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	workflowRef := workflowExecutionRefForTest(t, "task-pending-prompts", "node-pending-prompts", nil)
+	requests := []tools.AskQuestionRequest{
+		{ID: "question-z", StepID: uuid.NewString(), Question: "Question"},
+		{
+			ID:              "approval-a",
+			StepID:          uuid.NewString(),
+			Approval:        true,
+			ApprovalOptions: []tools.AskQuestionApprovalOption{{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow"}},
+		},
+	}
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			for _, request := range requests {
+				request := request
+				go func() {
+					_, _ = authority.AwaitPromptResponse(ctx, scope.ID(), request)
+				}()
+			}
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = handle.Stop(context.Background())
+	})
+	for range requests {
+		<-feed
+	}
+
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 1 {
+		t.Fatalf("executions = %+v, want one execution", snapshot.Executions)
+	}
+	prompts := snapshot.Executions[0].PendingPrompts
+	if len(prompts) != 2 {
+		t.Fatalf("pending prompts = %+v, want two prompts", prompts)
+	}
+	want := []PendingPromptReference{
+		{ID: "approval-a", Kind: PendingPromptKindSessionApproval},
+		{ID: "question-z", Kind: PendingPromptKindQuestion},
+	}
+	for index, expected := range want {
+		if prompts[index] != expected {
+			t.Fatalf("pending prompt %d = %+v, want %+v", index, prompts[index], expected)
+		}
+	}
+	if err := handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop agent execution: %v", err)
+	}
+	afterRetirement, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot after retirement: %v", err)
+	}
+	if len(afterRetirement.Executions) != 0 {
+		t.Fatalf("retired execution snapshot = %+v, want no executions", afterRetirement.Executions)
+	}
+}
+
+func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 1)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	request := tools.AskQuestionRequest{ID: "duplicate-prompt", StepID: uuid.NewString(), Question: "Question"}
+	workflowRef := workflowExecutionRefForTest(t, "task-duplicate-prompt", "node-duplicate-prompt", nil)
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			return awaitErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("start agent execution: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = handle.Stop(context.Background())
+	})
+	<-feed
+	if _, err := authority.AwaitPromptResponse(context.Background(), handle.Scope().ID(), request); err == nil {
+		t.Fatal("duplicate pending prompt was accepted")
+	}
+	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 1 || len(snapshot.Executions[0].PendingPrompts) != 1 {
+		t.Fatalf("snapshot after duplicate prompt = %+v", snapshot)
+	}
+}
+
+func TestTaskExecutionRejectsPendingPromptsForQueuedAndScript(t *testing.T) {
+	ref := workflowExecutionRefForTest(t, "task-invalid-prompt-state", "node-invalid-prompt-state", nil)
+	pending := []PendingPromptReference{{ID: "question", Kind: PendingPromptKindQuestion}}
+	for name, execution := range map[string]TaskExecution{
+		"queued": {
+			Ref:            ref,
+			Agent:          &TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+			Queued:         true,
+			PendingPrompts: pending,
+		},
+		"script": {
+			Ref:            ref,
+			Script:         &TaskScriptExecutionTarget{Path: "/bin/true"},
+			PendingPrompts: pending,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := execution.validate(); err == nil {
+				t.Fatalf("%s execution accepted pending prompts", name)
+			}
+		})
 	}
 }
 

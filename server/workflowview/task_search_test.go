@@ -10,26 +10,22 @@ import (
 	"core/server/metadata"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
-func TestNewTaskSearchRequiresCurrentNodeAuthority(t *testing.T) {
-	if _, err := NewTaskSearch(nil, NewTaskProjector(), nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent metadata and authority")
+func TestNewTaskSearchRequiresTaskStatusProjection(t *testing.T) {
+	if _, err := NewTaskSearch(nil, nil); err == nil {
+		t.Fatal("NewTaskSearch accepted absent metadata and projection")
 	}
 	store, err := metadata.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open metadata: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := NewTaskSearch(store, nil, nil); err == nil {
-		t.Fatal("NewTaskSearch accepted absent projector and authority")
-	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	t.Cleanup(func() { _ = authority.Close(context.Background()) })
-	if _, err := NewTaskSearch(store, NewTaskProjector(), authority); err != nil {
-		t.Fatalf("NewTaskSearch with Current Node authority: %v", err)
+	if _, err := NewTaskSearch(store, nil); err == nil {
+		t.Fatal("NewTaskSearch accepted absent projection")
 	}
 }
 
@@ -294,7 +290,19 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
 	question := fixture.startCurrentNodeQuestion(t, startTaskSearchTask(t, fixture, task))
-	search, err := NewTaskSearch(fixture.metadata, NewTaskProjector(), question.authority)
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		currentNodeViewStatusObservationSource{
+			authority:  question.authority,
+			quiescence: fixture.quiescence,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	search, err := NewTaskSearch(fixture.metadata, projection)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
@@ -304,20 +312,67 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	question.resolve(t, fixture.ctx)
 }
 
+func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	task := createTaskSearchTask(t, fixture, "Approval", "needle")
+	started := fixture.startTask(t, "Approval execution")
+	sessionID := fixture.bindCurrentNodeSession(t, started)
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+					task.ID: {
+						Executions: []sessionruntime.TaskExecution{{
+							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+							PendingPrompts: []sessionruntime.PendingPromptReference{{
+								ID:   "approval",
+								Kind: sessionruntime.PendingPromptKindSessionApproval,
+							}},
+						}},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	search, err := NewTaskSearch(fixture.metadata, projection)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	request := taskSearchRequest("needle")
+	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}
+	response, err := search.Search(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("TaskSearch.Search: %v", err)
+	}
+	if len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != string(task.ID) ||
+		response.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval ||
+		len(response.Groups[0].Status.AttentionTypes) != 1 ||
+		response.Groups[0].Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindApproval {
+		t.Fatalf("live approval search response = %+v", response)
+	}
+}
+
 func newTaskSearchFixture(t *testing.T, requiresApproval bool) (currentNodeViewFixture, *TaskSearch) {
 	t.Helper()
 	fixture := newCurrentNodeViewFixture(t, requiresApproval)
-	search := newTaskSearch(t, fixture.metadata, fixture.authority)
+	search := newTaskSearch(t, fixture.metadata, fixture.projection)
 	return fixture, search
 }
 
 func newTaskSearch(
 	t *testing.T,
 	metadataStore *metadata.Store,
-	authority *sessionruntime.Authority,
+	projection *TaskStatusProjection,
 ) *TaskSearch {
 	t.Helper()
-	search, err := NewTaskSearch(metadataStore, NewTaskProjector(), authority)
+	search, err := NewTaskSearch(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("NewTaskSearch: %v", err)
 	}
