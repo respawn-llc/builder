@@ -1,13 +1,21 @@
 import { z } from "zod";
 import { createElement } from "react";
 import { render } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
+import { SidebarContext } from "@/app-facade";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
+import { createTestSidebarController } from "../sidebar";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -92,6 +100,26 @@ export const taskDetailResponse = {
     actions: taskActions,
     label_ids: [],
     attention_count: 2,
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
   },
 };
 
@@ -372,10 +400,20 @@ export function mountTaskDetailSurface(
   options: TaskDetailFixtureOptions = {},
 ): TestAppServices {
   const services = createTaskDetailTestServices(task, options);
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
+    routeTree: createRootRoute(),
+  });
   render(
-    createElement(TestAppProviders, {
-      children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
-      services,
+    createElement(RouterContextProvider, {
+      router,
+      children: createElement(SidebarContext.Provider, {
+        value: createTestSidebarController(),
+        children: createElement(TestAppProviders, {
+          children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
+          services,
+        }),
+      }),
     }),
   );
   return services;

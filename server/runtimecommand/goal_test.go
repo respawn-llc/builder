@@ -292,6 +292,10 @@ func newGoalAuthorityFixture(
 
 func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.AgentRuntimePlan {
 	t.Helper()
+	reference, err := workflow.NewCurrentNodeReference("goal-authority-test-task", "goal-authority-test-node", nil)
+	if err != nil {
+		t.Fatalf("create goal-authority Current Node reference: %v", err)
+	}
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
 	settings.Model = "gpt-5"
@@ -304,10 +308,7 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: workflow.CurrentNodeReference{
-					TaskID: "task-goal-authority",
-					NodeID: "node-goal-authority",
-				},
+				CurrentNode: reference,
 			},
 		},
 	})

@@ -42,6 +42,7 @@ import (
 	"core/server/workflowrunner"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/server/workflowview"
 	"core/shared/config"
 )
 
@@ -296,7 +297,19 @@ func resolvePersistedWorkflowInspection(ctx context.Context, app config.App, met
 	if err != nil {
 		return workflowrunner.PersistedWorkflowInspection{}, err
 	}
-	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore)
+	definitions, err := workflowview.NewDefinitionProjection(workflowStore)
+	if err != nil {
+		return workflowrunner.PersistedWorkflowInspection{}, err
+	}
+	dependencies, err := workflowview.NewTaskDependenciesForInspection(metadataStore, definitions, workflowview.NewTaskProjector())
+	if err != nil {
+		return workflowrunner.PersistedWorkflowInspection{}, err
+	}
+	awareness, err := workflowrunner.NewTaskAwarenessSource(workflowStore, dependencies)
+	if err != nil {
+		return workflowrunner.PersistedWorkflowInspection{}, err
+	}
+	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore, awareness)
 }
 
 func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {

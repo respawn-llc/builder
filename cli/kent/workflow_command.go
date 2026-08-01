@@ -133,12 +133,12 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if !ok {
 		return exitCode
 	}
-	if !flagWasProvided(fs, "name") && !flagWasProvided(fs, "description") && !flagWasProvided(fs, "execution-target") {
+	if !flagExplicit(fs, "name") && !flagExplicit(fs, "description") && !flagExplicit(fs, "execution-target") {
 		fmt.Fprintln(stderr, "workflow update requires at least one of --name, --description, or --execution-target")
 		return 2
 	}
 	var targetPolicy *serverapi.WorkflowExecutionTargetConfiguration
-	if flagWasProvided(fs, "execution-target") {
+	if flagExplicit(fs, "execution-target") {
 		parsed, err := parseWorkflowExecutionTargetPolicySelector(*executionTargetRaw)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -162,10 +162,10 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			Description:           def.Workflow.Description,
 			ExecutionTargetPolicy: targetPolicy,
 		}
-		if flagWasProvided(fs, "name") {
+		if flagExplicit(fs, "name") {
 			metadata.Name = strings.TrimSpace(*name)
 		}
-		if flagWasProvided(fs, "description") {
+		if flagExplicit(fs, "description") {
 			metadata.Description = strings.TrimSpace(*description)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
@@ -247,7 +247,7 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "workflow list does not accept positional arguments")
 		return 2
 	}
-	projectProvided := flagWasProvided(fs, "project")
+	projectProvided := flagExplicit(fs, "project")
 	if projectProvided && strings.TrimSpace(*project) == "" {
 		fmt.Fprintln(stderr, "workflow list --project requires a non-blank value")
 		return 2
@@ -437,16 +437,16 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		if strings.TrimSpace(*displayName) != "" {
 			updated.DisplayName = strings.TrimSpace(*displayName)
 		}
-		if fs.Lookup("prompt") != nil && flagWasProvided(fs, "prompt") {
+		if fs.Lookup("prompt") != nil && flagExplicit(fs, "prompt") {
 			updated.PromptTemplate = *prompt
 		}
-		if fs.Lookup("agent") != nil && flagWasProvided(fs, "agent") {
+		if fs.Lookup("agent") != nil && flagExplicit(fs, "agent") {
 			updated.SubagentRole = *agent
 		}
-		if flagWasProvided(fs, "completion-mode") {
+		if flagExplicit(fs, "completion-mode") {
 			updated.CompletionMode = strings.TrimSpace(*completionMode)
 		}
-		if flagWasProvided(fs, "script-path") {
+		if flagExplicit(fs, "script-path") {
 			updated.ScriptPath = workflowScriptPathFlagValue(fs, "script-path", *scriptPath)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
@@ -478,7 +478,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 }
 
 func workflowScriptPathFlagValue(fs *flag.FlagSet, name string, value string) *string {
-	if !flagWasProvided(fs, name) {
+	if !flagExplicit(fs, name) {
 		return nil
 	}
 	trimmed := strings.TrimSpace(value)
@@ -584,7 +584,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			_ = resp
 		}
 		descriptionRollback := func() {}
-		if groupID != "" && flagWasProvided(fs, "transition-description") && existingGroup != nil {
+		if groupID != "" && flagExplicit(fs, "transition-description") && existingGroup != nil {
 			previousGroup := *existingGroup
 			ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 			resp, updateErr := remote.UpdateWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupUpdateRequest{WorkflowID: def.Workflow.ID, GroupID: existingGroup.ID, SourceNodeID: existingGroup.SourceNodeID, TransitionID: existingGroup.TransitionID, DisplayName: existingGroup.DisplayName, Description: trimmedDescription})
@@ -671,7 +671,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		} else if strings.TrimSpace(*transitionID) != "" {
 			updatedGroup.DisplayName = workflowDisplayNameFromKey(*transitionID)
 		}
-		if flagWasProvided(fs, "transition-description") {
+		if flagExplicit(fs, "transition-description") {
 			updatedGroup.Description = strings.TrimSpace(*transitionDescription)
 		}
 		updatedEdge := edge
@@ -697,19 +697,19 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			}
 			updatedEdge.ContextSource = parsedContextSource
 		}
-		if flagWasProvided(fs, "requires-approval") {
+		if flagExplicit(fs, "requires-approval") {
 			updatedEdge.RequiresApproval = *requiresApproval
 		}
-		if flagWasProvided(fs, "prompt") {
+		if flagExplicit(fs, "prompt") {
 			updatedEdge.PromptTemplate = *prompt
 		}
-		if *clearParams && flagWasProvided(fs, "param") {
+		if *clearParams && flagExplicit(fs, "param") {
 			fmt.Fprintln(stderr, "use either --param or --clear-params, not both")
 			return 2
 		}
 		if *clearParams {
 			updatedEdge.Parameters = nil
-		} else if flagWasProvided(fs, "param") {
+		} else if flagExplicit(fs, "param") {
 			parsedParameters, parseErr := parseWorkflowParameters(params)
 			if parseErr != nil {
 				fmt.Fprintln(stderr, parseErr)
@@ -1327,16 +1327,6 @@ func workflowTransitionGroupByID(def serverapi.WorkflowDefinition, groupID strin
 		}
 	}
 	return serverapi.WorkflowTransitionGroup{}, fmt.Errorf("workflow transition group id %q not found", trimmed)
-}
-
-func flagWasProvided(fs *flag.FlagSet, name string) bool {
-	provided := false
-	fs.Visit(func(flag *flag.Flag) {
-		if flag.Name == name {
-			provided = true
-		}
-	})
-	return provided
 }
 
 func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote workflowCommandRemote, ref string) (string, error) {

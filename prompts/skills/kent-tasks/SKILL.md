@@ -42,6 +42,9 @@ kent task create --project . [--workflow "<uuid>"] --title "Fix flaky workflow t
 kent task list --project .
 kent task list --project . --workflow "<uuid>"
 kent task show <short-id-or-task-id>
+kent task dep add --blocker <task> --blocked <task> [--project <project>] [--json]
+kent task dep remove --blocker <task> --blocked <task> [--project <project>] [--json]
+kent task dep list <task> [--direction blocks|blocked-by] [--project <project>] [--json]
 ```
 
 Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
@@ -75,6 +78,20 @@ kent task start <task> --execution-target ref:<revision>
 ```
 
 The override applies only to an unlocked task and does not edit the workflow. Do not attempt to replace a locked target.
+
+Task start and executable Task move check direct unsatisfied dependencies before
+execution-target selection. Rerun with `--ignore-dependencies` to acknowledge
+that operation:
+
+```bash
+kent task start <short-id-or-task-id> --ignore-dependencies
+kent task move <short-id-or-task-id> <target-node-id> --ignore-dependencies
+```
+
+Task dependencies are direct Project-scoped relationships from a Blocker Task
+to a Blocked Task. Inspect both directions with `kent task dep list`; use
+`--direction blocks` or `--direction blocked-by` to select one. Add and remove
+are idempotent and accept `--json` for typed outcomes.
 
 ## Approvals And Manual Moves
 Some workflow transitions wait for human approval before target runs start. Inspect the task before approving, rejecting, or moving it so you know which workflow transition is pending.

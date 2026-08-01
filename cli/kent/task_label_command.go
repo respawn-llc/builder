@@ -166,7 +166,7 @@ func taskLabelListSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "task label list does not accept positional arguments")
 		return 2
 	}
-	nameProvided := flagWasProvided(fs, "name")
+	nameProvided := flagExplicit(fs, "name")
 	if nameProvided && strings.TrimSpace(*name) == "" {
 		fmt.Fprintln(stderr, "task label list --name requires a non-blank value")
 		return 2
@@ -207,7 +207,7 @@ func taskLabelRenameSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	if !ok {
 		return exitCode
 	}
-	if !flagWasProvided(fs, "label") {
+	if !flagExplicit(fs, "label") {
 		fmt.Fprintln(stderr, "task label rename requires --label <name-or-uuid>")
 		return 2
 	}
@@ -267,7 +267,7 @@ func taskLabelDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, "task label delete does not accept positional arguments")
 		return 2
 	}
-	if !flagWasProvided(fs, "label") {
+	if !flagExplicit(fs, "label") {
 		fmt.Fprintln(stderr, "task label delete requires --label <name-or-uuid>")
 		return 2
 	}

@@ -23,8 +23,8 @@ export function TaskDeleteConfirmationFallbackDialog({
       closeLabel={t("app.close")}
       onClose={onClose}
       open
-      style={{ width: `min(${taskDeleteDialogWidth.toString()}px, calc(100vw - 32px))` }}
       title={t("board.deleteTaskTitle")}
+      width={taskDeleteDialogWidth}
     >
       <TaskDeleteConfirmationContent disabled={disabled} onCancel={onClose} onConfirm={onConfirm} />
     </Dialog>

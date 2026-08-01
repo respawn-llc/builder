@@ -234,7 +234,7 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "task assignment", request: assignment},
 		{name: "task label get response", request: WorkflowTaskLabelsGetResponse{Assignment: assignment}},
 		{name: "task label update response", request: WorkflowTaskLabelsUpdateResponse{Assignment: assignment}},
-		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}}},
+		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}, Dependencies: emptyWorkflowTaskDependenciesForTest()}},
 		{name: "task list projection", request: WorkflowTaskListItem{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
 		{name: "task list projection response", request: WorkflowTaskListResponse{Tasks: []WorkflowTaskListItem{{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}}}},
 		{name: "board card projection", request: WorkflowBoardTaskCard{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
@@ -450,7 +450,7 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
 	labelIDs := []string{workflowLabelIDAlpha, workflowLabelIDBeta}
 	for _, value := range []any{
-		WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, LabelIDs: labelIDs},
+		WorkflowTaskDetail{Summary: WorkflowTaskSummary{WorkflowID: runtimeids.NewWorkflowID()}, Workflow: WorkflowTaskWorkflowSummary{WorkflowID: runtimeids.NewWorkflowID()}, LabelIDs: labelIDs, Dependencies: emptyWorkflowTaskDependenciesForTest()},
 		WorkflowTaskListItem{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 		WorkflowBoardTaskCard{WorkflowID: runtimeids.NewWorkflowID(), LabelIDs: labelIDs},
 	} {

@@ -140,6 +140,7 @@
   --space-5: 24px;
   --space-6: 32px;
   --space-7: 48px;
+  --button-primary-min-width: calc(var(--space-7) + var(--space-5));
   --radius-s: 8px;
   --radius-m: 12px;
   --radius-l: 16px;

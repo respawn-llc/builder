@@ -547,6 +547,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskCreateConflict && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskCreateConflictError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowLabel && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowLabelError(resp.Data, message)
 	}

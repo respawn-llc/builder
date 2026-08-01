@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
-import { useConnectionSnapshot, useStatusController } from "@/app-facade";
+import { useAppNavigation, useConnectionSnapshot, useSidebar, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
 import {
   initialDescriptionPresentationState,
@@ -45,6 +45,8 @@ export function TaskDetailContent({
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
+  const navigation = useAppNavigation();
+  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     taskID: detail.id,
@@ -75,26 +77,31 @@ export function TaskDetailContent({
   }
   const update = useUpdateTask(detail.id);
   const reportActionError = useCallback(
-    (action: "interrupt" | "resume", error: unknown) => {
+    (action: "dependency_remove" | "interrupt" | "resume", error: unknown) => {
       const notice =
         action === "interrupt"
           ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
-          : { id: "task-resume-error", title: t("board.resumeFailed") };
+          : action === "resume"
+            ? { id: "task-resume-error", title: t("board.resumeFailed") }
+            : {
+                id: "task-dependency-remove-error",
+                title: t("task.dependenciesRemoveFailed"),
+              };
       push({
         ...notice,
         body: errorMessage(error),
-        durationMs: Infinity,
+        durationMs: action === "dependency_remove" ? 5000 : Infinity,
         tone: "danger",
       });
     },
     [push, t],
   );
-  const mutations = useTaskMutations(detail.id, {
+  const mutations = useTaskMutations(detail.id, detail.projectID, {
     onActionError: reportActionError,
     onChanged: onMutated,
   });
   const connection = useConnectionSnapshot();
-  useTaskDetailLiveRefresh(detail.id, detail.projectID, true);
+  useTaskDetailLiveRefresh(detail, true);
 
   // Reconcile the draft with the latest server snapshot during render (the
   // React "adjust state on prop change" pattern). Switching tasks resets to the
@@ -134,6 +141,40 @@ export function TaskDetailContent({
         setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
       }}
       onDescriptionPresentationChange={setDescriptionPresentation}
+      onAddDependency={(direction) => {
+        const destination = {
+          boardQueryWorkflowID: detail.workflowID,
+          initialSourceWorkspaceID: detail.sourceWorkspace.id,
+          kind: "newTask" as const,
+          mode: "overlay" as const,
+          pendingRelationship: {
+            originTaskID: detail.id,
+            newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
+          },
+          projectID: detail.projectID,
+          workflowID: detail.workflowID,
+        };
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar(destination);
+        } else {
+          void openSidebar(destination);
+        }
+      }}
+      onRemoveDependency={(pair) => {
+        mutations.removeDependency.mutate(pair);
+      }}
+      onSelectDependencyTask={(taskID) => {
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar({
+            kind: "taskDetail",
+            taskID,
+            ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
+            ...(activeDestination.onMutated === undefined ? {} : { onMutated: activeDestination.onMutated }),
+          });
+          return;
+        }
+        void navigation.replaceTask(taskID);
+      }}
       onNewCommentBodyChange={setNewCommentBody}
       onEditingCommentChange={setEditingComment}
       onQuestionSelectionChange={(askID, selection) => {

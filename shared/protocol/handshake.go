@@ -78,6 +78,9 @@ const (
 	MethodWorkflowTaskMove                              = "workflow.task.move"
 	MethodWorkflowTaskComplete                          = "workflow.task.complete"
 	MethodWorkflowTaskDelete                            = "workflow.task.delete"
+	MethodWorkflowTaskDependencyAdd                     = "workflow.task.dependency.add"
+	MethodWorkflowTaskDependencyRemove                  = "workflow.task.dependency.remove"
+	MethodWorkflowTaskDependencyList                    = "workflow.task.dependency.list"
 	MethodWorkflowAttentionList                         = "workflow.attention.list"
 	MethodWorkflowTaskAttentionList                     = "workflow.task.attention.list"
 	MethodWorkflowTaskQuestionAnswer                    = "workflow.task.question.answer"
@@ -876,6 +879,7 @@ const (
 	WorkflowProjectEventActionQuestionCleared        WorkflowProjectEventAction = "question_cleared"
 	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
+	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
 )
 
 type WorkflowProjectEvent struct {

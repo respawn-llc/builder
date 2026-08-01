@@ -5,7 +5,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage } from "@/api";
+import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
@@ -90,6 +90,8 @@ export function NewTaskWindowRoute({
 
 export function NewTaskForm({
   projectID,
+  initialSourceWorkspaceID,
+  pendingRelationship,
   ...props
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
@@ -97,6 +99,13 @@ export function NewTaskForm({
   onSubmitted: () => void;
   projectID: string;
   workflowID: string;
+  initialSourceWorkspaceID?: string | undefined;
+  pendingRelationship?:
+    | Readonly<{
+        originTaskID: string;
+        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
+      }>
+    | undefined;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -114,7 +123,12 @@ export function NewTaskForm({
   );
   return (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
-      <NewTaskFormContent projectID={projectID} {...props} />
+      <NewTaskFormContent
+        initialSourceWorkspaceID={initialSourceWorkspaceID}
+        pendingRelationship={pendingRelationship}
+        projectID={projectID}
+        {...props}
+      />
     </ProjectLabelsProvider>
   );
 }
@@ -123,6 +137,8 @@ function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
   onSubmitted,
+  initialSourceWorkspaceID,
+  pendingRelationship,
   projectID,
   workflowID,
 }: Readonly<{
@@ -131,6 +147,13 @@ function NewTaskFormContent({
   onSubmitted: () => void;
   projectID: string;
   workflowID: string;
+  initialSourceWorkspaceID?: string | undefined;
+  pendingRelationship?:
+    | Readonly<{
+        originTaskID: string;
+        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
+      }>
+    | undefined;
 }>) {
   const { t } = useTranslation();
   const connection = useConnectionSnapshot();
@@ -147,7 +170,11 @@ function NewTaskFormContent({
   }, [catalog.data, selectedLabelIDs]);
   const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
-  const initialWorkspaceID = initialSourceWorkspaceID(defaultWorkspaceID, workspaceItems);
+  const initialWorkspaceID = resolveInitialSourceWorkspaceID(
+    initialSourceWorkspaceID,
+    defaultWorkspaceID,
+    workspaceItems,
+  );
   const initializedRef = useRef(false);
   const form = useForm<NewTaskFormValues>({
     resolver: zodResolver(newTaskSchema),
@@ -178,6 +205,13 @@ function NewTaskFormContent({
         body: values.body,
         sourceWorkspaceID,
         labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
+        dependencyIntent:
+          pendingRelationship === undefined
+            ? undefined
+            : {
+                relatedTaskID: pendingRelationship.originTaskID,
+                newTaskRole: pendingRelationship.newTaskRole,
+              },
       });
       onSubmitted();
     } catch {
@@ -316,10 +350,17 @@ function NewTaskLabels({
   );
 }
 
-function initialSourceWorkspaceID(
+function resolveInitialSourceWorkspaceID(
+  requestedWorkspaceID: string | undefined,
   defaultWorkspaceID: string,
   workspaceItems: readonly { id: string }[],
 ): string {
+  if (
+    requestedWorkspaceID !== undefined &&
+    workspaceItems.some((workspace) => workspace.id === requestedWorkspaceID)
+  ) {
+    return requestedWorkspaceID;
+  }
   if (defaultWorkspaceID.length > 0) {
     return defaultWorkspaceID;
   }

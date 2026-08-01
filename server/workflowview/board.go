@@ -171,6 +171,10 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
+	dependencyProgressByTaskID, err := boardDependencyProgressByTaskID(rows)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
 	tasks := boardNodeTaskRecords(rows)
 	hasExtra := len(tasks) > pageSize
 	if hasExtra {
@@ -217,6 +221,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 			labelIDsByTask[task.ID],
 			snapshot,
 			sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary),
+			dependencyProgressByTaskID[task.ID],
 		)
 		cards = append(cards, card)
 	}
@@ -268,7 +273,7 @@ func (b *Board) currentNodesByTask(ctx context.Context, tasks []sqlitegen.TaskRe
 	return byTaskID, nil
 }
 
-func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
+func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, currentNodes []workflow.CurrentNode, liveExecutions []sessionruntime.TaskExecution, canDelete bool, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary, dependencyProgress *serverapi.WorkflowTaskDependencyProgress) (serverapi.WorkflowBoardTaskCard, bool) {
 	facts := b.projector.ProjectTaskFacts(TaskFactsInput{
 		Task:           task,
 		Status:         status,
@@ -278,18 +283,39 @@ func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, c
 		CanDelete:      canDelete,
 	})
 	return serverapi.WorkflowBoardTaskCard{
-		TaskID:          task.ID,
-		ShortID:         task.ShortID,
-		Title:           task.Title,
-		Preview:         markdownPreview(task.Body),
-		WorkflowID:      task.WorkflowID,
-		ActiveNodeIDs:   append([]string(nil), facts.Status.NodeIDs...),
-		SourceWorkspace: sourceWorkspace,
-		Status:          facts.Status,
-		Actions:         facts.Actions,
-		LabelIDs:        labelIDs,
-		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
+		TaskID:             task.ID,
+		ShortID:            task.ShortID,
+		Title:              task.Title,
+		Preview:            markdownPreview(task.Body),
+		WorkflowID:         task.WorkflowID,
+		ActiveNodeIDs:      append([]string(nil), facts.Status.NodeIDs...),
+		SourceWorkspace:    sourceWorkspace,
+		Status:             facts.Status,
+		Actions:            facts.Actions,
+		LabelIDs:           labelIDs,
+		DependencyProgress: dependencyProgress,
+		UpdatedAtUnixMs:    task.UpdatedAtUnixMs,
 	}, facts.Done
+}
+
+func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {
+	progress := make(map[string]*serverapi.WorkflowTaskDependencyProgress)
+	for _, row := range rows {
+		if row.DependencySatisfiedCount.Valid != row.DependencyTotalCount.Valid {
+			return nil, fmt.Errorf("board task %q dependency aggregate has inconsistent absence", row.ID)
+		}
+		if !row.DependencyTotalCount.Valid {
+			continue
+		}
+		if row.DependencyTotalCount.Int64 < 1 || row.DependencySatisfiedCount.Int64 < 0 || row.DependencySatisfiedCount.Int64 > row.DependencyTotalCount.Int64 {
+			return nil, fmt.Errorf("board task %q dependency aggregate is invalid: satisfied=%d total=%d", row.ID, row.DependencySatisfiedCount.Int64, row.DependencyTotalCount.Int64)
+		}
+		progress[row.ID] = &serverapi.WorkflowTaskDependencyProgress{
+			SatisfiedCount: int(row.DependencySatisfiedCount.Int64),
+			TotalCount:     int(row.DependencyTotalCount.Int64),
+		}
+	}
+	return progress, nil
 }
 
 func taskIDs(tasks []sqlitegen.TaskRecord) []string {

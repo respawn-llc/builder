@@ -27,12 +27,44 @@ type sqliteInstruction struct {
 
 func requireQueryUsesIndexWithoutSort(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
 	t.Helper()
+	requireQueryUsesIndexWithoutOpcodes(
+		t,
+		db,
+		query,
+		indexName,
+		[]sqliteOpcode{sqliteOpcodeOpenEphemeral, sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort},
+		args...,
+	)
+}
+
+func requireQueryUsesIndexWithoutSorter(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
+	t.Helper()
+	requireQueryUsesIndexWithoutOpcodes(
+		t,
+		db,
+		query,
+		indexName,
+		[]sqliteOpcode{sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort},
+		args...,
+	)
+}
+
+func requireQueryUsesIndexWithoutOpcodes(
+	t *testing.T,
+	db *sql.DB,
+	query string,
+	indexName string,
+	forbidden []sqliteOpcode,
+	args ...any,
+) {
+	t.Helper()
 	instructions := queryProgram(t, db, query, args...)
 	requireQueryProgramOpensIndex(t, db, instructions, indexName)
 	for _, instruction := range instructions {
-		switch instruction.Opcode {
-		case sqliteOpcodeOpenEphemeral, sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort:
-			t.Fatalf("query program opened a temporary sort structure: %+v", instructions)
+		for _, opcode := range forbidden {
+			if instruction.Opcode == opcode {
+				t.Fatalf("query program used forbidden opcode %s: %+v", opcode, instructions)
+			}
 		}
 	}
 }

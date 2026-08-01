@@ -20,14 +20,15 @@ import (
 )
 
 type TaskDetail struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	projector   *TaskProjector
-	authority   *sessionruntime.Authority
-	quiescence  TaskQuiescenceSource
+	queries      *sqlitegen.Queries
+	definitions  *DefinitionProjection
+	projector    *TaskProjector
+	authority    *sessionruntime.Authority
+	quiescence   TaskQuiescenceSource
+	dependencies *TaskDependencies
 }
 
-func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource) (*TaskDetail, error) {
+func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority, quiescence TaskQuiescenceSource, dependencies *TaskDependencies) (*TaskDetail, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -43,12 +44,16 @@ func NewTaskDetail(metadataStore *metadata.Store, definitions *DefinitionProject
 	if quiescence == nil {
 		return nil, errors.New("task quiescence source is required")
 	}
+	if dependencies == nil {
+		return nil, errors.New("task dependencies read model is required")
+	}
 	return &TaskDetail{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		projector:   projector,
-		authority:   authority,
-		quiescence:  quiescence,
+		queries:      metadataStore.Queries(),
+		definitions:  definitions,
+		projector:    projector,
+		authority:    authority,
+		quiescence:   quiescence,
+		dependencies: dependencies,
 	}, nil
 }
 
@@ -203,6 +208,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		Actions:              facts.Actions,
 		LabelIDs:             labelIDsByTask[task.ID],
 		AttentionCount:       attentionCount,
+	}
+	detail.Dependencies, err = d.dependencies.GetTaskDependencies(ctx, task.ID)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
 	}
 	for _, execution := range currentExecutions {
 		switch {

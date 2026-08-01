@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/workflowruntime"
 	"core/shared/config"
 )
 
@@ -28,5 +29,20 @@ func TestPrepareInspectionRequestWithoutToolsUsesAutomaticChoice(t *testing.T) {
 	}
 	if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
 		t.Fatalf("tool choice mode = %q, want automatic", request.ToolChoiceMode)
+	}
+}
+
+func TestPersistedWorkflowPromptCarriesTaskAwarenessWithoutLiveExecution(t *testing.T) {
+	t.Parallel()
+	want := workflowruntime.TaskAwareness{CommentCount: 4, UnsatisfiedDependencyCount: 2}
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), &fakeClient{}, Config{
+		WorkflowPrompt: &workflowruntime.PromptContract{TaskAwareness: want},
+	})
+	got, err := engine.currentWorkflowTaskAwareness(context.Background())
+	if err != nil {
+		t.Fatalf("currentWorkflowTaskAwareness: %v", err)
+	}
+	if got != want {
+		t.Fatalf("persisted Task awareness = %+v, want %+v", got, want)
 	}
 }

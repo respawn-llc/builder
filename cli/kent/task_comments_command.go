@@ -56,7 +56,7 @@ func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagWasProvided(fs, "author"))
+		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagExplicit(fs, "author"))
 		if trimmedAuthorID := strings.TrimSpace(*authorID); trimmedAuthorID != "" {
 			commentAuthor.ID = trimmedAuthorID
 		}

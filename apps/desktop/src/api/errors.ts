@@ -148,6 +148,150 @@ export function decodeWorkflowLabelError(error: unknown): WorkflowLabelError | n
   return new WorkflowLabelError(error, parsed.data);
 }
 
+export const workflowTaskDependencyErrorReasons = [
+  "missing_task",
+  "self_dependency",
+  "project_mismatch",
+  "reciprocal_dependency",
+  "blocker_limit",
+  "blocked_limit",
+] as const;
+export type WorkflowTaskDependencyErrorReason = (typeof workflowTaskDependencyErrorReasons)[number];
+
+export class WorkflowTaskDependencyError extends RpcError {
+  readonly reason: WorkflowTaskDependencyErrorReason;
+  readonly blockerTaskID: string;
+  readonly blockedTaskID: string;
+  readonly missingTaskID: string | null;
+  readonly currentCount: number | null;
+  readonly limit: number | null;
+
+  constructor(
+    rpcError: RpcError,
+    info: Readonly<{
+      reason: WorkflowTaskDependencyErrorReason;
+      blockerTaskID: string;
+      blockedTaskID: string;
+      missingTaskID: string | null;
+      currentCount: number | null;
+      limit: number | null;
+    }>,
+  ) {
+    super({
+      code: rpcError.code,
+      message: rpcError.message,
+      method: rpcError.method,
+      data: rpcError.data,
+    });
+    this.name = "WorkflowTaskDependencyError";
+    this.reason = info.reason;
+    this.blockerTaskID = info.blockerTaskID;
+    this.blockedTaskID = info.blockedTaskID;
+    this.missingTaskID = info.missingTaskID;
+    this.currentCount = info.currentCount;
+    this.limit = info.limit;
+  }
+}
+
+const workflowTaskDependencyErrorDataSchema = z
+  .object({
+    type: z.literal("workflow_task_dependency_error"),
+    reason: z.enum(workflowTaskDependencyErrorReasons),
+    blocker_task_id: requiredIDSchema,
+    blocked_task_id: requiredIDSchema,
+    missing_task_id: requiredIDSchema.optional(),
+    current_count: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine(validateWorkflowTaskDependencyErrorData)
+  .transform((data) => ({
+    reason: data.reason,
+    blockerTaskID: data.blocker_task_id,
+    blockedTaskID: data.blocked_task_id,
+    missingTaskID: data.missing_task_id ?? null,
+    currentCount: data.current_count ?? null,
+    limit: data.limit ?? null,
+  }));
+
+function validateWorkflowTaskDependencyErrorData(
+  data: Readonly<{
+    reason: WorkflowTaskDependencyErrorReason;
+    missing_task_id?: string | undefined;
+    current_count?: number | undefined;
+    limit?: number | undefined;
+  }>,
+  context: z.RefinementCtx,
+): void {
+  if (data.reason === "missing_task") {
+    validateMissingTaskDependencyError(data, context);
+    return;
+  }
+  if (data.reason === "blocker_limit" || data.reason === "blocked_limit") {
+    validateLimitedTaskDependencyError(data, context);
+    return;
+  }
+  validateMetadataFreeTaskDependencyError(data, context);
+}
+
+function validateMissingTaskDependencyError(
+  data: Readonly<{
+    missing_task_id?: string | undefined;
+    current_count?: number | undefined;
+    limit?: number | undefined;
+  }>,
+  context: z.RefinementCtx,
+): void {
+  if (data.missing_task_id === undefined || data.current_count !== undefined || data.limit !== undefined) {
+    context.addIssue({ code: "custom", message: "invalid missing task metadata" });
+  }
+}
+
+function validateLimitedTaskDependencyError(
+  data: Readonly<{
+    missing_task_id?: string | undefined;
+    current_count?: number | undefined;
+    limit?: number | undefined;
+  }>,
+  context: z.RefinementCtx,
+): void {
+  if (data.missing_task_id !== undefined) {
+    context.addIssue({ code: "custom", message: "invalid limit metadata" });
+    return;
+  }
+  if (data.current_count === undefined || data.limit === undefined) {
+    context.addIssue({ code: "custom", message: "invalid limit metadata" });
+    return;
+  }
+  if (data.current_count > data.limit) {
+    context.addIssue({ code: "custom", message: "invalid limit metadata" });
+  }
+}
+
+function validateMetadataFreeTaskDependencyError(
+  data: Readonly<{
+    missing_task_id?: string | undefined;
+    current_count?: number | undefined;
+    limit?: number | undefined;
+  }>,
+  context: z.RefinementCtx,
+): void {
+  if (data.missing_task_id !== undefined || data.current_count !== undefined || data.limit !== undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "unexpected dependency error metadata",
+    });
+  }
+}
+
+export function decodeWorkflowTaskDependencyError(error: unknown): WorkflowTaskDependencyError | null {
+  if (!(error instanceof RpcError)) {
+    return null;
+  }
+  const parsed = workflowTaskDependencyErrorDataSchema.safeParse(error.data);
+  return parsed.success ? new WorkflowTaskDependencyError(error, parsed.data) : null;
+}
+
 export class TransportError extends Error {
   constructor(message: string) {
     super(message);

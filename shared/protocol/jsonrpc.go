@@ -60,6 +60,7 @@ const (
 	ErrCodeWorkspaceDetachConflict           = -32050
 	ErrCodeWorkspaceMutationFailed           = -32051
 	ErrCodeWorkflowTaskSearch                = -32052
+	ErrCodeWorkflowTaskDependency            = -32053
 )
 
 type Request struct {
