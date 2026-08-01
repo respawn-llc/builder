@@ -130,6 +130,9 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 }
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
+	if err == nil && isAgentStepCapable(options.ActiveKind) {
+		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	}
 	s.closeActiveStepQueue(stepID)
 	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
 		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))

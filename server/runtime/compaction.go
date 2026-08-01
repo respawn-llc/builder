@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -45,7 +46,7 @@ const (
 var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output missing checkpoint item")
 
 var (
-	ErrManualCompactionTooSoon = errors.New("manual compaction requires a tool call since the latest compaction")
+	ErrManualCompactionTooSoon = serverapi.ErrManualCompactionTooSoon
 
 	// errHandoffDisabledByUser is returned when the user has disabled handoff and the agent requests one.
 	errHandoffDisabledByUser = errors.New(handoffDisabledByUserMessage)
@@ -107,37 +108,40 @@ func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Conte
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive)
+	return c.compactManualContext(ctx, instructions, onActive, true)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
-	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil)
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
 }
 
-func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
 	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
 	if err := c.steps.AcquireReservation(reservation); err != nil {
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	if !manualCompactionHasToolCall(c.engine.transcriptRuntimeState().SnapshotItems()) {
+	planningSnapshot := c.engine.compactionPlanningSnapshot()
+	if requireEligibility && c.engine.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
+		return session.CommitReceipt{}, errCompactionDisabledModeNone
+	}
+	if requireEligibility && !c.engine.compactionRuntimeState().ManualCompactionEligible() {
 		return session.CommitReceipt{}, ErrManualCompactionTooSoon
 	}
 	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive)
 }
 
-func manualCompactionHasToolCall(items []llm.ResponseItem) bool {
-	for _, item := range items {
-		if item.Type == llm.ResponseItemTypeFunctionCall ||
-			item.Type == llm.ResponseItemTypeCustomToolCall {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
 	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive)
+}
+
+func isAgentStepCapable(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -690,6 +694,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, replacementErr.Error())
 		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
 	}
+	e.compactionRuntimeState().SetManualCompactionEligible(false)
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(

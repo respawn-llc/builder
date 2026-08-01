@@ -35,7 +35,7 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 	}
 }
 
-func TestManualCompactionAcceptsToolCallSinceLatestCompaction(t *testing.T) {
+func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
 			Assistant: llm.Message{
@@ -48,14 +48,12 @@ func TestManualCompactionAcceptsToolCallSinceLatestCompaction(t *testing.T) {
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := engine.transcriptRuntimeState().AppendMessage("step-1", llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:   "edit-1",
-			Name: "edit",
-		}},
-	}); err != nil {
-		t.Fatalf("append editing tool call: %v", err)
+	if err := engine.stepLifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(context.Context, string) error { return nil },
+	); err != nil {
+		t.Fatalf("complete agent step: %v", err)
 	}
 
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
