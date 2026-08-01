@@ -97,7 +97,6 @@ type ManualMoveRequiredValue struct {
 }
 
 type ManualMoveTransitionChoice struct {
-	ChoiceKey      workflow.TransitionGroupID
 	TransitionKey  workflow.TransitionID
 	Label          string
 	SourceNode     workflow.Node
@@ -159,7 +158,7 @@ func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req
 	}
 	switch target.Kind() {
 	case workflow.NodeKindStart, workflow.NodeKindTerminal:
-		if req.TransitionKey != nil || req.ChoiceKey != nil || len(req.Values) != 0 {
+		if req.TransitionKey != nil || len(req.Values) != 0 {
 			return ManualMovePreview{}, ErrManualMoveDirectFieldsNotAllowed
 		}
 		return ManualMovePreview{Outcome: ManualMovePreviewOutcomeDirect}, nil
@@ -219,7 +218,6 @@ func (s *Store) resolveManualMoveExecutablePreview(
 			return ManualMovePreview{}, fmt.Errorf("manual move Transition %q source node %q is absent", group.TransitionID, group.SourceNodeID)
 		}
 		candidate := ManualMoveTransitionChoice{
-			ChoiceKey:     group.ID,
 			TransitionKey: group.TransitionID,
 			Label:         group.DisplayName,
 			SourceNode:    source,
@@ -241,8 +239,8 @@ func (s *Store) resolveManualMoveExecutablePreview(
 		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].ChoiceKey != candidates[j].ChoiceKey {
-			return candidates[i].ChoiceKey < candidates[j].ChoiceKey
+		if candidates[i].TransitionKey != candidates[j].TransitionKey {
+			return candidates[i].TransitionKey < candidates[j].TransitionKey
 		}
 		return workflow.NodeKey(candidates[i].SourceNode) < workflow.NodeKey(candidates[j].SourceNode)
 	})
@@ -255,43 +253,19 @@ func (s *Store) resolveManualMoveExecutablePreview(
 		}
 		return ManualMovePreview{Outcome: ManualMovePreviewOutcomeBlocked, Blocker: ManualMoveBlockerNoUsableTransition}, nil
 	}
-	if req.ChoiceKey != nil {
-		for _, candidate := range candidates {
-			if candidate.ChoiceKey == *req.ChoiceKey {
-				if req.TransitionKey != nil && candidate.TransitionKey != *req.TransitionKey {
-					return ManualMovePreview{}, fmt.Errorf("%w: choice key %q does not match Transition %q", ErrManualMoveTransitionNotUsable, *req.ChoiceKey, *req.TransitionKey)
-				}
-				if len(req.Values) != 0 {
-					if err := validateManualMoveValues(candidate, req.Values, valueEnvironment); err != nil {
-						return ManualMovePreview{}, err
-					}
-				}
-				return ManualMovePreview{Outcome: ManualMovePreviewOutcomeTransition, Choices: []ManualMoveTransitionChoice{candidate}}, nil
-			}
-		}
-		return ManualMovePreview{}, fmt.Errorf("%w: choice key %q", ErrManualMoveTransitionNotUsable, *req.ChoiceKey)
-	}
 	if req.TransitionKey != nil {
-		var selected *ManualMoveTransitionChoice
 		for _, candidate := range candidates {
 			if candidate.TransitionKey != *req.TransitionKey {
 				continue
 			}
-			if selected != nil {
-				return ManualMovePreview{}, ErrManualMoveTransitionSelectionRequired
+			if len(req.Values) != 0 {
+				if err := validateManualMoveValues(candidate, req.Values, valueEnvironment); err != nil {
+					return ManualMovePreview{}, err
+				}
 			}
-			value := candidate
-			selected = &value
+			return ManualMovePreview{Outcome: ManualMovePreviewOutcomeTransition, Choices: []ManualMoveTransitionChoice{candidate}}, nil
 		}
-		if selected == nil {
-			return ManualMovePreview{}, fmt.Errorf("%w: Transition %q", ErrManualMoveTransitionNotUsable, *req.TransitionKey)
-		}
-		if len(req.Values) != 0 {
-			if err := validateManualMoveValues(*selected, req.Values, valueEnvironment); err != nil {
-				return ManualMovePreview{}, err
-			}
-		}
-		return ManualMovePreview{Outcome: ManualMovePreviewOutcomeTransition, Choices: []ManualMoveTransitionChoice{*selected}}, nil
+		return ManualMovePreview{}, fmt.Errorf("%w: Transition %q", ErrManualMoveTransitionNotUsable, *req.TransitionKey)
 	}
 	if len(candidates) == 1 && len(req.Values) != 0 {
 		if err := validateManualMoveValues(candidates[0], req.Values, valueEnvironment); err != nil {

@@ -517,7 +517,7 @@ function BoardContent({
     const moveInput = {
       taskID: drop.taskID,
       targetNodeID: drop.targetNodeID,
-      ...(input.choiceKey === undefined ? {} : { transitionChoiceKey: input.choiceKey }),
+      ...(input.transitionKey === undefined ? {} : { transitionKey: input.transitionKey }),
       ...(input.values === undefined ? {} : { values: input.values }),
     };
     runCardAction(

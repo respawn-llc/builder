@@ -107,7 +107,6 @@ type ManualMoveRequest struct {
 	TaskID        workflow.TaskID
 	TargetNodeID  workflow.NodeID
 	TransitionKey *workflow.TransitionID
-	ChoiceKey     *workflow.TransitionGroupID
 	Values        map[workflow.ModelKey]map[string]string
 	Commentary    string
 }

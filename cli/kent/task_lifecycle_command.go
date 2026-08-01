@@ -12,6 +12,7 @@ import (
 
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 var (
@@ -658,7 +659,6 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 		}
 		var transitionKey *string
-		var transitionChoiceKey *string
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
 			key := strings.TrimSpace(*transition)
 			if key == "" {
@@ -666,34 +666,19 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
 					return 2
 				}
-				key = preview.Transition.Choices[0].ChoiceKey
+				key = preview.Transition.Choices[0].TransitionKey
 			}
 			var selected *serverapi.WorkflowTaskMovePreviewTransitionChoice
-			var authoredMatches []serverapi.WorkflowTaskMovePreviewTransitionChoice
 			for _, choice := range preview.Transition.Choices {
-				if choice.ChoiceKey == key {
+				if choice.TransitionKey == key {
 					value := choice
 					selected = &value
-				}
-				if choice.TransitionKey == key {
-					authoredMatches = append(authoredMatches, choice)
+					break
 				}
 			}
 			if selected == nil {
-				switch len(authoredMatches) {
-				case 1:
-					selected = &authoredMatches[0]
-				case 0:
-					fmt.Fprintf(stderr, "task move selection %q is not a usable incoming Transition or ChoiceKey\n", key)
-					return 2
-				default:
-					keys := make([]string, 0, len(authoredMatches))
-					for _, choice := range authoredMatches {
-						keys = append(keys, choice.ChoiceKey)
-					}
-					fmt.Fprintf(stderr, "task move Transition %q is ambiguous; choose one of these ChoiceKeys: %s\n", key, strings.Join(keys, ", "))
-					return 2
-				}
+				fmt.Fprintf(stderr, "task move Transition %q is not a usable incoming Transition\n", key)
+				return 2
 			}
 			choice := *selected
 			if err := validateManualMoveCLIValues(choice, values); err != nil {
@@ -701,20 +686,17 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				return 2
 			}
 			authoredKey := choice.TransitionKey
-			choiceKey := choice.ChoiceKey
 			transitionKey = &authoredKey
-			transitionChoiceKey = &choiceKey
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-				TaskID:              taskID,
-				TargetNodeID:        positionals[1],
-				TransitionKey:       transitionKey,
-				TransitionChoiceKey: transitionChoiceKey,
-				Values:              values,
-				Commentary:          *commentary,
-				SetupOperationID:    setupOperationID,
-				ExecutionTarget:     executionTarget,
+				TaskID:           taskID,
+				TargetNodeID:     positionals[1],
+				TransitionKey:    transitionKey,
+				Values:           values,
+				Commentary:       *commentary,
+				SetupOperationID: setupOperationID,
+				ExecutionTarget:  executionTarget,
 			})
 		})
 		if err != nil {
@@ -813,7 +795,7 @@ func validateManualMoveCLIValues(
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("manual move value %s.%s must be non-blank", nodeKey, outputName)
 			}
-			if len(value) > serverapi.MaxWorkflowOutputValueBytes {
+			if len(value) > workflowcontract.MaxOutputValueBytes {
 				return fmt.Errorf("manual move value %s.%s exceeds the maximum output value size", nodeKey, outputName)
 			}
 		}

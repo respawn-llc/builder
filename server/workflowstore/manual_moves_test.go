@@ -444,7 +444,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 	}
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       branches["split_a"].Reference,
-		TransitionID: "join",
+		TransitionID: "join_a",
 		OutputValues: map[string]string{"joined": "branch A"},
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode partial join: %v", err)
@@ -454,7 +454,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	target := nodeByKey(t, definition, "synth")
-	transition := workflow.TransitionID("done")
+	transition := workflow.TransitionID("synthesize")
 	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:        task.ID,
 		TargetNodeID:  workflow.NodeIDOf(target),

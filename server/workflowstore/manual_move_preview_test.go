@@ -148,23 +148,6 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 			PromptTemplate:    "Alternate {{.Params.prior_summary}}.",
 			Parameters:        []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}},
 		})
-		duplicateGroupID := workflow.TransitionGroupID("group-next-start-" + string(workflowID))
-		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
-			ID:           duplicateGroupID,
-			WorkflowID:   workflowID,
-			SourceNodeID: workflow.NodeIDOf(target),
-			TransitionID: "next",
-			DisplayName:  "Next from Start",
-		})
-		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-next-start-" + string(workflowID)),
-			WorkflowID:        workflowID,
-			TransitionGroupID: duplicateGroupID,
-			Key:               "next_start",
-			TargetNodeID:      workflow.NodeIDOf(target),
-			ContextMode:       workflow.ContextModeNewSession,
-			PromptTemplate:    "Next from Start.",
-		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -181,22 +164,8 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	if err != nil {
 		t.Fatalf("PreviewManualMove: %v", err)
 	}
-	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 3 {
+	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 2 {
 		t.Fatalf("preview = %+v, want stable sorted choices", preview)
-	}
-	nextChoices := make([]ManualMoveTransitionChoice, 0, 2)
-	choiceKeys := make(map[workflow.TransitionGroupID]struct{}, len(preview.Choices))
-	for _, choice := range preview.Choices {
-		if _, exists := choiceKeys[choice.ChoiceKey]; exists {
-			t.Fatalf("preview = %+v, duplicate ChoiceKey %q", preview, choice.ChoiceKey)
-		}
-		choiceKeys[choice.ChoiceKey] = struct{}{}
-		if choice.TransitionKey == "next" {
-			nextChoices = append(nextChoices, choice)
-		}
-	}
-	if len(nextChoices) != 2 {
-		t.Fatalf("preview = %+v, want two source-scoped choices with authored Transition next", preview)
 	}
 	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(target)}); !errors.Is(err, ErrManualMoveTransitionSelectionRequired) {
 		t.Fatalf("ambiguous preparation error = %v, want selection-required", err)
@@ -212,19 +181,6 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	}
 	if len(selectedPreview.Choices) != 1 || selectedPreview.Choices[0].TransitionKey != selected {
 		t.Fatalf("selected preview = %+v, want alternate only", selectedPreview)
-	}
-	selectedChoiceKey := nextChoices[0].ChoiceKey
-	selectedNext, err := store.PreviewManualMove(ctx, ManualMoveRequest{
-		TaskID:        task.ID,
-		TargetNodeID:  workflow.NodeIDOf(target),
-		ChoiceKey:     &selectedChoiceKey,
-		TransitionKey: &nextChoices[0].TransitionKey,
-	})
-	if err != nil {
-		t.Fatalf("ChoiceKey-selected PreviewManualMove: %v", err)
-	}
-	if len(selectedNext.Choices) != 1 || selectedNext.Choices[0].ChoiceKey != selectedChoiceKey {
-		t.Fatalf("ChoiceKey-selected preview = %+v, want selected source-scoped choice", selectedNext)
 	}
 	unknown := workflow.TransitionID("missing")
 	if _, err := store.PreviewManualMove(ctx, ManualMoveRequest{
@@ -286,8 +242,8 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 			group.SourceNodeID = detailBID
 		})
 		req.TransitionGroups = append(req.TransitionGroups,
-			TransitionGroupRecord{ID: detailAGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implA), TransitionID: "detail", DisplayName: "Detail"},
-			TransitionGroupRecord{ID: detailBGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implB), TransitionID: "detail", DisplayName: "Detail"},
+			TransitionGroupRecord{ID: detailAGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implA), TransitionID: "detail_a", DisplayName: "Detail"},
+			TransitionGroupRecord{ID: detailBGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implB), TransitionID: "detail_b", DisplayName: "Detail"},
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{ID: workflow.EdgeID("edge-detail-a-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
@@ -507,7 +463,7 @@ func TestManualMovePreviewPrefillsPartiallyArrivedFanoutValuesBySourceNode(t *te
 	}
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       branches["split_a"].Reference,
-		TransitionID: "join",
+		TransitionID: "join_a",
 		OutputValues: map[string]string{"joined": "arrived from A"},
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode partial join: %v", err)

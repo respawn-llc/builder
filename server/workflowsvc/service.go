@@ -1328,7 +1328,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 				})
 			}
 			choices = append(choices, serverapi.WorkflowTaskMovePreviewTransitionChoice{
-				ChoiceKey:             string(choice.ChoiceKey),
 				TransitionKey:         string(choice.TransitionKey),
 				Label:                 choice.Label,
 				SourceNodeDisplayName: workflow.NodeDisplayName(choice.SourceNode),
@@ -1364,16 +1363,10 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		value := workflow.TransitionID(*req.TransitionKey)
 		transitionKey = &value
 	}
-	var choiceKey *workflow.TransitionGroupID
-	if req.TransitionChoiceKey != nil {
-		value := workflow.TransitionGroupID(*req.TransitionChoiceKey)
-		choiceKey = &value
-	}
 	moveRequest := workflowstore.ManualMoveRequest{
 		TaskID:        workflow.TaskID(req.TaskID),
 		TargetNodeID:  workflow.NodeID(req.TargetNodeID),
 		TransitionKey: transitionKey,
-		ChoiceKey:     choiceKey,
 		Values:        values,
 		Commentary:    req.Commentary,
 	}

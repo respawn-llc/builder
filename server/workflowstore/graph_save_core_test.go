@@ -337,9 +337,9 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: spareRouteGroupID, WorkflowID: workflowID, SourceNodeID: planID, TransitionID: "spare", DisplayName: "Spare"},
-			TransitionGroupRecord{ID: spareSplitGroupID, WorkflowID: workflowID, SourceNodeID: spareSourceID, TransitionID: "split", DisplayName: "Split"},
-			TransitionGroupRecord{ID: spareBranchAGroupID, WorkflowID: workflowID, SourceNodeID: spareBranchAID, TransitionID: "join", DisplayName: "Join"},
-			TransitionGroupRecord{ID: spareBranchBGroupID, WorkflowID: workflowID, SourceNodeID: spareBranchBID, TransitionID: "join", DisplayName: "Join"},
+			TransitionGroupRecord{ID: spareSplitGroupID, WorkflowID: workflowID, SourceNodeID: spareSourceID, TransitionID: "spare_split", DisplayName: "Split"},
+			TransitionGroupRecord{ID: spareBranchAGroupID, WorkflowID: workflowID, SourceNodeID: spareBranchAID, TransitionID: "join_spare_a", DisplayName: "Join"},
+			TransitionGroupRecord{ID: spareBranchBGroupID, WorkflowID: workflowID, SourceNodeID: spareBranchBID, TransitionID: "join_spare_b", DisplayName: "Join"},
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{ID: workflow.EdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareSourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Route spare work."},
@@ -389,8 +389,8 @@ func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBloc
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: spareRouteGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare", DisplayName: "Spare"},
-			TransitionGroupRecord{ID: spareKeepGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "done", DisplayName: "Done"},
-			TransitionGroupRecord{ID: reassignedGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "spare_done", DisplayName: "Spare Done"},
+			TransitionGroupRecord{ID: spareKeepGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "spare_done", DisplayName: "Done"},
+			TransitionGroupRecord{ID: reassignedGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "spare_reassigned", DisplayName: "Spare Done"},
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{ID: workflow.EdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareAgentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare work."},

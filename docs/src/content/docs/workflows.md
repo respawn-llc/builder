@@ -325,10 +325,10 @@ kent task list --project . --workflow "$workflow_uuid" --column review
 
 ### Manually Move A Task
 
-Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with an authored Transition key that identifies one choice or a unique ChoiceKey listed when authored keys are shared. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
+Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
 
 ```bash
-kent task move <task> <target-node-id> --transition <transition-key-or-choice-key> \
+kent task move <task> <target-node-id> --transition <transition-key> \
   --values-json '{"plan":{"summary":"Approved plan"}}'
 kent task move <task> <target-node-id> --values-file ./move-values.json
 ```

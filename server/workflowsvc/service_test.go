@@ -1920,7 +1920,7 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 	})
 	graph.TransitionGroups = append(graph.TransitionGroups,
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptTransitionID, SourceNodeID: agentID, TransitionID: "script", DisplayName: "Script"},
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptDoneTransitionID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptDoneTransitionID, SourceNodeID: scriptID, TransitionID: "script_done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
 		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID.String(), TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, ContextMode: "new_session"},
