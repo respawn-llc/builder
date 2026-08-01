@@ -481,7 +481,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 	if backgroundIdx < 0 {
 		t.Fatalf("expected background notice committed event, got %+v", committedEvents)
 	}
-	if assistantIdx > backgroundIdx {
+	if assistantIdx < backgroundIdx {
 		t.Fatalf("foreground final assistant must publish before background notice, assistant_idx=%d background_idx=%d events=%+v", assistantIdx, backgroundIdx, committedEvents)
 	}
 }

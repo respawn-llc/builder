@@ -29,6 +29,17 @@ func newTranscriptRuntimeState(cwd string) *transcriptRuntimeState {
 	return &transcriptRuntimeState{cwd: strings.TrimSpace(cwd), chat: newChatStore(), liveTools: newTranscriptLiveToolLedger()}
 }
 
+func (s *transcriptRuntimeState) ResetProjection() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.chat = newChatStore()
+	s.liveTools = newTranscriptLiveToolLedger()
+	s.latestRollbackCandidate = nil
+	s.mu.Unlock()
+}
+
 func (s *transcriptRuntimeState) SetWorkingDir(workdir string) bool {
 	if s == nil {
 		return false

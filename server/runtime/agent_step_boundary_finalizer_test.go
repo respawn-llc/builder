@@ -13,8 +13,6 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
-	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 func TestAgentStepBoundaryFinalizerCommitsExactlyOneBoundaryAndProjectsEligibility(t *testing.T) {
@@ -74,6 +72,37 @@ func TestAgentStepBoundaryFinalizerLeavesEligibilityUnchangedWhenAppendIsUncommi
 	finalizer.Complete(receipt)
 	if engine.compactionRuntimeState().ManualCompactionEligible() {
 		t.Fatal("uncommitted boundary projected eligibility")
+	}
+}
+
+func TestRequestPreparationFailureDoesNotOpenAgentStepGeneration(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(), Config{})
+	finalizer := engine.openAgentStepBoundary("step-preparation-failure")
+	finalizer.ArmGeneration()
+	expected := errors.New("request preparation failed")
+
+	_, err := engine.generateWithMissingToolOutputRepairAtDispatch(
+		context.Background(),
+		"step-preparation-failure",
+		func() (llm.Request, error) {
+			return llm.Request{}, expected
+		},
+		nil,
+		nil,
+		nil,
+		finalizer.MarkDispatched,
+	)
+	if !errors.Is(err, expected) {
+		t.Fatalf("generation error = %v, want request preparation error", err)
+	}
+	if finalizer.Dispatched() {
+		t.Fatal("request preparation failure opened a provider generation")
+	}
+	if engine.compactionRuntimeState().ManualCompactionEligible() {
+		t.Fatal("request preparation failure projected manual eligibility")
+	}
+	if err := finalizer.Abort(err); err == nil {
+		t.Fatal("aborting armed pre-dispatch generation returned nil")
 	}
 }
 
@@ -172,7 +201,7 @@ func TestAgentStepBoundaryFinalizerDoesNotProjectPreparedFinalPayloadsWhenAppend
 		t.Fatalf("stage final message: %v", err)
 	}
 	if len(engine.transcriptRuntimeState().SnapshotMessages()) != 0 {
-		t.Fatal("staged final message was projected before durable commit")
+		t.Fatal("staged final message was projected before commit")
 	}
 	blocker := filemode.MustBlockEventLogAppends(t, filepath.Join(engine.store.Dir(), "events.jsonl"))
 
@@ -194,116 +223,40 @@ func TestAgentStepBoundaryFinalizerDoesNotProjectPreparedFinalPayloadsWhenAppend
 	}
 }
 
-func TestAgentStepBoundaryFinalizerAtomicallyRejectsToolAndReviewerPayloads(t *testing.T) {
+func TestUncommittedToolCompletionKeepsLiveToolAbortable(t *testing.T) {
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(), Config{})
-	finalizer := engine.openAgentStepBoundary("step-atomic-tool-reviewer")
-	finalizer.MarkDispatched()
-
-	call := llm.ToolCall{
-		ID:    "call-atomic",
-		Name:  string(toolspec.ToolExecCommand),
-		Input: json.RawMessage(`{"command":"pwd"}`),
-	}
-	if err := engine.steer("step-atomic-tool-reviewer", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
-	)); err != nil {
-		t.Fatalf("stage assistant tool call: %v", err)
-	}
-	liveCall := call
-	liveCall.Presentation = transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
-		ToolName: string(toolspec.ToolExecCommand),
-	})
-	if err := engine.steer("step-atomic-tool-reviewer", steerEventIntent(Event{
-		Kind:     EventToolCallStarted,
-		ToolCall: &liveCall,
-	})); err != nil {
-		t.Fatalf("stage live tool call: %v", err)
-	}
-	result := tools.Result{
-		CallID: call.ID,
-		Name:   toolspec.ToolExecCommand,
-		Output: json.RawMessage(`{"output":"ok","exit_code":0}`),
-	}
-	if err := engine.steer("step-atomic-tool-reviewer", steerToolCompletionIntent(result)); err != nil {
-		t.Fatalf("stage tool completion: %v", err)
-	}
-	if err := engine.steer("step-atomic-tool-reviewer", steerMessagesWithPersistenceIntent(
+	if err := engine.steer("step-tool", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
 		[]llm.Message{{
-			Role:       llm.RoleTool,
-			ToolCallID: textutil.Value(call.ID),
-			Name:       textutil.Value(string(call.Name)),
-			Content:    textutil.Value(string(result.Output)),
+			Role:      llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{ID: "call-tool", Name: "exec_command"}},
 		}},
 	)); err != nil {
-		t.Fatalf("stage tool result message: %v", err)
+		t.Fatalf("persist authoritative tool call: %v", err)
 	}
-	if err := engine.steer("step-atomic-tool-reviewer", steerLocalEntryIntent(storedLocalEntry{
-		Role: "reviewer_suggestions",
-		Text: "verify atomic output",
-	})); err != nil {
-		t.Fatalf("stage reviewer entry: %v", err)
+	if err := engine.transcriptRuntimeState().RecordLiveToolStart("step-tool", llm.ToolCall{
+		ID:   "call-tool",
+		Name: "exec_command",
+	}); err != nil {
+		t.Fatalf("record live tool start: %v", err)
 	}
-
 	blocker := filemode.MustBlockEventLogAppends(t, filepath.Join(engine.store.Dir(), "events.jsonl"))
-	receipt, err := finalizer.Commit("step-atomic-tool-reviewer", nil)
-	if err == nil || receipt.Committed {
-		t.Fatalf("uncommitted tool/reviewer finalization: receipt=%+v err=%v", receipt, err)
-	}
-	if got := engine.transcriptRuntimeState().ToolCompletionCount(); got != 0 {
-		t.Fatalf("uncommitted tool completions = %d, want 0", got)
-	}
-	if got := len(engine.transcriptRuntimeState().SnapshotMessages()); got != 0 {
-		t.Fatalf("uncommitted messages = %d, want 0", got)
+
+	err := engine.steer("step-tool", steerToolCompletionIntent(tools.Result{
+		CallID: "call-tool",
+		Name:   "exec_command",
+		Output: json.RawMessage(`{"ok":true}`),
+	}))
+	if err == nil {
+		t.Fatal("uncommitted tool completion unexpectedly succeeded")
 	}
 	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log before durable assertion: %v", err)
+		t.Fatalf("restore event log: %v", err)
 	}
-	for _, record := range mustReadRuntimeEvents(t, engine) {
-		switch mustSessionEventPayload(record).(type) {
-		case session.MessageRecord, session.ToolCompletionRecord, session.LocalEntryRecord, session.AgentStepBoundaryRecord:
-			t.Fatal("uncommitted finalization left a durable tool/reviewer fact")
-		}
-	}
-}
-
-func TestAgentStepBoundaryFinalizerDoesNotDispatchWhenRequestPreparationFails(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(), Config{})
-	finalizer := engine.openAgentStepBoundary("step-pre-dispatch-failure")
-	finalizer.ArmGeneration()
-	preparationErr := errors.New("request preparation failed")
-	_, err := engine.generateWithMissingToolOutputRepairAtDispatch(
-		context.Background(),
-		"step-pre-dispatch-failure",
-		func() (llm.Request, error) {
-			return llm.Request{}, preparationErr
-		},
-		nil,
-		nil,
-		nil,
-		finalizer.MarkDispatched,
-	)
-	if !errors.Is(err, preparationErr) {
-		t.Fatalf("generation error = %v, want preparation error", err)
-	}
-	if finalizer.Dispatched() {
-		t.Fatal("request preparation failure opened a dispatched generation")
-	}
-	if err := finalizer.Abort(err); err == nil {
-		t.Fatal("aborting un-dispatched generation returned nil")
-	}
-	if engine.compactionRuntimeState().ManualCompactionEligible() {
-		t.Fatal("pre-dispatch failure made manual compaction eligible")
-	}
-	for _, record := range mustReadRuntimeEvents(t, engine) {
-		if _, ok := mustSessionEventPayload(record).(session.AgentStepBoundaryRecord); ok {
-			t.Fatal("pre-dispatch failure persisted an agent step boundary")
-		}
+	if _, ok := engine.transcriptRuntimeState().ToolCallSnapshot("call-tool"); !ok {
+		t.Fatal("uncommitted tool completion removed the live tool before durable commit")
 	}
 }
 

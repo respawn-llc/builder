@@ -6,9 +6,25 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"github.com/google/uuid"
 )
+
+type agentStepBoundaryFinalizer struct {
+	engine             *Engine
+	mu                 sync.Mutex
+	open               bool
+	dispatched         bool
+	capturing          bool
+	committed          bool
+	aborted            bool
+	hadPendingRecovery bool
+	stagedFinalPayload *session.EventRecordPayload
+	stagedFinalMessage *llm.Message
+	deferredStream     *deferredAssistantStreamCleanup
+	detachedManual     []*pendingManualCompaction
+	receipt            session.CommitReceipt
+	err                error
+}
 
 type deferredAssistantStreamCleanup struct {
 	metadata            *AssistantStreamMetadata
@@ -26,28 +42,6 @@ func cloneAssistantStreamAbortReason(reason *AssistantStreamAbortReason) *Assist
 	return &copyReason
 }
 
-type agentStepBoundaryFinalizer struct {
-	engine                   *Engine
-	mu                       sync.Mutex
-	open                     bool
-	dispatched               bool
-	capturing                bool
-	committed                bool
-	aborted                  bool
-	hadPendingRecovery       bool
-	stagedPayloads           []session.EventRecordPayload
-	stagedMessages           []llm.Message
-	transientEntries         []ChatEntry
-	deferredToolStarts       []Event
-	stagedToolResults        []tools.Result
-	stagedQueuedFlushes      []steeringQueuedUserMessageFlush
-	deferredTranscriptUpdate bool
-	deferredStreamCleanup    *deferredAssistantStreamCleanup
-	detachedManual           []*pendingManualCompaction
-	receipt                  session.CommitReceipt
-	err                      error
-}
-
 func newAgentStepBoundaryFinalizer(engine *Engine) *agentStepBoundaryFinalizer {
 	return &agentStepBoundaryFinalizer{engine: engine}
 }
@@ -63,14 +57,9 @@ func (f *agentStepBoundaryFinalizer) Open() {
 	f.committed = false
 	f.aborted = false
 	f.hadPendingRecovery = false
-	f.stagedPayloads = nil
-	f.stagedMessages = nil
-	f.transientEntries = nil
-	f.deferredToolStarts = nil
-	f.stagedToolResults = nil
-	f.stagedQueuedFlushes = nil
-	f.deferredTranscriptUpdate = false
-	f.deferredStreamCleanup = nil
+	f.stagedFinalPayload = nil
+	f.stagedFinalMessage = nil
+	f.deferredStream = nil
 	f.detachedManual = nil
 	f.receipt = session.CommitReceipt{}
 	f.err = nil
@@ -110,141 +99,40 @@ func (f *agentStepBoundaryFinalizer) Capturing() bool {
 	return f.open && f.capturing && !f.committed && !f.aborted
 }
 
-func (f *agentStepBoundaryFinalizer) Stage(payload session.EventRecordPayload) error {
+func (f *agentStepBoundaryFinalizer) StageFinalAssistant(message llm.Message, payload session.EventRecordPayload) error {
 	if f == nil {
 		return errors.New("agent step boundary finalizer is required")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.open || !f.capturing || f.committed || f.aborted {
-		return errors.New("agent step boundary is not accepting durable payloads")
+		return errors.New("agent step boundary is not accepting final assistant message")
 	}
-	f.stagedPayloads = append(f.stagedPayloads, payload)
+	if f.stagedFinalMessage != nil {
+		return errors.New("agent step boundary already has a final assistant message")
+	}
+	copyMessage := message
+	f.stagedFinalMessage = &copyMessage
+	copyPayload := payload
+	f.stagedFinalPayload = &copyPayload
 	return nil
 }
 
-func (f *agentStepBoundaryFinalizer) StageMessage(message llm.Message) error {
-	if f == nil {
-		return errors.New("agent step boundary finalizer is required")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.open || !f.capturing || f.committed || f.aborted {
-		return errors.New("agent step boundary is not accepting messages")
-	}
-	f.stagedMessages = append(f.stagedMessages, message)
-	return nil
-}
-
-func (f *agentStepBoundaryFinalizer) StagedMessages() []llm.Message {
+func (f *agentStepBoundaryFinalizer) StagedFinalAssistantMessage() *llm.Message {
 	if f == nil {
 		return nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]llm.Message(nil), f.stagedMessages...)
-}
-
-func (f *agentStepBoundaryFinalizer) StageChatEntries(stepID string, entries []ChatEntry) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.open || !f.capturing || f.committed || f.aborted {
-		return
-	}
-	for _, entry := range entries {
-		entry.StepID = stepID
-		duplicate := false
-		for _, existing := range f.transientEntries {
-			if samePendingChatEntry(existing, entry) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			continue
-		}
-		f.transientEntries = append(f.transientEntries, entry)
-	}
-}
-
-func samePendingChatEntry(a, b ChatEntry) bool {
-	return a.Role == b.Role &&
-		a.ToolCallID == b.ToolCallID &&
-		a.Text == b.Text &&
-		a.CondensedText == b.CondensedText &&
-		a.StepID == b.StepID
-}
-
-func (f *agentStepBoundaryFinalizer) StagedVisibleChatEntryCount() int {
-	if f == nil {
-		return 0
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	count := 0
-	for _, message := range f.stagedMessages {
-		count += len(VisibleChatEntriesFromMessage(message))
-	}
-	return count
-}
-
-func (f *agentStepBoundaryFinalizer) TransientChatEntries() []ChatEntry {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.open || !f.capturing || f.committed || f.aborted {
+	if f.stagedFinalMessage == nil {
 		return nil
 	}
-	return append([]ChatEntry(nil), f.transientEntries...)
+	copyMessage := *f.stagedFinalMessage
+	return &copyMessage
 }
 
-func (f *agentStepBoundaryFinalizer) DeferCommittedTranscriptUpdate() {
-	if f == nil {
-		return
-	}
-	f.mu.Lock()
-	if f.open && f.capturing && !f.committed && !f.aborted {
-		f.deferredTranscriptUpdate = true
-	}
-	f.mu.Unlock()
-}
-
-func (f *agentStepBoundaryFinalizer) DeferCommittedToolStart(event Event) {
-	if f == nil {
-		return
-	}
-	f.mu.Lock()
-	if f.open && f.capturing && !f.committed && !f.aborted {
-		f.deferredToolStarts = append(f.deferredToolStarts, event)
-	}
-	f.mu.Unlock()
-}
-
-func (f *agentStepBoundaryFinalizer) StageToolCompletionResult(result tools.Result) {
-	if f == nil {
-		return
-	}
-	f.mu.Lock()
-	if f.open && f.capturing && !f.committed && !f.aborted {
-		f.stagedToolResults = append(f.stagedToolResults, cloneToolResult(result))
-	}
-	f.mu.Unlock()
-}
-
-func (f *agentStepBoundaryFinalizer) StageQueuedUserFlush(flush steeringQueuedUserMessageFlush) {
-	if f == nil {
-		return
-	}
-	f.mu.Lock()
-	if f.open && f.capturing && !f.committed && !f.aborted {
-		flush.payloadIndex = len(f.stagedPayloads) - 1
-		f.stagedQueuedFlushes = append(f.stagedQueuedFlushes, steeringQueuedUserMessageFlush{
-			payloadIndex: flush.payloadIndex,
-			text:         flush.text,
-			batch:        append([]string(nil), flush.batch...),
-			queueItems:   append([]QueuedUserMessage(nil), flush.queueItems...),
-		})
-	}
-	f.mu.Unlock()
+func (f *agentStepBoundaryFinalizer) HasStagedFinalAssistant() bool {
+	return f.StagedFinalAssistantMessage() != nil
 }
 
 func (f *agentStepBoundaryFinalizer) DeferStreamingAssistantCleanup(
@@ -259,7 +147,7 @@ func (f *agentStepBoundaryFinalizer) DeferStreamingAssistantCleanup(
 	}
 	f.mu.Lock()
 	if f.open && f.capturing && !f.committed && !f.aborted {
-		f.deferredStreamCleanup = &deferredAssistantStreamCleanup{
+		f.deferredStream = &deferredAssistantStreamCleanup{
 			metadata:            cloneAssistantStreamMetadata(metadata),
 			streamID:            cloneTranscriptStreamID(streamID),
 			abortReason:         cloneAssistantStreamAbortReason(abortReason),
@@ -318,27 +206,12 @@ func (f *agentStepBoundaryFinalizer) Abort(err error) error {
 	}
 	f.aborted = true
 	f.capturing = false
-	queuedFlushes := append([]steeringQueuedUserMessageFlush(nil), f.stagedQueuedFlushes...)
 	coordinator := f.engine.compactionRuntimeState().manualBoundaryCoordinator()
 	coordinator.abortArmedGeneration(err)
 	f.detachedManual = coordinator.sealAndTake()
 	f.err = err
 	f.mu.Unlock()
-	f.restoreStagedQueuedFlushes(queuedFlushes)
 	return err
-}
-
-func (f *agentStepBoundaryFinalizer) restoreStagedQueuedFlushes(flushes []steeringQueuedUserMessageFlush) {
-	if f == nil || f.engine == nil || len(flushes) == 0 {
-		return
-	}
-	f.engine.ensureOrchestrationCollaborators()
-	for _, flush := range flushes {
-		for _, item := range flush.queueItems {
-			f.engine.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-			f.engine.messageFlow.QueueUserMessageWithID(item)
-		}
-	}
 }
 
 func (f *agentStepBoundaryFinalizer) Commit(
@@ -359,22 +232,18 @@ func (f *agentStepBoundaryFinalizer) Commit(
 		return receipt, err
 	}
 	f.capturing = false
-	stagedPayloads := append([]session.EventRecordPayload(nil), f.stagedPayloads...)
-	deferredToolStarts := append([]Event(nil), f.deferredToolStarts...)
-	stagedToolResults := append([]tools.Result(nil), f.stagedToolResults...)
-	stagedQueuedFlushes := append([]steeringQueuedUserMessageFlush(nil), f.stagedQueuedFlushes...)
-	deferredStreamCleanup := f.deferredStreamCleanup
-	deferredTranscriptUpdate := f.deferredTranscriptUpdate
+	var stagedPayloads []session.EventRecordPayload
+	if f.stagedFinalPayload != nil {
+		stagedPayloads = []session.EventRecordPayload{*f.stagedFinalPayload}
+	}
+	deferredStream := f.deferredStream
 	f.detachedManual = f.engine.compactionRuntimeState().manualBoundaryCoordinator().sealAndTake()
 	f.mu.Unlock()
 
 	hadPendingRecovery := f.engine.pendingModelRecoveryForStep(stepID)
 	receipt := session.CommitReceipt{}
 	allPayloads := append(stagedPayloads, payloads...)
-	err := f.engine.steer(stepID, steerAgentStepFinalizationIntent(allPayloads, &receipt, deferredToolStarts, stagedToolResults, stagedQueuedFlushes, deferredStreamCleanup, deferredTranscriptUpdate))
-	if !receipt.Committed {
-		f.restoreStagedQueuedFlushes(stagedQueuedFlushes)
-	}
+	err := f.engine.steer(stepID, steerAgentStepFinalizationIntent(allPayloads, &receipt, deferredStream))
 
 	f.mu.Lock()
 	f.hadPendingRecovery = hadPendingRecovery

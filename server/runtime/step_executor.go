@@ -435,11 +435,6 @@ func completeAgentStepBoundary(finalizer *agentStepBoundaryFinalizer, stepID str
 		if compactor, ok := finalizer.engine.compactionFlow.(*defaultContextCompactor); ok {
 			compactor.drainPendingManualCompactions(stepID, entries)
 		}
-		if finalizer.engine.backgroundFlow != nil {
-			if _, flushErr := finalizer.engine.backgroundFlow.flushPendingNotices(stepID); flushErr != nil {
-				err = errors.Join(err, flushErr)
-			}
-		}
 	} else {
 		finalizer.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(entries, err)
 	}
@@ -934,11 +929,10 @@ func committedStartsForPersistedAssistantMessage(e *Engine, stepID string, msg l
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	stagedEntryCount := 0
-	if boundary := e.agentStepBoundary(stepID); boundary != nil && boundary.Capturing() {
-		stagedEntryCount = boundary.StagedVisibleChatEntryCount()
+	start := e.CommittedTranscriptEntryCount()
+	if boundary := e.agentStepBoundary(stepID); boundary == nil || !boundary.HasStagedFinalAssistant() {
+		start -= len(entries)
 	}
-	start := e.CommittedTranscriptEntryCount() + stagedEntryCount - len(entries)
 	if start < 0 {
 		return nil, nil
 	}

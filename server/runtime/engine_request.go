@@ -69,9 +69,6 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 
 	items := e.transcriptRuntimeState().SnapshotItems()
-	if boundary := e.agentStepBoundary(stepID); boundary != nil {
-		items = append(items, llm.ItemsFromMessages(boundary.StagedMessages())...)
-	}
 	if len(extra) > 0 {
 		items = append(items, llm.CloneResponseItems(extra)...)
 	}
