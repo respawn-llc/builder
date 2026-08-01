@@ -291,15 +291,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     catalog: ProjectLabelCatalog | null,
     failure: unknown,
   ): void {
-    if (failure === null && catalog !== null && ownsCurrentState) {
-      this.#latestOrderIntent = null;
-      this.#acceptAuthoritativeCatalog(catalog);
+    if (failure === null && catalog !== null) {
+      this.#applySuccessfulReorderSettlement(intent, ownsCurrentState, catalog);
       return;
-    }
-    // A stale success confirms the server accepted this intent, but its
-    // catalog snapshot predates a newer local catalog generation.
-    if (failure === null && catalog !== null && this.#latestOrderIntent?.id === intent.id) {
-      this.#latestOrderIntent = null;
     }
     if (failure !== null) {
       this.#onReorderFailure(failure);
@@ -309,6 +303,24 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     }
     if (ownsCurrentState && failure !== null) {
       this.#restoreCurrentReorderRollback(intent);
+    }
+    this.#reconcileAfterReordersDrain = true;
+  }
+
+  #applySuccessfulReorderSettlement(
+    intent: ReorderIntent,
+    ownsCurrentState: boolean,
+    catalog: ProjectLabelCatalog,
+  ): void {
+    if (ownsCurrentState) {
+      this.#latestOrderIntent = null;
+      this.#acceptAuthoritativeCatalog(catalog);
+      return;
+    }
+    // A stale success confirms the server accepted this intent, but its
+    // catalog snapshot predates a newer local catalog generation.
+    if (this.#latestOrderIntent?.id === intent.id) {
+      this.#latestOrderIntent = null;
     }
     this.#reconcileAfterReordersDrain = true;
   }

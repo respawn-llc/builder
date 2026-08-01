@@ -110,14 +110,6 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	projectID := strings.TrimSpace(req.ProjectID)
 	workflowID := req.WorkflowID
 	workflowIDString := workflowID.String()
-	workflowIDValue, err := workflowID.Value()
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	workflowIDBlob, ok := workflowIDValue.([]byte)
-	if !ok {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("workflow_id database value is not a BLOB")
-	}
 	nodeID := strings.TrimSpace(req.NodeID)
 	project, err := b.metadata.GetProjectOverview(ctx, projectID)
 	if err != nil {
@@ -143,15 +135,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	cursorSortValue := sql.NullString{}
 	cursorTaskSeq := sql.NullInt64{}
 	cursorUnlabeled := sql.NullInt64{}
-	cursorUpdatedAtUnixMs := sql.NullInt64{}
 	if cursor.anchor != nil {
 		if sort.Field != serverapi.WorkflowBoardNodeCardsSortFieldLabels || cursor.anchor.labelOrdinals != nil {
 			cursorSortValue = sql.NullString{String: cursor.anchor.sortValue(sort), Valid: true}
 		}
 		cursorTaskSeq = sql.NullInt64{Int64: cursor.anchor.taskSeq, Valid: true}
-		if cursor.anchor.updatedAtUnixMs != nil {
-			cursorUpdatedAtUnixMs = sql.NullInt64{Int64: *cursor.anchor.updatedAtUnixMs, Valid: true}
-		}
 		if cursor.anchor.unlabeled != nil {
 			cursorUnlabeled = sql.NullInt64{Int64: boolInt64(*cursor.anchor.unlabeled), Valid: true}
 		}
@@ -159,6 +147,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	workspaceContext := boardProjectWorkspaceContext(project)
 	var definition definitionSnapshot
 	var tasks []sqlitegen.TaskRecord
+	var pageTasks []boardNodeCardsPageTask
 	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
 	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
 	var hasExtra bool
@@ -171,33 +160,37 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		if _, ok := workflowNodesByID(definition.api)[nodeID]; !ok {
 			return errors.New("node_id is invalid for workflow")
 		}
-		rows, err := durable.BoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-			ProjectID:             projectID,
-			WorkflowID:            workflowID,
-			CursorDirection:       string(cursor.direction),
-			CursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
-			CursorTaskID:          cursorTaskID,
-			NodeID:                nodeID,
-			LabelFilterKind:       labelFilterArgs.kind,
-			LabelFilterMode:       labelFilterArgs.mode,
-			LabelIdsJson:          labelFilterArgs.labelIDsJSON,
-			ExcludedLabelIdsJson:  labelFilterArgs.excludedLabelIDsJSON,
-			LimitRows:             int64(pageSize + 1),
+		rows, err := b.queries.ListBoardNodeTasksGeneralized(ctx, sqlitegen.ListBoardNodeTasksGeneralizedParams{
+			ProjectID:            projectID,
+			WorkflowID:           workflowID,
+			NodeID:               nodeID,
+			LabelFilterKind:      labelFilterArgs.kind,
+			LabelFilterMode:      labelFilterArgs.mode,
+			LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+			ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+			SortField:            string(sort.Field),
+			SortDescending:       boolInt64(sort.Direction == serverapi.WorkflowTaskListSortDirectionDesc),
+			CursorDirection:      string(cursor.direction),
+			CursorSortValue:      cursorSortValue,
+			CursorTaskSeq:        cursorTaskSeq,
+			CursorUnlabeled:      cursorUnlabeled,
+			LimitRows:            int64(pageSize + 1),
 		})
 		if err != nil {
 			return err
 		}
-		dependencyProgressByTaskID, err = boardDependencyProgressByTaskID(rows)
-		if err != nil {
-			return err
-		}
-		tasks = boardNodeTaskRecords(rows)
-		hasExtra = len(tasks) > pageSize
+		pageTasks = boardNodeTaskRecordsGeneralized(rows)
+		hasExtra = len(pageTasks) > pageSize
 		if hasExtra {
-			tasks = tasks[:pageSize]
+			pageTasks = pageTasks[:pageSize]
 		}
 		if cursor.direction == boardNodeCardsPageDirectionNewer {
-			slices.Reverse(tasks)
+			slices.Reverse(pageTasks)
+		}
+		tasks = boardNodeCardTaskRecords(pageTasks)
+		dependencyProgressByTaskID, err = b.dependencyProgressByTaskID(ctx, taskIDs(tasks))
+		if err != nil {
+			return err
 		}
 		taskIDs := workflowTaskIDs(taskIDs(tasks))
 		observation, err := b.projection.Observe(taskIDs)
@@ -229,7 +222,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		)
 		cards = append(cards, card)
 	}
-	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowIDString, nodeID, labelFilter, sort, cursor, tasks, hasExtra)
+	previousPageToken, nextPageToken, err := boardNodeCardsPageTokens(projectID, workflowIDString, nodeID, labelFilter, sort, cursor, pageTasks, hasExtra)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
