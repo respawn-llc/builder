@@ -42,6 +42,26 @@ type workspaceParentMarkerData struct {
 	WorkspaceID string `json:"workspace_id"`
 }
 
+type managedRootExhaustionError struct {
+	Operation   string
+	WorkspaceID string
+	Base        string
+	Parent      string
+	TaskShortID string
+	Widths      []int
+	Candidates  []string
+}
+
+func (e *managedRootExhaustionError) Error() string {
+	if e == nil {
+		return "managed root allocation exhausted"
+	}
+	return fmt.Sprintf(
+		"managed root allocation exhausted: operation=%s workspace_id=%q base=%q parent=%q task=%q widths=%v candidates=%v",
+		e.Operation, e.WorkspaceID, e.Base, e.Parent, e.TaskShortID, e.Widths, e.Candidates,
+	)
+}
+
 type managedRootReservation struct {
 	allocator  *managedRootAllocator
 	parent     string
@@ -92,6 +112,9 @@ func (r *managedRootReservation) release() error {
 		return nil
 	}
 	r.released = true
+	if err := r.validateParentForCleanup(); err != nil {
+		return err
+	}
 	current, err := os.Lstat(r.root)
 	if os.IsNotExist(err) {
 		return nil
@@ -116,6 +139,50 @@ func (r *managedRootReservation) release() error {
 		return fmt.Errorf("remove reserved worktree root %q: %w", r.root, err)
 	}
 	return nil
+}
+
+func (r *managedRootReservation) validateParentForCleanup() error {
+	if r == nil || r.allocator == nil {
+		return errors.New("managed root reservation is required")
+	}
+	base, err := r.allocator.automaticBase()
+	if err != nil {
+		return err
+	}
+	currentParent, err := os.Lstat(r.parent)
+	if err != nil {
+		return fmt.Errorf("inspect reserved worktree parent %q: %w", r.parent, err)
+	}
+	if currentParent.Mode()&os.ModeSymlink != 0 || !currentParent.IsDir() || !os.SameFile(r.parentInfo, currentParent) {
+		return fmt.Errorf("refusing reserved worktree cleanup after parent identity changed: %q", r.parent)
+	}
+	canonicalParent, err := filepath.EvalSymlinks(r.parent)
+	if err != nil {
+		return fmt.Errorf("resolve reserved worktree parent %q during cleanup: %w", r.parent, err)
+	}
+	return requireManagedPathContained(base, canonicalParent)
+}
+
+func (r *managedRootReservation) exactLeafOccupied(leaf string) (bool, error) {
+	if r == nil {
+		return false, errors.New("managed root reservation is required")
+	}
+	trimmed := strings.TrimSpace(leaf)
+	if trimmed == "" || filepath.Base(filepath.Clean(trimmed)) != trimmed || filepath.IsAbs(trimmed) {
+		return false, errors.New("leaf must be one path component")
+	}
+	candidate := filepath.Join(r.parent, trimmed)
+	if candidate == r.root {
+		return false, nil
+	}
+	_, err := os.Lstat(candidate)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect exact managed root candidate %q: %w", candidate, err)
 }
 
 func (r *managedRootReservation) disarm() {
@@ -228,10 +295,6 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 	if err != nil {
 		return "", fmt.Errorf("get workspace for managed parent: %w", err)
 	}
-	if workspace.ManagedWorktreePathKey.Valid {
-		return a.materializePersistedWorkspaceParent(workspace.ID, workspace.ManagedWorktreePathKey.String, base)
-	}
-
 	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspace.CanonicalRootPath)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize persisted workspace root: %w", err)
@@ -242,6 +305,9 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 	}
 	if canonicalWorkspaceRoot != callerWorkspaceRoot {
 		return "", fmt.Errorf("workspace root %q does not match persisted canonical root %q", workspaceRoot, workspace.CanonicalRootPath)
+	}
+	if workspace.ManagedWorktreePathKey.Valid {
+		return a.materializePersistedWorkspaceParent(workspace.ID, workspace.ManagedWorktreePathKey.String, base)
 	}
 	seed := normalizeWorkspacePathKey(filepath.Base(filepath.Clean(canonicalWorkspaceRoot)))
 	for width := 0; width <= 4; width++ {
@@ -291,7 +357,14 @@ func (a *managedRootAllocator) reserveRegularRoot(ctx context.Context, workspace
 			return reservation, nil
 		}
 	}
-	panic(fmt.Sprintf("operation=regular-leaf workspace_id=%q base=%q parent=%q attempted_widths=3,4,5,6 attempted_candidates=%s", workspaceID, a.base.path, parent, strings.Join(attempted, ",")))
+	panic(&managedRootExhaustionError{
+		Operation:   "regular-leaf",
+		WorkspaceID: workspaceID,
+		Base:        a.base.path,
+		Parent:      parent,
+		Widths:      []int{3, 4, 5, 6},
+		Candidates:  attempted,
+	})
 }
 
 func (a *managedRootAllocator) reserveTaskRoot(ctx context.Context, workspaceID string, workspaceRoot string, taskShortID string) (*managedRootReservation, error) {
@@ -322,7 +395,15 @@ func (a *managedRootAllocator) reserveTaskRoot(ctx context.Context, workspaceID 
 			return reservation, nil
 		}
 	}
-	panic(fmt.Sprintf("operation=task-leaf workspace_id=%q base=%q parent=%q task=%q attempted_widths=direct,3,4,5,6 attempted_candidates=%s", workspaceID, a.base.path, parent, taskShortID, strings.Join(attempted, ",")))
+	panic(&managedRootExhaustionError{
+		Operation:   "task-leaf",
+		WorkspaceID: workspaceID,
+		Base:        a.base.path,
+		Parent:      parent,
+		TaskShortID: taskShortID,
+		Widths:      []int{0, 3, 4, 5, 6},
+		Candidates:  attempted,
+	})
 }
 
 func (a *managedRootAllocator) reserveLeaf(parent string, leaf string) (*managedRootReservation, bool, error) {

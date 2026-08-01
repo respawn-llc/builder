@@ -23,6 +23,7 @@ func TestManagedWorktreePathOwnershipGuard(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		identityNames := workspaceIdentityNames(file)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch current := node.(type) {
 			case *ast.FuncDecl:
@@ -39,12 +40,14 @@ func TestManagedWorktreePathOwnershipGuard(t *testing.T) {
 					}
 				}
 			case *ast.CallExpr:
-				if isPathJoinCall(current) {
-					for _, argument := range current.Args {
-						if containsWorkspaceID(argument) {
-							t.Errorf("%s constructs an automatic path from WorkspaceID outside managed_root_allocator.go", path)
-						}
-					}
+				if isForbiddenAutomaticPathConstruction(current, identityNames) {
+					t.Errorf("%s constructs an automatic path from Workspace identity outside managed_root_allocator.go", path)
+				}
+			case *ast.BinaryExpr:
+				if current.Op == token.ADD &&
+					containsWorkspaceID(current, identityNames) &&
+					containsPathSeparator(current) {
+					t.Errorf("%s constructs an automatic path by concatenating Workspace identity outside managed_root_allocator.go", path)
 				}
 			}
 			return true
@@ -65,14 +68,83 @@ func isPathJoinCall(call *ast.CallExpr) bool {
 	return ok && (packageName.Name == "filepath" || packageName.Name == "path")
 }
 
-func containsWorkspaceID(expression ast.Expr) bool {
+func workspaceIdentityNames(file *ast.File) map[string]bool {
+	names := map[string]bool{"workspaceID": true, "workspaceId": true}
+	for {
+		changed := false
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch current := node.(type) {
+			case *ast.AssignStmt:
+				if len(current.Lhs) == 1 && len(current.Rhs) == 1 {
+					if lhs, ok := current.Lhs[0].(*ast.Ident); ok && containsWorkspaceID(current.Rhs[0], names) && !names[lhs.Name] {
+						names[lhs.Name] = true
+						changed = true
+					}
+				}
+			case *ast.ValueSpec:
+				if len(current.Names) == 1 && len(current.Values) == 1 {
+					if containsWorkspaceID(current.Values[0], names) && !names[current.Names[0].Name] {
+						names[current.Names[0].Name] = true
+						changed = true
+					}
+				}
+			}
+			return true
+		})
+		if !changed {
+			return names
+		}
+	}
+}
+
+func containsWorkspaceID(expression ast.Expr, names map[string]bool) bool {
 	found := false
 	ast.Inspect(expression, func(node ast.Node) bool {
 		switch current := node.(type) {
 		case *ast.Ident:
-			found = found || current.Name == "workspaceID" || current.Name == "workspaceId"
+			found = found || names[current.Name]
 		case *ast.SelectorExpr:
-			found = found || current.Sel.Name == "WorkspaceID"
+			found = found || current.Sel.Name == "WorkspaceID" || current.Sel.Name == "ID"
+		}
+		return !found
+	})
+	return found
+}
+
+func isForbiddenAutomaticPathConstruction(call *ast.CallExpr, names map[string]bool) bool {
+	if isPathJoinCall(call) {
+		for _, argument := range call.Args {
+			if containsWorkspaceID(argument, names) {
+				return true
+			}
+		}
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Sprintf" {
+		return false
+	}
+	if len(call.Args) < 2 {
+		return false
+	}
+	format, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || !strings.Contains(format.Value, "/") && !strings.Contains(format.Value, `\`) {
+		return false
+	}
+	for _, argument := range call.Args[1:] {
+		if containsWorkspaceID(argument, names) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPathSeparator(expression ast.Expr) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		literal, ok := node.(*ast.BasicLit)
+		if ok && literal.Kind == token.STRING &&
+			(strings.Contains(literal.Value, "/") || strings.Contains(literal.Value, `\`)) {
+			found = true
 		}
 		return !found
 	})
@@ -80,25 +152,39 @@ func containsWorkspaceID(expression ast.Expr) bool {
 }
 
 func TestManagedWorktreePathOwnershipGuardDetectsWorkspaceIDJoinFixture(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", `package fixture
+	fixtures := []string{
+		`package fixture
 import "path/filepath"
-func automatic(base string, workspaceID string) string {
-	return filepath.Join(base, workspaceID, "leaf")
-}`, 0)
-	if err != nil {
-		t.Fatalf("parse fixture: %v", err)
+func automatic(base string, workspace Workspace) string { return filepath.Join(base, workspace.ID, "leaf") }`,
+		`package fixture
+import "path/filepath"
+func automatic(base string, workspace Workspace) string { key := workspace.ID; return filepath.Join(base, key, "leaf") }`,
+		`package fixture
+func automatic(base string, workspace Workspace) string { return base + "/" + workspace.ID + "/leaf" }`,
+		`package fixture
+import "fmt"
+func automatic(base string, workspace Workspace) string { return fmt.Sprintf("%s/%s/leaf", base, workspace.ID) }`,
 	}
-	found := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if ok && isPathJoinCall(call) {
-			for _, argument := range call.Args {
-				found = found || containsWorkspaceID(argument)
-			}
+	for index, source := range fixtures {
+		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", source, 0)
+		if err != nil {
+			t.Fatalf("parse fixture %d: %v", index, err)
 		}
-		return true
-	})
-	if !found {
-		t.Fatal("ownership guard fixture did not detect WorkspaceID path construction")
+		names := workspaceIdentityNames(file)
+		found := false
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch current := node.(type) {
+			case *ast.CallExpr:
+				found = found || isForbiddenAutomaticPathConstruction(current, names)
+			case *ast.BinaryExpr:
+				found = found || current.Op == token.ADD &&
+					containsWorkspaceID(current, names) &&
+					containsPathSeparator(current)
+			}
+			return true
+		})
+		if !found {
+			t.Fatalf("ownership guard fixture %d did not detect Workspace identity path construction", index)
+		}
 	}
 }

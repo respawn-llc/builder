@@ -457,50 +457,18 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 }
 
 func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest, task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (TaskWorktreeMaterialization, error) {
-	records, err := s.metadata.ListWorktreeRecordsByWorkspaceID(ctx, workspace.WorkspaceID)
-	if err != nil {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
-	}
-	managedRecords := make([]metadata.WorktreeRecord, 0, len(records))
-	for _, record := range records {
-		if record.Managed && !record.IsMain {
-			managedRecords = append(managedRecords, record)
-		}
-	}
-	if len(managedRecords) == 1 {
-		record := managedRecords[0]
-		identity, identityErr := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{
-			SourceWorkspaceRoot:  workspace.RootPath,
-			ExpectedWorktreeRoot: record.CanonicalRoot,
-		})
-		if identityErr != nil {
-			var typed *ManagedWorktreeIdentityError
-			if errors.As(identityErr, &typed) && typed.Kind == ManagedWorktreeIdentityErrorRootMissing {
-				return s.restoreMissingLockedTaskWorktree(ctx, req, task, workspace, record)
-			}
-			return TaskWorktreeMaterialization{}, lockedTaskWorktreeIdentityError(identityErr)
-		}
-		if _, ok := identity.NamedBranch(); !ok {
-			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
-		}
-		return s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
-	}
-	if len(managedRecords) > 1 {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
-	}
 	reservation, err := s.managedRoots.reserveTaskRoot(ctx, workspace.WorkspaceID, workspace.RootPath, task.ShortID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict, Err: err}
 	}
-	exactRoot := filepath.Join(filepath.Dir(reservation.root), task.ShortID)
-	if exactRoot != reservation.root {
-		if _, statErr := os.Lstat(exactRoot); statErr == nil {
-			_ = reservation.release()
-			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
-		} else if !os.IsNotExist(statErr) {
-			_ = reservation.release()
-			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: statErr}
-		}
+	occupied, err := reservation.exactLeafOccupied(task.ShortID)
+	if err != nil {
+		_ = reservation.release()
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: err}
+	}
+	if occupied {
+		_ = reservation.release()
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
 	}
 	defer func() { _ = reservation.release() }()
 	return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}

@@ -5,9 +5,9 @@ import (
 	"core/server/metadata"
 	"core/shared/config"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -377,11 +377,18 @@ func TestManagedRootAllocatorPanicsAfterSixDigitCollision(t *testing.T) {
 		if value == nil {
 			t.Fatal("six-digit collision did not panic")
 		}
-		message := fmt.Sprint(value)
-		for _, expected := range []string{"operation=task-leaf", fmt.Sprintf("workspace_id=%q", env.binding.WorkspaceID), "base=", "KENT-335-111111", "attempted_widths=direct,3,4,5,6"} {
-			if !strings.Contains(message, expected) {
-				t.Fatalf("panic %q does not contain %q", message, expected)
-			}
+		exhaustion, ok := value.(*managedRootExhaustionError)
+		if !ok {
+			t.Fatalf("panic type = %T, want *managedRootExhaustionError", value)
+		}
+		if exhaustion.Operation != "task-leaf" ||
+			exhaustion.WorkspaceID != env.binding.WorkspaceID ||
+			exhaustion.Base != allocator.base.path ||
+			exhaustion.Parent != parent ||
+			exhaustion.TaskShortID != "KENT-335" ||
+			!slices.Equal(exhaustion.Widths, []int{0, 3, 4, 5, 6}) ||
+			!slices.Equal(exhaustion.Candidates, []string{"KENT-335", "KENT-335-111", "KENT-335-1111", "KENT-335-11111", "KENT-335-111111"}) {
+			t.Fatalf("panic diagnostics = %+v", exhaustion)
 		}
 	}()
 	_, _ = allocator.reserveTaskRoot(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, "KENT-335")
@@ -419,6 +426,38 @@ func TestManagedRootReservationRevalidatesParentAndLeafBeforeGit(t *testing.T) {
 	}
 	if err := reservation.release(); err != nil {
 		t.Fatalf("release restored reservation: %v", err)
+	}
+}
+
+func TestManagedRootReservationReleaseRejectsReplacedParent(t *testing.T) {
+	env := newServiceTestEnv(t)
+	allocator := newManagedRootAllocator(env.store, env.baseDir, bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
+	reservation, err := allocator.reserveRegularRoot(env.ctx, env.binding.WorkspaceID, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("reserve root: %v", err)
+	}
+	parent := filepath.Dir(reservation.root)
+	backup := parent + "-release-backup"
+	if err := os.Rename(parent, backup); err != nil {
+		t.Fatalf("move parent: %v", err)
+	}
+	if err := os.Symlink(backup, parent); err != nil {
+		t.Fatalf("replace parent with symlink: %v", err)
+	}
+	if err := reservation.release(); err == nil {
+		t.Fatal("released reservation through replaced parent")
+	}
+	if _, err := os.Lstat(filepath.Join(backup, filepath.Base(reservation.root))); err != nil {
+		t.Fatalf("captured leaf was removed outside the base: %v", err)
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatalf("remove replacement symlink: %v", err)
+	}
+	if err := os.Rename(backup, parent); err != nil {
+		t.Fatalf("restore parent: %v", err)
+	}
+	if err := os.Remove(reservation.root); err != nil {
+		t.Fatalf("cleanup captured leaf: %v", err)
 	}
 }
 
