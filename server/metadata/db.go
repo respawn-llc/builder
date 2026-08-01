@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"core/server/workflow/label"
-	"core/shared/fileurl"
+	"core/shared/config"
 
 	"github.com/pressly/goose/v3"
 	sqlitedriver "modernc.org/sqlite"
@@ -72,7 +72,7 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 }
 
 func metadataSQLiteDSN(databasePath string) (string, error) {
-	u, ok := fileurl.LocalFileURL(databasePath)
+	u, ok := config.LocalFileURL(databasePath)
 	if !ok {
 		return "", fmt.Errorf("metadata database path %q is not absolute", databasePath)
 	}

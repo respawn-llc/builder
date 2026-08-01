@@ -1,4 +1,4 @@
-package fileurl
+package config
 
 import "testing"
 
@@ -20,9 +20,7 @@ func TestLocalFileURL(t *testing.T) {
 	}
 	for _, test := range tests {
 		got, ok := LocalFileURL(test.path)
-		if ok != test.ok {
-			t.Errorf("LocalFileURL(%q) ok = %t, want %t", test.path, ok, test.ok)
-		} else if ok && got.String() != test.want {
+		if ok != test.ok || ok && got.String() != test.want {
 			t.Errorf("LocalFileURL(%q) = %q, want %q", test.path, got.String(), test.want)
 		}
 	}

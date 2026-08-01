@@ -131,7 +131,6 @@ var allowedSmallPackages = map[string]string{
 	"shared/apicontract":                          "shared API route/service contract owner after absorbing RPC and service contracts",
 	"shared/auth":                                 "low-level shared auth contract required below server/auth and shared/serverapi",
 	"shared/boundedio":                            "single bounded-output writer shared by lifecycle hooks and existing shell, workflow, and worktree consumers",
-	"shared/fileurl":                              "pure local-file URI serializer shared by metadata and TUI patch rendering",
 	"shared/lifecyclecontract":                    "small public JSON contract shared by the interactive TUI and external lifecycle-hook receivers",
 	"shared/labelcontract":                        "versioned Project-label comparison and bounds contract shared by the workflow domain, server API, desktop generator, and CLI without introducing a server-to-API dependency",
 	"shared/llmerrors":                            "shared provider-error contract surfaced by CLI and server",

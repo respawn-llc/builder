@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"core/shared/clientui"
-	"core/shared/fileurl"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -546,7 +546,7 @@ func classifyPatchDetailLine(line patchformat.RenderedLine) (patchSourceKind, st
 
 func patchPathSpan(text, path string, role StyleRole) Span {
 	span := roleSpan(text, role)
-	if uri, ok := fileurl.LocalFileURL(path); ok {
+	if uri, ok := config.LocalFileURL(path); ok {
 		span.Hyperlink = &Hyperlink{URL: uri.String()}
 	}
 	return span

@@ -35,18 +35,17 @@
 
 ## Patch File Hyperlinks
 
-- Kent emits OSC 8 on every terminal when a patch file row's metadata contains a syntactically absolute path.
-- Patch file hyperlinks work on every operating system supported by the TUI.
-- Kent resolves a relative path from a current patch tool call against that tool call's working directory before creating the hyperlink destination.
-- A compact patch row displays its workspace-relative path. When linked, its hyperlink destination is the file's absolute local-file URI.
-- A current patch file header in Detail mode displays its absolute path. Its hyperlink destination is the same absolute local-file URI.
-- Local-file URIs use forward slashes, including for Windows drive paths.
-- Only the displayed path characters are part of the hyperlink. Change counts, the Detail selection rail, and trailing row whitespace are not part of the hyperlink.
-- When a path wraps or is truncated, every displayed path character remains linked. A truncation marker is not part of the hyperlink.
-- Unsupported terminals ignore OSC 8 and retain the visible path without additional destination text.
-- Added files, deleted files, unsuccessful patch attempts, and paths that do not currently exist remain linked.
-- A moved file links to its destination path.
-- Kent does not query the filesystem or validate a patch link destination before emitting it.
-- Patch links keep the existing path styling without a link-specific underline or other decoration.
-- A structured legacy patch row remains visible and unlinked when its original working directory is unavailable and its rebuilt metadata path is relative.
-- Raw patch content without an identified file row remains unlinked.
+- Kent must emit OSC 8 on every terminal when a displayed patch path identifies a syntactically absolute local path.
+- Patch file hyperlinks must work on every operating system supported by the TUI.
+- Kent must resolve a relative patch path against the working directory used for that patch before displaying it.
+- A compact patch row must display the workspace-relative path. Its hyperlink destination must be the absolute local-file URI for that path when the path identifies an absolute local path.
+- A Detail file header must display the absolute path when it is available. Its hyperlink destination must be the same absolute local-file URI.
+- Local-file URIs must use forward slashes on every operating system, including for Windows drive paths.
+- Only displayed path characters may be part of the hyperlink. Change counts, the Detail selection rail, and trailing row whitespace must remain outside the hyperlink.
+- When a path wraps or is truncated, every displayed path character must remain linked. A truncation marker must remain outside the hyperlink.
+- Unsupported terminals must ignore OSC 8 and retain the visible path without additional destination text.
+- Added files, deleted files, unsuccessful patch attempts, and paths that do not currently exist must remain linked when their paths identify absolute local paths.
+- A moved file must link to its destination path.
+- Patch links must keep the existing path styling without a link-specific underline or other decoration.
+- When available context does not identify an absolute local path, Kent must leave the visible path unlinked.
+- When Kent cannot identify file rows in patch content, it must leave that content unlinked.
