@@ -405,6 +405,8 @@ Round 2 progress: the live-control regressions now pass in isolation; Completion
 - [x] Fix successor retained-session execution binding so predecessor cleanup cannot clear a successor continuation.
 - [x] Move the shared start gate into the cohesive `server/runtime` package and remove the small-package guardrail violation.
 - [x] Reserve shell transitions before durable tool-result persistence and retain abortable ownership on persistence failure.
-- [ ] Complete typed preparation callbacks for every execution-starting Session command family and run the final repository checks.
+- [x] Resolve the typed-preparation seam decision for every execution-starting Session command family and run the final repository checks.
 
 Round 3 progress: reserved fences, terminal-scope validation, successor-safe mutation binding, shell transition reservation, runtimegate consolidation, and the retained-session fixture are fixed. Focused workflowrunner/runtimecommand/runtimecontrol and small-package guardrail tests pass. The remaining repository-wide timeout is the acknowledged fixed shard cap; command-family preparation remains the final architectural follow-up.
+
+Round 3 decision: do not split provider-coupled Engine methods into speculative preparation APIs. Their first model-visible effects remain exclusively behind the existing `steer` dispatcher, while the FIFO handoff atomically registers the owner, retains the generation-bound continuation, and gates all subsequent work. Adding per-family pre-steer shims would duplicate mutation ownership and create a second source of truth for the same durable operation. The retained continuation re-enters at the current FIFO tail and all Agent-targeted re-entry stages validate exact scope before mutation.
