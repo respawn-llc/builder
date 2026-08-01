@@ -255,14 +255,16 @@ func TestManagedRootAllocatorConcurrentlyMaterializesPersistedWorkspaceParent(t 
 		}()
 	}
 	close(start)
+	firstResult := true
 	var expectedRoot string
 	for range workers {
 		result := <-results
 		if result.err != nil {
 			t.Fatalf("concurrent persisted parent materialization: %v", result.err)
 		}
-		if expectedRoot == "" {
+		if firstResult {
 			expectedRoot = result.root
+			firstResult = false
 		} else if result.root != expectedRoot {
 			t.Fatalf("concurrent persisted parent roots differ: %q and %q", expectedRoot, result.root)
 		}
@@ -447,11 +449,13 @@ func TestManagedRootAllocatorPanicsAfterSixDigitCollision(t *testing.T) {
 		if !ok {
 			t.Fatalf("panic type = %T, want *managedRootExhaustionError", value)
 		}
-		if exhaustion.Operation != "task-leaf" ||
+		if exhaustion.Parent == nil ||
+			exhaustion.TaskShortID == nil ||
+			exhaustion.Operation != "task-leaf" ||
 			exhaustion.WorkspaceID != env.binding.WorkspaceID ||
 			exhaustion.Base != allocator.base.path ||
-			exhaustion.Parent != parent ||
-			exhaustion.TaskShortID != "KENT-335" ||
+			*exhaustion.Parent != parent ||
+			*exhaustion.TaskShortID != "KENT-335" ||
 			!slices.Equal(exhaustion.Widths, []int{0, 3, 4, 5, 6}) ||
 			!slices.Equal(exhaustion.Candidates, []string{"KENT-335", "KENT-335-111", "KENT-335-1111", "KENT-335-11111", "KENT-335-111111"}) {
 			t.Fatalf("panic diagnostics = %+v", exhaustion)

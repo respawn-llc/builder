@@ -15,6 +15,7 @@ import (
 
 	"core/server/metadata"
 	"core/shared/config"
+	"core/shared/filesystem"
 )
 
 const (
@@ -47,8 +48,8 @@ type managedRootExhaustionError struct {
 	Operation   string
 	WorkspaceID string
 	Base        string
-	Parent      string
-	TaskShortID string
+	Parent      *string
+	TaskShortID *string
 	Widths      []int
 	Candidates  []string
 }
@@ -57,9 +58,17 @@ func (e *managedRootExhaustionError) Error() string {
 	if e == nil {
 		return "managed root allocation exhausted"
 	}
+	parent := "<absent>"
+	if e.Parent != nil {
+		parent = fmt.Sprintf("%q", *e.Parent)
+	}
+	taskShortID := "<absent>"
+	if e.TaskShortID != nil {
+		taskShortID = fmt.Sprintf("%q", *e.TaskShortID)
+	}
 	return fmt.Sprintf(
-		"managed root allocation exhausted: operation=%s workspace_id=%q base=%q parent=%q task=%q widths=%v candidates=%v",
-		e.Operation, e.WorkspaceID, e.Base, e.Parent, e.TaskShortID, e.Widths, e.Candidates,
+		"managed root allocation exhausted: operation=%s workspace_id=%q base=%q parent=%s task=%s widths=%v candidates=%v",
+		e.Operation, e.WorkspaceID, e.Base, parent, taskShortID, e.Widths, e.Candidates,
 	)
 }
 
@@ -325,7 +334,7 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 		candidate := workspacePathKeyCandidate(seed, suffix)
 		attempted = append(attempted, candidate)
 		parent := filepath.Join(base, candidate)
-		exists, err := lstatPathExists(parent)
+		exists, err := filesystem.PathExists(parent)
 		if err != nil {
 			return "", fmt.Errorf("inspect managed workspace parent candidate %q: %w", parent, err)
 		}
@@ -372,7 +381,7 @@ func (a *managedRootAllocator) reserveRegularRoot(ctx context.Context, workspace
 		Operation:   "regular-leaf",
 		WorkspaceID: workspaceID,
 		Base:        a.base.path,
-		Parent:      parent,
+		Parent:      &parent,
 		Widths:      []int{3, 4, 5, 6},
 		Candidates:  attempted,
 	})
@@ -410,8 +419,8 @@ func (a *managedRootAllocator) reserveTaskRoot(ctx context.Context, workspaceID 
 		Operation:   "task-leaf",
 		WorkspaceID: workspaceID,
 		Base:        a.base.path,
-		Parent:      parent,
-		TaskShortID: taskShortID,
+		Parent:      &parent,
+		TaskShortID: &taskShortID,
 		Widths:      []int{0, 3, 4, 5, 6},
 		Candidates:  attempted,
 	})
@@ -460,17 +469,6 @@ func (a *managedRootAllocator) randomDecimal(width int) (string, error) {
 		buf[i] = '0' + (buf[i] % 10)
 	}
 	return string(buf), nil
-}
-
-func lstatPathExists(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
 }
 
 func (a *managedRootAllocator) materializePersistedWorkspaceParent(workspaceID string, key string, base string) (string, error) {

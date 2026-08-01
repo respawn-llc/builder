@@ -18,6 +18,7 @@ import (
 	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/filesystem"
 	"core/shared/serverapi"
 )
 
@@ -490,11 +491,11 @@ func (a projectSessionDeleteArtifacts) Recover(state workflowstore.ProjectDelete
 	if err != nil {
 		return false, err
 	}
-	sessionsExists, err := pathExists(sessionsRoot)
+	sessionsExists, err := filesystem.PathExists(sessionsRoot)
 	if err != nil {
 		return false, err
 	}
-	tombstoneExists, err := pathExists(tombstoneRoot)
+	tombstoneExists, err := filesystem.PathExists(tombstoneRoot)
 	if err != nil {
 		return false, err
 	}
@@ -545,12 +546,12 @@ func (a projectSessionDeleteArtifacts) Stage() error {
 	if err != nil {
 		return err
 	}
-	if exists, err := pathExists(tombstoneRoot); err != nil {
+	if exists, err := filesystem.PathExists(tombstoneRoot); err != nil {
 		return err
 	} else if exists {
 		return errors.New("project sessions delete tombstone already exists")
 	}
-	exists, err := pathExists(sessionsRoot)
+	exists, err := filesystem.PathExists(sessionsRoot)
 	if err != nil {
 		return err
 	}
@@ -568,14 +569,14 @@ func (a projectSessionDeleteArtifacts) Restore() error {
 	if err != nil {
 		return err
 	}
-	tombstoneExists, err := pathExists(tombstoneRoot)
+	tombstoneExists, err := filesystem.PathExists(tombstoneRoot)
 	if err != nil {
 		return err
 	}
 	if !tombstoneExists {
 		return nil
 	}
-	if sessionsExists, err := pathExists(sessionsRoot); err != nil {
+	if sessionsExists, err := filesystem.PathExists(sessionsRoot); err != nil {
 		return err
 	} else if sessionsExists {
 		return errors.New("project sessions root exists while restoring delete tombstone")
@@ -654,17 +655,6 @@ func persistenceRootPath(persistenceRoot string) (string, error) {
 		return "", fmt.Errorf("resolve persistence root symlinks: %w", err)
 	}
 	return root, nil
-}
-
-func pathExists(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, fmt.Errorf("inspect project session artifact path %q: %w", path, err)
 }
 
 func rejectSymlinkComponents(root string, target string) error {

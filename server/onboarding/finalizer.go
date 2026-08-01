@@ -14,6 +14,7 @@ import (
 	"core/server/llm"
 	"core/server/onboardingimports"
 	"core/shared/config"
+	"core/shared/filesystem"
 	"core/shared/serverapi"
 	"core/shared/theme"
 	"core/shared/toolspec"
@@ -62,7 +63,7 @@ func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.Onboar
 		ctx = context.Background()
 	}
 	settingsPath := strings.TrimSpace(f.settingsPath)
-	if exists, err := pathExists(settingsPath); err != nil {
+	if exists, err := filesystem.PathExists(settingsPath); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "validate", err)
 	} else if exists {
 		return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
@@ -72,7 +73,7 @@ func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.Onboar
 		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelWaitingForLock)
 	}
 	defer release()
-	if exists, err := pathExists(settingsPath); err != nil {
+	if exists, err := filesystem.PathExists(settingsPath); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "validate", err)
 	} else if exists {
 		return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
@@ -563,16 +564,6 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func pathExists(path string) (bool, error) {
-	if _, err := os.Lstat(path); err == nil {
-		return true, nil
-	} else if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else {
-		return false, err
-	}
 }
 
 type rootLocks struct {
