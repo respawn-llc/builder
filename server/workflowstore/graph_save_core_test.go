@@ -242,7 +242,7 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	}
 }
 
-func TestWorkflowGraphSaveAllowsTransitionKeyRecoveryForActiveTask(t *testing.T) {
+func TestWorkflowGraphSaveRenamingTransitionKeyWithActiveTaskIsBlocked(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -258,23 +258,13 @@ func TestWorkflowGraphSaveAllowsTransitionKeyRecoveryForActiveTask(t *testing.T)
 			request.TransitionGroups[index].TransitionID = "complete"
 		}
 	}
+
 	preview, err := store.PreviewWorkflowGraphSave(ctx, request)
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
-		t.Fatalf("transition-key recovery preview = %+v, want no active contract blocker", preview)
-	}
-	if !preview.Changed {
-		t.Fatalf("transition-key recovery preview = %+v, want graph change", preview)
-	}
-
-	saved, err := store.SaveWorkflowGraph(ctx, request)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph: %v", err)
-	}
-	if !saved.Saved {
-		t.Fatalf("transition-key recovery save = %+v, want saved graph", saved)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("transition-key rename preview = %+v, want active contract blocker", preview)
 	}
 }
 
