@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestExclusiveStepLifecycleWaitsForInlineCompactionBeforeTerminalPublication
 					nil,
 				)
 				if enqueueErr != nil {
-					t.Fatalf("enqueue pending compaction: %v", enqueueErr)
+					return fmt.Errorf("enqueue pending compaction: %w", enqueueErr)
 				}
 				return providerErr
 			},
