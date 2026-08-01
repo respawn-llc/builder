@@ -234,10 +234,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if len(hostedToolExecutions) > 0 {
 					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
 					return stepLoopResult{}, err
 				}
-				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -246,10 +246,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerFinalMessageIntent(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(commentaryWithoutToolCallsWarning)})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
 					return stepLoopResult{}, err
 				}
-				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -258,20 +258,16 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerFinalMessageIntent(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
 					return stepLoopResult{}, err
 				}
-				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
 			}
 
-			flushed, err := s.flushPendingUserInjections(stepID, options)
-			if err != nil {
-				return stepLoopResult{}, err
-			}
-			if flushed > 0 {
+			if s.pendingBoundaryFlush() {
 				if messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
 					assistantMsg.Content != nil &&
 					strings.TrimSpace(*assistantMsg.Content) != "" &&
@@ -284,7 +280,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if err := completeAgentStepBoundary(boundary, stepID); err != nil {
 					return stepLoopResult{}, err
 				}
-				continue
+				flushed, err := s.flushPendingUserInjections(stepID, options)
+				if err != nil {
+					return stepLoopResult{}, err
+				}
+				if flushed > 0 {
+					continue
+				}
 			}
 			if len(hostedToolExecutions) > 0 {
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
@@ -436,13 +438,21 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			return stepLoopResult{ExecutedToolCall: true}, nil
 		}
-		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-			return stepLoopResult{}, err
-		}
 		if err := completeAgentStepBoundary(boundary, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+			return stepLoopResult{}, err
+		}
 	}
+}
+
+func (s *defaultStepExecutor) pendingBoundaryFlush() bool {
+	if s == nil || s.engine == nil {
+		return false
+	}
+	return s.messages.HasPendingUserInjections() ||
+		(s.engine.backgroundFlow != nil && s.engine.backgroundFlow.HasPendingNotices())
 }
 
 func completeAgentStepBoundary(finalizer *agentStepBoundaryFinalizer, stepID string) error {

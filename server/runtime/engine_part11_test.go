@@ -62,7 +62,7 @@ func assertRequestHasUserMessage(t *testing.T, request llm.Request, content stri
 	}
 }
 
-func TestQueuedUserMessageFlushBeforeFinalAssistantPreservesImmediateQueuePersistence(t *testing.T) {
+func TestQueuedUserMessageFinalAssistantCommitsBeforeQueueFlush(t *testing.T) {
 	t.Parallel()
 	client, started, release := newGatedHookClient(
 		llm.Response{
@@ -126,8 +126,8 @@ func TestQueuedUserMessageFlushBeforeFinalAssistantPreservesImmediateQueuePersis
 	if flushIndex < 0 {
 		t.Fatalf("expected queued user flush event, got %+v", events)
 	}
-	if assistantIndex < flushIndex {
-		t.Fatalf("first final assistant event index %d must be after queued flush index %d; events=%+v", assistantIndex, flushIndex, events)
+	if assistantIndex > flushIndex {
+		t.Fatalf("first final assistant event index %d must be before queued flush index %d; events=%+v", assistantIndex, flushIndex, events)
 	}
 
 	assistant := events[assistantIndex]
@@ -140,9 +140,9 @@ func TestQueuedUserMessageFlushBeforeFinalAssistantPreservesImmediateQueuePersis
 	if len(flushEntries) == 0 {
 		t.Fatalf("queued flush event carried no transcript entries: %+v", flushed)
 	}
-	wantAssistantStart := flushed.CommittedEntryStart + len(flushEntries)
-	if assistant.CommittedEntryStart != wantAssistantStart {
-		t.Fatalf("assistant start = %d, want %d after queued flush; assistant=%+v flush=%+v", assistant.CommittedEntryStart, wantAssistantStart, assistant, flushed)
+	wantFlushStart := assistant.CommittedEntryStart + len(assistantEntries)
+	if flushed.CommittedEntryStart != wantFlushStart {
+		t.Fatalf("queued flush start = %d, want %d after assistant; assistant=%+v flush=%+v", flushed.CommittedEntryStart, wantFlushStart, assistant, flushed)
 	}
 }
 

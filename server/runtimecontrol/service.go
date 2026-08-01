@@ -574,10 +574,12 @@ func (s *Service) markManualCompactionActive(sessionID string, ref clientui.Runt
 	if s == nil || s.operations == nil {
 		return
 	}
-	snapshot := engine.ActiveRun()
+	snapshot := runtimeactivity.ActiveStepFromProvider(engine)
 	if snapshot != nil {
 		switch snapshot.ActiveKind {
-		case runtime.ActiveKindUserTurn, runtime.ActiveKindWorkflowTurn, runtime.ActiveKindGoalLoop:
+		case clientui.RuntimeActivityActiveKindUserTurn,
+			clientui.RuntimeActivityActiveKindWorkflowTurn,
+			clientui.RuntimeActivityActiveKindGoalLoop:
 			s.operations.MarkOperationAttemptOnly(sessionID, ref)
 			return
 		}

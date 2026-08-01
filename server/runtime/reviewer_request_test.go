@@ -96,7 +96,7 @@ func TestBuildReviewerRequestUsesReviewerModelCapabilities(t *testing.T) {
 		},
 	})
 
-	req, err := eng.buildReviewerRequest(context.Background(), &fakeClient{})
+	req, err := eng.buildReviewerRequestForStep(context.Background(), "", &fakeClient{})
 	if err != nil {
 		t.Fatalf("build reviewer request: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	req, err := eng.buildReviewerRequest(context.Background(), &fakeClient{})
+	req, err := eng.buildReviewerRequestForStep(context.Background(), "", &fakeClient{})
 	if err != nil {
 		t.Fatalf("build reviewer request: %v", err)
 	}

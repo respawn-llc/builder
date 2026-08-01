@@ -27,10 +27,6 @@ func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 	}
 }
 
-func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Client) (llm.Request, error) {
-	return e.buildReviewerRequestForStep(ctx, "", reviewerClient)
-}
-
 func (e *Engine) buildReviewerRequestForStep(ctx context.Context, stepID string, reviewerClient llm.Client) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
 	items := e.transcriptRuntimeState().SnapshotItems()
