@@ -69,6 +69,14 @@ func (a *Authority) AcquireExecution(
 	if err != nil {
 		return nil, err
 	}
+	resource.lifecycleMu.Lock()
+	defer resource.lifecycleMu.Unlock()
+	resource.mu.Lock()
+	closed := resource.closed
+	resource.mu.Unlock()
+	if closed {
+		return nil, ErrResourceUnavailable
+	}
 	if err := resource.acquirePermit(ctx); err != nil {
 		return nil, err
 	}

@@ -117,6 +117,7 @@ type CurrentNodeController struct {
 	permit           *MutationPermit
 	attention        CurrentNodeAttentionLifecycle
 	commandAuthority *runtimecommand.Authority
+	completion       *completionAttemptWorkflowController
 
 	agentConcurrency int
 	workerContext    context.Context
@@ -213,6 +214,9 @@ func NewCurrentNodeController(
 		automaticReservations: make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
 		admissionWorkers:      make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
 		interrupts:            newCurrentNodeInterruptState(),
+	}
+	if cfg.CommandAuthority != nil {
+		controller.completion = newCompletionAttemptWorkflowController(controller, authority, cfg.CommandAuthority)
 	}
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()

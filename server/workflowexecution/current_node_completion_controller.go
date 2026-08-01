@@ -75,6 +75,7 @@ func (c *completionAttemptWorkflowController) BeginCompletionAttempt(
 		if state.lease != nil {
 			return fmt.Errorf("workflow completion attempt already reserved for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
 		}
+		return fmt.Errorf("workflow completion attempt already pending for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
 	}
 	c.attempts[scopeID] = completionAttemptState{attempt: attempt}
 	return nil
@@ -159,7 +160,10 @@ func NewCompletionFencedCurrentNodeExecution(
 	if commands == nil {
 		return nil, errors.New("runtime command authority is required")
 	}
-	completion := newCompletionAttemptWorkflowController(controller, authority, commands)
+	completion := controller.completion
+	if completion == nil {
+		completion = newCompletionAttemptWorkflowController(controller, authority, commands)
+	}
 	if completion == nil {
 		return nil, errors.New("completion attempt workflow controller is unavailable")
 	}

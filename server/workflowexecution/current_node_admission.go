@@ -264,8 +264,8 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		return currentNodeAdmissionError{cause: err}
 	}
 	controller := workflowruntime.Controller(c)
-	if c.commandAuthority != nil {
-		controller = newCompletionAttemptWorkflowController(controller, c.authority, c.commandAuthority)
+	if c.completion != nil {
+		controller = c.completion
 	}
 	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, controller); err != nil {
 		return currentNodeAdmissionError{
