@@ -13,11 +13,14 @@ WITH ranked_agent_roles AS (
     WHERE node.kind = 'agent'
 )
 UPDATE sessions
-SET continuation_json = CASE (
-        SELECT normalized_role
-        FROM ranked_agent_roles
-        WHERE ranked_agent_roles.session_id = sessions.id
-          AND ranked_agent_roles.recency_rank = 1
+SET continuation_json = CASE coalesce(
+        (
+            SELECT normalized_role
+            FROM ranked_agent_roles
+            WHERE ranked_agent_roles.session_id = sessions.id
+              AND ranked_agent_roles.recency_rank = 1
+        ),
+        ''
     )
         WHEN '' THEN json_remove(continuation_json, '$.agent_role')
         WHEN 'default' THEN json_remove(continuation_json, '$.agent_role')

@@ -165,6 +165,41 @@ WHERE id = 'session-blank-role-repair'`)
 	})
 }
 
+func TestOpenRepairsNullWorkflowSessionAgentRoleAfterBlankRepair(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 64)
+	if err != nil {
+		t.Fatalf("open version 64 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-null-role-repair', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(t, db, "project-null-role-repair", "workspace-null-role-repair", "session-null-role-repair", now)
+	execSeed(t, db, "null role session", `
+UPDATE sessions
+SET continuation_json = '{"agent_role":null,"keep":"null"}',
+    locked_json = '{"model":"locked-null"}',
+    metadata_json = '{"prompt_cache_lineage_generation":6,"keep":"null"}'
+WHERE id = 'session-null-role-repair'`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 64 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open repaired store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	assertMigratedSessionJSON(t, store.db, "session-null-role-repair", map[string]any{
+		"continuation": map[string]any{"keep": "null"},
+		"locked":       map[string]any{},
+		"metadata":     map[string]any{"prompt_cache_lineage_generation": float64(7), "keep": "null"},
+	})
+}
+
 func assertMigratedSessionJSON(t *testing.T, db *sql.DB, sessionID string, want map[string]any) {
 	t.Helper()
 	var continuationRaw, lockedRaw, metadataRaw string
