@@ -89,6 +89,9 @@ var (
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
 	// is already bound to a workspace. Callers match it via errors.Is.
 	ErrWorkspaceAlreadyBound = errors.New("workspace is already bound")
+	// ErrWorkspacePathKeyCandidateCollision is returned when another Workspace
+	// already owns a candidate managed-worktree path key.
+	ErrWorkspacePathKeyCandidateCollision = errors.New("workspace path key candidate collision")
 	// ErrWorktreeAlreadyBound is returned when a rebind worktree canonical root
 	// is already bound. Callers match it via errors.Is.
 	ErrWorktreeAlreadyBound = errors.New("worktree is already bound")
@@ -439,6 +442,69 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 		return sqlitegen.Workspace{}, fmt.Errorf("get workspace by id: %w", err)
 	}
 	return row, nil
+}
+
+// ClaimWorkspacePathKey assigns candidate to workspaceID if the Workspace has
+// not claimed a key yet. A repeated claim converges on the existing key.
+func (s *Store) ClaimWorkspacePathKey(ctx context.Context, workspaceID string, candidate string) (string, error) {
+	if s == nil || s.queries == nil {
+		return "", errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	trimmedCandidate := strings.TrimSpace(candidate)
+	if trimmedWorkspaceID == "" {
+		return "", errors.New("workspace id is required")
+	}
+	if trimmedCandidate == "" {
+		return "", errors.New("workspace path key candidate is required")
+	}
+	rows, err := s.queries.ClaimWorkspacePathKey(ctx, sqlitegen.ClaimWorkspacePathKeyParams{
+		ManagedWorktreePathKey: sql.NullString{String: trimmedCandidate, Valid: true},
+		ID:                     trimmedWorkspaceID,
+	})
+	if err != nil {
+		if IsSQLiteUniqueConstraint(err) {
+			return "", fmt.Errorf("%w: candidate=%q", ErrWorkspacePathKeyCandidateCollision, trimmedCandidate)
+		}
+		return "", fmt.Errorf("claim workspace path key: %w", err)
+	}
+	if rows > 0 {
+		return trimmedCandidate, nil
+	}
+	workspace, err := s.queries.GetWorkspacePathKeyByID(ctx, trimmedWorkspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("workspace %q: %w", trimmedWorkspaceID, sql.ErrNoRows)
+		}
+		return "", fmt.Errorf("read workspace path key: %w", err)
+	}
+	if !workspace.Valid {
+		return "", fmt.Errorf("workspace %q has no available path key", trimmedWorkspaceID)
+	}
+	return workspace.String, nil
+}
+
+// ReleaseWorkspacePathKey clears candidate only when it is still owned by the
+// specified Workspace.
+func (s *Store) ReleaseWorkspacePathKey(ctx context.Context, workspaceID string, candidate string) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	trimmedCandidate := strings.TrimSpace(candidate)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	if trimmedCandidate == "" {
+		return errors.New("workspace path key candidate is required")
+	}
+	if _, err := s.queries.ReleaseWorkspacePathKey(ctx, sqlitegen.ReleaseWorkspacePathKeyParams{
+		ManagedWorktreePathKey: sql.NullString{String: trimmedCandidate, Valid: true},
+		ID:                     trimmedWorkspaceID,
+	}); err != nil {
+		return fmt.Errorf("release workspace path key: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceID string) ([]WorktreeRecord, error) {
@@ -1223,7 +1289,14 @@ func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, c
 	case 0:
 		return sqlitegen.Workspace{}, sql.ErrNoRows
 	case 1:
-		return rows[0], nil
+		return sqlitegen.Workspace{
+			ID:                rows[0].ID,
+			ProjectID:         rows[0].ProjectID,
+			CanonicalRootPath: rows[0].CanonicalRootPath,
+			GitMetadataJson:   rows[0].GitMetadataJson,
+			CreatedAtUnixMs:   rows[0].CreatedAtUnixMs,
+			UpdatedAtUnixMs:   rows[0].UpdatedAtUnixMs,
+		}, nil
 	default:
 		projectIDs := make([]string, 0, len(rows))
 		for _, row := range rows {

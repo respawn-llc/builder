@@ -336,6 +336,27 @@ func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskPa
 	return result.RowsAffected()
 }
 
+const claimWorkspacePathKey = `-- name: ClaimWorkspacePathKey :execrows
+UPDATE workspaces
+SET managed_worktree_path_key = ?1
+WHERE id = ?2
+  AND managed_worktree_path_key IS NULL
+`
+
+type ClaimWorkspacePathKeyParams struct {
+	ManagedWorktreePathKey sql.NullString
+	ID                     string
+}
+
+func (q *Queries) ClaimWorkspacePathKey(ctx context.Context, arg ClaimWorkspacePathKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimWorkspacePathKey, arg.ManagedWorktreePathKey, arg.ID)
+	err = recordQueryError(ctx, err, claimWorkspacePathKey, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
 UPDATE projects
 SET
@@ -2473,7 +2494,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    managed_worktree_path_key
 FROM workspaces
 WHERE id = ?1
 LIMIT 1
@@ -2489,9 +2511,25 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
+		&i.ManagedWorktreePathKey,
 	), getWorkspaceByID, 1)
 
 	return i, err
+}
+
+const getWorkspacePathKeyByID = `-- name: GetWorkspacePathKeyByID :one
+SELECT managed_worktree_path_key
+FROM workspaces
+WHERE id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetWorkspacePathKeyByID(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspacePathKeyByID, id)
+	var managed_worktree_path_key sql.NullString
+	err := recordQueryError(ctx, row.Scan(&managed_worktree_path_key), getWorkspacePathKeyByID, 1)
+
+	return managed_worktree_path_key, err
 }
 
 const getWorktreeByCanonicalRoot = `-- name: GetWorktreeByCanonicalRoot :one
@@ -7063,16 +7101,25 @@ WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
 `
 
-func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]Workspace, error) {
+type ListWorkspacesByCanonicalRootRow struct {
+	ID                string
+	ProjectID         string
+	CanonicalRootPath string
+	GitMetadataJson   string
+	CreatedAtUnixMs   int64
+	UpdatedAtUnixMs   int64
+}
+
+func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]ListWorkspacesByCanonicalRootRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspacesByCanonicalRoot, canonicalRootPath)
 	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workspace
+	var items []ListWorkspacesByCanonicalRootRow
 	for rows.Next() {
-		var i Workspace
+		var i ListWorkspacesByCanonicalRootRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
@@ -7312,6 +7359,27 @@ func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg Recover
 		return nil, err
 	}
 	return items, nil
+}
+
+const releaseWorkspacePathKey = `-- name: ReleaseWorkspacePathKey :execrows
+UPDATE workspaces
+SET managed_worktree_path_key = NULL
+WHERE id = ?1
+  AND managed_worktree_path_key = ?2
+`
+
+type ReleaseWorkspacePathKeyParams struct {
+	ID                     string
+	ManagedWorktreePathKey sql.NullString
+}
+
+func (q *Queries) ReleaseWorkspacePathKey(ctx context.Context, arg ReleaseWorkspacePathKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseWorkspacePathKey, arg.ID, arg.ManagedWorktreePathKey)
+	err = recordQueryError(ctx, err, releaseWorkspacePathKey, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const renameProjectLabel = `-- name: RenameProjectLabel :one

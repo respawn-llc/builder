@@ -15,7 +15,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -185,24 +184,6 @@ func TestBeginMutationReacquiresWorkspaceLaneWhenSessionWorkspaceChanges(t *test
 		result.release()
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for second mutation")
-	}
-}
-
-func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
-	baseRoot := filepath.Join(t.TempDir(), "collision")
-	for idx := 0; idx < 1024; idx++ {
-		candidate := baseRoot
-		if idx > 0 {
-			candidate = baseRoot + "-" + strconv.Itoa(idx+1)
-		}
-		if err := os.MkdirAll(candidate, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", candidate, err)
-		}
-	}
-
-	_, err := nextAvailableWorktreeRoot(baseRoot)
-	if !errors.Is(err, ErrWorktreeRootCollisionCap) {
-		t.Fatalf("nextAvailableWorktreeRoot error = %v, want capped collision error", err)
 	}
 }
 

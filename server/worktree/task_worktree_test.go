@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -868,8 +869,8 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
-	if taskWorktreeID(resp.Worktree) == "" || !strings.Contains(taskWorktreeRoot(resp.Worktree), source.WorkspaceID) {
-		t.Fatalf("worktree = %+v, want root under source workspace id %q", resp.Worktree, source.WorkspaceID)
+	if taskWorktreeID(resp.Worktree) == "" || strings.Contains(taskWorktreeRoot(resp.Worktree), source.WorkspaceID) {
+		t.Fatalf("worktree = %+v, want compact root without source workspace id %q", resp.Worktree, source.WorkspaceID)
 	}
 	if got := runGit(t, sourceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
 		t.Fatalf("source branch list = %q, want task branch %q", got, task.ShortID)
@@ -882,11 +883,13 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	baseRoot, err := defaultWorktreeRoot(env.baseDir, env.binding.WorkspaceID, task.ShortID)
+	allocator := newManagedRootAllocator(env.store, env.baseDir, bytes.NewReader(bytes.Repeat([]byte{4}, 32)))
+	parent, err := allocator.ensureWorkspaceParent(env.ctx, env.binding.WorkspaceID, env.workspaceRoot)
 	if err != nil {
-		t.Fatalf("defaultWorktreeRoot: %v", err)
+		t.Fatalf("ensure compact parent: %v", err)
 	}
-	if err := os.MkdirAll(baseRoot, 0o755); err != nil {
+	baseRoot := filepath.Join(parent, task.ShortID)
+	if err := os.Mkdir(baseRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll collision root: %v", err)
 	}
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
@@ -901,8 +904,8 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 	if taskWorktreeRoot(resp.Worktree) == baseRoot {
 		t.Fatalf("worktree root = %q, want suffixed root because base exists", taskWorktreeRoot(resp.Worktree))
 	}
-	if !strings.HasSuffix(taskWorktreeRoot(resp.Worktree), filepath.Base(baseRoot)+"-2") {
-		t.Fatalf("worktree root = %q, want -2 suffix from existing collision behavior", taskWorktreeRoot(resp.Worktree))
+	if filepath.Base(taskWorktreeRoot(resp.Worktree)) == filepath.Base(baseRoot) {
+		t.Fatalf("worktree root = %q, want compact suffix after existing collision", taskWorktreeRoot(resp.Worktree))
 	}
 
 	otherTask, _ := createTaskWorktreeTestTask(t, env)
