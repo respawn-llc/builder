@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -221,13 +222,16 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 func (m *Manager) emitCompletionEvent(entry *processEntry, event Event) {
 	entry.interactMu.Lock()
 	defer entry.interactMu.Unlock()
-	entry.mu.Lock()
-	eventType := event.Type
-	entry.terminalEventType = &eventType
-	entry.mu.Unlock()
 	delivered := m.emitEvent(event)
 	entry.mu.Lock()
 	entry.terminalDelivered = entry.terminalDelivered || delivered
+	entry.mu.Unlock()
+	if delivered {
+		return
+	}
+	cached := cacheTerminalEvent(entry, event)
+	entry.mu.Lock()
+	entry.terminalEvent = cached
 	entry.mu.Unlock()
 }
 
@@ -245,7 +249,8 @@ func (m *Manager) RetryTerminalEvents(ownerSessionID string) {
 	for _, entry := range entries {
 		entry.mu.Lock()
 		pending := entry.ownerSessionID == ownerSessionID &&
-			entry.terminalEventType != nil &&
+			entry.backgrounded &&
+			!entry.running &&
 			!entry.terminalDelivered
 		entry.mu.Unlock()
 		if pending {
@@ -259,19 +264,105 @@ func (m *Manager) retryTerminalEvent(entry *processEntry, ownerSessionID string)
 	defer entry.interactMu.Unlock()
 	entry.mu.Lock()
 	if entry.ownerSessionID != ownerSessionID ||
-		entry.terminalEventType == nil ||
 		entry.terminalDelivered {
 		entry.mu.Unlock()
 		return
 	}
-	eventType := *entry.terminalEventType
-	snapshot := entry.snapshotLocked()
+	cached := entry.terminalEvent
 	entry.mu.Unlock()
-	event := m.buildTerminalEvent(entry, eventType, snapshot)
+	if cached == nil {
+		return
+	}
+	event := cached.event()
 	delivered := m.emitEvent(event)
 	entry.mu.Lock()
 	entry.terminalDelivered = entry.terminalDelivered || delivered
+	if delivered {
+		entry.terminalEvent = nil
+	}
 	entry.mu.Unlock()
+}
+
+func cacheTerminalEvent(entry *processEntry, event Event) *terminalEventCache {
+	cached := &terminalEventCache{
+		eventType:        event.Type,
+		snapshot:         snapshotWithExecutionCorrelationCopy(event.Snapshot),
+		noticeSuppressed: event.NoticeSuppressed,
+	}
+	if event.completion == nil {
+		return cached
+	}
+	completion := &terminalCompletionCache{
+		source:  event.completion.source,
+		warning: event.completion.output.warning,
+		removed: event.completion.removed,
+	}
+	cached.completion = completion
+	output := event.completion.output.command
+	if output == "" {
+		return cached
+	}
+	if len(output) > maxFullLogPostprocessBytes {
+		cached.err = fmt.Errorf("postprocessed terminal output exceeds cache limit %d", maxFullLogPostprocessBytes)
+		return cached
+	}
+	outputPath := entry.logPath + ".completion"
+	if err := os.WriteFile(outputPath, []byte(output), 0o600); err != nil {
+		cached.err = fmt.Errorf("cache postprocessed terminal output: %w", err)
+		return cached
+	}
+	completion.outputPath = &outputPath
+	return cached
+}
+
+func (c *terminalEventCache) event() Event {
+	if c == nil {
+		panic("terminal event cache is required")
+	}
+	if c.err != nil {
+		return c.fallbackEvent(c.err)
+	}
+	event := Event{
+		Type:             c.eventType,
+		Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+		NoticeSuppressed: c.noticeSuppressed,
+	}
+	if c.completion == nil {
+		return event
+	}
+	output := ""
+	if c.completion.outputPath != nil {
+		cachedOutput, err := readOutputFileLimited(*c.completion.outputPath, maxFullLogPostprocessBytes)
+		if err != nil {
+			return c.fallbackEvent(fmt.Errorf("read cached postprocessed terminal output: %w", err))
+		}
+		output = cachedOutput
+	}
+	event.completion = &completionOutput{
+		source:  c.completion.source,
+		output:  newVisibleShellOutput(output, c.completion.warning),
+		removed: c.completion.removed,
+	}
+	return event
+}
+
+func (c *terminalEventCache) fallbackEvent(cause error) Event {
+	warning, err := postprocess.NewWarning(fmt.Sprintf("background terminal delivery cache failed: %v", cause))
+	if err != nil {
+		return Event{
+			Type:             c.eventType,
+			Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+			NoticeSuppressed: c.noticeSuppressed,
+		}
+	}
+	return newFallbackBackgroundEvent(
+		c.eventType,
+		c.snapshot,
+		c.snapshot.RecentOutput,
+		warning,
+		1,
+		c.noticeSuppressed,
+	)
 }
 
 func (m *Manager) collectUntil(ctx context.Context, entry *processEntry, deadline time.Time) ([]byte, error) {

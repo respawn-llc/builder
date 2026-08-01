@@ -13,10 +13,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	events := make(chan Event, 2)
 	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventCompleted || evt.Type == EventKilled {
-			select {
-			case events <- evt:
-			default:
-			}
+			events <- evt
 		}
 		return true
 	})
@@ -192,10 +189,7 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	manager := newBackgroundTestManager(t)
 	events := make(chan Event, 1)
 	manager.SetEventHandler(func(evt Event) bool {
-		select {
-		case events <- evt:
-		default:
-		}
+		events <- evt
 		return true
 	})
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")

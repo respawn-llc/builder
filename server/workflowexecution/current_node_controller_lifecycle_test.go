@@ -346,6 +346,7 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 		},
 	}
 	release := make(chan struct{})
+	waitStarted := make(chan struct{})
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &recordingScriptRunner{
 		authority: authority,
@@ -357,7 +358,10 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 	}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AutomaticConcurrency: 1,
-		AssignmentSteerer:    lateCommitCurrentNodeAssignmentSteerer{release: release},
+		AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
+			release: release,
+			started: waitStarted,
+		},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -367,17 +371,33 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 		_ = authority.Close(context.Background())
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	taskID := source.TaskID
-	if _, err := controller.CompleteIdleCurrentNode(
-		ctx,
-		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
-		"next",
-		nil,
-		"forced completion",
-	); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("CompleteIdleCurrentNode error = %v, want context deadline exceeded", err)
+	completed := make(chan error, 1)
+	go func() {
+		_, completeErr := controller.CompleteIdleCurrentNode(
+			ctx,
+			workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+			"next",
+			nil,
+			"forced completion",
+		)
+		completed <- completeErr
+	}()
+	select {
+	case <-waitStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("assignment wait did not start")
+	}
+	cancel()
+	select {
+	case err := <-completed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CompleteIdleCurrentNode error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CompleteIdleCurrentNode did not return after caller cancellation")
 	}
 	select {
 	case started := <-runner.started:

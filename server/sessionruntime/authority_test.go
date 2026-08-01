@@ -1401,6 +1401,12 @@ func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
 	authority := fixture.authority
 	currentStarted := make(chan struct{})
 	releaseCurrent := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseCurrent)
+		}
+	}()
 	current, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
@@ -1437,6 +1443,7 @@ func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
 	}
 
 	close(releaseCurrent)
+	released = true
 	if _, err := current.Wait(context.Background()); err != nil {
 		t.Fatalf("wait current execution: %v", err)
 	}
