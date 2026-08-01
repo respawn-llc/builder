@@ -60,7 +60,7 @@ Use raw FTS5 when its field syntax or operators are needed; Comments require exp
 kent task search 'body:"retry policy" OR comment:timeout' --fts5 --include-comments --status active --json
 ```
 
-Literal queries require three normalized characters. Repeat `--project` to search a Project union, repeat or comma-separate `--status`, and pass the stderr continuation token back through `--page-token`.
+Literal queries require three normalized characters. Repeat `--project` to search a Project union, repeat or comma-separate `--status`, and pass the zero-based stderr continuation offset back through `--offset`.
 
 ## Execution targets
 `kent task show` always reports the source workspace. After target lock it also reports the target mode and execution root; managed targets include requested revision, resolved commit, current named branch when available, and managed worktree.

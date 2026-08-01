@@ -499,7 +499,8 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
-- Except for Task Search, every paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
+- Task Search pagination is defined exclusively by the owning Task Search specification.
+- Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
 - An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
 - `--limit` defaults to `100` and accepts values from `1` through `100`.
 - Callers may change the limit between requests. An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
@@ -509,7 +510,6 @@
 - Each request applies its offset to the current results for that request's Project, Workflow, selectors, filters, and sorting. Callers repeat those query choices when continuing. Kent does not bind an offset to a previous query.
 - If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
 - The server keeps pagination memory bounded by the requested limit. It does not retain page contents or pagination state between requests and does not persist pagination state.
-- Task Search retains its specified opaque cursor contract.
 - `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.
