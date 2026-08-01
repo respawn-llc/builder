@@ -37,6 +37,34 @@
 - Mutation error objects contain only `code`, `message`, resolved Project/workspace IDs when resolution succeeded, bounded `blockers` when detach is blocked, and `retryable: true` for a concurrent detach conflict.
 - Canonical workspace roots are never included in mutation success or error JSON results.
 
+## CLI Project Deletion
+
+- `kent project delete <project-id>` selects a Project only by its canonical Project ID.
+- Project deletion never deletes or moves workspace files.
+- The server owns Project deletion and its blockers. The CLI never deletes Project data or workspace files directly.
+- Project deletion is non-interactive.
+- The CLI requires `--confirm` before it requests deletion.
+- Before checking confirmation, the CLI checks whether the Project contains any Task whose state is not terminal, including a Backlog Task.
+- If unfinished work exists and the command is running inside a Kent agent shell, the command is human-only and reports exactly `Project deletion is human-only because project <project-id> contains unfinished work.`
+- The unfinished-work check establishes only whether unfinished work exists. It does not count or list Tasks.
+- The unfinished-work check uses a command-time snapshot. A concurrent Task change can occur between that check and the deletion request.
+- If unfinished work appears after the snapshot, an agent's Project deletion may still complete. The CLI does not provide atomic human-only enforcement.
+- The server applies its authoritative deletion blockers when it processes the deletion request.
+- If confirmation is absent after the conditional human-only check permits the caller, the command makes no deletion request and reports exactly `Project deletion was not confirmed. Rerun with --confirm to delete project <project-id>.`
+- Successful plain output is exactly `Deleted project <project-id>. Workspace files were not deleted.`
+- Blocked plain output preserves every server blocker in server order with its code, message, and positive count when present. The CLI adds no blocker guidance.
+- A successful deletion exits with status 0.
+- Missing confirmation, conditional human-only denial, blocked deletion, Project lookup failure, and other operational failures exit with status 1.
+- Usage errors exit with status 2.
+- `--json` emits exactly one JSON object on stdout for every operational outcome after valid argument parsing.
+- Successful JSON uses `status: "ok"` and includes the canonical Project ID as `result.project_id`.
+- Failed JSON uses `status: "error"` and includes an `error` object with `code` and `message`.
+- Every failed JSON result after valid argument parsing includes the canonical requested Project ID as `error.project_id`.
+- A blocked JSON result includes every server blocker in server order at `error.blockers`.
+- Each JSON blocker preserves the server's `code` and `message`. It includes `count` only when the count is positive.
+- Non-blocked JSON errors omit `blockers`.
+- Stable Project deletion error codes are `confirmation_required`, `human_only_unfinished_work`, `project_not_found`, `project_delete_blocked`, and `request_failed`.
+
 ## CLI Detach
 
 - `kent detach` is the canonical detach command.

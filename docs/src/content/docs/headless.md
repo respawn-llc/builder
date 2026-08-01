@@ -122,6 +122,22 @@ Detach blockers use these recovery actions:
 - `managed_owned_worktrees`: delete dependent worktrees or their quiescent owning Tasks, then retry.
 - `missing_history_snapshot`: re-save the editable Task's source workspace; keep the binding if its history cannot be edited.
 
+### Project deletion
+
+Delete a Project by its canonical Project ID:
+
+```bash
+kent project delete <project-id> --confirm
+```
+
+Project deletion is non-interactive and does not accept a path, name, default Project, or workspace binding as a selector. The command always checks for unfinished Tasks before checking `--confirm`. An agent-shell invocation is human-only when the Project contains any non-terminal Task, including a Backlog Task; the command reports the Project ID and does not request deletion. This policy check is a best-effort command-time snapshot, so a Task can change between the check and the server request. The server's deletion blockers remain authoritative.
+
+Without `--confirm`, the command makes no deletion request. Use `--json` for automation; it emits exactly one `status` envelope on `stdout`, with the canonical Project ID in `result.project_id` on success or `error.project_id` on operational failure. Blocked deletion preserves the server's blocker codes, messages, order, and positive counts. Blockers and other operational failures exit nonzero.
+
+Stable deletion error codes are `confirmation_required`, `human_only_unfinished_work`, `project_not_found`, `project_delete_blocked`, and `request_failed`.
+
+Project deletion is owned by the server and never deletes or moves workspace files. A successful human-readable result explicitly states that workspace files were not deleted.
+
 ## Output Modes
 
 By default, `kent run` writes each finalized assistant commentary or final response to `stdout` as it is committed. Use `--quiet` to suppress live output and print only the terminal result. For scripting, use JSON mode:
