@@ -456,21 +456,23 @@ func isManagedExecutionTargetMode(mode sql.NullString) bool {
 	}
 }
 
-func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest, task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (TaskWorktreeMaterialization, error) {
+func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest, task sqlitegen.TaskRecord, workspace taskSourceWorkspace) (result TaskWorktreeMaterialization, err error) {
 	reservation, err := s.managedRoots.reserveTaskRoot(ctx, workspace.WorkspaceID, workspace.RootPath, task.ShortID)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict, Err: err}
 	}
+	defer func() {
+		if cleanupErr := reservation.release(); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 	occupied, err := reservation.exactLeafOccupied(task.ShortID)
 	if err != nil {
-		_ = reservation.release()
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseRootInaccessible, Err: err}
 	}
 	if occupied {
-		_ = reservation.release()
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseConflict}
 	}
-	defer func() { _ = reservation.release() }()
 	return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}
 }
 

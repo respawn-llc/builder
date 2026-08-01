@@ -310,6 +310,7 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 		return a.materializePersistedWorkspaceParent(workspace.ID, workspace.ManagedWorktreePathKey.String, base)
 	}
 	seed := normalizeWorkspacePathKey(filepath.Base(filepath.Clean(canonicalWorkspaceRoot)))
+	attempted := make([]string, 0, 5)
 	for width := 0; width <= 4; width++ {
 		suffix := ""
 		if width > 0 {
@@ -319,6 +320,7 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 			}
 		}
 		candidate := workspacePathKeyCandidate(seed, suffix)
+		attempted = append(attempted, candidate)
 		parent := filepath.Join(base, candidate)
 		exists, err := lstatPathExists(parent)
 		if err != nil {
@@ -336,7 +338,13 @@ func (a *managedRootAllocator) ensureWorkspaceParent(ctx context.Context, worksp
 		}
 		return a.materializeClaimedWorkspaceParent(workspace.ID, claimed, base)
 	}
-	panic(fmt.Sprintf("operation=workspace-parent workspace_id=%q base=%q seed=%q attempted_widths=direct,3,4,5,6", workspace.ID, base, seed))
+	panic(&managedRootExhaustionError{
+		Operation:   "workspace-parent",
+		WorkspaceID: workspace.ID,
+		Base:        base,
+		Widths:      []int{0, 3, 4, 5, 6},
+		Candidates:  attempted,
+	})
 }
 
 func (a *managedRootAllocator) reserveRegularRoot(ctx context.Context, workspaceID string, workspaceRoot string) (*managedRootReservation, error) {
