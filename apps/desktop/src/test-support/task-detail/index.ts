@@ -1,16 +1,21 @@
 import { z } from "zod";
 import { createElement } from "react";
 import { render } from "@testing-library/react";
-import { RouterContextProvider } from "@tanstack/react-router";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { createAppRouter } from "@/app/routes";
-import { SidebarProvider } from "@/app/sidebarProvider";
+import { SidebarContext } from "@/app-facade";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
+import { createTestSidebarController } from "../sidebar";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -395,11 +400,15 @@ export function mountTaskDetailSurface(
   options: TaskDetailFixtureOptions = {},
 ): TestAppServices {
   const services = createTaskDetailTestServices(task, options);
-  const router = createAppRouter();
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
+    routeTree: createRootRoute(),
+  });
   render(
     createElement(RouterContextProvider, {
       router,
-      children: createElement(SidebarProvider, {
+      children: createElement(SidebarContext.Provider, {
+        value: createTestSidebarController(),
         children: createElement(TestAppProviders, {
           children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
           services,

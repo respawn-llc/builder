@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import type { JsonValue } from "@/api";
-import { SidebarContext, type SidebarController, type SidebarDestination } from "@/app-facade";
+import { SidebarContext, type SidebarDestination } from "@/app-facade";
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRpcTransport, FakeRoute } from "@/test-support/api";
 import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
+import { createTestSidebarController } from "@/test-support/sidebar";
 import { workflowAttentionCalls, workflowAttentionRpcMethods } from "@/test-support/workflow-attention";
 import { SidebarInboxNav } from "./SidebarInboxNav";
 import { useGlobalAttentionEvents, useGlobalAttentionPages } from "./useHomeData";
@@ -132,7 +133,7 @@ describe("Home global attention data", () => {
       );
     });
     const openedDestinations: SidebarDestination[] = [];
-    const controller = createSidebarController((destination) => {
+    const controller = createTestSidebarController((destination) => {
       openedDestinations.push(destination);
     });
     const view = renderHome(services, <HomeAttentionQueryHarness />);
@@ -295,36 +296,8 @@ const taskDetailDestination = {
   taskID: "task-1",
 } as const;
 
-const sidebarController = createSidebarController();
+const sidebarController = createTestSidebarController();
 const workflowID = "11111111-1111-4111-8111-111111111111";
-
-function createSidebarController(
-  onOpen: (destination: SidebarDestination) => void = () => {
-    return;
-  },
-): SidebarController {
-  return {
-    activeDestination: null,
-    closeSidebar() {
-      return;
-    },
-    async openSidebar(destination) {
-      onOpen(destination);
-      return { status: "canceled", reason: "closed" };
-    },
-    replaceSidebar(destination) {
-      onOpen(destination);
-    },
-    phase: "open",
-    resolveSidebar() {
-      return;
-    },
-    resizeSidebar() {
-      return;
-    },
-    sidebarWidthPx: 320,
-  };
-}
 
 const attentionChangingProjectEvent = {
   event: {
