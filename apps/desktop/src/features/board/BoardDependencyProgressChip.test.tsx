@@ -13,14 +13,19 @@ describe("BoardDependencyProgressChip", () => {
     render(
       <div onClick={onCardActivate}>
         <BoardDependencyProgressChip
-          label="Dependency progress"
           onActivate={onActivate}
           progress={{ satisfiedCount: 1, totalCount: 2 }}
         />
       </div>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Dependency progress" }));
+    const chip = screen.getByRole("button");
+    await user.tab();
+    expect(chip).toHaveFocus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent(chip.getAttribute("aria-label") ?? "");
+
+    await user.click(chip);
 
     expect(onActivate).toHaveBeenCalledOnce();
     expect(onCardActivate).not.toHaveBeenCalled();

@@ -1,22 +1,17 @@
 import type { MouseEvent, PointerEvent } from "react";
 
 import type { TaskDependencyProgress } from "@/api";
-import { ProgressInteractiveChip } from "@/ui";
+import { TaskDependencyProgressChip } from "@/shared/task-dependencies";
 
 export function BoardDependencyProgressChip({
-  label,
   onActivate,
   progress,
 }: Readonly<{
-  label: string;
   onActivate(): void;
   progress: TaskDependencyProgress;
 }>) {
-  const complete = progress.satisfiedCount === progress.totalCount;
   return (
-    <ProgressInteractiveChip
-      label={label}
-      maximum={progress.totalCount}
+    <TaskDependencyProgressChip
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         onActivate();
@@ -28,8 +23,7 @@ export function BoardDependencyProgressChip({
       onPointerDown={(event: PointerEvent<HTMLButtonElement>) => {
         event.stopPropagation();
       }}
-      tone={complete ? "success" : "primary"}
-      value={progress.satisfiedCount}
+      progress={progress}
     />
   );
 }

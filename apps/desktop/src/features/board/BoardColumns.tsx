@@ -497,17 +497,12 @@ const TaskCard = memo(function TaskCard({
 });
 
 function TaskCardDependencyProgress({ card }: Readonly<{ card: KanbanCardVM }>): ReactNode {
-  const { t } = useTranslation();
   const { openSidebar } = useSidebar();
   if (card.dependencyProgress === null) {
     return null;
   }
   return (
     <BoardDependencyProgressChip
-      label={t("task.dependenciesProgress", {
-        completed: card.dependencyProgress.satisfiedCount,
-        total: card.dependencyProgress.totalCount,
-      })}
       onActivate={() => {
         void openSidebar({
           kind: "taskDetail",

@@ -26,6 +26,7 @@ export function Button({
       className={cx(
         "border border-[var(--button-border)] bg-[var(--button-bg)] text-[var(--button-color)] disabled:cursor-not-allowed disabled:opacity-55",
         buttonSizeClassNames[size],
+        size === "default" && variant === "primary" && "min-w-[var(--button-primary-min-width)]",
         className,
       )}
       style={{ ...buttonVariantStyles[variant], ...style }}

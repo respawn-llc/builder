@@ -9,8 +9,12 @@ import type {
   TaskDependencyItem,
   TaskStatusKind,
 } from "@/api";
-import { requiredTaskDependencyDirection, type TaskDependencyPair } from "@/shared/task-dependencies";
-import { ActionableListRow, Button, Island, ProgressInteractiveChip, Spinner } from "@/ui";
+import {
+  requiredTaskDependencyDirection,
+  TaskDependencyProgressChip,
+  type TaskDependencyPair,
+} from "@/shared/task-dependencies";
+import { ActionableListRow, Button, Island, Spinner } from "@/ui";
 
 export function TaskDependenciesArea({
   dependencies,
@@ -35,14 +39,11 @@ export function TaskDependenciesArea({
       <header className="flex min-w-0 items-center justify-between gap-[var(--space-2)]">
         <h2 className="m-0 text-base font-semibold">{t("task.dependencies")}</h2>
         {dependencies.blockerCount === 0 ? null : (
-          <ProgressInteractiveChip
-            label={t("task.dependenciesProgress", {
-              completed: dependencies.blockerCount - dependencies.unsatisfiedBlockerCount,
-              total: dependencies.blockerCount,
-            })}
-            maximum={dependencies.blockerCount}
-            tone={dependencies.unsatisfiedBlockerCount === 0 ? "success" : "primary"}
-            value={dependencies.blockerCount - dependencies.unsatisfiedBlockerCount}
+          <TaskDependencyProgressChip
+            progress={{
+              satisfiedCount: dependencies.blockerCount - dependencies.unsatisfiedBlockerCount,
+              totalCount: dependencies.blockerCount,
+            }}
           />
         )}
       </header>
