@@ -451,7 +451,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	return result, err
 }
 
-func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepIDs ...string) {
+func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepID *string) {
 	if e == nil || e.store == nil {
 		return
 	}
@@ -485,11 +485,15 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepIDs ...string
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	stepID := ""
-	if len(stepIDs) > 0 {
-		stepID = stepIDs[0]
+	workflowStepID := ""
+	if stepID != nil {
+		workflowStepID = strings.TrimSpace(*stepID)
+		if workflowStepID == "" {
+			reportErr(errors.New("workflow completion step identity must not be empty when provided"))
+			return
+		}
 	}
-	if _, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(completed)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatus(workflowStepID, msg, goalStatusUpdateFromState(completed)); err != nil {
 		reportErr(err)
 	}
 }

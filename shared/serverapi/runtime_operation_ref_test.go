@@ -94,6 +94,22 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 	}
 }
 
+func TestRuntimeCompactContextRequestRejectsWhitespaceOnlyArgs(t *testing.T) {
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	err := (RuntimeCompactContextRequest{
+		ClientRequestID: clientRequestID.String(),
+		SessionID:       "session-1",
+		Args:            " \t ",
+		OperationRef: clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindCompact,
+			ClientRequestID: clientRequestID,
+		},
+	}).Validate()
+	if err == nil {
+		t.Fatal("expected whitespace-only compaction instructions to be rejected")
+	}
+}
+
 func TestRuntimeInterruptRequestValidatesOptionalTargetOperationRef(t *testing.T) {
 	submitID := runtimeids.NewRuntimeClientRequestID()
 	interruptID := runtimeids.NewRuntimeClientRequestID()
