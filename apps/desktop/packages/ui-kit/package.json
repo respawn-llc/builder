@@ -26,6 +26,7 @@
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",
     "typescript7": "npm:typescript@7.0.2",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "vitest-browser-react": "2.2.0"
   }
 }

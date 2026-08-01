@@ -1,9 +1,25 @@
-import { render } from "@testing-library/react";
+import { render } from "vitest-browser-react";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { commands, page as screen, userEvent } from "vitest/browser";
-import type { ReorderPointerCommandInput } from "../../../tooling/vite.config";
 import { VerticalReorder } from "./VerticalReorder";
+
+type ReorderPointerCommandInput = Readonly<{
+  sourceSelector: string;
+  destination:
+    | Readonly<{ kind: "source" }>
+    | Readonly<{
+        kind: "target";
+        placement: "center" | "gap";
+        selector: string;
+      }>;
+}>;
+
+declare module "vitest/internal/browser" {
+  interface BrowserCommands {
+    pointerDrag: (input: ReorderPointerCommandInput) => Promise<void>;
+  }
+}
 
 type ReorderItem = Readonly<{ id: string; label: string }>;
 
@@ -15,14 +31,14 @@ const items: readonly ReorderItem[] = [
 
 describe("VerticalReorder transformed browser regression", () => {
   it("does not commit a pointer activation before the destination is crossed", async () => {
-    render(<BrowserReorderHarness />);
+    await render(<BrowserReorderHarness />);
     await commands.pointerDrag(sourceAt('[data-testid="row-first"] button'));
 
     await expect.poll(() => screen.getByTestId("committed-order").element().textContent).toBe("");
   });
 
   it("commits one adjacent pointer move through a translated surface", async () => {
-    render(<BrowserReorderHarness />);
+    await render(<BrowserReorderHarness />);
     await commands.pointerDrag(
       destinationAt('[data-testid="row-second"] button', '[data-testid="row-third"]', "center"),
     );
@@ -33,7 +49,7 @@ describe("VerticalReorder transformed browser regression", () => {
   });
 
   it("commits the adjacent destination through a translated surface", async () => {
-    render(<BrowserReorderHarness />);
+    await render(<BrowserReorderHarness />);
     await commands.pointerDrag(
       destinationAt('[data-testid="row-first"] button', '[data-testid="row-second"]', "gap"),
     );
@@ -44,7 +60,7 @@ describe("VerticalReorder transformed browser regression", () => {
   });
 
   it("commits one adjacent keyboard move through a translated surface", async () => {
-    render(<BrowserReorderHarness />);
+    await render(<BrowserReorderHarness />);
     const source = screen.getByRole("button", { name: "Reorder First" });
     source.element().focus();
     await userEvent.keyboard("{Space}");

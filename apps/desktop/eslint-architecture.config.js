@@ -404,27 +404,6 @@ const toolingDependencyPolicies = Object.freeze([
 const testDependencyPolicies = Object.freeze([
   Object.freeze({
     from: {
-      element: {
-        types: architectureOwners.UI_KIT,
-      },
-      file: {
-        categories: architectureFileCategories.TEST,
-      },
-    },
-    allow: {
-      to: {
-        element: {
-          types: architectureOwners.TOOLING,
-          fileInternalPath: "vite.config.ts",
-        },
-      },
-      dependency: {
-        source: "../../../tooling/vite.config",
-      },
-    },
-  }),
-  Object.freeze({
-    from: {
       file: {
         categories: architectureFileCategories.TEST,
       },

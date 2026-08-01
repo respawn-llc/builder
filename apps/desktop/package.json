@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
     "test": "vitest --config tooling/vite.config.ts run",
-    "test:browser:install": "playwright install --with-deps chromium chromium-headless-shell",
+    "test:browser:install": "playwright install --with-deps --no-shell chromium",
     "test:browser:reorder": "pnpm test:browser:install && vitest --config tooling/vitest.browser.config.mjs run packages/ui-kit/src/VerticalReorder.browser.test.tsx --browser.headless",
     "test:watch": "vitest --config tooling/vite.config.ts",
     "format": "prettier --check .",

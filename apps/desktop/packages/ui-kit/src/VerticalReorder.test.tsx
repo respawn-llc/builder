@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VerticalReorder } from "./VerticalReorder";
+import { createEdgeScrollDriver, type EdgeScrollMotion } from "./edgeScroll";
 import { projectVerticalReorder } from "./reorderProjection";
 
 type ReorderItem = Readonly<{ id: string; label: string }>;
@@ -267,7 +268,10 @@ describe("VerticalReorder", () => {
       matches: true,
       removeEventListener: vi.fn(),
     };
-    vi.stubGlobal("matchMedia", vi.fn(() => media));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
     mockRowGeometry();
 
     const view = render(<ReorderHarness onCommit={onCommit} />);
@@ -457,10 +461,7 @@ function TransformedReorderHarness(props: ReorderHarnessProps) {
   );
 }
 
-function ReorderHarness({
-  onCommit,
-  scrollable = false,
-}: ReorderHarnessProps) {
+function ReorderHarness({ onCommit, scrollable = false }: ReorderHarnessProps) {
   const [orderedItems, setOrderedItems] = useState(items);
   const reorder = (
     <VerticalReorder
@@ -534,12 +535,7 @@ function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number
       third: 2,
     };
     const index = rowID === undefined ? undefined : rowIndexByID[rowID];
-    const baseTop =
-      index === undefined
-        ? 0
-        : index === 2
-          ? 40 + secondHeight + 8
-          : index * 40;
+    const baseTop = index === undefined ? 0 : index === 2 ? 40 + secondHeight + 8 : index * 40;
     const top = baseTop;
     const height = index === 1 ? secondHeight : 32;
     return {
@@ -558,8 +554,106 @@ function mockRowGeometry({ secondHeight = 32 }: Readonly<{ secondHeight?: number
 
 function rowIDForElement(element: HTMLElement): string | undefined {
   return ["first", "second", "third"].find(
-    (id) =>
-      element.dataset.testid === `row-${id}` ||
-      within(element).queryByTestId(`row-${id}`) !== null,
+    (id) => element.dataset.testid === `row-${id}` || within(element).queryByTestId(`row-${id}`) !== null,
   );
+}
+
+describe("edge-scroll driver", () => {
+  let callbacks: Map<number, FrameRequestCallback>;
+  let nextFrameID: number;
+
+  beforeEach(() => {
+    callbacks = new Map();
+    nextFrameID = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const frameID = ++nextFrameID;
+      callbacks.set(frameID, callback);
+      return frameID;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frameID) => {
+      callbacks.delete(frameID);
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("schedules no frame without motion and only one frame while motion is active", () => {
+    let motion: readonly EdgeScrollMotion[] | null = null;
+    const driver = createEdgeScrollDriver(() => motion);
+
+    driver.refresh();
+    expect(callbacks).toHaveLength(0);
+
+    motion = [{ axis: "y", element: edgeScrollTestScrollport(), velocity: 900 }];
+    driver.refresh();
+    driver.refresh();
+    expect(callbacks).toHaveLength(1);
+  });
+
+  it("applies bounded motion and stops when the target can no longer move", () => {
+    const element = edgeScrollTestScrollport();
+    const motion: readonly EdgeScrollMotion[] = [{ axis: "y", element, velocity: 10_000 }];
+    const driver = createEdgeScrollDriver(() => motion);
+
+    driver.refresh();
+    releaseEdgeScrollFrame(callbacks, 1_000);
+
+    expect(element.scrollTop).toBeLessThanOrEqual(43.2);
+    expect(callbacks).toHaveLength(1);
+
+    element.scrollTop = element.scrollHeight - element.clientHeight;
+    releaseEdgeScrollFrame(callbacks, 2_000);
+    expect(callbacks).toHaveLength(0);
+  });
+
+  it("moves in the requested direction with a bounded frame delta", () => {
+    const element = edgeScrollTestScrollport();
+    element.scrollTop = 200;
+    const motion: readonly EdgeScrollMotion[] = [{ axis: "y", element, velocity: -10_000 }];
+    const driver = createEdgeScrollDriver(() => motion);
+
+    driver.refresh();
+    releaseEdgeScrollFrame(callbacks, 10_000);
+
+    expect(element.scrollTop).toBeGreaterThanOrEqual(156.8);
+    expect(element.scrollTop).toBeLessThan(200);
+  });
+
+  it("cancels its pending frame and clears future writes on stop", () => {
+    const element = edgeScrollTestScrollport();
+    let motion: readonly EdgeScrollMotion[] | null = [{ axis: "y", element, velocity: 900 }];
+    const driver = createEdgeScrollDriver(() => motion);
+
+    driver.refresh();
+    driver.stop();
+    motion = [{ axis: "y", element, velocity: 900 }];
+    for (const [frameID, callback] of callbacks) {
+      callbacks.delete(frameID);
+      callback(1_000);
+    }
+
+    expect(element.scrollTop).toBe(0);
+    expect(callbacks).toHaveLength(0);
+  });
+});
+
+function releaseEdgeScrollFrame(callbacks: Map<number, FrameRequestCallback>, timestamp: number): void {
+  const pending = firstFrame(callbacks);
+  if (pending === undefined) {
+    throw new Error("expected a pending animation frame");
+  }
+  callbacks.delete(pending[0]);
+  pending[1](timestamp);
+}
+
+function edgeScrollTestScrollport(): HTMLElement {
+  const element = document.createElement("div");
+  Object.defineProperties(element, {
+    clientHeight: { configurable: true, value: 100 },
+    scrollHeight: { configurable: true, value: 500 },
+    scrollTop: { configurable: true, value: 0, writable: true },
+  });
+  return element;
 }

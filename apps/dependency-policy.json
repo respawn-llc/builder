@@ -101,7 +101,8 @@
         "jsdom",
         "typescript",
         "typescript7",
-        "vitest"
+        "vitest",
+        "vitest-browser-react"
       ]
     }
   }
