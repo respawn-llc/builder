@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,7 +169,10 @@ func TestOpenSupportsConcurrentIndependentDatabases(t *testing.T) {
 
 func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
 	t.Parallel()
-	dsn := metadataSQLiteDSN(`C:\Users\Nek\kent db\main ? #.sqlite3`)
+	dsn, err := metadataSQLiteDSN(`C:\Users\Nek\kent db\main ? #.sqlite3`)
+	if err != nil {
+		t.Fatalf("metadataSQLiteDSN: %v", err)
+	}
 	if !strings.HasPrefix(dsn, "file:///C:/Users/Nek/kent%20db/main%20%3F%20%23.sqlite3?") {
 		t.Fatalf("dsn = %q, want file URL with normalized Windows drive path", dsn)
 	}
@@ -242,7 +246,11 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 	if err := registerMetadataSQLiteFunctions(); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", metadataSQLiteDSN(dbPath))
+	dsn, err := metadataSQLiteDSN(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("metadataSQLiteDSN: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}

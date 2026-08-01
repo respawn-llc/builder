@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"core/shared/clientui"
+	"core/shared/fileurl"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -396,7 +397,7 @@ func renderPatchTool(
 			continue
 		}
 		var spans []Span
-		spans = append(spans, roleSpan(path, role))
+		spans = append(spans, patchPathSpan(path, file.AbsPath, role))
 		if removed := patchformat.RemovedLineCount(file); removed != nil {
 			spans = append(spans, roleSpan(" ", role))
 			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", *removed), StyleRoleToolError))
@@ -485,6 +486,7 @@ func renderStructuredPatch(
 		}
 	}
 	for _, renderedLine := range rendered.DetailLines {
+		rawPath := renderedLine.Path
 		renderedLine.Text = safeTranscriptText(renderedLine.Text)
 		renderedLine.Path = safeTranscriptText(renderedLine.Path)
 		if renderedLine.Kind == patchformat.RenderedLineKindFile {
@@ -492,7 +494,7 @@ func renderStructuredPatch(
 			currentLexer = lexers.Match(strings.TrimSpace(renderedLine.Path))
 			inferredLexer = nil
 			inferredLexerResolved = false
-			out = append(out, wrapPatchMetadataLine(renderedLine.Text, width)...)
+			out = append(out, wrapPatchMetadataLine(renderedLine.Text, rawPath, width)...)
 			continue
 		}
 		kind, text, source := classifyPatchDetailLine(renderedLine)
@@ -501,7 +503,7 @@ func renderStructuredPatch(
 			continue
 		}
 		flushPending()
-		out = append(out, wrapPatchMetadataLine(renderedLine.Text, width)...)
+		out = append(out, wrapPatchMetadataLine(renderedLine.Text, "", width)...)
 	}
 	flushPending()
 	if len(out) == 0 {
@@ -542,8 +544,16 @@ func classifyPatchDetailLine(line patchformat.RenderedLine) (patchSourceKind, st
 	}
 }
 
-func wrapPatchMetadataLine(text string, width int) []Line {
-	return wrapStyledLine([]Span{SemanticSpan(text, StyleRoleToolPatch)}, width)
+func patchPathSpan(text, path string, role StyleRole) Span {
+	span := roleSpan(text, role)
+	if uri, ok := fileurl.LocalFileURL(path); ok {
+		span.Hyperlink = &Hyperlink{URL: uri.String()}
+	}
+	return span
+}
+
+func wrapPatchMetadataLine(text, path string, width int) []Line {
+	return wrapStyledLine([]Span{patchPathSpan(text, path, StyleRoleToolPatch)}, width)
 }
 
 func wrapPatchSourceLine(kind patchSourceKind, source []Span, width int) []Line {
