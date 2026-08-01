@@ -494,109 +494,43 @@ type boardUpdatedTaskRow interface {
 		sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow
 }
 
-type boardUpdatedTaskFields struct {
-	id                          string
-	projectID                   string
-	projectWorkflowLinkID       string
-	workflowID                  []byte
-	workflowRevisionSeen        int64
-	taskSeq                     int64
-	shortID                     string
-	title                       string
-	body                        string
-	sourceURL                   string
-	sourceWorkspaceID           sql.NullString
-	managedWorktreeID           sql.NullString
-	executionTargetMode         sql.NullString
-	executionTargetRequestedRef sql.NullString
-	executionTargetResolvedRef  sql.NullString
-	executionTargetCommitOID    sql.NullString
-	executionTargetProvenance   sql.NullString
-	createdAtUnixMs             int64
-	updatedAtUnixMs             int64
-	metadataJSON                string
-}
+// All updated-task queries intentionally select the same shape. Converting
+// their generated row types to this shape makes query-shape drift fail at compile time.
+type boardUpdatedTaskRowShape sqlitegen.ListBoardNodeTasksUpdatedAscRow
 
-func boardUpdatedTaskRecord(fields boardUpdatedTaskFields) sqlitegen.TaskRecord {
+func boardUpdatedTaskRecord(row boardUpdatedTaskRowShape) sqlitegen.TaskRecord {
 	var workflowID runtimeids.WorkflowID
-	err := workflowID.Scan(fields.workflowID)
+	err := workflowID.Scan(row.WorkflowID)
 	if err != nil {
 		panic(fmt.Sprintf("board updated task row has invalid workflow_id: %v", err))
 	}
 	return sqlitegen.TaskRecord{
-		ID:                          fields.id,
-		ProjectID:                   fields.projectID,
-		ProjectWorkflowLinkID:       fields.projectWorkflowLinkID,
+		ID:                          row.ID,
+		ProjectID:                   row.ProjectID,
+		ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
 		WorkflowID:                  workflowID,
-		WorkflowRevisionSeen:        fields.workflowRevisionSeen,
-		TaskSeq:                     fields.taskSeq,
-		ShortID:                     fields.shortID,
-		Title:                       fields.title,
-		Body:                        fields.body,
-		SourceUrl:                   fields.sourceURL,
-		SourceWorkspaceID:           fields.sourceWorkspaceID,
-		ManagedWorktreeID:           fields.managedWorktreeID,
-		ExecutionTargetMode:         fields.executionTargetMode,
-		ExecutionTargetRequestedRef: fields.executionTargetRequestedRef,
-		ExecutionTargetResolvedRef:  fields.executionTargetResolvedRef,
-		ExecutionTargetCommitOid:    fields.executionTargetCommitOID,
-		ExecutionTargetProvenance:   fields.executionTargetProvenance,
-		CreatedAtUnixMs:             fields.createdAtUnixMs,
-		UpdatedAtUnixMs:             fields.updatedAtUnixMs,
-		MetadataJson:                fields.metadataJSON,
-	}
-}
-
-func boardUpdatedTaskFieldsFromRow[T boardUpdatedTaskRow](row T) boardUpdatedTaskFields {
-	switch row := any(row).(type) {
-	case sqlitegen.ListBoardNodeTasksUpdatedAscRow:
-		return boardUpdatedTaskFields{
-			id: row.ID, projectID: row.ProjectID, projectWorkflowLinkID: row.ProjectWorkflowLinkID, workflowID: row.WorkflowID,
-			workflowRevisionSeen: row.WorkflowRevisionSeen, taskSeq: row.TaskSeq, shortID: row.ShortID, title: row.Title,
-			body: row.Body, sourceURL: row.SourceUrl, sourceWorkspaceID: row.SourceWorkspaceID, managedWorktreeID: row.ManagedWorktreeID,
-			executionTargetMode: row.ExecutionTargetMode, executionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-			executionTargetResolvedRef: row.ExecutionTargetResolvedRef, executionTargetCommitOID: row.ExecutionTargetCommitOid,
-			executionTargetProvenance: row.ExecutionTargetProvenance, createdAtUnixMs: row.CreatedAtUnixMs,
-			updatedAtUnixMs: row.UpdatedAtUnixMs, metadataJSON: row.MetadataJson,
-		}
-	case sqlitegen.ListBoardNodeTasksUpdatedAscPreviousRow:
-		return boardUpdatedTaskFields{
-			id: row.ID, projectID: row.ProjectID, projectWorkflowLinkID: row.ProjectWorkflowLinkID, workflowID: row.WorkflowID,
-			workflowRevisionSeen: row.WorkflowRevisionSeen, taskSeq: row.TaskSeq, shortID: row.ShortID, title: row.Title,
-			body: row.Body, sourceURL: row.SourceUrl, sourceWorkspaceID: row.SourceWorkspaceID, managedWorktreeID: row.ManagedWorktreeID,
-			executionTargetMode: row.ExecutionTargetMode, executionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-			executionTargetResolvedRef: row.ExecutionTargetResolvedRef, executionTargetCommitOID: row.ExecutionTargetCommitOid,
-			executionTargetProvenance: row.ExecutionTargetProvenance, createdAtUnixMs: row.CreatedAtUnixMs,
-			updatedAtUnixMs: row.UpdatedAtUnixMs, metadataJSON: row.MetadataJson,
-		}
-	case sqlitegen.ListBoardNodeTasksUpdatedDescRow:
-		return boardUpdatedTaskFields{
-			id: row.ID, projectID: row.ProjectID, projectWorkflowLinkID: row.ProjectWorkflowLinkID, workflowID: row.WorkflowID,
-			workflowRevisionSeen: row.WorkflowRevisionSeen, taskSeq: row.TaskSeq, shortID: row.ShortID, title: row.Title,
-			body: row.Body, sourceURL: row.SourceUrl, sourceWorkspaceID: row.SourceWorkspaceID, managedWorktreeID: row.ManagedWorktreeID,
-			executionTargetMode: row.ExecutionTargetMode, executionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-			executionTargetResolvedRef: row.ExecutionTargetResolvedRef, executionTargetCommitOID: row.ExecutionTargetCommitOid,
-			executionTargetProvenance: row.ExecutionTargetProvenance, createdAtUnixMs: row.CreatedAtUnixMs,
-			updatedAtUnixMs: row.UpdatedAtUnixMs, metadataJSON: row.MetadataJson,
-		}
-	case sqlitegen.ListBoardNodeTasksUpdatedDescPreviousRow:
-		return boardUpdatedTaskFields{
-			id: row.ID, projectID: row.ProjectID, projectWorkflowLinkID: row.ProjectWorkflowLinkID, workflowID: row.WorkflowID,
-			workflowRevisionSeen: row.WorkflowRevisionSeen, taskSeq: row.TaskSeq, shortID: row.ShortID, title: row.Title,
-			body: row.Body, sourceURL: row.SourceUrl, sourceWorkspaceID: row.SourceWorkspaceID, managedWorktreeID: row.ManagedWorktreeID,
-			executionTargetMode: row.ExecutionTargetMode, executionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-			executionTargetResolvedRef: row.ExecutionTargetResolvedRef, executionTargetCommitOID: row.ExecutionTargetCommitOid,
-			executionTargetProvenance: row.ExecutionTargetProvenance, createdAtUnixMs: row.CreatedAtUnixMs,
-			updatedAtUnixMs: row.UpdatedAtUnixMs, metadataJSON: row.MetadataJson,
-		}
-	default:
-		panic(fmt.Sprintf("board updated task row has unexpected type %T", row))
+		WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
+		TaskSeq:                     row.TaskSeq,
+		ShortID:                     row.ShortID,
+		Title:                       row.Title,
+		Body:                        row.Body,
+		SourceUrl:                   row.SourceUrl,
+		SourceWorkspaceID:           row.SourceWorkspaceID,
+		ManagedWorktreeID:           row.ManagedWorktreeID,
+		ExecutionTargetMode:         row.ExecutionTargetMode,
+		ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
+		ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
+		ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
+		ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
+		CreatedAtUnixMs:             row.CreatedAtUnixMs,
+		UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
+		MetadataJson:                row.MetadataJson,
 	}
 }
 
 func boardNodeTaskRecordsUpdated[T boardUpdatedTaskRow](rows []T) []boardNodeCardsPageTask {
 	return boardNodeCardsPageTasks(rows, func(row T) boardNodeCardsPageTask {
-		return boardNodeCardsPageTask{task: boardUpdatedTaskRecord(boardUpdatedTaskFieldsFromRow(row))}
+		return boardNodeCardsPageTask{task: boardUpdatedTaskRecord(boardUpdatedTaskRowShape(row))}
 	})
 }
 
