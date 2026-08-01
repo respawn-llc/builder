@@ -33,6 +33,32 @@ describe("Project catalog authority", () => {
     ]);
   });
 
+  it("upserts repeated creates without duplicating the catalog record", () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => catalog([]),
+      onReorderFailure: noOpReorderFailure,
+      reorderCatalog: noOpReorderCatalog,
+    });
+    const key = queryKeys.projectLabels("project-1");
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Before"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
+
+    authority.applyCreate({ id: labelID, name: "After" });
+
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
+      { id: labelID, name: "After" },
+      { id: secondLabelID, name: "Beta" },
+    ]);
+  });
+
   it("keeps an authoritative local rename ahead of an older catalog read", async () => {
     const oldRead = deferred<ProjectLabelCatalog>();
     const reconciliation = deferred<ProjectLabelCatalog>();

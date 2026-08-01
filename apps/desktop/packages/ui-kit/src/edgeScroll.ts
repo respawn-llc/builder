@@ -71,7 +71,9 @@ export function createEdgeScrollDriver(
     lastFrameTimestamp = timestamp;
     let moved = false;
     for (const item of motion) {
-      moved ||= applyScroll(item, elapsedMs);
+      if (applyScroll(item, elapsedMs)) {
+        moved = true;
+      }
     }
     if (!moved) {
       stop();

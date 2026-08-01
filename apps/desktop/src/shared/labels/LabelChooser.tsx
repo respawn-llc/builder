@@ -23,6 +23,7 @@ import {
   SegmentedControl,
   Spinner,
   fieldInputClassName,
+  showStatusToast,
 } from "@/ui";
 import {
   removeDeletedSelection,
@@ -274,7 +275,15 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           rename,
           preparedSearch,
           reorderCatalog(orderedIDs) {
-            authority.reorder(orderedIDs);
+            try {
+              authority.reorder(orderedIDs);
+            } catch {
+              showStatusToast({
+                id: "project-label-reorder-failure",
+                tone: "danger",
+                title: t("labels.reorderFailed"),
+              });
+            }
           },
           setDeletion,
           setKeyboardHighlightedIndex,

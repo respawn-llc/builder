@@ -243,7 +243,8 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     const { active } = this.#snapshot;
     const filterChanged = !taskLabelFiltersEqual(active.filter, filter);
     const sortChanged = !boardNodeCardsSortEqual(active.sort, sort);
-    if (!active.retiring && !this.#hasUnsettledWork() && !filterChanged && !sortChanged) {
+    const desiredPending = this.#snapshot.desiredFilter !== null || this.#snapshot.desiredSort !== null;
+    if (!filterChanged && !sortChanged && !desiredPending) {
       return;
     }
     if (!active.retiring && !this.#hasUnsettledWork()) {

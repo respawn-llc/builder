@@ -108,10 +108,15 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     const current = this.#currentCatalog();
     this.#advanceCatalog();
     this.#deletedLabelIDs.delete(label.id);
-    if (current?.labels.some((candidate) => candidate.id === label.id) !== true) {
+    const alreadyPresent = current?.labels.some((candidate) => candidate.id === label.id) === true;
+    if (!alreadyPresent) {
       this.#supersedePendingForMembershipChange();
     }
-    this.#patchCatalog((labels) => [...labels, label]);
+    this.#patchCatalog((labels) =>
+      labels.some((candidate) => candidate.id === label.id)
+        ? labels.map((candidate) => (candidate.id === label.id ? label : candidate))
+        : [...labels, label],
+    );
     this.#startRefreshIfIdle();
   }
 

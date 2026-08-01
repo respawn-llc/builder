@@ -325,7 +325,10 @@ func compactProjectLabelOrdinals(ctx context.Context, q *sqlitegen.Queries, proj
 	if len(rows) > label.MaxProjectLabels {
 		return fmt.Errorf("project %q label catalog exceeds the bounded limit", projectID)
 	}
-	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, projectID); err != nil {
+	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+		ProjectID:           projectID,
+		TemporaryBandOffset: int64(label.MaxProjectLabels),
+	}); err != nil {
 		return err
 	}
 	return rewriteProjectLabelOrdinalsFromRows(ctx, q, projectID, rows)
@@ -337,7 +340,10 @@ func rewriteProjectLabelOrdinals(
 	projectID string,
 	orderedIDs []label.ID,
 ) error {
-	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, projectID); err != nil {
+	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+		ProjectID:           projectID,
+		TemporaryBandOffset: int64(label.MaxProjectLabels),
+	}); err != nil {
 		return err
 	}
 	for index, id := range orderedIDs {

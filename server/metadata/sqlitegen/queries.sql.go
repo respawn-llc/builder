@@ -4252,28 +4252,31 @@ board_node_tasks AS (
 ),
 board_node_task_label_values AS (
     SELECT
-        assignment.task_id,
-        group_concat(printf('%03d', label.ordinal), '') OVER (
-            PARTITION BY assignment.task_id
-            ORDER BY label.ordinal ASC, label.id ASC
-            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-        ) AS label_ordinals,
-        ROW_NUMBER() OVER (
-            PARTITION BY assignment.task_id
-            ORDER BY label.ordinal DESC, label.id DESC
-        ) AS label_score_row
+        board_task.id AS task_id,
+        (
+            SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
+            FROM (
+                SELECT label.ordinal
+                FROM task_label_assignments assignment
+                JOIN project_labels label ON label.id = assignment.label_id
+                WHERE assignment.task_id = board_task.id
+                ORDER BY label.ordinal ASC, label.id ASC
+            ) ordered_label
+        ) AS label_ordinals
     FROM board_node_tasks board_task
-    JOIN task_label_assignments assignment ON assignment.task_id = board_task.id
-    JOIN project_labels label ON label.id = assignment.label_id
     CROSS JOIN board_sort_args args
     WHERE args.sort_field = 'labels'
+      AND EXISTS (
+          SELECT 1
+          FROM task_label_assignments assignment
+          WHERE assignment.task_id = board_task.id
+      )
 ),
 board_node_task_labels AS (
     SELECT
         task_id,
         CAST(label_ordinals AS TEXT) AS label_ordinals
     FROM board_node_task_label_values
-    WHERE label_score_row = 1
 ),
 board_node_tasks_scored AS (
     SELECT
@@ -8843,13 +8846,18 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 
 const moveProjectLabelOrdinalsToTemporaryBand = `-- name: MoveProjectLabelOrdinalsToTemporaryBand :execrows
 UPDATE project_labels
-SET ordinal = ordinal + 100
-WHERE project_id = ?1
+SET ordinal = ordinal + CAST(?1 AS INTEGER)
+WHERE project_id = ?2
 `
 
-func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, projectID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, projectID)
-	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 1)
+type MoveProjectLabelOrdinalsToTemporaryBandParams struct {
+	TemporaryBandOffset int64
+	ProjectID           string
+}
+
+func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, arg.TemporaryBandOffset, arg.ProjectID)
+	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 2)
 	if err != nil {
 		return 0, err
 	}

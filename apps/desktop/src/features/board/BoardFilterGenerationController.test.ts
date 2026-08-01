@@ -30,6 +30,23 @@ describe("BoardFilterGenerationController", () => {
     });
   });
 
+  it("does not retire an active generation for an unchanged view while transport is pending", () => {
+    const controller = createBoardFilterGenerationController({ kind: "none" });
+    controller.admitBoardTransport(1, "board:active", async () => new Promise<WorkflowBoard>(() => undefined));
+
+    controller.setDesiredFilter({ kind: "none" });
+    controller.setDesiredSort({ field: "updated", direction: "desc" });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      active: {
+        generation: 1,
+        retiring: false,
+      },
+      desiredFilter: null,
+      desiredSort: null,
+    });
+  });
+
   it("coalesces interleaved filter and sort edits into one latest desired view", async () => {
     const controller = createBoardFilterGenerationController({ kind: "none" });
     let settle: ((board: WorkflowBoard) => void) | undefined;

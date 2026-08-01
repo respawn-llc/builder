@@ -111,5 +111,7 @@ INSERT INTO project_labels (
 ) VALUES ('label-duplicate-ordinal', 'project-label-order-migration', 'Duplicate', 1, 2, 2)
 `); err == nil {
 		t.Fatal("duplicate project label ordinal insert succeeded")
+	} else if !IsSQLiteUniqueConstraint(err) {
+		t.Fatalf("duplicate project label ordinal insert returned non-unique error: %v", err)
 	}
 }

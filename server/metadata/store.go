@@ -1042,10 +1042,7 @@ func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Querie
 			missingSnapshots--
 		}
 	}
-	missingSessionSnapshots, err := q.CountSessionsMissingWorkspaceSnapshot(ctx, sql.NullString{
-		String: workspace.ID,
-		Valid:  true,
-	})
+	missingSessionSnapshots, err := q.CountSessionsMissingWorkspaceSnapshot(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("count missing session workspace snapshots: %w", err)
 	}

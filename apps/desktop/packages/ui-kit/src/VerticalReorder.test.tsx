@@ -633,6 +633,22 @@ describe("edge-scroll driver", () => {
     expect(callbacks).toHaveLength(0);
   });
 
+  it("applies every active motion in one frame", () => {
+    const first = edgeScrollTestScrollport();
+    const second = edgeScrollTestScrollport();
+    const motion: readonly EdgeScrollMotion[] = [
+      { axis: "y", element: first, velocity: 900 },
+      { axis: "y", element: second, velocity: 900 },
+    ];
+    const driver = createEdgeScrollDriver(() => motion);
+
+    driver.refresh();
+    releaseEdgeScrollFrame(callbacks, 1_000);
+
+    expect(first.scrollTop).toBeGreaterThan(0);
+    expect(second.scrollTop).toBeGreaterThan(0);
+  });
+
   it("moves in the requested direction with a bounded frame delta", () => {
     const element = edgeScrollTestScrollport();
     element.scrollTop = 200;

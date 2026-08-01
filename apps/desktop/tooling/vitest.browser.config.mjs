@@ -3,12 +3,8 @@ import { mergeConfig, defineConfig } from "vitest/config";
 import { playwright } from "@vitest/browser-playwright";
 import baseConfig from "./vite.config";
 
-const pointerDrag = async ({ provider, sessionId }, input) => {
-  const runtimeContext = provider.getCommandsContext(sessionId);
-  if (!(runtimeContext instanceof Object)) {
-    throw new Error("Cannot resolve the browser pointer-drag runtime context.");
-  }
-  const testFrame = await runtimeContext.frame();
+const pointerDrag = async ({ frame, page }, input) => {
+  const testFrame = await frame();
   const sourceBox = await resolveBox(testFrame, input.sourceSelector, "source");
   const destinationBox =
     input.destination.kind === "source"
@@ -17,11 +13,11 @@ const pointerDrag = async ({ provider, sessionId }, input) => {
   const destination = projectPointerDestination(destinationBox, input.destination);
   const sourceX = sourceBox.x + sourceBox.width / 2;
   const sourceY = sourceBox.y + sourceBox.height / 2;
-  await runtimeContext.page.mouse.move(sourceX, sourceY);
-  await runtimeContext.page.mouse.down();
-  await runtimeContext.page.mouse.move(sourceX, sourceY + 7);
-  await runtimeContext.page.mouse.move(destination.x, destination.y);
-  await runtimeContext.page.mouse.up();
+  await page.mouse.move(sourceX, sourceY);
+  await page.mouse.down();
+  await page.mouse.move(sourceX, sourceY + 7);
+  await page.mouse.move(destination.x, destination.y);
+  await page.mouse.up();
 };
 
 async function resolveBox(frame, selector, role) {
