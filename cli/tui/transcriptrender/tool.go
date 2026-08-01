@@ -191,6 +191,9 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 			if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
 				resultSummary = ""
 			}
+			if isPatchTool(meta) && !meta.IsError {
+				resultSummary = ""
+			}
 			status = firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)
 			if meta.IsShell && modeShowsShellContinuationMetadata(mode) {
 				if continuation, ok := shellCommandContinuationMetadata(meta.Command); ok {
@@ -388,7 +391,7 @@ func renderPatchTool(
 		if mode == ModeDetailExpanded {
 			return renderDetailedToolTextBlock(role, text, result, width, meta)
 		}
-		return renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)
+		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
 	}
 	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
@@ -411,7 +414,7 @@ func renderPatchTool(
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{roleSpan(text, role)}}}
 	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, "", mode, meta)
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, meta)
 }
 
 const (

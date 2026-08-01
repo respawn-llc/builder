@@ -17,7 +17,7 @@ func TestLocalFileURL(t *testing.T) {
 			t.Errorf("LocalFileURL(%q) = %q, want %q", path, got.String(), want)
 		}
 	}
-	for _, path := range []string{"relative.go", `\relative.go`, `C:relative.go`} {
+	for _, path := range []string{"relative.go", `\relative.go`, `C:relative.go`, `\\server\`} {
 		if _, ok := LocalFileURL(path); ok {
 			t.Errorf("LocalFileURL(%q) unexpectedly accepted relative path", path)
 		}
