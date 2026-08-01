@@ -412,3 +412,12 @@ Round 3 progress: reserved fences, terminal-scope validation, successor-safe mut
 Round 3 decision: do not split provider-coupled Engine methods into speculative preparation APIs. Their first model-visible effects remain exclusively behind the existing `steer` dispatcher, while the FIFO handoff atomically registers the owner, retains the generation-bound continuation, and gates all subsequent work. Adding per-family pre-steer shims would duplicate mutation ownership and create a second source of truth for the same durable operation. The retained continuation re-enters at the current FIFO tail and all Agent-targeted re-entry stages validate exact scope before mutation.
 
 Final design resolution: the operator rejected the larger prepared-command refactor as scope creep for the rare interleaving edge. Preserve the single `steer()` mutation source and current long-running owner seams; do not add per-family speculative command state. The residual ordering tradeoff is explicit and user-authorized, while safety fixes (no deadlock, no stale successor mutation, no partial completion fence or shell ownership transfer) remain enforced.
+
+## Review remediation round 4
+
+- [x] Settle both pending and reserved shell transitions as aborted during manager shutdown.
+- [x] Make test parallelism cap a single source of truth for help text and behavior.
+- [x] Attempt the repository server suite after the scheduling change; feature failures from the experimental shard threshold were reverted, leaving the known fixed-cap result only.
+- [x] Record the operator's prior explicit direction that the repository cap is non-blocking for this task.
+
+Round 4 progress: shutdown now closes reserved transition futures and prevents post-close commitment; scripts/test.sh derives its help text and behavior from one parallelism cap. The stable shard threshold remains unchanged after the experimental speed-up caused unrelated runtime test contention. The fixed 180-second repository cap remains the only full-suite limitation and is covered by the operator authorization recorded in ticket comments.
