@@ -68,6 +68,7 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   const [session, setSession] = useState<VerticalReorderDragSession | null>(null);
   const rowNodes = useRef(new Map<UniqueIdentifier, HTMLElement>());
   const listRef = useRef<HTMLDivElement | null>(null);
+  const pointerListenerCleanup = useRef<(() => void) | null>(null);
   const edgeScroll = useBoundedVerticalEdgeScroll();
   const itemByID = new Map<UniqueIdentifier, Item>(items.map((item) => [getItemID(item), item]));
   const sensors = useSensors(
@@ -88,10 +89,25 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
     },
     [edgeScroll],
   );
+  const stopPointerListener = useCallback(() => {
+    pointerListenerCleanup.current?.();
+    pointerListenerCleanup.current = null;
+  }, []);
+  const startPointerListener = useCallback(() => {
+    stopPointerListener();
+    const handlePointerMove = (event: PointerEvent) => {
+      recordPointerPosition({ x: event.clientX, y: event.clientY });
+    };
+    window.addEventListener("pointermove", handlePointerMove, { passive: true });
+    pointerListenerCleanup.current = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+    };
+  }, [recordPointerPosition, stopPointerListener]);
   const clearSession = useCallback(() => {
     edgeScroll.stop();
+    stopPointerListener();
     setSession(null);
-  }, [edgeScroll]);
+  }, [edgeScroll, stopPointerListener]);
 
   const onDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -103,13 +119,14 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
       });
       if (source === "pointer") {
         edgeScroll.start(listRef.current);
+        startPointerListener();
         const pointer = pointerActivationLocation(event.activatorEvent);
         if (pointer !== null) {
           recordPointerPosition(pointer);
         }
       }
     },
-    [edgeScroll, recordPointerPosition],
+    [edgeScroll, recordPointerPosition, startPointerListener],
   );
 
   const onDragOver = useCallback(
@@ -146,15 +163,6 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   );
 
   useEffect(() => clearSession, [clearSession]);
-  useEffect(() => {
-    const handlePointerMove = (event: PointerEvent) => {
-      recordPointerPosition({ x: event.clientX, y: event.clientY });
-    };
-    window.addEventListener("pointermove", handlePointerMove, { passive: true });
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-    };
-  }, [recordPointerPosition]);
   const activeItem = session === null ? undefined : itemByID.get(session.activeID);
 
   return (
