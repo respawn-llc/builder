@@ -27,12 +27,12 @@ func TestManagedWorktreePathOwnershipGuard(t *testing.T) {
 
 func typedPathOwnershipViolations(pkg *packages.Package) []string {
 	workspaceType := workspaceTypeForPackage(pkg)
+	identity := workspaceIdentityObjects(pkg, workspaceType)
 	violations := make([]string, 0)
 	for _, file := range pkg.Syntax {
 		if filepath.Base(pkg.Fset.Position(file.Pos()).Filename) == "managed_root_allocator.go" {
 			continue
 		}
-		identities := workspaceIdentityObjects(pkg, file, workspaceType)
 		separators := pathSeparatorObjects(pkg, file)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch current := node.(type) {
@@ -50,12 +50,12 @@ func typedPathOwnershipViolations(pkg *packages.Package) []string {
 					}
 				}
 			case *ast.CallExpr:
-				if typedForbiddenPathCall(pkg, current, identities, separators) {
+				if typedForbiddenPathCall(pkg, current, identity, separators) {
 					violations = append(violations, "typed Workspace identity path construction")
 				}
 			case *ast.BinaryExpr:
 				if current.Op == token.ADD &&
-					typedContainsWorkspaceIdentity(pkg, current, identities, workspaceType) &&
+					typedContainsWorkspaceIdentity(pkg, current, identity, workspaceType) &&
 					typedContainsPathSeparator(pkg, current, separators) {
 					violations = append(violations, "typed Workspace identity path concatenation")
 				}
@@ -82,7 +82,12 @@ func workspaceTypeForPackage(pkg *packages.Package) *types.Named {
 	return nil
 }
 
-func workspaceIdentityObjects(pkg *packages.Package, file *ast.File, workspaceType *types.Named) map[types.Object]bool {
+type workspaceIdentityAnalysis struct {
+	objects   map[types.Object]bool
+	returning map[*types.Func]bool
+}
+
+func workspaceIdentityObjects(pkg *packages.Package, workspaceType *types.Named) workspaceIdentityAnalysis {
 	objects := make(map[types.Object]bool)
 	for _, object := range pkg.TypesInfo.Defs {
 		if isWorkspaceIDSource(object) {
@@ -94,59 +99,147 @@ func workspaceIdentityObjects(pkg *packages.Package, file *ast.File, workspaceTy
 			objects[object] = true
 		}
 	}
+	returning := make(map[*types.Func]bool)
 	for {
 		changed := false
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch current := node.(type) {
-			case *ast.AssignStmt:
-				if len(current.Lhs) == 1 && len(current.Rhs) == 1 {
-					if lhs, ok := current.Lhs[0].(*ast.Ident); ok &&
-						typedContainsWorkspaceIdentity(pkg, current.Rhs[0], objects, workspaceType) {
-						object := pkg.TypesInfo.Defs[lhs]
-						if object == nil {
-							object = pkg.TypesInfo.Uses[lhs]
+		for _, file := range pkg.Syntax {
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch current := node.(type) {
+				case *ast.AssignStmt:
+					if len(current.Lhs) == 1 && len(current.Rhs) == 1 {
+						if lhs, ok := current.Lhs[0].(*ast.Ident); ok &&
+							typedCarriesWorkspaceIdentity(pkg, current.Rhs[0], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+							object := pkg.TypesInfo.Defs[lhs]
+							if object == nil {
+								object = pkg.TypesInfo.Uses[lhs]
+							}
+							if object != nil && !objects[object] {
+								objects[object] = true
+								changed = true
+							}
 						}
+					}
+				case *ast.ValueSpec:
+					if len(current.Names) == 1 && len(current.Values) == 1 &&
+						typedCarriesWorkspaceIdentity(pkg, current.Values[0], workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+						object := pkg.TypesInfo.Defs[current.Names[0]]
 						if object != nil && !objects[object] {
 							objects[object] = true
 							changed = true
 						}
 					}
-				}
-			case *ast.ValueSpec:
-				if len(current.Names) == 1 && len(current.Values) == 1 &&
-					typedContainsWorkspaceIdentity(pkg, current.Values[0], objects, workspaceType) {
-					object := pkg.TypesInfo.Defs[current.Names[0]]
-					if object != nil && !objects[object] {
-						objects[object] = true
-						changed = true
+				case *ast.CallExpr:
+					callee := calledFunction(pkg, current)
+					if callee != nil {
+						signature, ok := callee.Type().(*types.Signature)
+						if ok {
+							for index, argument := range current.Args {
+								if index >= signature.Params().Len() ||
+									!typedCarriesWorkspaceIdentity(pkg, argument, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) {
+									continue
+								}
+								parameter := signature.Params().At(index)
+								if !objects[parameter] {
+									objects[parameter] = true
+									changed = true
+								}
+							}
+						}
 					}
+				case *ast.FuncDecl:
+					callee, ok := pkg.TypesInfo.Defs[current.Name].(*types.Func)
+					if !ok || current.Body == nil {
+						break
+					}
+					ast.Inspect(current.Body, func(bodyNode ast.Node) bool {
+						returnStmt, ok := bodyNode.(*ast.ReturnStmt)
+						if !ok {
+							return true
+						}
+						for _, result := range returnStmt.Results {
+							if typedCarriesWorkspaceIdentity(pkg, result, workspaceIdentityAnalysis{objects: objects, returning: returning}, workspaceType) &&
+								!returning[callee] {
+								returning[callee] = true
+								changed = true
+							}
+						}
+						return true
+					})
 				}
-			}
-			return true
-		})
+				return true
+			})
+		}
 		if !changed {
-			return objects
+			return workspaceIdentityAnalysis{objects: objects, returning: returning}
 		}
 	}
 }
 
-func typedContainsWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, objects map[types.Object]bool, workspaceType *types.Named) bool {
+func calledFunction(pkg *packages.Package, call *ast.CallExpr) *types.Func {
+	switch function := call.Fun.(type) {
+	case *ast.Ident:
+		result, _ := pkg.TypesInfo.Uses[function].(*types.Func)
+		return result
+	case *ast.SelectorExpr:
+		result, _ := pkg.TypesInfo.Uses[function.Sel].(*types.Func)
+		return result
+	default:
+		return nil
+	}
+}
+
+func typedCarriesWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
+	switch current := expression.(type) {
+	case *ast.Ident:
+		return identity.objects[pkg.TypesInfo.Uses[current]] || identity.objects[pkg.TypesInfo.Defs[current]]
+	case *ast.SelectorExpr:
+		if object := pkg.TypesInfo.Uses[current.Sel]; identity.objects[object] {
+			return true
+		}
+		selection := pkg.TypesInfo.Selections[current]
+		return selection != nil &&
+			workspaceType != nil &&
+			sameNamedType(selection.Recv(), workspaceType) &&
+			selection.Obj().Name() == "ID"
+	case *ast.CallExpr:
+		if callee := calledFunction(pkg, current); callee != nil {
+			return identity.returning[callee]
+		}
+		return len(current.Args) == 1 &&
+			isStringType(pkg.TypesInfo.TypeOf(current)) &&
+			typedCarriesWorkspaceIdentity(pkg, current.Args[0], identity, workspaceType)
+	case *ast.BinaryExpr:
+		return current.Op == token.ADD &&
+			(typedCarriesWorkspaceIdentity(pkg, current.X, identity, workspaceType) ||
+				typedCarriesWorkspaceIdentity(pkg, current.Y, identity, workspaceType))
+	case *ast.ParenExpr:
+		return typedCarriesWorkspaceIdentity(pkg, current.X, identity, workspaceType)
+	default:
+		return false
+	}
+}
+
+func typedContainsWorkspaceIdentity(pkg *packages.Package, expression ast.Expr, identity workspaceIdentityAnalysis, workspaceType *types.Named) bool {
 	found := false
 	ast.Inspect(expression, func(node ast.Node) bool {
 		switch current := node.(type) {
 		case *ast.Ident:
-			if object := pkg.TypesInfo.Uses[current]; object != nil && objects[object] {
+			if object := pkg.TypesInfo.Uses[current]; object != nil && identity.objects[object] {
 				found = true
 			}
-			if object := pkg.TypesInfo.Defs[current]; object != nil && objects[object] {
+			if object := pkg.TypesInfo.Defs[current]; object != nil && identity.objects[object] {
 				found = true
 			}
 		case *ast.SelectorExpr:
-			if object := pkg.TypesInfo.Uses[current.Sel]; object != nil && objects[object] {
+			if object := pkg.TypesInfo.Uses[current.Sel]; object != nil && identity.objects[object] {
 				found = true
 			}
 			selection := pkg.TypesInfo.Selections[current]
 			if selection != nil && workspaceType != nil && sameNamedType(selection.Recv(), workspaceType) && selection.Obj().Name() == "ID" {
+				found = true
+			}
+		case *ast.CallExpr:
+			if callee := calledFunction(pkg, current); callee != nil && identity.returning[callee] {
 				found = true
 			}
 		}
@@ -237,7 +330,7 @@ func sameNamedType(typ types.Type, want *types.Named) bool {
 	return ok && named == want
 }
 
-func typedForbiddenPathCall(pkg *packages.Package, call *ast.CallExpr, objects map[types.Object]bool, separators map[types.Object]bool) bool {
+func typedForbiddenPathCall(pkg *packages.Package, call *ast.CallExpr, identity workspaceIdentityAnalysis, separators map[types.Object]bool) bool {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -246,15 +339,23 @@ func typedForbiddenPathCall(pkg *packages.Package, call *ast.CallExpr, objects m
 	if !ok || function.Pkg() == nil {
 		return false
 	}
-	if function.Pkg().Path() != "path/filepath" && function.Pkg().Path() != "path" && function.Pkg().Path() != "fmt" {
-		return false
-	}
-	if function.Name() != "Join" && function.Name() != "Sprintf" {
+	switch function.Pkg().Path() {
+	case "path/filepath", "path", "strings":
+		if function.Name() != "Join" {
+			return false
+		}
+	case "fmt":
+		if function.Name() != "Sprintf" {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, argument := range call.Args {
-		if typedContainsWorkspaceIdentity(pkg, argument, objects, workspaceTypeForPackage(pkg)) &&
-			(function.Name() == "Join" || typedContainsPathSeparator(pkg, call, separators)) {
+		if typedContainsWorkspaceIdentity(pkg, argument, identity, workspaceTypeForPackage(pkg)) &&
+			(function.Pkg().Path() == "path/filepath" ||
+				function.Pkg().Path() == "path" ||
+				typedContainsPathSeparator(pkg, call, separators)) {
 			return true
 		}
 	}
@@ -292,12 +393,19 @@ import "path/filepath"
 type Workspace struct { ID string }
 func automatic(base string, workspace Workspace) string { return base + string(filepath.Separator) + workspace.ID }`,
 		`package fixture
+import ("path/filepath"; "strings")
+type Workspace struct { ID string }
+func automatic(base string, workspace Workspace) string {
+	return strings.Join([]string{base, workspace.ID, "leaf"}, string(filepath.Separator))
+}`,
+		`package fixture
 import "fmt"
 type Workspace struct { ID string }
 func automatic(base string, workspace Workspace) string { return fmt.Sprintf("%s%c%s", base, '/', workspace.ID) }`,
 		`package fixture
 import "path/filepath"
-func managedRoot(base string, workspaceID string) string { return filepath.Join(base, workspaceID, "leaf") }`,
+func caller(base string, workspaceID string) string { return managedRoot(base, workspaceID) }
+func managedRoot(base string, id string) string { return filepath.Join(base, id, "leaf") }`,
 		`package fixture
 import "path/filepath"
 type Binding struct { WorkspaceID string }
