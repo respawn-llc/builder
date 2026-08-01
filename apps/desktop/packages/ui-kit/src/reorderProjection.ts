@@ -1,34 +1,26 @@
 import type { UniqueIdentifier } from "@dnd-kit/core";
 
-export type VerticalReorderProjection<ID extends UniqueIdentifier> = Readonly<{
-  insertionIndex: number | undefined;
-  orderedIDs: readonly ID[] | null;
-}>;
-
 export function projectVerticalReorder<ID extends UniqueIdentifier>(
   ids: readonly ID[],
   activeID: UniqueIdentifier,
   overID: UniqueIdentifier | undefined,
-): VerticalReorderProjection<ID> {
+): readonly ID[] | null {
   if (overID === undefined || activeID === overID) {
-    return { insertionIndex: undefined, orderedIDs: null };
+    return null;
   }
   const indexes = indexesByID(ids);
   const activeIndex = indexes.get(activeID);
   const overIndex = indexes.get(overID);
   if (activeIndex === undefined || overIndex === undefined) {
-    return { insertionIndex: undefined, orderedIDs: null };
+    return null;
   }
   const orderedIDs = [...ids];
   const [moved] = orderedIDs.splice(activeIndex, 1);
   if (moved === undefined) {
-    return { insertionIndex: undefined, orderedIDs: null };
+    return null;
   }
   orderedIDs.splice(overIndex, 0, moved);
-  return {
-    insertionIndex: activeIndex < overIndex ? overIndex + 1 : overIndex,
-    orderedIDs,
-  };
+  return orderedIDs;
 }
 
 export function indexesByID(ids: readonly UniqueIdentifier[]): ReadonlyMap<UniqueIdentifier, number> {

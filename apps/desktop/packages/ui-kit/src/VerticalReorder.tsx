@@ -21,7 +21,7 @@ import {
 import {
   SortableContext,
   useSortable,
-  type SortingStrategy,
+  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
   cloneElement,
@@ -37,6 +37,7 @@ import {
   type ReactNode,
   type RefAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 import { createEdgeScrollDriver } from "./edgeScroll";
 import { indexesByID, projectVerticalReorder } from "./reorderProjection";
 
@@ -144,12 +145,12 @@ export function VerticalReorder<Item, ID extends UniqueIdentifier>({
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeID = event.active.id;
-      const projection = projectVerticalReorder(items.map(getItemID), activeID, event.over?.id);
+      const orderedIDs = projectVerticalReorder(items.map(getItemID), activeID, event.over?.id);
       clearSession();
-      if (projection.orderedIDs === null) {
+      if (orderedIDs === null) {
         return;
       }
-      onCommit(projection.orderedIDs);
+      onCommit(orderedIDs);
     },
     [clearSession, getItemID, items, onCommit],
   );
@@ -205,7 +206,7 @@ function VerticalReorderOverlay<Item>({
   const { active } = useDndContext();
   const activeItem =
     active === null ? undefined : items.find((item) => getItemID(item) === active.id);
-  return (
+  return createPortal(
     <DragOverlay dropAnimation={useReducedMotion() ? null : undefined}>
       {activeItem === undefined ? null : (
         <div aria-hidden="true" style={{ pointerEvents: "none" }}>
@@ -216,11 +217,10 @@ function VerticalReorderOverlay<Item>({
           })}
         </div>
       )}
-    </DragOverlay>
+    </DragOverlay>,
+    document.body,
   );
 }
-
-const verticalReorderProjectionStrategy: SortingStrategy = () => null;
 
 function VerticalReorderList<Item, ID extends UniqueIdentifier>({
   getItemID,
@@ -237,27 +237,14 @@ function VerticalReorderList<Item, ID extends UniqueIdentifier>({
   renderActivator: (item: Item) => VerticalReorderActivator;
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
-  const { active, activeNodeRect, over } = useDndContext();
-  const ids = items.map(getItemID);
-  const projection =
-    active === null
-      ? { insertionIndex: undefined, orderedIDs: null }
-      : projectVerticalReorder(ids, active.id, over?.id);
-  const activeRowHeight = activeNodeRect?.height;
-  const canCollapseActive = projection.insertionIndex !== undefined && activeRowHeight !== undefined;
-
   return (
-    <SortableContext items={ids} strategy={verticalReorderProjectionStrategy}>
+    <SortableContext items={items.map(getItemID)} strategy={verticalListSortingStrategy}>
       <div ref={listRef} style={{ display: "grid", gap: "var(--space-3)" }}>
-        {items.map((item, index) => {
+        {items.map((item) => {
           const id = getItemID(item);
           return (
             <VerticalReorderItem
-              activeRowHeight={activeRowHeight}
-              collapseActive={canCollapseActive && active?.id === id}
               id={id}
-              insertionGap={projection.insertionIndex === index}
-              isDragging={active?.id === id}
               item={item}
               key={id}
               onRowNodeChange={onRowNodeChange}
@@ -266,34 +253,34 @@ function VerticalReorderList<Item, ID extends UniqueIdentifier>({
             />
           );
         })}
-        {projection.insertionIndex === ids.length ? <VerticalReorderGap height={activeRowHeight} /> : null}
       </div>
     </SortableContext>
   );
 }
 
 function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
-  activeRowHeight,
-  collapseActive,
   id,
-  insertionGap,
-  isDragging,
   item,
   onRowNodeChange,
   renderActivator,
   renderItem,
 }: Readonly<{
-  activeRowHeight: number | undefined;
-  collapseActive: boolean;
   id: ID;
-  insertionGap: boolean;
-  isDragging: boolean;
   item: Item;
   onRowNodeChange: (id: ID, element: HTMLElement | null) => void;
   renderActivator: (item: Item) => VerticalReorderActivator;
   renderItem: (item: Item, row: VerticalReorderRow) => ReactNode;
 }>) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef } = useSortable({ id });
+  const reducedMotion = useReducedMotion();
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id });
   const setRowNodeRef = useCallback(
     (element: HTMLElement | null) => {
       setNodeRef(element);
@@ -301,43 +288,28 @@ function VerticalReorderItem<Item, ID extends UniqueIdentifier>({
     },
     [id, onRowNodeChange, setNodeRef],
   );
-  const style: CSSProperties | undefined = collapseActive
-    ? { height: 0, opacity: 0, overflow: "hidden", pointerEvents: "none" }
-    : isDragging
-      ? { opacity: 0, pointerEvents: "none" }
-      : undefined;
+  const style: CSSProperties = isDragging
+    ? { opacity: 0, pointerEvents: "none" }
+    : {
+        transform:
+          transform === null
+            ? undefined
+            : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
+        transition: reducedMotion ? undefined : transition,
+      };
 
   return (
-    <>
-      {insertionGap ? <VerticalReorderGap height={activeRowHeight} /> : null}
-      <div ref={setRowNodeRef} style={style}>
-        {renderItem(item, {
-          activator: cloneElement(renderActivator(item), {
-            ...attributes,
-            ...listeners,
-            ref: setActivatorNodeRef,
-          }),
-          isDragging,
-          isOverlay: false,
-        })}
-      </div>
-    </>
-  );
-}
-
-function VerticalReorderGap({ height }: Readonly<{ height: number | undefined }>) {
-  const reducedMotion = useReducedMotion();
-  if (height === undefined) {
-    return null;
-  }
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        height,
-        transition: reducedMotion ? undefined : "height var(--motion-fast) ease-out",
-      }}
-    />
+    <div ref={setRowNodeRef} style={style}>
+      {renderItem(item, {
+        activator: cloneElement(renderActivator(item), {
+          ...attributes,
+          ...listeners,
+          ref: setActivatorNodeRef,
+        }),
+        isDragging,
+        isOverlay: false,
+      })}
+    </div>
   );
 }
 

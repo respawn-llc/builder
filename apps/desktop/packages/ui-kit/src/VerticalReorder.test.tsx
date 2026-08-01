@@ -89,6 +89,39 @@ describe("VerticalReorder", () => {
     view.unmount();
   });
 
+  it("keeps the active overlay outside a transformed surface", () => {
+    const view = render(
+      <div data-testid="transformed-surface" style={{ transform: "translateY(50px)" }}>
+        <ReorderHarness onCommit={vi.fn()} />
+      </div>,
+    );
+    const handle = screen.getByRole("button", { name: "Reorder Second" });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      clientX: 20,
+      clientY: 50,
+      isPrimary: true,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(document, {
+      buttons: 1,
+      clientX: 20,
+      clientY: 57,
+      isPrimary: true,
+      pointerId: 1,
+    });
+
+    expect(screen.getByTestId("transformed-surface")).not.toContainElement(
+      screen.getByTestId("reorder-overlay"),
+    );
+
+    act(() => {
+      cancelPointerDrag();
+    });
+    view.unmount();
+  });
+
   it("keeps pointer projection anchored inside a variable-height source row", async () => {
     const onCommit = vi.fn();
     mockRowGeometry({ secondHeight: 80 });
