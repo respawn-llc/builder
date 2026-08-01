@@ -17,12 +17,13 @@ func TestWriteStdinHarvestWaitsForTerminalEventDelivery(t *testing.T) {
 			close(releaseTerminal)
 		}
 	}()
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type != EventCompleted && evt.Type != EventKilled {
-			return
+			return true
 		}
 		close(terminalStarted)
 		<-releaseTerminal
+		return true
 	})
 
 	started, err := manager.Start(context.Background(), ExecRequest{
@@ -83,12 +84,13 @@ func TestWriteStdinHarvestCancellationDoesNotWaitForTerminalEventDelivery(t *tes
 			close(releaseTerminal)
 		}
 	}()
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type != EventCompleted && evt.Type != EventKilled {
-			return
+			return true
 		}
 		close(terminalStarted)
 		<-releaseTerminal
+		return true
 	})
 
 	started, err := manager.Start(context.Background(), ExecRequest{

@@ -136,9 +136,20 @@ describe("Home global attention data", () => {
     const controller = createTestSidebarController((destination) => {
       openedDestinations.push(destination);
     });
-    const view = renderHome(services, <HomeAttentionQueryHarness />);
+    let homeAttention: ReturnType<typeof useGlobalAttentionPages> | undefined;
+    const view = renderHome(
+      services,
+      <HomeAttentionQueryHarness
+        onQuery={(query) => {
+          homeAttention = query;
+        }}
+      />,
+    );
 
     await expectAttentionCalls(services.transport, 1);
+    await waitFor(() => {
+      expect(homeAttention?.data?.pages[0]?.items[0]?.taskID).toBe("task-1");
+    });
     view.rerender(
       <TestAppProviders services={services}>
         <SidebarContext.Provider value={sidebarController}>

@@ -184,6 +184,7 @@ var (
 	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a task to a workflow node.", "", "User-only; unavailable inside Kent shell commands.")
 	taskCompleteUsage       = leafCommandUsage(config.Command+" task complete [--transition <key>] [--commentary <text>] [--param name=value] [--session <session-id>|--task <task> [--project <project>]] [--force]", "Submit your task result.", "", "Use this to submit your task and end your turn. This is the only way to end your turn during a workflow.", "Use `--json` or `--json-file` instead of field flags to submit a JSON transition result.", "Positional arguments are not accepted.", "If you're stuck for any reason, use ask_question to ask for help instead of attempting to submit a final_answer. Invoke this command exactly as is described in the workflow instructions you received in a developer reminder.")
 	taskListUsage           = leafCommandUsage(config.Command+" task list [--workflow <uuid>] [flags]", "List and filter tasks in a project.")
+	taskSearchUsage         = leafCommandUsage(config.Command+" task search <query> [flags]", "Search task titles, bodies, and optionally comments.")
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
@@ -199,6 +200,8 @@ var (
 	taskCommentReplaceUsage = leafCommandUsage(config.Command+" task comment replace <comment-id> --body <text>", "Replace a comment's body.")
 	taskCommentDeleteUsage  = leafCommandUsage(config.Command+" task comment delete <comment-id>", "Permanently delete a comment.", "", "User-only; unavailable inside Kent shell commands.")
 	projectUsage            = commandUsage{helpFile: "project.txt"}
+	projectDefaultUsage     = commandUsage{helpFile: "project_default.txt", includeEmbeddedFlags: true}
+	detachUsage             = commandUsage{helpFile: "detach.txt", includeEmbeddedFlags: true}
 	projectListUsage        = commandUsage{helpFile: "project_list.txt"}
 	projectCreateUsage      = commandUsage{helpFile: "project_create.txt", includeEmbeddedFlags: true}
 	attachUsage             = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}

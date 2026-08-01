@@ -304,10 +304,14 @@ func (c *CurrentNodeController) steerAndWaitStarts(
 	starts []currentNodeQueuedStart,
 ) ([]currentNodeQueuedStart, error) {
 	steered, steerErr := c.steerStartsAssignments(ctx, starts)
-	committed, waitErr := waitCurrentNodeAssignmentSteers(ctx, steered)
-	cause := errors.Join(steerErr, waitErr)
+	outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
+	cause := errors.Join(steerErr, outcome.err)
 	if cause != nil {
-		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, committed, false, cause))
+		if len(outcome.pending) != 0 {
+			c.continueCurrentNodeAssignmentStarts(steered, steerErr)
+			return nil, cause
+		}
+		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, outcome.committed, false, cause))
 	}
 	return steered, nil
 }
@@ -354,15 +358,23 @@ func (c *CurrentNodeController) steerAssignment(
 	return assignment, nil
 }
 
+type currentNodeAssignmentWaitOutcome struct {
+	committed []currentNodeQueuedStart
+	pending   []currentNodeQueuedStart
+	err       error
+}
+
 func waitCurrentNodeAssignmentSteers(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
-) ([]currentNodeQueuedStart, error) {
-	committed := make([]currentNodeQueuedStart, 0, len(starts))
-	var waitErr error
+) currentNodeAssignmentWaitOutcome {
+	outcome := currentNodeAssignmentWaitOutcome{
+		committed: make([]currentNodeQueuedStart, 0, len(starts)),
+		pending:   make([]currentNodeQueuedStart, 0, len(starts)),
+	}
 	for _, start := range starts {
 		if start.assignmentSteer == nil {
-			waitErr = errors.Join(waitErr, fmt.Errorf(
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
 				"current node assignment %v has no steer completion",
 				start.reference,
 			))
@@ -370,10 +382,13 @@ func waitCurrentNodeAssignmentSteers(
 		}
 		receipt, err := start.assignmentSteer.Wait(ctx)
 		if receipt.Committed {
-			committed = append(committed, start)
+			outcome.committed = append(outcome.committed, start)
 		}
 		if err != nil {
-			waitErr = errors.Join(waitErr, fmt.Errorf(
+			if cause := context.Cause(ctx); !receipt.Committed && cause != nil && errors.Is(err, cause) {
+				outcome.pending = append(outcome.pending, start)
+			}
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
 				"wait for current node assignment %v: %w",
 				start.reference,
 				err,
@@ -381,13 +396,42 @@ func waitCurrentNodeAssignmentSteers(
 			continue
 		}
 		if !receipt.Committed {
-			waitErr = errors.Join(waitErr, fmt.Errorf(
+			outcome.err = errors.Join(outcome.err, fmt.Errorf(
 				"current node assignment %v was not committed",
 				start.reference,
 			))
 		}
 	}
-	return committed, waitErr
+	return outcome
+}
+
+func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
+	starts []currentNodeQueuedStart,
+	priorErr error,
+) {
+	if len(starts) == 0 {
+		return
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.workerWG.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.workerWG.Done()
+		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
+		if context.Cause(c.workerContext) != nil {
+			return
+		}
+		cause := errors.Join(priorErr, outcome.err)
+		if cause != nil {
+			c.handleCurrentNodeStartFailures(outcome.committed, false, cause)
+			return
+		}
+		c.enqueueStarts(starts)
+	}()
 }
 
 func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {

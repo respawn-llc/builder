@@ -59,6 +59,21 @@ type completionOutput struct {
 	removed int
 }
 
+type terminalEventCache struct {
+	eventType        EventType
+	snapshot         Snapshot
+	noticeSuppressed bool
+	completion       *terminalCompletionCache
+	err              error
+}
+
+type terminalCompletionCache struct {
+	source     completionOutputSource
+	outputPath *string
+	warning    postprocess.Warning
+	removed    int
+}
+
 func newBackgroundedEvent(snapshot Snapshot) Event {
 	return Event{Type: EventBackgrounded, Snapshot: snapshotWithExecutionCorrelationCopy(snapshot)}
 }
@@ -249,6 +264,8 @@ type processEntry struct {
 	notify               chan struct{}
 	done                 chan struct{}
 	killRequested        bool
+	terminalEvent        *terminalEventCache
+	terminalDelivered    bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }

@@ -1,17 +1,11 @@
 package sqlitegen
 
 import (
-	"database/sql"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestListBoardNodeTasksUsesIndexedOrderingInBothDirections(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE tasks (
@@ -66,7 +60,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 
 	for _, direction := range []string{"older", "newer"} {
 		t.Run(direction, func(t *testing.T) {
-			requireBoardQueryUsesIndexedOrdering(
+			requireQueryUsesIndexWithoutSorter(
 				t,
 				db,
 				listBoardNodeTasks,
@@ -119,17 +113,5 @@ CREATE INDEX task_label_assignments_label_task_idx
 			requireQueryUsesIndex(t, db, query.sql, "sqlite_autoindex_task_label_assignments_1", query.args...)
 			requireQueryUsesIndex(t, db, query.sql, "task_label_assignments_label_task_idx", query.args...)
 		})
-	}
-}
-
-func requireBoardQueryUsesIndexedOrdering(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
-	t.Helper()
-	instructions := queryProgram(t, db, query, args...)
-	requireQueryProgramOpensIndex(t, db, instructions, indexName)
-	for _, instruction := range instructions {
-		switch instruction.Opcode {
-		case sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort:
-			t.Fatalf("query program opened a temporary sort structure: %+v", instructions)
-		}
 	}
 }

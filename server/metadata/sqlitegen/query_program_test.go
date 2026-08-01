@@ -10,6 +10,10 @@ type sqliteOpcode string
 const (
 	sqliteOpcodeOpenRead      sqliteOpcode = "OpenRead"
 	sqliteOpcodeOpenEphemeral sqliteOpcode = "OpenEphemeral"
+	sqliteOpcodeVFilter       sqliteOpcode = "VFilter"
+	sqliteOpcodeRewind        sqliteOpcode = "Rewind"
+	sqliteOpcodeNext          sqliteOpcode = "Next"
+	sqliteOpcodePrev          sqliteOpcode = "Prev"
 	sqliteOpcodeSorterOpen    sqliteOpcode = "SorterOpen"
 	sqliteOpcodeSort          sqliteOpcode = "Sort"
 	sqliteOpcodeSorterSort    sqliteOpcode = "SorterSort"
@@ -17,17 +21,50 @@ const (
 
 type sqliteInstruction struct {
 	Opcode sqliteOpcode
+	P1     int64
 	P2     int64
 }
 
 func requireQueryUsesIndexWithoutSort(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
 	t.Helper()
+	requireQueryUsesIndexWithoutOpcodes(
+		t,
+		db,
+		query,
+		indexName,
+		[]sqliteOpcode{sqliteOpcodeOpenEphemeral, sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort},
+		args...,
+	)
+}
+
+func requireQueryUsesIndexWithoutSorter(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
+	t.Helper()
+	requireQueryUsesIndexWithoutOpcodes(
+		t,
+		db,
+		query,
+		indexName,
+		[]sqliteOpcode{sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort},
+		args...,
+	)
+}
+
+func requireQueryUsesIndexWithoutOpcodes(
+	t *testing.T,
+	db *sql.DB,
+	query string,
+	indexName string,
+	forbidden []sqliteOpcode,
+	args ...any,
+) {
+	t.Helper()
 	instructions := queryProgram(t, db, query, args...)
 	requireQueryProgramOpensIndex(t, db, instructions, indexName)
 	for _, instruction := range instructions {
-		switch instruction.Opcode {
-		case sqliteOpcodeOpenEphemeral, sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort:
-			t.Fatalf("query program opened a temporary sort structure: %+v", instructions)
+		for _, opcode := range forbidden {
+			if instruction.Opcode == opcode {
+				t.Fatalf("query program used forbidden opcode %s: %+v", opcode, instructions)
+			}
 		}
 	}
 }
@@ -85,7 +122,7 @@ func queryProgram(t *testing.T, db *sql.DB, query string, args ...any) []sqliteI
 		if err := rows.Scan(&address, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
 			t.Fatalf("scan query program: %v", err)
 		}
-		instructions = append(instructions, sqliteInstruction{Opcode: sqliteOpcode(opcode), P2: p2})
+		instructions = append(instructions, sqliteInstruction{Opcode: sqliteOpcode(opcode), P1: p1, P2: p2})
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query program: %v", err)

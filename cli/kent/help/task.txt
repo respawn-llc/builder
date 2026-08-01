@@ -8,6 +8,7 @@ Usage of kent task:
   kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--offset <n>] [--limit <n>] [--json]
+  kent task search <query> [--fts5] [--case-sensitive] [--context <n>] [--include-comments] [--project <project>]... [--status <status>[,<status>...]] [--page-size <n>] [--offset <n>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
   kent task delete <short-id-or-task-id> [--project <project>]
   kent task dep add --blocker <short-id-or-task-id> --blocked <short-id-or-task-id> [--project <project>] [--json]
@@ -77,3 +78,11 @@ Listing tasks:
   label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`,
   or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.
+
+Searching tasks:
+  Search spans every Project unless one or more `--project` selectors narrow
+  it. A Project selector accepts a Project ID or registered workspace path.
+  The default search treats the query as a literal substring. `--fts5` treats
+  it as a raw FTS5 expression; `--case-sensitive` applies only to literal
+  search. `--include-comments` adds Task Comments to the searchable sources.
+  Repeatable or comma-separated `--status` filters primary typed Task status.

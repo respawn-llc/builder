@@ -39,6 +39,15 @@ func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.C
 
 var runtimeControlPromptHistoryStores sync.Map
 
+func runtimeControlCurrentNodeInstructions() workflowruntime.TaskInstructions {
+	return workflowruntime.TaskInstructions{
+		CurrentNode: workflow.CurrentNodeReference{
+			TaskID: "task-1",
+			NodeID: "node-1",
+		},
+	}
+}
+
 type runtimeControlPromptHistoryStore struct {
 	mu             sync.Mutex
 	records        []metadata.PromptHistoryRecord

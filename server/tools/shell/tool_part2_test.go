@@ -11,13 +11,11 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	t.Helper()
 	manager := newShellTestManager(t, 50*time.Millisecond)
 	events := make(chan Event, 2)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventCompleted || evt.Type == EventKilled {
-			select {
-			case events <- evt:
-			default:
-			}
+			events <- evt
 		}
+		return true
 	})
 
 	result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, ""), execID, map[string]any{
@@ -80,10 +78,11 @@ func TestWriteStdinFallbackCompletionLeavesBackgroundNoticeEventUnsuppressed(t *
 func TestSharedManagerWriteStdinHarvestLeavesProcessOwnerNoticeUnsuppressed(t *testing.T) {
 	manager := newShellTestManager(t, 50*time.Millisecond)
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventCompleted || evt.Type == EventKilled {
 			events <- evt
 		}
+		return true
 	})
 
 	started, err := manager.Start(context.Background(), ExecRequest{
@@ -129,13 +128,14 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	terminalHandlerStarted := make(chan struct{})
 	releaseTerminalHandler := make(chan struct{})
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type != EventCompleted && evt.Type != EventKilled {
-			return
+			return true
 		}
 		close(terminalHandlerStarted)
 		<-releaseTerminalHandler
 		events <- evt
+		return true
 	})
 
 	result := callExecCommand(t, execTool, "bg-lock-1", map[string]any{
@@ -188,11 +188,9 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
-		select {
-		case events <- evt:
-		default:
-		}
+	manager.SetEventHandler(func(evt Event) bool {
+		events <- evt
+		return true
 	})
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 
@@ -229,13 +227,14 @@ func TestManagerCloseKillsRunningProcesses(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventKilled {
 			select {
 			case events <- evt:
 			default:
 			}
 		}
+		return true
 	})
 
 	result, err := manager.Start(context.Background(), ExecRequest{

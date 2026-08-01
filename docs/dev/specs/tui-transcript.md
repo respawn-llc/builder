@@ -168,6 +168,8 @@
 - Kent determines status from typed facts, not display text.
 - Kent does not invent a semantic color for an unspecified symbol.
 - Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.
+- Successful patch rows must not show a result suffix.
+- Failed patch rows may show failure status.
 - A `web_search` preview in ongoing and collapsed Detail reads `Searched the web for "<query>"`, using its typed query. Its compact preview does not append result metadata. Expanded Detail shows the raw query and any committed output.
 - A `view_image` preview in ongoing and detail reads `Viewed image at <path>`, using its typed image path. The image path belongs only to typed image metadata until the client renders that preview.
 - A successful answered question in ongoing renders the full Markdown question followed by the selected option's full text and optional custom commentary from its typed condensed answer. The question uses the user text role; response text uses faint primary, and `│`/`└` continuation guides remain faint structural chrome. Unselected suggestions and numeric option summaries are omitted. Collapsed detail remains question-only.

@@ -110,7 +110,7 @@ function ProjectEditContent({
     async (target: WorkspaceUnlinkTarget, close?: () => void): Promise<void> => {
       try {
         const response = await unlink.mutateAsync(target.workspaceID);
-        if (response.unlinked) {
+        if (response.blockers.length === 0) {
           close?.();
           pushToast("project-edit-workspace-unlinked", "success", t("projectEdit.workspaceUnlinked"));
           return;

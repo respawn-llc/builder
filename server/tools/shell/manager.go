@@ -24,7 +24,7 @@ type Manager struct {
 	nextID               int
 	entries              map[string]*processEntry
 	tempDir              string
-	onEvent              func(Event)
+	onEvent              func(Event) bool
 	minimumExecToBgTime  time.Duration
 	closeGracePeriod     time.Duration
 	closeWaitTimeout     time.Duration
@@ -98,7 +98,7 @@ func (m *Manager) TempDir() string {
 	return m.tempDir
 }
 
-func (m *Manager) SetEventHandler(handler func(Event)) {
+func (m *Manager) SetEventHandler(handler func(Event) bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onEvent = handler

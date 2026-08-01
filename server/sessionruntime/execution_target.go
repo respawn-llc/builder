@@ -245,10 +245,10 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	return active, nil
 }
 
-func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
+func (a *Authority) routeBackgroundEvent(event shelltool.Event) bool {
 	correlation := event.Snapshot.ExecutionCorrelation
 	if correlation == nil {
-		return
+		return false
 	}
 	if err := correlation.Validate(); err != nil {
 		panic(fmt.Sprintf("route background event with invalid execution correlation: process_id=%q error=%v", event.Snapshot.ID, err))
@@ -260,13 +260,67 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 	if err != nil {
 		panic(fmt.Sprintf("route background event with invalid owner session: process_id=%q session_id=%q error=%v", event.Snapshot.ID, event.Snapshot.OwnerSessionID, err))
 	}
+	if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
+		return a.routeTerminalBackgroundEvent(sessionID, event)
+	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
-	if resource == nil || (event.Type == shelltool.EventBackgrounded && resource.ref.Generation() != correlation.ResourceGeneration()) {
-		return
+	if resource == nil || resource.ref.Generation() != correlation.ResourceGeneration() {
+		return false
 	}
-	routeErr := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+	delivered, routeErr := a.deliverBackgroundEvent(resource, event)
+	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
+		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+	}
+	return delivered
+}
+
+func (a *Authority) routeTerminalBackgroundEvent(sessionID runtimeids.SessionID, event shelltool.Event) bool {
+	for {
+		a.mu.Lock()
+		if a.closed {
+			a.mu.Unlock()
+			return false
+		}
+		resource := a.resources[sessionID]
+		if resource == nil {
+			a.mu.Unlock()
+			return false
+		}
+		a.mu.Unlock()
+
+		delivered, routeErr := a.deliverBackgroundEvent(resource, event)
+		if delivered {
+			if routeErr != nil && resource.logger != nil {
+				resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+			}
+			return true
+		}
+		if !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) {
+			if resource.logger != nil {
+				resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
+			}
+			return false
+		}
+
+		a.mu.Lock()
+		if a.closed {
+			a.mu.Unlock()
+			return false
+		}
+		if a.resources[sessionID] != resource {
+			a.mu.Unlock()
+			continue
+		}
+		a.mu.Unlock()
+		return false
+	}
+}
+
+func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shelltool.Event) (bool, error) {
+	delivered := false
+	err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
 		summary := shelltool.BackgroundNoticeSummary{}
 		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
 			var summaryErr error
@@ -307,11 +361,10 @@ func (a *Authority) routeBackgroundEvent(event shelltool.Event) {
 			UserRequestedKill: event.Snapshot.KillRequested,
 			NoticeSuppressed:  event.NoticeSuppressed,
 		}, !event.NoticeSuppressed)
+		delivered = true
 		return nil
 	})
-	if routeErr != nil && !errors.Is(routeErr, serverapi.ErrRuntimeUnavailable) && resource.logger != nil {
-		resource.logger.Logf("runtime.background.route.failed process_id=%s error=%q", event.Snapshot.ID, routeErr.Error())
-	}
+	return delivered, err
 }
 
 func ParseSessionIDs(raw []string) ([]runtimeids.SessionID, error) {

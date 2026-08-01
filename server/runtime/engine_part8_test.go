@@ -189,11 +189,11 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
-	manager.SetEventHandler(func(evt shelltool.Event) {
+	manager.SetEventHandler(func(evt shelltool.Event) bool {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
 		if summaryErr != nil {
 			t.Errorf("SummarizeBackgroundEvent: %v", summaryErr)
-			return
+			return false
 		}
 		preview, previewRemoved := summary.RuntimePreview()
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
@@ -214,6 +214,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
 		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
+		return true
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")

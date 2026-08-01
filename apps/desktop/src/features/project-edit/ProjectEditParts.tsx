@@ -318,7 +318,7 @@ async function confirmNativeWorkspaceUnlink(
 ): Promise<void> {
   try {
     const response = await api.unlinkWorkspace(target.projectID, target.workspaceID);
-    if (!response.unlinked) {
+    if (response.blockers.length > 0) {
       callbacks.onBlocked(response.blockers.map((blocker) => blocker.message).join("\n"));
       return;
     }

@@ -1,0 +1,43 @@
+{{.Indent}}live_task_states AS (
+{{.Indent}}    SELECT
+{{.Indent}}        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+{{.Indent}}        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+{{.Indent}}        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+{{.Indent}}        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+{{.Indent}}    FROM json_each({{.LiveTaskStatesJSON}})
+{{.Indent}}),
+{{.Indent}}effective_status AS (
+{{.Indent}}    SELECT
+{{.Indent}}        durable.task_id,
+{{.Indent}}        durable.is_done,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN durable.is_done != 0 THEN 'done'
+{{.Indent}}            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+{{.Indent}}            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+{{.Indent}}            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+{{.Indent}}            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+{{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+{{.Indent}}            ELSE durable.kind
+{{.Indent}}        END AS kind,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN durable.is_done != 0 THEN 1
+{{.Indent}}            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+{{.Indent}}            WHEN durable.kind = 'waiting_approval' THEN 3
+{{.Indent}}            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+{{.Indent}}            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+{{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+{{.Indent}}            ELSE durable.primary_status_rank
+{{.Indent}}        END AS primary_status_rank,
+{{.Indent}}        durable.node_ids_json,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+{{.Indent}}            WHEN EXISTS (
+{{.Indent}}                SELECT 1
+{{.Indent}}                FROM json_each(durable.attention_types_json) existing_attention
+{{.Indent}}                WHERE existing_attention.value = 'question'
+{{.Indent}}            ) THEN durable.attention_types_json
+{{.Indent}}            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
+{{.Indent}}        END AS attention_types_json
+{{.Indent}}    FROM workflow_task_status_records durable
+{{.Indent}}    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+{{.Indent}}){{.Suffix}}

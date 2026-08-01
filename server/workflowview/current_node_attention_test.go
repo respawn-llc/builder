@@ -1,21 +1,15 @@
 package workflowview
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"core/internal/testharness/testsetup"
-	"core/server/sessionruntime"
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T) {
@@ -183,47 +177,12 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Question")
 	unrelated := fixture.startTask(t, "Unrelated")
-	sessionID := fixture.bindCurrentNodeSession(t, started)
-	authority, plan := fixture.newAgentAuthority(t)
-	askID := uuid.NewString()
-	request := tools.AskQuestionRequest{
-		ID:                     askID,
-		StepID:                 uuid.NewString(),
-		Question:               "Proceed?",
-		Suggestions:            []string{"Yes", "No"},
-		RecommendedOptionIndex: 1,
-	}
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		CurrentNode: started.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	handle, err := authority.StartAgentExecution(fixture.ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			return awaitErr
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
-	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, err := authority.ResolvePendingWorkflowPrompt(started.currentNode.TaskID, askID)
-		return err == nil
-	}, "timed out waiting for live workflow Question")
+	question := fixture.startCurrentNodeQuestion(t, started)
 	taskList, err := NewTaskList(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
 		NewTaskProjector(),
-		authority,
+		question.authority,
 	)
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
@@ -247,18 +206,18 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		t.Fatalf("task list waiting-question projection = %+v", listed)
 	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
-		sessionID.String(): {{
-			ID:                     askID,
+		question.sessionID.String(): {{
+			ID:                     question.request.ID,
 			CreatedAt:              time.UnixMilli(4_000).UTC(),
-			Question:               request.Question,
-			Suggestions:            request.Suggestions,
-			RecommendedOptionIndex: intPointer(request.RecommendedOptionIndex),
+			Question:               question.request.Question,
+			Suggestions:            question.request.Suggestions,
+			RecommendedOptionIndex: intPointer(question.request.RecommendedOptionIndex),
 		}},
 	}}
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		authority,
+		question.authority,
 		prompts,
 	)
 	if err != nil {
@@ -273,11 +232,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if len(taskAttention.Items) != 1 ||
 		taskAttention.Items[0].Kind != "question" ||
 		taskAttention.Items[0].QuestionID == nil ||
-		*taskAttention.Items[0].QuestionID != askID ||
+		*taskAttention.Items[0].QuestionID != question.request.ID ||
 		taskAttention.Items[0].Message == nil ||
-		*taskAttention.Items[0].Message != request.Question ||
+		*taskAttention.Items[0].Message != question.request.Question ||
 		taskAttention.Items[0].SessionID == nil ||
-		*taskAttention.Items[0].SessionID != sessionID.String() ||
+		*taskAttention.Items[0].SessionID != question.sessionID.String() ||
 		taskAttention.Items[0].CurrentNode == nil ||
 		taskAttention.Items[0].CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("question attention = %+v", taskAttention.Items)
@@ -293,11 +252,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	definitions := mustDefinitionProjection(t, fixture.store)
 	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, projector, authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, projector, question.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
-	detail, err := NewTaskDetail(fixture.metadata, definitions, projector, authority, fixture.quiescence, dependencies)
+	detail, err := NewTaskDetail(fixture.metadata, definitions, projector, question.authority, fixture.quiescence, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -308,16 +267,8 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if projected.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
 		projected.AttentionCount != 1 ||
 		len(projected.LiveSessionIDs) != 1 ||
-		projected.LiveSessionIDs[0] != sessionID.String() {
+		projected.LiveSessionIDs[0] != question.sessionID.String() {
 		t.Fatalf("question task detail = %+v", projected)
 	}
-	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
-		RequestID: askID,
-		Answer:    "Yes",
-	}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
-	if _, err := handle.Wait(fixture.ctx); err != nil {
-		t.Fatalf("wait Question execution: %v", err)
-	}
+	question.resolve(t, fixture.ctx)
 }

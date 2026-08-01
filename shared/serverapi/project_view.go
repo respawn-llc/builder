@@ -1,9 +1,9 @@
 package serverapi
 
 import (
-	"errors"
-
 	"core/shared/runtimeids"
+	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/clientui"
@@ -98,7 +98,7 @@ type ProjectHomeSummary struct {
 	DisplayName          string                  `json:"display_name"`
 	PrimaryWorkspace     ProjectWorkspaceSummary `json:"primary_workspace"`
 	DefaultWorkflowID    *runtimeids.WorkflowID  `json:"default_workflow_id"`
-	DefaultWorkflowName  string                  `json:"default_workflow_name"`
+	DefaultWorkflowName  string                  `json:"default_workflow_name,omitempty"`
 	DefaultWorkflowValid bool                    `json:"default_workflow_valid"`
 	UpdatedAtUnixMs      int64                   `json:"updated_at_unix_ms"`
 	TaskCount            int                     `json:"task_count"`
@@ -157,8 +157,8 @@ type ProjectUpdateResponse struct {
 }
 
 type ProjectDefaultWorkspaceSetRequest struct {
-	ProjectID   string `json:"project_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ProjectID string `json:"project_id"`
+	ProjectWorkspaceSelector
 }
 
 type ProjectDefaultWorkspaceSetResponse struct {
@@ -166,14 +166,13 @@ type ProjectDefaultWorkspaceSetResponse struct {
 }
 
 type ProjectWorkspaceUnlinkRequest struct {
-	ProjectID   string `json:"project_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ProjectID string `json:"project_id"`
+	ProjectWorkspaceSelector
 }
 
 type ProjectWorkspaceUnlinkResponse struct {
 	ProjectID   string                          `json:"project_id"`
 	WorkspaceID string                          `json:"workspace_id"`
-	Unlinked    bool                            `json:"unlinked"`
 	Blockers    []ProjectWorkspaceUnlinkBlocker `json:"blockers,omitempty"`
 	Project     *ProjectHomeSummary             `json:"project,omitempty"`
 }
@@ -182,6 +181,126 @@ type ProjectWorkspaceUnlinkBlocker struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Count   int    `json:"count,omitempty"`
+}
+
+func (s ProjectHomeSummary) Validate() error {
+	for field, value := range map[string]string{
+		"project_id":               s.ProjectID,
+		"display_name":             s.DisplayName,
+		"primary_workspace_id":     s.PrimaryWorkspace.WorkspaceID,
+		"primary_workspace_root":   s.PrimaryWorkspace.RootPath,
+		"primary_workspace_status": s.PrimaryWorkspace.Availability,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return errors.New(field + " must not be blank")
+		}
+	}
+	if strings.TrimSpace(s.PrimaryWorkspace.DisplayName) == "" && !IsFilesystemRootPath(s.PrimaryWorkspace.RootPath) {
+		return errors.New("primary_workspace_name must not be blank")
+	}
+	if s.DefaultWorkflowID == nil {
+		if strings.TrimSpace(s.DefaultWorkflowName) != "" {
+			return errors.New("default workflow name must be absent when no workflow is present")
+		}
+		if s.DefaultWorkflowValid {
+			return errors.New("default workflow validity must be false when no workflow is present")
+		}
+		return nil
+	}
+	if s.DefaultWorkflowID.IsZero() {
+		return errors.New("default_workflow_id must not be zero when present")
+	}
+	if strings.TrimSpace(s.DefaultWorkflowName) == "" {
+		return errors.New("default_workflow_name must not be blank when present")
+	}
+	if !s.DefaultWorkflowValid {
+		return errors.New("default workflow validity must be true when a workflow is present")
+	}
+	return nil
+}
+
+// IsFilesystemRootPath recognizes filesystem roots without applying local OS path rules.
+func IsFilesystemRootPath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "/" {
+		return true
+	}
+	if isWindowsDriveRoot(trimmed) {
+		return true
+	}
+	return isWindowsUNCRoot(trimmed)
+}
+
+func isWindowsDriveRoot(path string) bool {
+	return len(path) == 3 &&
+		((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) &&
+		path[1] == ':' &&
+		isPathSeparator(path[2])
+}
+
+func isWindowsUNCRoot(path string) bool {
+	if len(path) < 5 || !isPathSeparator(path[0]) || !isPathSeparator(path[1]) {
+		return false
+	}
+	index := 2
+	serverStart := index
+	for index < len(path) && !isPathSeparator(path[index]) {
+		index++
+	}
+	if index == serverStart {
+		return false
+	}
+	for index < len(path) && isPathSeparator(path[index]) {
+		index++
+	}
+	shareStart := index
+	for index < len(path) && !isPathSeparator(path[index]) {
+		index++
+	}
+	if index == shareStart {
+		return false
+	}
+	for index < len(path) {
+		if !isPathSeparator(path[index]) {
+			return false
+		}
+		index++
+	}
+	return true
+}
+
+func isPathSeparator(value byte) bool {
+	return value == '/' || value == '\\'
+}
+
+func (r ProjectDefaultWorkspaceSetResponse) Validate() error {
+	return r.Project.Validate()
+}
+
+func (r ProjectWorkspaceUnlinkResponse) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id must not be blank")
+	}
+	if strings.TrimSpace(r.WorkspaceID) == "" {
+		return errors.New("workspace_id must not be blank")
+	}
+	for _, blocker := range r.Blockers {
+		if strings.TrimSpace(blocker.Code) == "" {
+			return errors.New("unlink blocker code must not be blank")
+		}
+		if strings.TrimSpace(blocker.Message) == "" {
+			return errors.New("unlink blocker message must not be blank")
+		}
+		if blocker.Count < 0 {
+			return errors.New("unlink blocker count must not be negative")
+		}
+	}
+	if r.Project != nil {
+		if err := r.Project.Validate(); err != nil {
+			return fmt.Errorf("unlink response project: %w", err)
+		}
+	}
+	return nil
 }
 
 type ProjectDeleteRequest struct {
@@ -203,6 +322,66 @@ type ProjectDeleteBlocker struct {
 type ProjectAttachWorkspaceRequest struct {
 	ProjectID     string `json:"project_id"`
 	WorkspaceRoot string `json:"workspace_root"`
+}
+
+// ProjectWorkspaceSelector identifies one workspace without using an empty
+// string as an absence sentinel. Its fields are intentionally flat so legacy
+// workspace_id request payloads remain wire-compatible.
+type ProjectWorkspaceSelector struct {
+	WorkspaceID   *string `json:"workspace_id,omitempty"`
+	WorkspaceRoot *string `json:"workspace_root,omitempty"`
+}
+
+func NewProjectWorkspaceSelectorForID(workspaceID string) (ProjectWorkspaceSelector, error) {
+	trimmed, err := normalizeWorkspaceSelectorArm(&workspaceID, "workspace_id")
+	if err != nil {
+		return ProjectWorkspaceSelector{}, err
+	}
+	return ProjectWorkspaceSelector{WorkspaceID: trimmed}, nil
+}
+
+func NewProjectWorkspaceSelectorForRoot(workspaceRoot string) (ProjectWorkspaceSelector, error) {
+	trimmed, err := normalizeWorkspaceSelectorArm(&workspaceRoot, "workspace_root")
+	if err != nil {
+		return ProjectWorkspaceSelector{}, err
+	}
+	return ProjectWorkspaceSelector{WorkspaceRoot: trimmed}, nil
+}
+
+func (s ProjectWorkspaceSelector) Validate() error {
+	id, idErr := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
+	root, rootErr := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
+	if idErr != nil {
+		return idErr
+	}
+	if rootErr != nil {
+		return rootErr
+	}
+	if (id == nil) == (root == nil) {
+		return errors.New("exactly one workspace_id or workspace_root is required")
+	}
+	return nil
+}
+
+func (s ProjectWorkspaceSelector) WorkspaceIDValue() *string {
+	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
+	return value
+}
+
+func (s ProjectWorkspaceSelector) WorkspaceRootValue() *string {
+	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
+	return value
+}
+
+func normalizeWorkspaceSelectorArm(value *string, field string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%s is required", field)
+	}
+	return &trimmed, nil
 }
 
 type ProjectAttachWorkspaceResponse struct {
@@ -272,20 +451,14 @@ func (r ProjectDefaultWorkspaceSetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if strings.TrimSpace(r.WorkspaceID) == "" {
-		return errors.New("workspace_id is required")
-	}
-	return nil
+	return r.ProjectWorkspaceSelector.Validate()
 }
 
 func (r ProjectWorkspaceUnlinkRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	if strings.TrimSpace(r.WorkspaceID) == "" {
-		return errors.New("workspace_id is required")
-	}
-	return nil
+	return r.ProjectWorkspaceSelector.Validate()
 }
 
 func (r ProjectDeleteRequest) Validate() error {

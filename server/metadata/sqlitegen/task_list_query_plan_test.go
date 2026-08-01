@@ -3,15 +3,10 @@ package sqlitegen
 import (
 	"database/sql"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestListWorkflowTaskListRowsUsesProjectLinkAndTaskIndexes(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE workflows (
@@ -100,6 +95,8 @@ CREATE INDEX task_label_assignments_label_task_idx
 		nil,
 		int64(0),
 		"[]",
+		"[]",
+		"[]",
 		int64(0),
 		"[]",
 		"none",
@@ -151,7 +148,7 @@ func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, que
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query plan: %v", err)
 	}
-	if groupingStructures > 1 {
-		t.Fatalf("task-list cardinality introduced an extra unbounded grouping structure: count=%d", groupingStructures)
+	if groupingStructures > 2 {
+		t.Fatalf("task-list canonical status and cardinality introduced extra grouping structures: count=%d", groupingStructures)
 	}
 }

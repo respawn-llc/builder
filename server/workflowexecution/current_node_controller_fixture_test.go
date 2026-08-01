@@ -107,6 +107,37 @@ func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) 
 	return session.CommitReceipt{Committed: true}, nil
 }
 
+type lateCommitCurrentNodeAssignmentSteerer struct {
+	release <-chan struct{}
+	started chan struct{}
+}
+
+func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (CurrentNodeAssignmentSteer, error) {
+	return &lateCommitCurrentNodeAssignmentSteer{
+		release: s.release,
+		started: s.started,
+	}, nil
+}
+
+type lateCommitCurrentNodeAssignmentSteer struct {
+	release <-chan struct{}
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+		return session.CommitReceipt{Committed: true}, nil
+	case <-ctx.Done():
+		return session.CommitReceipt{}, context.Cause(ctx)
+	}
+}
+
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference

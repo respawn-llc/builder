@@ -287,7 +287,9 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
 		}
 		if response.NextOffset != nil {
-			fmt.Fprintf(stderr, "Next offset: `%d`\n", *response.NextOffset)
+			if err := writeNextOffset(stderr, *response.NextOffset); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})

@@ -20,10 +20,11 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatalf("new execution correlation: %v", err)
 	}
 	events := make(chan Event, 2)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type == EventBackgrounded || event.Type == EventCompleted || event.Type == EventKilled {
 			events <- event
 		}
+		return true
 	})
 	tool := NewExecCommandToolWithConfig(workspace, 16_000, manager, "owner", ExecCommandToolConfig{
 		Postprocessor:        replacementRunner(t, "RUNTIME"),
@@ -190,14 +191,15 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	waitForManagerCount(t, manager, 0, time.Second)
 
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type != EventCompleted && event.Type != EventKilled {
-			return
+			return true
 		}
 		select {
 		case events <- event:
 		default:
 		}
+		return true
 	})
 	autoA := callExecCommand(t, toolA, "a-auto", map[string]any{
 		"cmd":           "sleep 0.2; printf automatic",
@@ -289,11 +291,12 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-b", replacementRunner(t, "RUNTIME_B"))
 	pollTool := NewWriteStdinTool(16_000, manager)
 	events := make(chan Event, 4)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type != EventCompleted && event.Type != EventKilled {
-			return
+			return true
 		}
 		events <- event
+		return true
 	})
 
 	for name, tool := range map[string]*ExecCommandTool{"RUNTIME_A": toolA, "RUNTIME_B": toolB} {

@@ -286,7 +286,6 @@ describe("ApiClient", () => {
         result: {
           project_id: "project-1",
           workspace_id: "workspace-1",
-          unlinked: false,
           blockers: [{ code: "default_workspace", message: "Default workspace cannot be unlinked." }],
         },
       },
@@ -301,7 +300,6 @@ describe("ApiClient", () => {
     await client.updateProject("project-1", "Renamed", "ABC");
     await client.setDefaultWorkspace("project-1", "workspace-1");
     await expect(client.unlinkWorkspace("project-1", "workspace-1")).resolves.toMatchObject({
-      unlinked: false,
       blockers: [{ code: "default_workspace", count: 0 }],
     });
 

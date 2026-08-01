@@ -662,9 +662,13 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	committed, err := waitCurrentNodeAssignmentSteers(waitCtx, starts)
-	if err != nil {
-		c.handleCurrentNodeStartFailures(committed, false, err)
+	outcome := waitCurrentNodeAssignmentSteers(waitCtx, starts)
+	if outcome.err != nil {
+		if len(outcome.pending) != 0 {
+			c.continueCurrentNodeAssignmentStarts(starts, nil)
+			return
+		}
+		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
 		return
 	}
 	c.enqueueStarts(starts)

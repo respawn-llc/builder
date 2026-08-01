@@ -11,14 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/workflow/label"
+	"core/shared/config"
 
 	"github.com/pressly/goose/v3"
 	goosedatabase "github.com/pressly/goose/v3/database"
-	sqlitedriver "modernc.org/sqlite"
 )
 
 //go:embed migrations/*.up.sql
@@ -31,16 +29,11 @@ const metadataSQLiteConnectionPoolSize = 8
 var metadataMigrationDebugLogs = false
 var metadataMigrationLogWriter io.Writer = os.Stderr
 
-const labelCollationName = "kent_label_casefold_v1"
-
 const (
 	workflowIdentityMigrationVersion         int64 = 62
 	workflowSessionAgentRoleMigrationVersion int64 = 63
 	workflowIdentityViewName                       = "project_default_workflow_identity"
 )
-
-var registerMetadataSQLiteCollationsOnce sync.Once
-var registerMetadataSQLiteCollationsErr error
 
 func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, error) {
 	trimmedRoot, err := filepath.Abs(filepath.Clean(persistenceRoot))
@@ -61,7 +54,14 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err := os.MkdirAll(filepath.Dir(trimmedDatabasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata db dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", metadataSQLiteDSN(trimmedDatabasePath))
+	if err := registerMetadataSQLiteCollations(); err != nil {
+		return nil, fmt.Errorf("register metadata SQLite extensions: %w", err)
+	}
+	dsn, err := metadataSQLiteDSN(trimmedDatabasePath)
+	if err != nil {
+		return nil, fmt.Errorf("build metadata db DSN: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
@@ -74,33 +74,21 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	return db, nil
 }
 
-func metadataSQLiteDSN(databasePath string) string {
-	u := url.URL{Scheme: "file", Path: sqliteFileURLPath(databasePath)}
+func metadataSQLiteDSN(databasePath string) (string, error) {
+	u, ok := config.LocalFileURL(databasePath)
+	if !ok {
+		return "", fmt.Errorf("metadata database path %q is not absolute", databasePath)
+	}
 	q := url.Values{}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
 	q.Add("_pragma", "busy_timeout(5000)")
 	u.RawQuery = q.Encode()
-	return u.String()
-}
-
-func sqliteFileURLPath(databasePath string) string {
-	slashPath := strings.ReplaceAll(filepath.ToSlash(databasePath), "\\", "/")
-	if len(slashPath) >= 2 && slashPath[1] == ':' && isASCIILetter(rune(slashPath[0])) {
-		return "/" + slashPath
-	}
-	return slashPath
-}
-
-func isASCIILetter(r rune) bool {
-	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+	return u.String(), nil
 }
 
 func runMigrations(db *sql.DB) error {
-	if err := registerMetadataSQLiteCollations(); err != nil {
-		return err
-	}
 	if err := registerMetadataSQLiteFunctions(); err != nil {
 		return err
 	}
@@ -116,6 +104,10 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("apply metadata migrations: %w", err)
 	}
 	return nil
+}
+
+func registerMetadataSQLiteCollations() error {
+	return sqlitegen.RegisterSQLiteExtensions()
 }
 
 // repairWorkflowIdentityMigrationCollision recognizes databases that recorded
@@ -171,21 +163,6 @@ func newMetadataMigrationProvider(db *sql.DB) (*goose.Provider, error) {
 		return nil, fmt.Errorf("create metadata migration provider: %w", err)
 	}
 	return provider, nil
-}
-
-func registerMetadataSQLiteCollations() error {
-	registerMetadataSQLiteCollationsOnce.Do(func() {
-		registerMetadataSQLiteCollationsErr = sqlitedriver.RegisterCollationUtf8(
-			labelCollationName,
-			func(left string, right string) int {
-				return label.Compare(label.Name(left), label.Name(right))
-			},
-		)
-	})
-	if registerMetadataSQLiteCollationsErr != nil {
-		return fmt.Errorf("register metadata SQLite label collation %q: %w", labelCollationName, registerMetadataSQLiteCollationsErr)
-	}
-	return nil
 }
 
 type metadataMigrationLogger struct {
