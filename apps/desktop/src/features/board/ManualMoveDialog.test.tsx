@@ -65,7 +65,7 @@ describe("ManualMoveDialog", () => {
     const confirmButton = screen.getByRole("button", { name: appI18n.t("board.manualMoveConfirm") });
     expect(confirmButton).toBeDisabled();
 
-    await user.type(screen.getByLabelText(appI18n.t("board.manualMoveValueLabel", { index: 1 })), "A plan");
+    await user.type(screen.getByLabelText("summary"), "A plan");
     expect(confirmButton).toBeEnabled();
     await user.click(confirmButton);
 

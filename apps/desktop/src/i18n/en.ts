@@ -222,7 +222,6 @@ export const englishResources = {
       manualMoveTransitionChoices: "Choose a transition",
       manualMoveConfirmBody: "Confirm this manual workflow override.",
       manualMoveConfirm: "Confirm move",
-      manualMoveValueLabel: "Value {{index}}",
       moveBlocked: "Task move blocked",
       moveBlockedWaitingQuestion: "Answer the waiting question before moving this task.",
       moveBlockedLifecycle: "The task is busy with another lifecycle operation.",
