@@ -9,6 +9,7 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -178,11 +179,23 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	started := fixture.startTask(t, "Question")
 	unrelated := fixture.startTask(t, "Unrelated")
 	question := fixture.startCurrentNodeQuestion(t, started)
+	projector := NewTaskProjector()
+	questionProjection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		projector,
+		currentNodeViewStatusObservationSource{
+			authority:  question.authority,
+			quiescence: fixture.quiescence,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection question: %v", err)
+	}
 	taskList, err := NewTaskList(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		NewTaskProjector(),
-		question.authority,
+		questionProjection,
 	)
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
@@ -212,6 +225,12 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 			Question:               question.request.Question,
 			Suggestions:            question.request.Suggestions,
 			RecommendedOptionIndex: intPointer(question.request.RecommendedOptionIndex),
+		}, {
+			ID:                "unrelated-approval",
+			CreatedAt:         time.UnixMilli(4_001).UTC(),
+			Question:          "Approve unrelated action?",
+			Approval:          true,
+			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce},
 		}},
 	}}
 	attention, err := NewAttention(
@@ -250,13 +269,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if len(unrelatedAttention.Items) != 0 {
 		t.Fatalf("unrelated task attention = %+v, want none", unrelatedAttention.Items)
 	}
-	definitions := mustDefinitionProjection(t, fixture.store)
-	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(fixture.metadata, projector, question.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
-	detail, err := NewTaskDetail(fixture.metadata, definitions, projector, question.authority, fixture.quiescence, dependencies)
+	detail, err := NewTaskDetail(fixture.metadata, questionProjection, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}

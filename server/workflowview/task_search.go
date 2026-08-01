@@ -10,8 +10,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/shared/serverapi"
 	"core/shared/tasksearchtext"
 
@@ -20,41 +18,36 @@ import (
 )
 
 type TaskSearch struct {
-	metadata  *metadata.Store
-	queries   *sqlitegen.Queries
-	projector *TaskProjector
-	authority *sessionruntime.Authority
+	metadata   *metadata.Store
+	queries    *sqlitegen.Queries
+	projection *TaskStatusProjection
 }
 
 type taskSearchReadSnapshot struct {
-	queries       *sqlitegen.Queries
-	liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	close         func() error
+	queries            *sqlitegen.Queries
+	liveTaskStatesJSON string
+	close              func() error
 }
 
 func NewTaskSearch(
 	metadataStore *metadata.Store,
-	projector *TaskProjector,
-	authority *sessionruntime.Authority,
+	projection *TaskStatusProjection,
 ) (*TaskSearch, error) {
 	switch {
 	case metadataStore == nil || metadataStore.Queries() == nil:
 		return nil, errors.New("metadata store is required")
-	case projector == nil:
-		return nil, errors.New("task projector is required")
-	case authority == nil:
-		return nil, errors.New("session runtime authority is required")
+	case projection == nil:
+		return nil, errors.New("task status projection is required")
 	}
 	return &TaskSearch{
-		metadata:  metadataStore,
-		queries:   metadataStore.Queries(),
-		projector: projector,
-		authority: authority,
+		metadata:   metadataStore,
+		queries:    metadataStore.Queries(),
+		projection: projection,
 	}, nil
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projector == nil || s.authority == nil {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -85,7 +78,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
 		}
 	}
-	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveSnapshots, req, offset)
+	rows, err := s.queryPage(ctx, snapshot.queries, snapshot.liveTaskStatesJSON, req, offset)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -131,14 +124,14 @@ func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.Task
 	if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
 		return nil, errors.Join(err, closeTransaction())
 	}
-	liveSnapshots, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+	observation, err := s.projection.Observe(nil)
 	if err != nil {
 		return nil, errors.Join(err, closeTransaction())
 	}
 	return &taskSearchReadSnapshot{
-		queries:       queries,
-		liveSnapshots: liveSnapshots,
-		close:         closeTransaction,
+		queries:            queries,
+		liveTaskStatesJSON: observation.LiveTaskStatesJSON,
+		close:              closeTransaction,
 	}, nil
 }
 
@@ -149,7 +142,7 @@ func (s *taskSearchReadSnapshot) Close() error {
 	close := s.close
 	s.close = nil
 	s.queries = nil
-	s.liveSnapshots = nil
+	s.liveTaskStatesJSON = ""
 	return close()
 }
 
@@ -175,11 +168,7 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, req serverapi.TaskSearchRequest, offset int) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
-	liveTaskStatesJSON, err := workflowTaskListLiveStatesJSON(liveSnapshots)
-	if err != nil {
-		return nil, err
-	}
+func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveTaskStatesJSON string, req serverapi.TaskSearchRequest, offset int) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
 	projectIDsJSON, err := taskSearchOptionalJSON(taskSearchProjectIDs(req))
 	if err != nil {
 		return nil, fmt.Errorf("encode task search project ids: %w", err)
@@ -256,7 +245,7 @@ func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Q
 		if err != nil {
 			return nil, err
 		}
-		status, err := s.projector.DecodeStatus(TaskStatusInput{
+		status, err := s.projection.DecodeStatus(TaskStatusInput{
 			TaskID:             row.TaskID,
 			Kind:               statusKind,
 			NodeIDsJSON:        nodeIDsJSON,

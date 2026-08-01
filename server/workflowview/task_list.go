@@ -9,8 +9,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/sessionruntime"
-	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -19,29 +17,24 @@ type TaskList struct {
 	metadata    *metadata.Store
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
-	projector   *TaskProjector
-	authority   *sessionruntime.Authority
+	projection  *TaskStatusProjection
 }
 
-func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, authority *sessionruntime.Authority) (*TaskList, error) {
+func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjection, projection *TaskStatusProjection) (*TaskList, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if definitions == nil {
 		return nil, errors.New("definition projection is required")
 	}
-	if projector == nil {
-		return nil, errors.New("task projector is required")
-	}
-	if authority == nil {
-		return nil, errors.New("session runtime authority is required")
+	if projection == nil {
+		return nil, errors.New("task status projection is required")
 	}
 	return &TaskList{
 		metadata:    metadataStore,
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
-		projector:   projector,
-		authority:   authority,
+		projection:  projection,
 	}, nil
 }
 
@@ -95,25 +88,20 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			columnKeys: req.ColumnKeys,
 		}
 	}
-	var liveSnapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	if workflowID == nil {
-		liveSnapshots, err = l.authority.CurrentProjectTaskExecutionSnapshots(projectID)
-	} else {
-		liveSnapshots, err = l.authority.CurrentProjectWorkflowTaskExecutionSnapshots(projectID, *workflowID)
-	}
+	observation, err := l.projection.Observe(nil)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	page, err := l.queryRows(ctx, workflowTaskListQueryRequest{
-		projectID:      projectID,
-		narrowed:       narrowedQuery,
-		statusKinds:    req.StatusKinds,
-		attentionKinds: req.AttentionKinds,
-		labelFilter:    labelFilter,
-		sortSelectors:  sortSelectors,
-		offset:         window.Offset,
-		limit:          window.Limit + 1,
-		liveSnapshots:  liveSnapshots,
+		projectID:          projectID,
+		narrowed:           narrowedQuery,
+		statusKinds:        req.StatusKinds,
+		attentionKinds:     req.AttentionKinds,
+		labelFilter:        labelFilter,
+		sortSelectors:      sortSelectors,
+		offset:             window.Offset,
+		limit:              window.Limit + 1,
+		liveTaskStatesJSON: observation.LiveTaskStatesJSON,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err

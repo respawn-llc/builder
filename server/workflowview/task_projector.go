@@ -14,10 +14,6 @@ import (
 
 type TaskProjector struct{}
 
-type TaskQuiescenceSource interface {
-	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
-}
-
 type TaskStatusInput struct {
 	TaskID             string
 	Kind               string
@@ -193,7 +189,8 @@ func taskActions(
 	hasLiveExecution := len(live) != 0
 	hasInterruptibleExecution := false
 	for _, execution := range live {
-		hasInterruptibleExecution = hasInterruptibleExecution || (!execution.Queued && !execution.WaitingQuestion)
+		hasInterruptibleExecution = hasInterruptibleExecution ||
+			(!execution.Queued && !execution.HasPendingPrompts())
 	}
 	actions := serverapi.WorkflowTaskActions{
 		CanStart:     !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindBacklog,

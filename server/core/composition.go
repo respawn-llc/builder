@@ -236,16 +236,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
 	workflowTaskProjector := workflowview.NewTaskProjector()
-	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
-	}
-	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskProjector, runtimeAuthority)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
-	}
 	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowTaskProjector)
 	if err != nil {
 		cleanupNewFailure()
@@ -266,7 +256,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
-	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskProjector, runtimeAuthority)
+	workflowTaskDependencyCounter, err := workflowview.NewTaskDependencies(metadataStore, nil)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
@@ -277,7 +267,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		RuntimeClientFactory: opts.RuntimeClientFactory,
 		RuntimeAuthority:     runtimeAuthority,
 		MutationPermit:       workflowMutationPermit,
-		TaskDependencies:     workflowTaskDependencies,
+		TaskDependencies:     workflowTaskDependencyCounter,
 	})
 	if err != nil {
 		cleanupNewFailure()
@@ -302,12 +292,37 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
-	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector, runtimeAuthority, workflowController)
+	workflowTaskStatusProjection, err := workflowview.NewTaskStatusProjection(
+		metadataStore,
+		workflowStore,
+		workflowTaskProjector,
+		workflowController,
+	)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task status projection: %w", err)
+	}
+	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskStatusProjection)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
+	}
+	workflowTaskSearch, err := workflowview.NewTaskSearch(metadataStore, workflowTaskStatusProjection)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
+	}
+	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskStatusProjection)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
+	}
+	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskStatusProjection)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: board: %w", err)
 	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority, workflowController, workflowTaskDependencies)
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowTaskStatusProjection, workflowTaskDependencies)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -320,18 +321,20 @@ type executionPromptEntry struct {
 }
 
 type executionPromptStore struct {
-	mu      sync.RWMutex
-	scope   ExecutionScope
-	feed    ExecutionPromptFeed
-	closed  bool
-	pending map[string]*executionPromptEntry
+	authority *Authority
+	mu        sync.RWMutex
+	scope     ExecutionScope
+	feed      ExecutionPromptFeed
+	closed    bool
+	pending   map[string]*executionPromptEntry
 }
 
-func newExecutionPromptStore(scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
+func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
 	return executionPromptStore{
-		scope:   scope,
-		feed:    feed,
-		pending: make(map[string]*executionPromptEntry),
+		authority: authority,
+		scope:     scope,
+		feed:      feed,
+		pending:   make(map[string]*executionPromptEntry),
 	}
 }
 
@@ -352,25 +355,34 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		snapshot: snapshot,
 		response: make(chan executionPromptResult, 1),
 	}
+	if s.authority == nil {
+		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
+	}
+	s.authority.mu.Lock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		s.authority.mu.Unlock()
 		return tools.AskQuestionResponse{}, context.Canceled
 	}
 	if _, exists := s.pending[requestID]; exists {
 		s.mu.Unlock()
+		s.authority.mu.Unlock()
 		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
+	s.authority.mu.Unlock()
 	s.publishPending(snapshot)
 	defer func() {
+		s.authority.mu.Lock()
 		s.mu.Lock()
 		current := s.pending[requestID]
 		if current == entry {
 			delete(s.pending, requestID)
 		}
 		s.mu.Unlock()
+		s.authority.mu.Unlock()
 		if current == entry {
 			s.publishResolved(snapshot)
 		}
@@ -388,20 +400,27 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	if requestID == "" {
 		return errors.New("prompt response request id is required")
 	}
+	if s.authority == nil {
+		return errors.New("session runtime authority is required")
+	}
+	s.authority.mu.Lock()
 	s.mu.Lock()
 	entry := s.pending[requestID]
 	if entry == nil {
 		s.mu.Unlock()
+		s.authority.mu.Unlock()
 		return fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
 	}
 	if submitErr == nil {
 		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
 			s.mu.Unlock()
+			s.authority.mu.Unlock()
 			return err
 		}
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
+	s.authority.mu.Unlock()
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	s.publishResolved(entry.snapshot)
 	return nil
@@ -411,9 +430,14 @@ func (s *executionPromptStore) Close(err error) {
 	if err == nil {
 		err = context.Canceled
 	}
+	if s.authority == nil {
+		return
+	}
+	s.authority.mu.Lock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		s.authority.mu.Unlock()
 		return
 	}
 	s.closed = true
@@ -423,6 +447,7 @@ func (s *executionPromptStore) Close(err error) {
 		delete(s.pending, requestID)
 	}
 	s.mu.Unlock()
+	s.authority.mu.Unlock()
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)
@@ -440,6 +465,33 @@ func (s *executionPromptStore) hasPendingID(requestID string) bool {
 	defer s.mu.RUnlock()
 	_, exists := s.pending[requestID]
 	return exists
+}
+
+func (s *executionPromptStore) pendingReferences() ([]PendingPromptReference, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	references := make([]PendingPromptReference, 0, len(s.pending))
+	for requestID, entry := range s.pending {
+		if entry == nil {
+			return nil, errors.New("pending prompt store contains a nil entry")
+		}
+		reference := PendingPromptReference{
+			ID: requestID,
+		}
+		if entry.snapshot.Request.Approval {
+			reference.Kind = PendingPromptKindSessionApproval
+		} else {
+			reference.Kind = PendingPromptKindQuestion
+		}
+		references = append(references, reference)
+	}
+	sort.Slice(references, func(i, j int) bool {
+		if references[i].ID != references[j].ID {
+			return references[i].ID < references[j].ID
+		}
+		return references[i].Kind < references[j].Kind
+	})
+	return references, nil
 }
 
 func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {
@@ -504,14 +556,9 @@ func (a *Authority) ResolvePendingWorkflowPrompt(taskID workflow.TaskID, askID s
 	}
 
 	a.mu.Lock()
-	executions := make([]*execution, 0, len(a.byScope))
-	for _, candidate := range a.byScope {
-		executions = append(executions, candidate)
-	}
-	a.mu.Unlock()
-
+	defer a.mu.Unlock()
 	var resolved *WorkflowPromptResolution
-	for _, candidate := range executions {
+	for _, candidate := range a.byScope {
 		if candidate.scope.Kind() != ExecutionScopeAgent {
 			continue
 		}

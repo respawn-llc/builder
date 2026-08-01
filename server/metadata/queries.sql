@@ -1359,6 +1359,35 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: ListTasksByIDs :many
+SELECT
+    id,
+    project_id,
+    project_workflow_link_id,
+    workflow_id,
+    workflow_revision_seen,
+    task_seq,
+    short_id,
+    title,
+    body,
+    source_url,
+    source_workspace_id,
+    managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    metadata_json
+FROM task_records
+WHERE id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(sqlc.arg(task_ids_json))
+)
+ORDER BY id ASC;
+
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,
@@ -1369,6 +1398,82 @@ SELECT
     CAST(attention_types_json AS TEXT) AS attention_types_json
 FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY task_id ASC;
+
+-- name: ListWorkflowTaskStatusProjectionByTasks :many
+WITH
+requested_task_ids AS (
+    SELECT CAST(value AS TEXT) AS task_id
+    FROM json_each(sqlc.arg(task_ids_json))
+),
+args AS (
+    SELECT CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
+),
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM json_each((SELECT live_task_states_json FROM args))
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+)
+
+SELECT
+    task_id,
+    is_done,
+    CAST(kind AS TEXT) AS kind,
+    primary_status_rank,
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
+FROM effective_status
+WHERE task_id IN (SELECT task_id FROM requested_task_ids)
 ORDER BY task_id ASC;
 
 -- name: AnchorTaskSearchReadSnapshot :one
@@ -1625,7 +1730,8 @@ live_task_states AS (
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
     FROM json_each((SELECT live_task_states_json FROM args))
 ),
 effective_status AS (
@@ -1635,7 +1741,8 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
             WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
@@ -1644,7 +1751,8 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
             WHEN COALESCE(live.has_running, 0) != 0 THEN 5
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
@@ -1652,13 +1760,22 @@ effective_status AS (
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
-            WHEN EXISTS (
-                SELECT 1
-                FROM json_each(durable.attention_types_json) existing_attention
-                WHERE existing_attention.value = 'question'
-            ) THEN durable.attention_types_json
-            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
@@ -3592,6 +3709,24 @@ SELECT
 FROM task_pending_approvals
 WHERE source_task_id = sqlc.arg(task_id)
 ORDER BY created_at_unix_ms, id;
+
+-- name: ListTaskPendingApprovalsByTasks :many
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(sqlc.arg(task_ids_json))
+)
+ORDER BY source_task_id, created_at_unix_ms, id;
 
 -- name: GetTaskPendingApproval :one
 SELECT

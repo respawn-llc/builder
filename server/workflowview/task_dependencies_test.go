@@ -10,7 +10,7 @@ import (
 
 func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 
 func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithoutTouchingBlockedTask(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 
 func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 
 func TestListTaskDependenciesSortsBothDirectionsUnfinishedFirstThenShortID(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

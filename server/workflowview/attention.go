@@ -297,7 +297,7 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 		}
 		var task *sqlitegen.TaskRecord
 		for _, execution := range snapshot.Executions {
-			if !execution.WaitingQuestion {
+			if !execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) {
 				continue
 			}
 			if execution.Agent == nil {
@@ -314,22 +314,40 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			if err != nil {
 				return nil, err
 			}
+			promptsByID := make(map[string]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				if strings.TrimSpace(prompt.ID) == "" {
+				promptID := strings.TrimSpace(prompt.ID)
+				if promptID == "" {
 					return nil, fmt.Errorf("task %q session %q has a pending prompt without question identity", taskID, execution.Agent.SessionID)
+				}
+				if _, duplicate := promptsByID[promptID]; duplicate {
+					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, promptID)
+				}
+				promptsByID[promptID] = prompt
+			}
+			for _, promptReference := range execution.PendingPrompts {
+				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion {
+					continue
+				}
+				prompt, present := promptsByID[promptReference.ID]
+				if !present {
+					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
 				question, present, err := pendingQuestionFromPrompt(prompt)
 				if err != nil {
 					return nil, err
 				}
 				if !present {
-					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, prompt.ID)
+					return nil, fmt.Errorf("task %q session %q prompt %q cannot be projected", taskID, execution.Agent.SessionID, promptReference.ID)
+				}
+				if prompt.Approval {
+					return nil, fmt.Errorf("task %q session %q prompt %q changed from Question to Approval", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
 				occurredAt := prompt.CreatedAt.UnixMilli()
 				if occurredAt <= 0 {
-					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, prompt.ID)
+					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
-				questionID := prompt.ID
+				questionID := promptReference.ID
 				sessionID := execution.Agent.SessionID.String()
 				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
 				currentNode.SessionID = &sessionID

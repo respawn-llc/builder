@@ -177,14 +177,14 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowview.NewTaskProjector(), fixture.authority)
+	dependencyCounter, err := workflowview.NewTaskDependencies(metadataStore, nil)
 	if err != nil {
-		t.Fatalf("new Task dependency projection: %v", err)
+		t.Fatalf("new Task dependency counter: %v", err)
 	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
 		MutationPermit:   permit,
-		TaskDependencies: dependencies,
+		TaskDependencies: dependencyCounter,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
@@ -200,7 +200,6 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		t.Fatalf("new starter: %v", err)
 	}
 	fixture.starter = starter
-	fixture.dependencies = dependencies
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: starter,
@@ -209,6 +208,20 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		t.Fatalf("new current node controller: %v", err)
 	}
 	fixture.controller = controller
+	projection, err := workflowview.NewTaskStatusProjection(
+		metadataStore,
+		store,
+		workflowview.NewTaskProjector(),
+		controller,
+	)
+	if err != nil {
+		t.Fatalf("new Task status projection: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection)
+	if err != nil {
+		t.Fatalf("new Task dependency projection: %v", err)
+	}
+	fixture.dependencies = dependencies
 	return fixture
 }
 

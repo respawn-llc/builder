@@ -897,7 +897,20 @@ func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
 }
 
 func (s *Store) GetDefinition(ctx context.Context, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
-	return workflowDefinitionFromQueries(ctx, s.queries, workflowID)
+	if s == nil {
+		return workflow.Definition{}, WorkflowRecord{}, errors.New("workflow store is required")
+	}
+	return GetDefinitionWithQueries(ctx, s.queries, workflowID)
+}
+
+// GetDefinitionWithQueries reads and decodes a Workflow definition through the
+// supplied generated queries so callers can keep definition reads inside one
+// transaction-owned query snapshot.
+func GetDefinitionWithQueries(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
+	if q == nil {
+		return workflow.Definition{}, WorkflowRecord{}, errors.New("workflow queries are required")
+	}
+	return workflowDefinitionFromQueries(ctx, q, workflowID)
 }
 
 func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {

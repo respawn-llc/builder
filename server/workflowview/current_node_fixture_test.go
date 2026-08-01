@@ -13,6 +13,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -32,10 +33,36 @@ type currentNodeViewFixture struct {
 	agentNodeID workflow.NodeID
 	authority   *sessionruntime.Authority
 	quiescence  *currentNodeViewQuiescence
+	projection  *TaskStatusProjection
 	board       *Board
 	detail      *TaskDetail
 	tasks       *TaskList
+	search      *TaskSearch
 	activity    *Activity
+}
+
+type currentNodeViewStatusObservationSource struct {
+	authority  *sessionruntime.Authority
+	quiescence currentNodeViewQuiescenceSource
+}
+
+type currentNodeViewQuiescenceSource interface {
+	CurrentTaskQuiescence([]workflow.TaskID) (map[workflow.TaskID]bool, error)
+}
+
+func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	executions, err := s.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
+	return workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: executions,
+		Quiescence: quiescence,
+	}, nil
 }
 
 type startedCurrentNodeViewTask struct {
@@ -95,21 +122,37 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		}
 	})
 	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(metadataStore, projector, authority)
+	projection, err := NewTaskStatusProjection(
+		metadataStore,
+		store,
+		projector,
+		currentNodeViewStatusObservationSource{
+			authority:  authority,
+			quiescence: quiescence,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencies, err := NewTaskDependencies(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
-	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projector, authority, quiescence)
+	board, err := NewBoard(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), projection)
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detail, err := NewTaskDetail(metadataStore, definitions, projector, authority, quiescence, dependencies)
+	detail, err := NewTaskDetail(metadataStore, projection, dependencies)
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
-	tasks, err := NewTaskList(metadataStore, definitions, projector, authority)
+	tasks, err := NewTaskList(metadataStore, definitions, projection)
 	if err != nil {
 		t.Fatalf("NewTaskList: %v", err)
+	}
+	search, err := NewTaskSearch(metadataStore, projection)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
 	}
 	activity, err := NewActivity(metadataStore, projector)
 	if err != nil {
@@ -125,9 +168,11 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		agentNodeID: agentNodeID,
 		authority:   authority,
 		quiescence:  quiescence,
+		projection:  projection,
 		board:       board,
 		detail:      detail,
 		tasks:       tasks,
+		search:      search,
 		activity:    activity,
 	}
 }
@@ -363,7 +408,7 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 			return false
 		}
 		executions := snapshots[started.task.ID].Executions
-		return len(executions) == 1 && executions[0].WaitingQuestion
+		return len(executions) == 1 && executions[0].HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion)
 	}, "timed out waiting for live workflow Question")
 	return currentNodeViewQuestion{
 		authority: authority,

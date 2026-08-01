@@ -1359,6 +1359,35 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: ListTasksByIDs :many
+SELECT
+    id,
+    project_id,
+    project_workflow_link_id,
+    workflow_id,
+    workflow_revision_seen,
+    task_seq,
+    short_id,
+    title,
+    body,
+    source_url,
+    source_workspace_id,
+    managed_worktree_id,
+    execution_target_mode,
+    execution_target_requested_ref,
+    execution_target_resolved_ref,
+    execution_target_commit_oid,
+    execution_target_provenance,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    metadata_json
+FROM task_records
+WHERE id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(sqlc.arg(task_ids_json))
+)
+ORDER BY id ASC;
+
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,
@@ -1369,6 +1398,27 @@ SELECT
     CAST(attention_types_json AS TEXT) AS attention_types_json
 FROM workflow_task_status_records
 WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY task_id ASC;
+
+-- name: ListWorkflowTaskStatusProjectionByTasks :many
+WITH
+requested_task_ids AS (
+    SELECT CAST(value AS TEXT) AS task_id
+    FROM json_each(sqlc.arg(task_ids_json))
+),
+args AS (
+    SELECT CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
+),
+{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ""}}
+SELECT
+    task_id,
+    is_done,
+    CAST(kind AS TEXT) AS kind,
+    primary_status_rank,
+    CAST(node_ids_json AS TEXT) AS node_ids_json,
+    CAST(attention_types_json AS TEXT) AS attention_types_json
+FROM effective_status
+WHERE task_id IN (SELECT task_id FROM requested_task_ids)
 ORDER BY task_id ASC;
 
 -- name: AnchorTaskSearchReadSnapshot :one
@@ -3393,6 +3443,24 @@ SELECT
 FROM task_pending_approvals
 WHERE source_task_id = sqlc.arg(task_id)
 ORDER BY created_at_unix_ms, id;
+
+-- name: ListTaskPendingApprovalsByTasks :many
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT CAST(value AS TEXT)
+    FROM json_each(sqlc.arg(task_ids_json))
+)
+ORDER BY source_task_id, created_at_unix_ms, id;
 
 -- name: GetTaskPendingApproval :one
 SELECT
