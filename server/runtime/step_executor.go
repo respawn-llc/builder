@@ -411,11 +411,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			resolvedCommittedStart, resolvedCommittedStartSet = committedAssistantCoordinateFields(resolvedCommittedCoordinate)
-			if err := completeAgentStepBoundary(boundary, stepID); err != nil {
-				return stepLoopResult{}, err
-			}
+			boundaryErr := completeAgentStepBoundary(boundary, stepID)
 			if reviewerCompletion != nil {
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
+				receipt, _, committed := boundary.Committed()
+				if committed && receipt.Committed {
+					boundaryErr = errors.Join(boundaryErr, e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion})))
+				}
+			}
+			if boundaryErr != nil {
+				return stepLoopResult{}, boundaryErr
 			}
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}

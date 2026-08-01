@@ -126,7 +126,6 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 			recursiveResult:       stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall},
 		}, followUpErr
 	}
-	_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
 	outcome.resolved = resolved
 	outcome.handledRecursiveRun = true
 	outcome.recursiveResult = stepLoopResult{
@@ -134,6 +133,9 @@ func (s *defaultStepExecutor) runReviewerContinuation(
 		ExecutedToolCall:           executedToolCall,
 		AssistantCommittedStart:    followUp.AssistantCommittedStart,
 		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
+	}
+	if err := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion})); err != nil {
+		return outcome, err
 	}
 	return outcome, nil
 }
