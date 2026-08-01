@@ -296,6 +296,8 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
       this.#acceptAuthoritativeCatalog(catalog);
       return;
     }
+    // A stale success confirms the server accepted this intent, but its
+    // catalog snapshot predates a newer local catalog generation.
     if (failure === null && catalog !== null && this.#latestOrderIntent?.id === intent.id) {
       this.#latestOrderIntent = null;
     }
