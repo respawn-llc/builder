@@ -2,24 +2,8 @@ import { render } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { commands, page as screen, userEvent } from "vitest/browser";
+import type { ReorderPointerCommandInput } from "../../../tooling/vite.config";
 import { VerticalReorder } from "./VerticalReorder";
-
-type ReorderPointerCommandInput = Readonly<{
-  sourceSelector: string;
-  destination:
-    | Readonly<{ kind: "source" }>
-    | Readonly<{
-        kind: "target";
-        placement: "center" | "gap";
-        selector: string;
-      }>;
-}>;
-
-declare module "vitest/internal/browser" {
-  interface BrowserCommands {
-    pointerDrag: (input: ReorderPointerCommandInput) => Promise<void>;
-  }
-}
 
 type ReorderItem = Readonly<{ id: string; label: string }>;
 

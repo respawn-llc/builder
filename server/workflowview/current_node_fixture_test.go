@@ -229,18 +229,6 @@ func (f currentNodeViewFixture) setTaskUpdatedAt(t *testing.T, taskID workflow.T
 	}
 }
 
-func (f currentNodeViewFixture) setTaskCreatedAt(t *testing.T, taskID workflow.TaskID, unixMs int64) {
-	t.Helper()
-	if _, err := f.metadata.DB().ExecContext(
-		f.ctx,
-		`UPDATE tasks SET created_at_unix_ms = ? WHERE id = ?`,
-		unixMs,
-		string(taskID),
-	); err != nil {
-		t.Fatalf("set task created at: %v", err)
-	}
-}
-
 func (f currentNodeViewFixture) setSessionCreatedAt(t *testing.T, sessionID runtimeids.SessionID, unixMs int64) {
 	t.Helper()
 	if _, err := f.metadata.DB().ExecContext(

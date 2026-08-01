@@ -1,21 +1,17 @@
 /// <reference lib="dom" />
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { env } from "node:process";
-import type { BrowserCommandContext, BrowserProviderOption } from "vitest/node";
+import type { BrowserCommandContext } from "vitest/node";
 import { configDefaults, defineConfig } from "vitest/config";
 import { z } from "zod";
 
 const protocolVersionDefinition = z
   .object({ version: z.string().min(1) })
   .parse(JSON.parse(readFileSync(new URL("../../../shared/protocol/version.json", import.meta.url), "utf8")));
-const require = createRequire(import.meta.url);
-const browserRegression = env.KENT_BROWSER_TEST === "1";
 
-type ReorderPointerCommandInput = Readonly<{
+export type ReorderPointerCommandInput = Readonly<{
   sourceSelector: string;
   destination:
     | Readonly<{ kind: "source" }>
@@ -25,6 +21,12 @@ type ReorderPointerCommandInput = Readonly<{
         selector: string;
       }>;
 }>;
+
+declare module "vitest/internal/browser" {
+  interface BrowserCommands {
+    pointerDrag: (input: ReorderPointerCommandInput) => Promise<void>;
+  }
+}
 
 type PointerBox = Readonly<{
   height: number;
@@ -54,19 +56,7 @@ const pointerCommandRuntimeContextSchema = z.custom<PointerCommandRuntimeContext
   (value) => value instanceof Object,
 );
 
-function isCallable(value: unknown): boolean {
-  return value instanceof Function;
-}
-
-type BrowserProviderOptions = Readonly<{
-  launchOptions?: Readonly<{ executablePath?: string }>;
-}>;
-
-const playwrightProviderSchema = z.object({
-  playwright: z.custom<(options?: BrowserProviderOptions) => BrowserProviderOption>(isCallable),
-});
-
-const pointerDrag = async (
+export const pointerDrag = async (
   { provider, sessionId }: BrowserCommandContext,
   input: ReorderPointerCommandInput,
 ): Promise<void> => {
@@ -139,29 +129,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: [
-      ...configDefaults.exclude,
-      "eslint-fixtures/**",
-      ...(browserRegression ? [] : ["**/*.browser.test.*"]),
-    ],
+    exclude: [...configDefaults.exclude, "eslint-fixtures/**", "**/*.browser.test.*"],
     globals: true,
     maxWorkers: 2,
     setupFiles: ["./test/setup.ts"],
-    ...(browserRegression ? { include: ["packages/ui-kit/src/**/*.browser.test.tsx"] } : {}),
-    browser: {
-      enabled: browserRegression,
-      headless: true,
-      provider: playwrightProviderSchema.parse(require("@vitest/browser-playwright")).playwright(
-        env.KENT_PLAYWRIGHT_CHROMIUM_PATH === undefined
-          ? undefined
-          : {
-              launchOptions: {
-                executablePath: env.KENT_PLAYWRIGHT_CHROMIUM_PATH,
-              },
-            },
-      ),
-      commands: { pointerDrag },
-      instances: [{ browser: "chromium" }],
-    },
   },
 });

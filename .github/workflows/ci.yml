@@ -310,35 +310,6 @@ jobs:
       - name: Build GUI web assets
         run: pnpm build
 
-  gui-browser:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Install GUI dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Chromium
-        run: pnpm --filter @app/desktop exec playwright install --with-deps chromium chromium-headless-shell
-
       - name: Test transformed reorder in Chromium
         run: pnpm --filter @app/desktop test:browser:reorder
 

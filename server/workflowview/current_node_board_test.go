@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/server/workflow"
 	"core/shared/serverapi"
 )
 
@@ -122,6 +123,18 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 	request.LabelFilter = serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindUnlabeled}
 	if _, err := fixture.board.ListNodeCards(fixture.ctx, request); !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("board token replay with changed filter error = %v, want invalid page token", err)
+	}
+}
+
+func (f currentNodeViewFixture) setTaskCreatedAt(t *testing.T, taskID workflow.TaskID, unixMs int64) {
+	t.Helper()
+	if _, err := f.metadata.DB().ExecContext(
+		f.ctx,
+		`UPDATE tasks SET created_at_unix_ms = ? WHERE id = ?`,
+		unixMs,
+		string(taskID),
+	); err != nil {
+		t.Fatalf("set task created at: %v", err)
 	}
 }
 
