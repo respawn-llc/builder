@@ -266,7 +266,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attention: workflowAttention,
 		finalizer: workflowAttentionFinalizer,
 	})
-	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowDefinitions, workflowTaskProjector, runtimeAuthority)
+	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskProjector, runtimeAuthority)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)

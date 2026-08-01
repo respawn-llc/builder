@@ -252,7 +252,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	definitions := mustDefinitionProjection(t, fixture.store)
 	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, projector, question.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projector, question.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

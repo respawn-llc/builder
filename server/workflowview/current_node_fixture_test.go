@@ -95,7 +95,7 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		}
 	})
 	projector := NewTaskProjector()
-	dependencies, err := NewTaskDependencies(metadataStore, definitions, projector, authority)
+	dependencies, err := NewTaskDependencies(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

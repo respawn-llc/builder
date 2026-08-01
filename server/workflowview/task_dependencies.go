@@ -16,11 +16,10 @@ import (
 )
 
 type TaskDependencies struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	projector   *TaskProjector
-	authority   *sessionruntime.Authority
-	policy      workflow.TaskDependencyPolicy
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
+	authority *sessionruntime.Authority
+	policy    workflow.TaskDependencyPolicy
 }
 
 type taskDependencyFactRow struct {
@@ -44,33 +43,27 @@ type taskDependencyRowKey struct {
 
 func NewTaskDependencies(
 	metadataStore *metadata.Store,
-	definitions *DefinitionProjection,
 	projector *TaskProjector,
 	authority *sessionruntime.Authority,
 ) (*TaskDependencies, error) {
-	return newTaskDependencies(metadataStore, definitions, projector, authority, false)
+	return newTaskDependencies(metadataStore, projector, authority, false)
 }
 
 func NewTaskDependenciesForInspection(
 	metadataStore *metadata.Store,
-	definitions *DefinitionProjection,
 	projector *TaskProjector,
 ) (*TaskDependencies, error) {
-	return newTaskDependencies(metadataStore, definitions, projector, nil, true)
+	return newTaskDependencies(metadataStore, projector, nil, true)
 }
 
 func newTaskDependencies(
 	metadataStore *metadata.Store,
-	definitions *DefinitionProjection,
 	projector *TaskProjector,
 	authority *sessionruntime.Authority,
 	allowNilAuthority bool,
 ) (*TaskDependencies, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
-	}
-	if definitions == nil {
-		return nil, errors.New("definition projection is required")
 	}
 	if projector == nil {
 		return nil, errors.New("task projector is required")
@@ -79,11 +72,10 @@ func newTaskDependencies(
 		return nil, errors.New("session runtime authority is required")
 	}
 	return &TaskDependencies{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		projector:   projector,
-		authority:   authority,
-		policy:      workflow.TaskDependencyPolicy{},
+		queries:   metadataStore.Queries(),
+		projector: projector,
+		authority: authority,
+		policy:    workflow.TaskDependencyPolicy{},
 	}, nil
 }
 
@@ -229,10 +221,6 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 	if err != nil {
 		return taskDependencyFacts{}, err
 	}
-	currentNodes, err := d.definitions.CurrentNodesByTask(ctx, workflowTaskIDs(taskIDs))
-	if err != nil {
-		return taskDependencyFacts{}, err
-	}
 	var live map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
 	if d.authority != nil {
 		live, err = d.authority.CurrentProjectTaskExecutionSnapshots(subject.ProjectID)
@@ -240,29 +228,12 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 			return taskDependencyFacts{}, err
 		}
 	}
-	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot)
-	for _, row := range rows {
-		key := taskDependencyRowKey{
-			direction: serverapi.WorkflowTaskDependencyDirection(row.Direction),
-			taskID:    row.TaskID,
-		}
-		workflowID := workflowIDs[key]
-		if _, exists := definitions[workflowID]; exists {
-			continue
-		}
-		definition, err := d.definitions.snapshot(ctx, workflowID)
-		if err != nil {
-			return taskDependencyFacts{}, err
-		}
-		definitions[workflowID] = definition
-	}
 	for _, row := range rows {
 		direction := serverapi.WorkflowTaskDependencyDirection(row.Direction)
 		workflowID := workflowIDs[taskDependencyRowKey{direction: direction, taskID: row.TaskID}]
 		durable := statuses[row.TaskID]
 		taskLive := live[workflow.TaskID(row.TaskID)].Executions
 		projectedStatus := taskDetailStatusFact(durable, taskLive)
-		done := durable.Done || currentNodesContainTerminal(currentNodes[workflow.TaskID(row.TaskID)], definitions[workflowID].nodeKinds)
 		facts.rows[direction] = append(facts.rows[direction], taskDependencyFactRow{
 			direction: row.Direction,
 			taskID:    row.TaskID,
@@ -270,7 +241,7 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 			title:     row.Title,
 			workflow:  workflowID.String(),
 			status:    projectedStatus.Status,
-			done:      done,
+			done:      durable.Done,
 		})
 	}
 	for direction := range facts.rows {

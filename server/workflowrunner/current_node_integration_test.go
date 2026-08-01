@@ -177,11 +177,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
-	definitions, err := workflowview.NewDefinitionProjection(store)
-	if err != nil {
-		t.Fatalf("new workflow definition projection: %v", err)
-	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, definitions, workflowview.NewTaskProjector(), fixture.authority)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowview.NewTaskProjector(), fixture.authority)
 	if err != nil {
 		t.Fatalf("new Task dependency projection: %v", err)
 	}

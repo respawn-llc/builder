@@ -2194,7 +2194,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskSearch: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, definitions, projector, authority)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projector, authority)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDependencies: %v", err)
 	}

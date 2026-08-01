@@ -10,11 +10,7 @@ import (
 
 func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	definitions, err := NewDefinitionProjection(fixture.store)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -76,11 +72,7 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 
 func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithoutTouchingBlockedTask(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	definitions, err := NewDefinitionProjection(fixture.store)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -163,11 +155,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 
 func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	definitions, err := NewDefinitionProjection(fixture.store)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -196,11 +184,7 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 
 func TestListTaskDependenciesSortsBothDirectionsUnfinishedFirstThenShortID(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	definitions, err := NewDefinitionProjection(fixture.store)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, definitions, NewTaskProjector(), fixture.authority)
+	dependencies, err := NewTaskDependencies(fixture.metadata, NewTaskProjector(), fixture.authority)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
