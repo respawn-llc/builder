@@ -1580,9 +1580,8 @@ live_task_states AS (
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
-        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
-    FROM json_each((SELECT live_task_states_json FROM args))
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+    FROM args, json_each(args.live_task_states_json)
 ),
 effective_status AS (
     SELECT
@@ -1591,8 +1590,7 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN COALESCE(live.has_waiting_approval, 0) != 0
-              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
             WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
@@ -1601,8 +1599,7 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN COALESCE(live.has_waiting_approval, 0) != 0
-              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN durable.kind = 'waiting_approval' THEN 3
             WHEN COALESCE(live.has_running, 0) != 0 THEN 5
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
@@ -1610,22 +1607,13 @@ effective_status AS (
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN durable.is_done != 0 THEN durable.attention_types_json
-            ELSE (
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
-                    FROM json_each(durable.attention_types_json) existing_attention
-                    WHERE existing_attention.value != 'question'
-                    UNION
-                    SELECT 'question'
-                    WHERE COALESCE(live.waiting_question, 0) != 0
-                    UNION
-                    SELECT 'approval'
-                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
-                    ORDER BY attention_type ASC
-                )
-            )
+            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'question'
+            ) THEN durable.attention_types_json
+            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
@@ -4212,14 +4200,6 @@ OR blocked_task_id IN (
     WHERE task_records.workflow_id = sqlc.arg(workflow_id)
 );
 
-
--- name: AnchorTaskSearchReadSnapshot :one
-SELECT EXISTS(
-    SELECT 1
-    FROM task_search_documents
-) AS anchored;
-
-
 -- name: ListBoardNodeTasks :many
 WITH board_node_tasks AS (
     SELECT
@@ -4415,29 +4395,6 @@ LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = sqlc.arg(workspace_id);
-
-
--- name: ListTasksMissingSourceWorkspaceDisplayName :many
-SELECT metadata_json
-FROM tasks
-WHERE source_workspace_id = sqlc.arg(workspace_id)
-  AND json_valid(metadata_json)
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
-ORDER BY rowid ASC;
-
-
--- name: CountSessionsMissingWorkspaceSnapshot :one
-SELECT CAST(COUNT(*) AS INTEGER) AS session_count
-FROM sessions
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND (
-      NOT json_valid(metadata_json)
-      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
-      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
-  );
-
-
 -- name: AcquireCurrentNodeResumeWriteLock :execrows
 UPDATE task_current_nodes
 SET scheduling_state = scheduling_state

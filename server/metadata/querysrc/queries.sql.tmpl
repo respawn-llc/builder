@@ -3653,14 +3653,6 @@ OR blocked_task_id IN (
     WHERE task_records.workflow_id = sqlc.arg(workflow_id)
 );
 
-
--- name: AnchorTaskSearchReadSnapshot :one
-SELECT EXISTS(
-    SELECT 1
-    FROM task_search_documents
-) AS anchored;
-
-
 -- name: ListBoardNodeTasks :many
 WITH board_node_tasks AS (
     SELECT
@@ -3804,29 +3796,6 @@ LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = sqlc.arg(workspace_id);
-
-
--- name: ListTasksMissingSourceWorkspaceDisplayName :many
-SELECT metadata_json
-FROM tasks
-WHERE source_workspace_id = sqlc.arg(workspace_id)
-  AND json_valid(metadata_json)
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.root_path'), '') IS NOT NULL
-  AND NULLIF(json_extract(metadata_json, '$.source_workspace_snapshot.display_name'), '') IS NULL
-ORDER BY rowid ASC;
-
-
--- name: CountSessionsMissingWorkspaceSnapshot :one
-SELECT CAST(COUNT(*) AS INTEGER) AS session_count
-FROM sessions
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND (
-      NOT json_valid(metadata_json)
-      OR NULLIF(json_extract(metadata_json, '$.workspace_root'), '') IS NULL
-      OR NULLIF(json_extract(metadata_json, '$.workspace_container'), '') IS NULL
-  );
-
-
 -- name: AcquireCurrentNodeResumeWriteLock :execrows
 UPDATE task_current_nodes
 SET scheduling_state = scheduling_state
