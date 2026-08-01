@@ -152,6 +152,12 @@ describe("TaskDependenciesArea", () => {
     expect(
       screen.queryAllByRole("button").some((button) => within(button).queryByRole("progressbar") !== null),
     ).toBe(false);
+    const chip = screen.getByLabelText(progress.getAttribute("aria-label") ?? "", {
+      selector: "span[tabindex]",
+    });
+    await user.tab();
+    expect(chip).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).not.toBeEmptyDOMElement();
 
     await user.click(screen.getByTestId("dependency-row-task-2"));
     await user.click(screen.getByTestId("dependency-add-blocked-by"));

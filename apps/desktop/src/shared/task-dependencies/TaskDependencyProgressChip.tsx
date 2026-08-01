@@ -24,8 +24,14 @@ export type TaskDependencyProgressInteractiveChipProps = Readonly<
   }
 >;
 
-export function TaskDependencyProgressChip({ progress, ...appearance }: TaskDependencyProgressChipProps) {
-  return <TaskDependencyProgressChipPresentation appearance={appearance} progress={progress} />;
+export function TaskDependencyProgressChip({
+  progress,
+  tabIndex = 0,
+  ...appearance
+}: TaskDependencyProgressChipProps) {
+  return (
+    <TaskDependencyProgressChipPresentation appearance={{ ...appearance, tabIndex }} progress={progress} />
+  );
 }
 
 export function TaskDependencyProgressInteractiveChip({
