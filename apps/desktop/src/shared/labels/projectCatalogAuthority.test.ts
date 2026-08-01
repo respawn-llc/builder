@@ -3,7 +3,7 @@ import { waitFor } from "@testing-library/react";
 
 import type { ProjectLabelCatalog } from "@/api";
 import { queryKeys } from "@/app-facade";
-import { createProjectCatalogAuthority } from "./index";
+import { createProjectCatalogAuthority, selectOrderedProjectLabels } from "./index";
 
 const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 const secondLabelID = "942495c2-5958-4959-8445-94046ad74fbd";
@@ -18,6 +18,21 @@ const noOpReorderFailure = (error: unknown): void => {
 };
 
 describe("Project catalog authority", () => {
+  it("uses catalog order instead of assignment mutation order", () => {
+    expect(
+      selectOrderedProjectLabels(
+        [
+          { id: labelID, name: "Alpha" },
+          { id: secondLabelID, name: "Beta" },
+        ],
+        [secondLabelID, labelID],
+      ),
+    ).toEqual([
+      { id: labelID, name: "Alpha" },
+      { id: secondLabelID, name: "Beta" },
+    ]);
+  });
+
   it("keeps an authoritative local rename ahead of an older catalog read", async () => {
     const oldRead = deferred<ProjectLabelCatalog>();
     const reconciliation = deferred<ProjectLabelCatalog>();
@@ -322,10 +337,13 @@ describe("Project catalog authority", () => {
       reorderCatalog: noOpReorderCatalog,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [secondLabelID, "Zulu"],
-      [labelID, "Alpha"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [secondLabelID, "Zulu"],
+        [labelID, "Alpha"],
+      ]),
+    );
 
     authority.applyCreate({ id: thirdLabelID, name: "Beta" });
     authority.applyRename({ id: labelID, name: "Renamed" });
@@ -360,11 +378,14 @@ describe("Project catalog authority", () => {
       onReorderFailure: noOpReorderFailure,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID, thirdLabelID]);
     await waitFor(() => {
@@ -373,11 +394,13 @@ describe("Project catalog authority", () => {
     authority.reorder([thirdLabelID, secondLabelID, labelID]);
 
     expect(labelIDs(queryClient, key)).toEqual([thirdLabelID, secondLabelID, labelID]);
-    firstReorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    firstReorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(calls).toEqual([
         [secondLabelID, labelID, thirdLabelID],
@@ -386,19 +409,23 @@ describe("Project catalog authority", () => {
     });
     expect(labelIDs(queryClient, key)).toEqual([thirdLabelID, secondLabelID, labelID]);
 
-    secondReorder.resolve(catalog([
-      [thirdLabelID, "Gamma"],
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-    ]));
+    secondReorder.resolve(
+      catalog([
+        [thirdLabelID, "Gamma"],
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+      ]),
+    );
     await waitFor(() => {
       expect(readCount).toBe(1);
     });
-    reconciliation.resolve(catalog([
-      [thirdLabelID, "Gamma"],
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-    ]));
+    reconciliation.resolve(
+      catalog([
+        [thirdLabelID, "Gamma"],
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+      ]),
+    );
     await waitFor(() => {
       expect(labelIDs(queryClient, key)).toEqual([thirdLabelID, secondLabelID, labelID]);
     });
@@ -426,10 +453,13 @@ describe("Project catalog authority", () => {
       reorderCatalog: async () => reorder.promise,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID]);
     await waitFor(() => {
@@ -441,27 +471,33 @@ describe("Project catalog authority", () => {
       expect(readCount).toBe(1);
     });
 
-    firstRefresh.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    firstRefresh.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(labelIDs(queryClient, key)).toEqual([secondLabelID, labelID, thirdLabelID]);
     });
-    reorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-    ]));
+    reorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+      ]),
+    );
     expect(labelIDs(queryClient, key)).toEqual([secondLabelID, labelID, thirdLabelID]);
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(labelIDs(queryClient, key)).toEqual([secondLabelID, labelID, thirdLabelID]);
     });
@@ -490,10 +526,13 @@ describe("Project catalog authority", () => {
       reorderCatalog: async () => reorder.promise,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID]);
     authority.applyDelete(labelID);
@@ -538,10 +577,13 @@ describe("Project catalog authority", () => {
       reorderCatalog: async () => reorder.promise,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID]);
     authority.applyRename({ id: labelID, name: "Renamed" });
@@ -553,20 +595,24 @@ describe("Project catalog authority", () => {
       expect(readCount).toBe(1);
     });
 
-    firstRefresh.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Renamed"],
-    ]));
+    firstRefresh.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Renamed"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Beta" },
         { id: labelID, name: "Renamed" },
       ]);
     });
-    reorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-    ]));
+    reorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+      ]),
+    );
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
       { id: secondLabelID, name: "Beta" },
       { id: labelID, name: "Renamed" },
@@ -574,10 +620,12 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Renamed"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Renamed"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Beta" },
@@ -613,11 +661,14 @@ describe("Project catalog authority", () => {
       },
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID, thirdLabelID]);
     await waitFor(() => {
@@ -628,11 +679,13 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(1);
     });
-    refreshed.resolve(catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Renamed"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    refreshed.resolve(
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Renamed"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: thirdLabelID, name: "Gamma" },
@@ -641,11 +694,13 @@ describe("Project catalog authority", () => {
       ]);
     });
 
-    firstReorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    firstReorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(calls).toEqual([
         [secondLabelID, labelID, thirdLabelID],
@@ -664,11 +719,13 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [secondLabelID, "Renamed"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [secondLabelID, "Renamed"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Renamed" },
@@ -701,20 +758,25 @@ describe("Project catalog authority", () => {
       reorderCatalog: async () => reorder.promise,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID]);
     authority.applyRename({ id: labelID, name: "Renamed" });
     await waitFor(() => {
       expect(readCount).toBe(1);
     });
-    refreshed.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Renamed"],
-    ]));
+    refreshed.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Renamed"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Beta" },
@@ -733,10 +795,12 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Renamed"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Renamed"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: secondLabelID, name: "Beta" },
@@ -769,11 +833,14 @@ describe("Project catalog authority", () => {
       },
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID, thirdLabelID]);
     await waitFor(() => {
@@ -784,27 +851,33 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(1);
     });
-    changedRefresh.resolve(catalog([
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    changedRefresh.resolve(
+      catalog([
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(labelIDs(queryClient, key)).toEqual([labelID, thirdLabelID]);
     });
     expect(calls).toEqual([[secondLabelID, labelID, thirdLabelID]]);
 
-    firstReorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    firstReorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(labelIDs(queryClient, key)).toEqual([labelID, thirdLabelID]);
     });
@@ -837,11 +910,14 @@ describe("Project catalog authority", () => {
       onReorderFailure: noOpReorderFailure,
     });
     const key = queryKeys.projectLabels("project-1");
-    queryClient.setQueryData<ProjectLabelCatalog>(key, catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Beta"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    queryClient.setQueryData<ProjectLabelCatalog>(
+      key,
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Beta"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
 
     authority.reorder([secondLabelID, labelID, thirdLabelID]);
     await waitFor(() => {
@@ -852,11 +928,13 @@ describe("Project catalog authority", () => {
     await waitFor(() => {
       expect(readCount).toBe(1);
     });
-    refreshed.resolve(catalog([
-      [labelID, "Alpha"],
-      [secondLabelID, "Renamed"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    refreshed.resolve(
+      catalog([
+        [labelID, "Alpha"],
+        [secondLabelID, "Renamed"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: thirdLabelID, name: "Gamma" },
@@ -865,30 +943,36 @@ describe("Project catalog authority", () => {
       ]);
     });
 
-    firstReorder.resolve(catalog([
-      [secondLabelID, "Beta"],
-      [labelID, "Alpha"],
-      [thirdLabelID, "Gamma"],
-    ]));
+    firstReorder.resolve(
+      catalog([
+        [secondLabelID, "Beta"],
+        [labelID, "Alpha"],
+        [thirdLabelID, "Gamma"],
+      ]),
+    );
     await waitFor(() => {
       expect(calls).toEqual([
         [secondLabelID, labelID, thirdLabelID],
         [thirdLabelID, secondLabelID, labelID],
       ]);
     });
-    secondReorder.resolve(catalog([
-      [thirdLabelID, "Gamma"],
-      [secondLabelID, "Renamed"],
-      [labelID, "Alpha"],
-    ]));
+    secondReorder.resolve(
+      catalog([
+        [thirdLabelID, "Gamma"],
+        [secondLabelID, "Renamed"],
+        [labelID, "Alpha"],
+      ]),
+    );
     await waitFor(() => {
       expect(readCount).toBe(2);
     });
-    finalRefresh.resolve(catalog([
-      [thirdLabelID, "Gamma"],
-      [secondLabelID, "Renamed"],
-      [labelID, "Alpha"],
-    ]));
+    finalRefresh.resolve(
+      catalog([
+        [thirdLabelID, "Gamma"],
+        [secondLabelID, "Renamed"],
+        [labelID, "Alpha"],
+      ]),
+    );
     await waitFor(() => {
       expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
         { id: thirdLabelID, name: "Gamma" },

@@ -4,19 +4,20 @@ import { describe, expect, it } from "vitest";
 import { commands, page as screen, userEvent } from "vitest/browser";
 import { VerticalReorder } from "./VerticalReorder";
 
-declare module "vitest/browser" {
-  interface BrowserCommands {
-    activatePointerInSource: (selector: string) => Promise<void>;
-    dragToAdjacent: (sourceSelector: string, targetSelector: string) => Promise<void>;
-    dragToGap: (sourceSelector: string, targetSelector: string) => Promise<void>;
-  }
-}
+type ReorderPointerCommandInput = Readonly<{
+  sourceSelector: string;
+  destination:
+    | Readonly<{ kind: "source" }>
+    | Readonly<{
+        kind: "target";
+        placement: "center" | "gap";
+        selector: string;
+      }>;
+}>;
 
 declare module "vitest/internal/browser" {
   interface BrowserCommands {
-    activatePointerInSource: (selector: string) => Promise<void>;
-    dragToAdjacent: (sourceSelector: string, targetSelector: string) => Promise<void>;
-    dragToGap: (sourceSelector: string, targetSelector: string) => Promise<void>;
+    pointerDrag: (input: ReorderPointerCommandInput) => Promise<void>;
   }
 }
 
@@ -31,14 +32,16 @@ const items: readonly ReorderItem[] = [
 describe("VerticalReorder transformed browser regression", () => {
   it("does not commit a pointer activation before the destination is crossed", async () => {
     render(<BrowserReorderHarness />);
-    await commands.activatePointerInSource('[data-testid="row-first"] button');
+    await commands.pointerDrag(sourceAt('[data-testid="row-first"] button'));
 
     await expect.poll(() => screen.getByTestId("committed-order").element().textContent).toBe("");
   });
 
   it("commits one adjacent pointer move through a translated surface", async () => {
     render(<BrowserReorderHarness />);
-    await commands.dragToAdjacent('[data-testid="row-second"] button', '[data-testid="row-third"]');
+    await commands.pointerDrag(
+      destinationAt('[data-testid="row-second"] button', '[data-testid="row-third"]', "center"),
+    );
 
     await expect
       .poll(() => screen.getByTestId("committed-order").element().textContent)
@@ -47,7 +50,9 @@ describe("VerticalReorder transformed browser regression", () => {
 
   it("commits the adjacent destination through a translated surface", async () => {
     render(<BrowserReorderHarness />);
-    await commands.dragToGap('[data-testid="row-first"] button', '[data-testid="row-second"]');
+    await commands.pointerDrag(
+      destinationAt('[data-testid="row-first"] button', '[data-testid="row-second"]', "gap"),
+    );
 
     await expect
       .poll(() => screen.getByTestId("committed-order").element().textContent)
@@ -106,6 +111,24 @@ function BrowserReorderHarness() {
       <output data-testid="committed-order">{committedOrder}</output>
     </div>
   );
+}
+
+function sourceAt(sourceSelector: string): ReorderPointerCommandInput {
+  return {
+    sourceSelector,
+    destination: { kind: "source" },
+  };
+}
+
+function destinationAt(
+  sourceSelector: string,
+  targetSelector: string,
+  placement: "center" | "gap",
+): ReorderPointerCommandInput {
+  return {
+    sourceSelector,
+    destination: { kind: "target", placement, selector: targetSelector },
+  };
 }
 
 function move(rows: readonly ReorderItem[], orderedIDs: readonly string[]): readonly ReorderItem[] {

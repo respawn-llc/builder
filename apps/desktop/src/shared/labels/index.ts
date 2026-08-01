@@ -17,7 +17,11 @@ export {
   labelNameContains,
   labelNamesEqual,
 } from "./labelComparison";
-export { createProjectCatalogAuthority, type ProjectCatalogAuthority } from "./projectCatalogAuthority";
+export {
+  createProjectCatalogAuthority,
+  selectOrderedProjectLabels,
+  type ProjectCatalogAuthority,
+} from "./projectCatalogAuthority";
 export { ProjectLabelsProvider } from "./ProjectLabelsProvider";
 export {
   useProjectCatalogAuthority,
@@ -49,7 +53,6 @@ export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
 export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
-export { selectOrderedProjectLabels } from "./orderedProjectLabels";
 export {
   createProjectLabelEffects,
   type LabelMembershipRefreshEffect,

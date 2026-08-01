@@ -34,6 +34,17 @@ export function createProjectCatalogAuthority({
   });
 }
 
+export function selectOrderedProjectLabels(
+  catalog: readonly ProjectLabel[] | undefined,
+  assignedLabelIDs: readonly string[],
+): readonly ProjectLabel[] {
+  if (catalog === undefined || assignedLabelIDs.length === 0) {
+    return [];
+  }
+  const assigned = new Set(assignedLabelIDs);
+  return catalog.filter((label) => assigned.has(label.id));
+}
+
 type ActiveCatalogRead = Readonly<{
   generation: number;
   promise: Promise<ProjectLabelCatalog>;
@@ -87,11 +98,7 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     const generation = this.#catalogGeneration;
     const activeRead = this.#activeRead ?? this.#startRead(generation);
     const catalog = await activeRead.promise;
-    if (
-      signal.aborted ||
-      generation !== this.#catalogGeneration ||
-      activeRead.generation !== generation
-    ) {
+    if (signal.aborted || generation !== this.#catalogGeneration || activeRead.generation !== generation) {
       throw new CancelledError({ revert: true, silent: true });
     }
     return this.#acceptAuthoritativeCatalog(catalog);
@@ -186,7 +193,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
 
   #acceptAuthoritativeCatalog(catalog: ProjectLabelCatalog): ProjectLabelCatalog {
     if (catalog.projectID !== this.#projectID) {
-      throw new Error(`Project catalog response belongs to ${catalog.projectID}, expected ${this.#projectID}.`);
+      throw new Error(
+        `Project catalog response belongs to ${catalog.projectID}, expected ${this.#projectID}.`,
+      );
     }
     const intent = this.#latestOrderIntent;
     if (intent !== null && !sameLabelMembership(catalog.labels, intent.requestedIDs)) {
