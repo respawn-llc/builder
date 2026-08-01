@@ -258,16 +258,23 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, handle := range handles {
-		exact, ok := handle.(executionHandle)
-		if !ok || exact.execution == nil {
-			return errors.New("execution handle does not belong to this authority")
-		}
-		execution := exact.execution
-		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
-			return ErrExecutionNoLongerLive
+		if _, err := a.exactExecutionFromHandleLocked(handle); err != nil {
+			return err
 		}
 	}
 	return operation()
+}
+
+func (a *Authority) exactExecutionFromHandleLocked(handle ExecutionHandle) (*execution, error) {
+	exact, ok := handle.(executionHandle)
+	if !ok || exact.execution == nil {
+		return nil, errors.New("execution handle does not belong to this authority")
+	}
+	execution := exact.execution
+	if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
+		return nil, ErrExecutionNoLongerLive
+	}
+	return execution, nil
 }
 
 func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionHandle, bool) {
@@ -388,13 +395,14 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
 	reserved := &execution{
-		authority: a,
-		scope:     scope,
-		ctx:       runCtx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		prompts:   newExecutionPromptStore(scope, a.promptFeed),
-		phase:     executionPhaseRunning,
+		authority:          a,
+		scope:              scope,
+		ctx:                runCtx,
+		cancel:             cancel,
+		done:               make(chan struct{}),
+		prompts:            newExecutionPromptStore(scope, a.promptFeed),
+		phase:              executionPhaseRunning,
+		exactCallbackPhase: exactCallbackAdmissionOpen,
 	}
 	if workflowRef != nil {
 		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}

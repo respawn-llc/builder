@@ -551,6 +551,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSession(t, "ws", workspace)
+	appendAgentStepBoundaryForEligibilityTest(t, store, "subagent-catalog-step")
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",

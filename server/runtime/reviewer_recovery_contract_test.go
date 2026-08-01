@@ -18,32 +18,6 @@ func TestReviewerSkippedWhenNoToolCalls(t *testing.T) {
 	}
 }
 
-func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"},
-		ProviderCapabilitiesOverride: &llm.ProviderCapabilities{ProviderID: "test"},
-	})
-	blocker := mustBlockTestEventLogAppends(t, store)
-	t.Cleanup(func() { _ = blocker.Restore() })
-	original := llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")}
-	result, err := (&defaultReviewerPipeline{engine: engine}).RunFollowUp(
-		context.Background(), "review", original, 7, true,
-		&fakeClient{
-			caps:      llm.ProviderCapabilities{ProviderID: "test"},
-			responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["fix"]}`)}}},
-		},
-	)
-	if err != nil {
-		t.Fatalf("run reviewer follow-up: %v", err)
-	}
-	if result.Completion == nil || result.Completion.Outcome != "followup_failed" || result.Completion.SuggestionsCount != 1 ||
-		result.Message.Role != original.Role ||
-		result.AssistantCommittedStart != 7 || !result.AssistantCommittedStartSet {
-		t.Fatalf("follow-up failure result = completion:%+v message:%+v", result.Completion, result.Message)
-	}
-}
-
 func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 	store := mustCreateTestSession(t)
 	main, reviewer := reviewerAppliedClients()

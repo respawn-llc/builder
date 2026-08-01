@@ -191,13 +191,9 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 }
 
 func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, error) {
-	entry, err := normalizeStoredLocalEntry(entry)
+	entry, record, err := prepareStoredLocalEntryRecord(entry)
 	if err != nil {
-		return session.CommitReceipt{}, fmt.Errorf("normalize local entry: %w", err)
-	}
-	record, adaptErr := sessionLocalEntryRecordFromRuntime(entry)
-	if adaptErr != nil {
-		return session.CommitReceipt{}, fmt.Errorf("adapt local entry record: %w", adaptErr)
+		return session.CommitReceipt{}, err
 	}
 	_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 	if receipt.Committed {
@@ -211,6 +207,18 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 		})
 	}
 	return receipt, err
+}
+
+func prepareStoredLocalEntryRecord(entry storedLocalEntry) (storedLocalEntry, session.LocalEntryRecord, error) {
+	entry, err := normalizeStoredLocalEntry(entry)
+	if err != nil {
+		return storedLocalEntry{}, session.LocalEntryRecord{}, fmt.Errorf("normalize local entry: %w", err)
+	}
+	record, adaptErr := sessionLocalEntryRecordFromRuntime(entry)
+	if adaptErr != nil {
+		return storedLocalEntry{}, session.LocalEntryRecord{}, fmt.Errorf("adapt local entry record: %w", adaptErr)
+	}
+	return entry, record, nil
 }
 
 func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error) {
@@ -271,6 +279,14 @@ func (e *Engine) resetLocalDiagnostics() {
 	e.diagnosticDedupeStore().Reset()
 }
 
+func (e *Engine) restoreTransientAgentStepProjection() error {
+	if e == nil {
+		return nil
+	}
+	e.transcriptRuntimeState().ResetProjection()
+	return e.restoreMessages()
+}
+
 func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -281,22 +297,15 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 }
 
 func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) (session.CommitReceipt, error) {
-	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	var err error
-	msg, err = normalizePersistedMessageWorktreeContext(msg)
+	msg, record, err := e.prepareMessageRecord(stepID, msg)
 	if err != nil {
 		return session.CommitReceipt{}, err
-	}
-	// Reject conflicting provider identity before durable append so one malformed
-	// response cannot poison the session or crash the server projection.
-	if err := e.transcriptRuntimeState().ValidateMessage(stepID, msg); err != nil {
-		return session.CommitReceipt{}, fmt.Errorf("validate message projection: %w", err)
 	}
 	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	receipt := session.CommitReceipt{}
 	var appendErr error
 	if persist {
-		appended, err := e.appendPersistedMessageEvent(stepID, msg)
+		appended, err := e.appendPreparedMessageEvent(stepID, msg, record)
 		receipt = appended.CommitReceipt
 		appendErr = err
 		if !receipt.Committed {
@@ -323,25 +332,31 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	return receipt, appendErr
 }
 
-func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventRecordAppendResult, error) {
-	record, err := sessionMessageRecordFromLLM(msg)
+func (e *Engine) prepareMessageRecord(stepID string, msg llm.Message) (llm.Message, session.MessageRecord, error) {
+	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+	normalized, err := normalizePersistedMessageWorktreeContext(msg)
 	if err != nil {
-		return session.EventRecordAppendResult{}, fmt.Errorf("adapt message record: %w", err)
+		return llm.Message{}, session.MessageRecord{}, err
 	}
+	if err := e.transcriptRuntimeState().ValidateMessage(stepID, normalized); err != nil {
+		return llm.Message{}, session.MessageRecord{}, fmt.Errorf("validate message projection: %w", err)
+	}
+	record, err := sessionMessageRecordFromLLM(normalized)
+	if err != nil {
+		return llm.Message{}, session.MessageRecord{}, fmt.Errorf("adapt message record: %w", err)
+	}
+	return normalized, record, nil
+}
+
+func (e *Engine) appendPreparedMessageEvent(stepID string, msg llm.Message, record session.MessageRecord) (session.EventRecordAppendResult, error) {
 	if !isRollbackCandidateMessage(msg) {
 		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
-		return session.EventRecordAppendResult{
-			Record:        appended,
-			CommitReceipt: receipt,
-		}, appendErr
+		return session.EventRecordAppendResult{Record: appended, CommitReceipt: receipt}, appendErr
 	}
 	appended, err := e.eventLog.AppendRecordWithEndByteCursor(textutil.OptionalExactString(stepID), record)
 	if appended.Committed {
 		if appended.EndByteCursor == nil {
-			panic(fmt.Sprintf(
-				"committed rollback candidate message is missing its event-log end-byte cursor (event_seq=%d)",
-				appended.Record.Seq(),
-			))
+			panic(fmt.Sprintf("committed rollback candidate message is missing its event-log end-byte cursor (event_seq=%d)", appended.Record.Seq()))
 		}
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(rollbacktarget.CandidateLocator{
 			UserMessageSeq:       appended.Record.Seq(),
@@ -349,6 +364,65 @@ func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (se
 		})
 	}
 	return appended, err
+}
+
+func (e *Engine) stageAgentStepMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy) error {
+	finalizer := e.agentStepBoundary(stepID)
+	if finalizer == nil || !finalizer.Capturing() {
+		_, err := e.appendMessageRaw(stepID, msg, eventPolicy, true)
+		return err
+	}
+	msg, record, err := e.prepareMessageRecord(stepID, msg)
+	if err != nil {
+		return err
+	}
+	if err := finalizer.Stage(record); err != nil {
+		return err
+	}
+	finalizer.StageChatEntries(stepID, VisibleChatEntriesFromMessage(msg))
+	return e.projectMessageRaw(stepID, msg, eventPolicy)
+}
+
+func (e *Engine) projectMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy) error {
+	previousCommittedCount := e.CommittedTranscriptEntryCount()
+	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
+		e.markCurrentRequestShapeDirtyForSignificantMutation()
+	} else {
+		e.markCurrentRequestShapeDirty()
+	}
+	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
+		return fmt.Errorf("append message projection: %w", projectionErr)
+	}
+	if eventPolicy != steeringMessageEventNone && e.CommittedTranscriptEntryCount() > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
+		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
+	}
+	return nil
+}
+
+func (e *Engine) stageAgentStepLocalEntryRaw(stepID string, entry storedLocalEntry) error {
+	finalizer := e.agentStepBoundary(stepID)
+	if finalizer == nil || !finalizer.Capturing() {
+		_, err := e.appendPersistedLocalEntryRecordRaw(stepID, entry)
+		return err
+	}
+	entry, record, err := prepareStoredLocalEntryRecord(entry)
+	if err != nil {
+		return err
+	}
+	if err := finalizer.Stage(record); err != nil {
+		return err
+	}
+	projected := localEntryChatEntryForStep(entry, stepID)
+	e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
+	return e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: projected, CommittedTranscriptChanged: true})
+}
+
+func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventRecordAppendResult, error) {
+	msg, record, err := e.prepareMessageRecord(stepID, msg)
+	if err != nil {
+		return session.EventRecordAppendResult{}, err
+	}
+	return e.appendPreparedMessageEvent(stepID, msg, record)
 }
 
 func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) error {

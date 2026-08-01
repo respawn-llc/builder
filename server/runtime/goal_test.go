@@ -1056,13 +1056,24 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	client.releaseCall(1)
 
 	client.waitStarted(t, 2)
-	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindCompaction {
-		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
+	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindGoalLoop {
+		t.Fatalf("second model request active run = %+v, want owning goal loop retained during compaction", active)
 	}
 	client.releaseCall(2)
 	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrExclusiveStepReservationPending) && !errors.Is(second, ErrExclusiveStepReservationPending)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one pending rejection", first, second)
+	var tooSoonCount int
+	for _, err := range []error{first, second} {
+		if err == nil {
+			continue
+		}
+		var admissionErr *ManualCompactionAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Reason != ManualCompactionAdmissionReasonTooSoon {
+			t.Fatalf("duplicate compact error = %v, want too-soon admission or success", err)
+		}
+		tooSoonCount++
+	}
+	if tooSoonCount != 1 || (first == nil) == (second == nil) {
+		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one too-soon rejection", first, second)
 	}
 	if got := engine.CompactionCount(); got != 1 {
 		t.Fatalf("compaction count = %d, want 1", got)

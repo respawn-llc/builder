@@ -155,6 +155,7 @@ type runtimeControlFakeClient struct {
 	mu                  sync.Mutex
 	responses           []llm.Response
 	compactionResponses []llm.CompactionResponse
+	compactionErrors    []error
 	capabilities        llm.ProviderCapabilities
 	calls               int
 	compactionCalls     int
@@ -527,6 +528,11 @@ func (c *runtimeControlFakeClient) Compact(context.Context, llm.CompactionReques
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.compactionCalls++
+	if len(c.compactionErrors) != 0 {
+		err := c.compactionErrors[0]
+		c.compactionErrors = c.compactionErrors[1:]
+		return llm.CompactionResponse{}, err
+	}
 	if len(c.compactionResponses) == 0 {
 		return llm.CompactionResponse{}, nil
 	}

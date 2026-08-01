@@ -25,6 +25,32 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	snapshot.Streaming = streaming
 	snapshot.StreamingMetadata = streamingMetadata
 	snapshot.StreamingError = streamingErr
+	e.overlayTransientAgentStepEntries(snapshot)
+}
+
+func (e *Engine) overlayTransientAgentStepEntries(snapshot *ChatSnapshot) {
+	e.agentBoundaryMu.Lock()
+	boundaries := make([]*agentStepBoundaryFinalizer, 0, len(e.agentBoundaries))
+	for _, boundary := range e.agentBoundaries {
+		boundaries = append(boundaries, boundary)
+	}
+	e.agentBoundaryMu.Unlock()
+	for _, boundary := range boundaries {
+		entries := boundary.TransientChatEntries()
+		if len(entries) == 0 {
+			continue
+		}
+		insertAt := len(snapshot.Entries)
+		for index, entry := range snapshot.Entries {
+			if entry.MessageType == llm.MessageTypeGoal {
+				insertAt = index
+				break
+			}
+		}
+		snapshot.Entries = append(snapshot.Entries, make([]ChatEntry, len(entries))...)
+		copy(snapshot.Entries[insertAt+len(entries):], snapshot.Entries[insertAt:len(snapshot.Entries)-len(entries)])
+		copy(snapshot.Entries[insertAt:], entries)
+	}
 }
 
 type TranscriptSegmentPage struct {

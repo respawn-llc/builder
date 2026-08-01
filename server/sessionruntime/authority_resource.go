@@ -746,16 +746,17 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
 	execution := &execution{
-		authority:     a,
-		resource:      resource,
-		scope:         scope,
-		workflow:      workflowBinding,
-		ctx:           runCtx,
-		cancel:        cancel,
-		done:          make(chan struct{}),
-		prompts:       newExecutionPromptStore(scope, a.promptFeed),
-		closeResource: closeResource,
-		phase:         executionPhaseRunning,
+		authority:          a,
+		resource:           resource,
+		scope:              scope,
+		workflow:           workflowBinding,
+		ctx:                runCtx,
+		cancel:             cancel,
+		done:               make(chan struct{}),
+		prompts:            newExecutionPromptStore(scope, a.promptFeed),
+		closeResource:      closeResource,
+		phase:              executionPhaseRunning,
+		exactCallbackPhase: exactCallbackAdmissionOpen,
 	}
 	if workflowRef != nil {
 		execution.phase = executionPhaseQueued
@@ -893,21 +894,11 @@ func (a *Authority) WithLiveExecutionRuntime(
 	if a == nil {
 		return errors.New("session runtime authority is required")
 	}
-	execution, ok := a.SessionExecution(sessionID)
-	if !ok {
-		err := a.WithCurrentRuntime(ctx, sessionID, func(context.Context, *runtime.Engine) error {
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		return serverapi.ErrRuntimeNoActiveRun
+	capture, err := a.captureLiveExecution(sessionID)
+	if err != nil {
+		return err
 	}
-	resource, ok := execution.Scope().Resource()
-	if !ok {
-		return errors.New("agent execution scope has no runtime resource")
-	}
-	return a.WithRuntime(ctx, resource, callback)
+	return a.admitLiveExecution(ctx, capture, callback)
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {

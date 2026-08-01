@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/shared/textutil"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +22,9 @@ var ErrAgentBusy = errors.New("agent is busy")
 var ErrEngineClosed = errors.New("runtime engine is closed")
 
 var ErrExclusiveStepReservationPending = errors.New("manual compaction is already pending")
+
+var errTerminalRunErrorPersisted = errors.New("terminal run error persisted")
+var errAgentStepNotDispatched = errors.New("agent step ended before provider dispatch")
 
 // errPendingModelRecoveryClear wraps failures to clear the recovery marker at
 // step end after terminal transcript state has already been published.
@@ -125,6 +131,7 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 		}
 	}
+	s.engine.openAgentStepBoundary(stepID)
 	err = fn(stepCtx, stepID)
 	return s.finishStep(stepID, options, err)
 }
@@ -134,11 +141,53 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
 		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
 	}
+	var durableCleanupErr error
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
-		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
+		durableCleanupErr = fmt.Errorf("drain active-step goal mutations: %w", drainErr)
+		err = errors.Join(err, durableCleanupErr)
+	}
+	if abortErr := s.engine.steer(stepID, steerLiveToolAbortIntent("terminal")); abortErr != nil {
+		durableCleanupErr = errors.Join(durableCleanupErr, fmt.Errorf("cleanup dangling tools: %w", abortErr))
+		err = errors.Join(err, abortErr)
+	}
+	boundary := s.engine.agentStepBoundary(stepID)
+	status := statusFromRunError(err)
+	if boundary != nil {
+		if durableCleanupErr != nil {
+			status = RunStatusFailed
+			_ = boundary.Abort(durableCleanupErr)
+			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), durableCleanupErr)
+		} else if boundary.Dispatched() && err == nil {
+			// A successful executor path normally commits its boundary before
+			// returning. The lifecycle still owns the fallback for direct
+			// terminal paths.
+			if finalizationErr := s.finalizeAgentStep(stepID, boundary, nil); finalizationErr != nil {
+				err = errors.Join(err, finalizationErr)
+			}
+		} else if boundary.Dispatched() {
+			if finalizationErr := s.finalizeAgentStep(stepID, boundary, err); finalizationErr != nil {
+				err = errors.Join(err, finalizationErr)
+			}
+		} else {
+			notDispatchedErr := err
+			if notDispatchedErr == nil {
+				notDispatchedErr = errAgentStepNotDispatched
+			}
+			_ = boundary.Abort(notDispatchedErr)
+			detached := boundary.TakeDetachedManual()
+			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(detached, notDispatchedErr)
+			if len(detached) > 0 {
+				err = errors.Join(err, notDispatchedErr)
+				status = RunStatusFailed
+			}
+		}
+	}
+	if boundary != nil {
+		if committedReceipt, _, committed := boundary.Committed(); committed && !committedReceipt.Committed {
+			status = RunStatusFailed
+		}
 	}
 	finishedAt := time.Now().UTC()
-	status := statusFromRunError(err)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
 	if status != RunStatusCompleted {
 		_ = s.engine.steer(stepID, steerClearStreamingStateIntent())
@@ -162,11 +211,6 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			err = errors.Join(err, fmt.Errorf("publish step ended: %w", publishErr))
 		}
 	}
-	if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
-		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
-		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
-		err = errors.Join(err, wrapped)
-	}
 	var publishLiveRunFinished func()
 	if options.EmitRunState {
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
@@ -183,7 +227,79 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
 	}
+	s.engine.compactionRuntimeState().manualBoundaryCoordinator().endTurn()
+	s.engine.closeAgentStepBoundary(stepID)
 	return err
+}
+
+func (s *defaultExclusiveStepLifecycle) finalizeAgentStep(
+	stepID string,
+	boundary *agentStepBoundaryFinalizer,
+	terminalErr error,
+) error {
+	if boundary == nil {
+		return nil
+	}
+	receipt, commitErr, committed := boundary.Committed()
+	if committed {
+		if receipt.Committed {
+			boundary.Complete(receipt)
+			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
+		} else {
+			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
+		}
+		return commitErr
+	}
+	if terminalErr != nil && !errors.Is(terminalErr, context.Canceled) {
+		entry := storedLocalEntry{
+			Visibility: transcript.EntryVisibilityAuto,
+			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
+			Text:       llm.UserFacingError(terminalErr),
+		}
+		if entry.Text == "" {
+			entry.Text = terminalErr.Error()
+		}
+		record, err := sessionLocalEntryRecordFromRuntime(entry)
+		if err != nil {
+			_ = boundary.Abort(err)
+			s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), err)
+			return err
+		}
+		receipt, commitErr := boundary.Commit(stepID, []session.EventRecordPayload{record})
+		if receipt.Committed {
+			boundary.Complete(receipt)
+			s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
+			return errors.Join(commitErr, errTerminalRunErrorPersisted)
+		}
+		s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
+		return commitErr
+	}
+	receipt, commitErr = boundary.Commit(stepID, nil)
+	if receipt.Committed {
+		boundary.Complete(receipt)
+		s.drainManualBoundary(stepID, boundary.TakeDetachedManual())
+		return commitErr
+	}
+	s.engine.compactionRuntimeState().manualBoundaryCoordinator().rejectDetached(boundary.TakeDetachedManual(), commitErr)
+	return commitErr
+}
+
+func (e *Engine) pendingModelRecoveryForStep(stepID string) bool {
+	if e == nil || e.store == nil {
+		return false
+	}
+	recovery := e.store.Meta().PendingModelRecovery
+	return recovery != nil && strings.TrimSpace(recovery.StepID) == strings.TrimSpace(stepID)
+}
+
+func (s *defaultExclusiveStepLifecycle) drainManualBoundary(stepID string, entries []*pendingManualCompaction) {
+	if s == nil || s.engine == nil {
+		return
+	}
+	compactor, ok := s.engine.compactionFlow.(*defaultContextCompactor)
+	if ok {
+		compactor.drainPendingManualCompactions(stepID, entries)
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {

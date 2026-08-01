@@ -208,6 +208,40 @@ func (s *Service) runAgentExecution(
 	return s.execution.RunAgentExecution(ctx, sessionID, run)
 }
 
+func (s *Service) runManualCompactionExecution(
+	ctx context.Context,
+	sessionID string,
+	attempt runtimeops.Attempt,
+	run func(context.Context, *runtime.Engine) error,
+) error {
+	runCtx, stop := mergeOperationContexts(ctx, attempt.Context())
+	defer stop()
+	for {
+		err := s.runAgentExecution(runCtx, sessionID, run)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, serverapi.ErrSessionRunStarting) {
+			return err
+		}
+		id, parseErr := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+		if parseErr != nil {
+			return parseErr
+		}
+		err = s.withLiveExecutionRuntime(runCtx, id, run)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
+			!errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+			return err
+		}
+		if runCtx.Err() != nil {
+			return context.Cause(runCtx)
+		}
+	}
+}
+
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
 	if s == nil {
 		return nil
@@ -501,17 +535,32 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
 	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
 		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		err := s.runManualCompactionExecution(ctx, req.SessionID, attempt, func(runCtx context.Context, engine *runtime.Engine) error {
 			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+				s.markManualCompactionActive(memoReq.SessionID, req.OperationRef, engine)
 			})
 			receipt = compactReceipt
-			return compactErr
+			return mapManualCompactionAdmissionError(compactErr)
 		})
 		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
 		return struct{}{}, err
 	})
 	return err
+}
+
+func (s *Service) markManualCompactionActive(sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) {
+	if s == nil || s.operations == nil {
+		return
+	}
+	snapshot := engine.ActiveRun()
+	if snapshot != nil {
+		switch snapshot.ActiveKind {
+		case runtime.ActiveKindUserTurn, runtime.ActiveKindWorkflowTurn, runtime.ActiveKindGoalLoop:
+			s.operations.MarkOperationAttemptOnly(sessionID, ref)
+			return
+		}
+	}
+	s.operations.MarkOperationActive(sessionID, ref)
 }
 
 func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
@@ -733,6 +782,28 @@ func (s *Service) rejectWorkflowAutoCompactionDisable(ctx context.Context, sessi
 		return errWorkflowTaskSessionAutoCompactionDisable
 	}
 	return nil
+}
+
+func mapManualCompactionAdmissionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var admission *runtime.ManualCompactionAdmissionError
+	if !errors.As(err, &admission) {
+		return err
+	}
+	var reason serverapi.ManualCompactionAdmissionReason
+	switch admission.Reason {
+	case runtime.ManualCompactionAdmissionReasonActive:
+		reason = serverapi.ManualCompactionAdmissionActive
+	case runtime.ManualCompactionAdmissionReasonDisabled:
+		reason = serverapi.ManualCompactionAdmissionDisabled
+	case runtime.ManualCompactionAdmissionReasonTooSoon:
+		reason = serverapi.ManualCompactionAdmissionTooSoon
+	default:
+		return fmt.Errorf("manual compaction admission reason is invalid: %q", admission.Reason)
+	}
+	return &serverapi.ManualCompactionAdmissionError{Reason: reason}
 }
 
 func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, engine *runtime.Engine) (bool, error) {

@@ -45,7 +45,14 @@ type steeringItem struct {
 	cacheWarning                *steeringCacheWarning
 	cacheObservation            *steeringCacheObservation
 	liveToolAbort               *steeringLiveToolAbort
+	agentStepFinalization       *steeringAgentStepFinalization
 	commitReceipt               *session.CommitReceipt
+}
+
+type steeringAgentStepFinalization struct {
+	payloads     []session.EventRecordPayload
+	receipt      *session.CommitReceipt
+	preprojected bool
 }
 
 type steeringMessage struct {
@@ -237,6 +244,21 @@ func steerLiveToolAbortIntent(reason string) steeringIntent {
 	}
 }
 
+func steerAgentStepFinalizationIntent(
+	payloads []session.EventRecordPayload,
+	receipt *session.CommitReceipt,
+	preprojected bool,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items: []steeringItem{{agentStepFinalization: &steeringAgentStepFinalization{
+			payloads:     append([]session.EventRecordPayload(nil), payloads...),
+			receipt:      receipt,
+			preprojected: preprojected,
+		}}},
+	}
+}
+
 func steerCommittedAssistantMessageIntent(msg llm.Message, coordinate *committedAssistantCoordinate) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
@@ -404,6 +426,9 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
+		if item.message.persist && shouldStageAgentStepMessage(item.message.message) && e.agentStepBoundary(stepID) != nil && e.agentStepBoundary(stepID).Capturing() {
+			return e.stageAgentStepMessageRaw(stepID, item.message.message, item.message.eventPolicy)
+		}
 		receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 		item.recordCommitReceipt(receipt)
 		return err
@@ -528,6 +553,41 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.liveToolAbort != nil {
 		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
 	}
+	if item.agentStepFinalization != nil {
+		records, receipt, err := e.eventLog.AppendAgentStepFinalization(stepID, item.agentStepFinalization.payloads)
+		if item.agentStepFinalization.receipt != nil {
+			*item.agentStepFinalization.receipt = receipt
+		}
+		if item.agentStepFinalization.preprojected {
+			return err
+		}
+		if receipt.Committed {
+			for _, record := range records {
+				payload, payloadErr := record.Payload()
+				if payloadErr != nil {
+					err = errors.Join(err, payloadErr)
+					continue
+				}
+				switch typed := payload.(type) {
+				case session.LocalEntryRecord:
+					entry, restoreErr := storedLocalEntryFromSessionRecord(typed)
+					if restoreErr != nil {
+						err = errors.Join(err, restoreErr)
+						continue
+					}
+					projected := localEntryChatEntryForStep(entry, stepID)
+					e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
+					err = errors.Join(err, e.emitRaw(Event{
+						Kind:                       EventLocalEntryAdded,
+						StepID:                     stepID,
+						LocalEntry:                 projected,
+						CommittedTranscriptChanged: true,
+					}))
+				}
+			}
+		}
+		return err
+	}
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
@@ -558,6 +618,10 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	return nil
 }
 
+func shouldStageAgentStepMessage(message llm.Message) bool {
+	return message.Role == llm.RoleAssistant && len(message.ToolCalls) == 0
+}
+
 func (item steeringItem) recordCommitReceipt(receipt session.CommitReceipt) {
 	if item.commitReceipt != nil {
 		*item.commitReceipt = receipt
@@ -578,6 +642,9 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		textutil.OptionalExactString(stepID),
 		record,
 	)
+	if receipt.Committed {
+		e.compactionRuntimeState().SetManualCompactionEligible(false)
+	}
 	if appendErr != nil && !receipt.Committed {
 		return receipt, appendErr
 	}

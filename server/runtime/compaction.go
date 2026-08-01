@@ -105,24 +105,102 @@ func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Conte
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive)
+	return c.compactManualContext(ctx, instructions, onActive, true)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
-	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil)
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
 }
 
-func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func()) (session.CommitReceipt, error) {
-	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
-	if err := c.steps.AcquireReservation(reservation); err != nil {
+func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), admit bool) (session.CommitReceipt, error) {
+	if admit {
+		if err := c.engine.admitManualCompactionForRequest(); err != nil {
+			return session.CommitReceipt{}, err
+		}
+		if snapshot := c.steps.Snapshot(); snapshot != nil && isAgentStepCapable(snapshot.ActiveKind) {
+			entry, err := c.engine.compactionRuntimeState().manualBoundaryCoordinator().enqueueForGeneration(ctx, instructions, onActive)
+			if err == nil {
+				select {
+				case result := <-entry.done:
+					return result.receipt, result.err
+				case <-ctx.Done():
+					c.engine.compactionRuntimeState().manualBoundaryCoordinator().cancel(entry)
+					return session.CommitReceipt{}, ctx.Err()
+				}
+			}
+			if !errors.Is(err, errManualBoundaryNoGeneration) {
+				return session.CommitReceipt{}, err
+			}
+		}
+		if !c.engine.compactionRuntimeState().ManualCompactionEligible() {
+			return session.CommitReceipt{}, &ManualCompactionAdmissionError{
+				Reason: ManualCompactionAdmissionReasonTooSoon,
+			}
+		}
+	}
+	return c.compactContext(ctx, compactionModeManual, instructions, true, nil, onActive, admit)
+}
+
+func isAgentStepCapable(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *defaultContextCompactor) drainPendingManualCompactions(stepID string, entries []*pendingManualCompaction) {
+	if c == nil || c.engine == nil {
+		return
+	}
+	coordinator := c.engine.compactionRuntimeState().manualBoundaryCoordinator()
+	for _, entry := range entries {
+		if !coordinator.beginExecution(entry) {
+			continue
+		}
+		var result manualCompactionResult
+		if err := entry.ctx.Err(); err != nil {
+			result.err = err
+		} else if err := c.engine.admitManualCompaction(); err != nil {
+			result.err = err
+		} else {
+			result.receipt, result.err = c.compactManualInline(entry.ctx, stepID, entry.instructions, entry.onActive)
+		}
+		entry.complete(result)
+	}
+	coordinator.finishGeneration()
+}
+
+func (c *defaultContextCompactor) compactManualInline(
+	ctx context.Context,
+	stepID string,
+	instructions compactionInstructionsInput,
+	onActive func(),
+) (session.CommitReceipt, error) {
+	e := c.engine
+	lease, err := e.compactionRuntimeState().acquireCompactionGate(true, e.cfg.Debug)
+	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive)
+	defer lease.release()
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	if onActive != nil {
+		onActive()
+	}
+	if err := e.ensureMetaContextForCompaction(ctx, stepID); err != nil {
+		return session.CommitReceipt{}, err
+	}
+	_, receipt, err := e.compactNowWithGate(ctx, stepID, compactionModeManual, instructions, true, lease)
+	if err == nil || receipt.Committed {
+		e.handoffRuntimeState().ClearRequest()
+	}
+	return receipt, err
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive)
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, false)
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -148,7 +226,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), manualAdmission bool) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includePreservedUserMessage {
@@ -158,13 +236,18 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
+		lease, err := e.compactionRuntimeState().acquireCompactionGate(manualAdmission, e.cfg.Debug)
+		if err != nil {
+			return err
+		}
+		defer lease.release()
 		if onActive != nil {
 			onActive()
 		}
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}
-		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, instructions, includePreservedUserMessage)
+		_, compactReceipt, err := e.compactNowWithGate(stepCtx, stepID, mode, instructions, includePreservedUserMessage, lease)
 		receipt = compactReceipt
 		if err == nil || receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
@@ -596,6 +679,15 @@ func (e *Engine) currentTokenUsage() int {
 }
 
 func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
+	lease, err := e.compactionRuntimeState().acquireCompactionGate(false, e.cfg.Debug)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, err
+	}
+	defer lease.release()
+	return e.compactNowWithGate(ctx, stepID, mode, instructionsInput, includePreservedUserMessage, lease)
+}
+
+func (e *Engine) compactNowWithGate(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool, _ *compactionGateLease) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
 	if planner.mode(planningSnapshot.compactionMode) == "none" {

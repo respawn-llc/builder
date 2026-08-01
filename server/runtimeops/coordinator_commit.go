@@ -126,3 +126,17 @@ func (c *Coordinator) MarkOperationActive(sessionID string, ref clientui.Runtime
 		}
 	}
 }
+
+func (c *Coordinator) MarkOperationAttemptOnly(sessionID string, ref clientui.RuntimeOperationRef) {
+	if c == nil || ref.Validate() != nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ledger := c.sessions[sessionKey(sessionID)]; ledger != nil {
+		if entry := ledger.operations[ledger.operationKey(ref)]; entry != nil && !entry.completed {
+			entry.active = true
+			entry.interruptActive = false
+		}
+	}
+}

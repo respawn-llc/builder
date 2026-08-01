@@ -178,6 +178,8 @@ type Engine struct {
 	outputMutationMu           sync.Mutex
 	workflowAssignmentMu       sync.Mutex
 	pendingWorkflowAssignments []queuedWorkflowAssignment
+	agentBoundaryMu            sync.Mutex
+	agentBoundaries            map[string]*agentStepBoundaryFinalizer
 	// queuedUserWorkMu serializes the server-owned continuation that drains
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
@@ -303,7 +305,9 @@ func New(
 		lockedState:          newLockedContractState(),
 		modelRequestsState:   newModelRequestRuntimeState(),
 		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
+		workflowDelivery:     newWorkflowPromptDeliveryState(cfg.CurrentNodeExecution),
 		compactionPlanner:    newCompactionPlanner(),
+		agentBoundaries:      make(map[string]*agentStepBoundaryFinalizer),
 	}
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
@@ -800,11 +804,6 @@ func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, ste
 		RefreshReviewerConfigOnResolve: refreshReviewerConfigOnResolve,
 		OnQueuedUserFlushCommitted:     onQueuedUserFlushCommitted,
 	})
-}
-
-func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
 }
 
 func (e *Engine) ensureLocked() (session.LockedContract, error) {

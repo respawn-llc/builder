@@ -411,6 +411,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
+			appendAgentStepBoundaryForEligibilityTest(t, store, "headless-compaction-step")
 			client := &fakeClient{responses: []llm.Response{{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 				Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},

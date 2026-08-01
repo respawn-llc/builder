@@ -2,6 +2,7 @@ package runtimeops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -89,17 +90,23 @@ type queuedOperationIdentity struct {
 }
 
 type operationEntry struct {
-	req         any
-	resp        any
-	err         error
-	done        chan struct{}
-	cancel      context.CancelFunc
-	completed   bool
-	successful  bool
-	committed   bool
-	active      bool
-	completedAt time.Time
-	createdAt   time.Time
+	req             any
+	resp            any
+	err             error
+	done            chan struct{}
+	cancel          context.CancelFunc
+	completed       bool
+	successful      bool
+	committed       bool
+	retained        bool
+	active          bool
+	interruptActive bool
+	completedAt     time.Time
+	createdAt       time.Time
+}
+
+type retainedTerminalOutcome interface {
+	RetainRuntimeOperation()
 }
 
 type operationCommitBarrier struct {
@@ -177,7 +184,7 @@ func Do[Req any, Resp any](
 			coord.mu.Unlock()
 			select {
 			case <-done:
-				if existing.successful || existing.committed {
+				if existing.successful || existing.committed || existing.retained {
 					resp, ok := existing.resp.(Resp)
 					if !ok {
 						return zero, fmt.Errorf("runtime operation response type mismatch for %s", key)
@@ -191,10 +198,11 @@ func Do[Req any, Resp any](
 		}
 		attemptCtx, cancel := context.WithCancel(context.Background())
 		entry := &operationEntry{
-			req:       req,
-			done:      make(chan struct{}),
-			cancel:    cancel,
-			createdAt: coord.now(),
+			req:             req,
+			done:            make(chan struct{}),
+			cancel:          cancel,
+			createdAt:       coord.now(),
+			interruptActive: true,
 		}
 		ledger.operations[key] = entry
 		coord.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationAccepted, false, coord.now())
@@ -214,6 +222,8 @@ func Do[Req any, Resp any](
 		entry.completed = true
 		entry.successful = err == nil
 		entry.committed = committedSideEffect
+		var retained retainedTerminalOutcome
+		entry.retained = err != nil && errors.As(err, &retained)
 		entry.completedAt = coord.now()
 		if err != nil {
 			if committedSideEffect {
@@ -221,7 +231,7 @@ func Do[Req any, Resp any](
 			} else if tombstoned {
 				delete(ledger.operations, key)
 				delete(ledger.failedReqs, key)
-			} else {
+			} else if !entry.retained {
 				delete(ledger.operations, key)
 				ledger.failedReqs[key] = req
 			}
@@ -258,7 +268,7 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 		if record, ok := ledger.records[key]; ok {
 			switch record.State {
 			case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
-				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
+				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && entry.interruptActive && operationCancellationInterruptsActive(ref) {
 					cancel = entry.cancel
 					c.mu.Unlock()
 					return CancellationResult{InterruptActive: true, cancel: cancel}, nil
@@ -274,7 +284,7 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 			}
 			if !entry.completed {
 				cancel = entry.cancel
-				interruptActive = entry.active && operationCancellationInterruptsActive(ref)
+				interruptActive = entry.active && entry.interruptActive && operationCancellationInterruptsActive(ref)
 			}
 		}
 		if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {

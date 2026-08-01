@@ -24,7 +24,8 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 	}}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
@@ -53,6 +54,11 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	if err != nil || !receipt.Committed {
 		t.Fatalf("persist compaction checkpoint: receipt=%+v error=%v", receipt, err)
 	}
+	appendAgentStepBoundaryForEligibilityTest(t, store, "local-history-after-checkpoint-step")
+	engine = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model:          "gpt-5",
+		CompactionMode: "local",
+	})
 	if err := engine.steer("after", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
@@ -98,6 +104,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 	t.Parallel()
 	probe := &toolExecutionProbe{}
 	store := mustCreateTestSession(t)
+	appendAgentStepBoundaryForEligibilityTest(t, store, "local-tool-call-step")
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant},
 		ToolCalls: []llm.ToolCall{{
@@ -165,7 +172,9 @@ func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 	}
 
 	err := engine.CompactContext(context.Background(), "")
-	if !errors.Is(err, errCompactionDisabledModeNone) {
+	var admissionErr *ManualCompactionAdmissionError
+	if !errors.As(err, &admissionErr) ||
+		admissionErr.Reason != ManualCompactionAdmissionReasonDisabled {
 		t.Fatalf("manual compaction error = %v, want disabled-mode rejection", err)
 	}
 	if len(client.calls) != 0 || len(client.compactionCalls) != 0 {

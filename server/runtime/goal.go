@@ -451,7 +451,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	return result, err
 }
 
-func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
+func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion(stepIDs ...string) {
 	if e == nil || e.store == nil {
 		return
 	}
@@ -485,7 +485,11 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
+	stepID := ""
+	if len(stepIDs) > 0 {
+		stepID = stepIDs[0]
+	}
+	if _, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(completed)); err != nil {
 		reportErr(err)
 	}
 }
@@ -651,6 +655,7 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 func (e *Engine) surfaceRunError(err error) {
 	if err == nil ||
 		errors.Is(err, context.Canceled) ||
+		errors.Is(err, errTerminalRunErrorPersisted) ||
 		errors.Is(err, ErrAgentBusy) ||
 		errors.Is(err, errGoalLoopInactive) ||
 		errors.Is(err, ErrEngineClosed) {

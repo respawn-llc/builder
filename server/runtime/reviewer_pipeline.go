@@ -6,12 +6,10 @@ import (
 	"strings"
 
 	"core/server/llm"
-	"core/shared/textutil"
 )
 
 type defaultReviewerPipeline struct {
-	engine     *Engine
-	stepRunner stepLoopRunner
+	engine *Engine
 }
 
 func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool {
@@ -30,87 +28,36 @@ func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient
 	}
 }
 
-func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
+func (r *defaultReviewerPipeline) PrepareFollowUp(
+	ctx context.Context,
+	stepID string,
+	reviewerClient llm.Client,
+) (reviewerFollowUpPreparation, error) {
 	e := r.engine
 	_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
 	reviewerResult, err := r.RunSuggestions(ctx, stepID, reviewerClient)
 	if err != nil {
-		status := ReviewerStatus{
-			Outcome: "failed",
-			Error:   strings.TrimSpace(err.Error()),
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpPreparation{
+			Completion: &ReviewerStatus{
+				Outcome: "failed",
+				Error:   strings.TrimSpace(err.Error()),
+			},
+		}, nil
 	}
-	suggestions := reviewerResult.Suggestions
-	if len(suggestions) == 0 {
-		status := ReviewerStatus{Outcome: "no_suggestions"}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-	if e.cfg.Reviewer.VerboseOutput {
-		suggestionsText := reviewerSuggestionsText(suggestions)
-		_ = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-			Role: "reviewer_suggestions", Text: suggestionsText,
-			CondensedText: textutil.Value(suggestionsText),
-		}))
-	}
-
-	instruction := formatReviewerDeveloperInstruction(suggestions)
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
-		status := ReviewerStatus{
-			Outcome:               "followup_failed",
-			SuggestionsCount:      len(suggestions),
+	if len(reviewerResult.Suggestions) == 0 {
+		return reviewerFollowUpPreparation{
 			CacheHitPercent:       reviewerResult.CacheHitPercent,
 			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
-			Error:                 strings.TrimSpace(err.Error()),
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+			Completion:            &ReviewerStatus{Outcome: "no_suggestions"},
+		}, nil
 	}
-	if r.stepRunner == nil {
-		status := ReviewerStatus{
-			Outcome:          "followup_failed",
-			SuggestionsCount: len(suggestions),
-			Error:            "reviewer step runner is not configured",
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-
-	followUp, err := r.stepRunner.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
-		ReviewerFrequency:              "off",
-		ReviewerClient:                 nil,
-		RefreshReviewerConfigOnResolve: false,
-	})
-	if err != nil {
-		status := ReviewerStatus{
-			Outcome:               "followup_failed",
-			SuggestionsCount:      len(suggestions),
-			CacheHitPercent:       reviewerResult.CacheHitPercent,
-			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
-			Error:                 strings.TrimSpace(err.Error()),
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-	if followUp.FinalAnswer == nil || isNoopFinalAnswer(*followUp.FinalAnswer) {
-		status := ReviewerStatus{
-			Outcome:               "noop",
-			SuggestionsCount:      len(suggestions),
-			CacheHitPercent:       reviewerResult.CacheHitPercent,
-			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
-		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-	status := ReviewerStatus{
-		Outcome:               "applied",
-		SuggestionsCount:      len(suggestions),
+	suggestions := append([]string(nil), reviewerResult.Suggestions...)
+	return reviewerFollowUpPreparation{
+		Suggestions:           suggestions,
+		SuggestionsText:       reviewerSuggestionsText(suggestions),
+		Instruction:           formatReviewerDeveloperInstruction(suggestions),
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
-	}
-	finalAnswer := *followUp.FinalAnswer
-	return reviewerFollowUpResult{
-		Message:                    finalAnswer,
-		Completion:                 &status,
-		AssistantCommittedStart:    followUp.AssistantCommittedStart,
-		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      true,
 	}, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 type recordAppendOutcome struct {
@@ -124,6 +125,46 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 		)
 	}
 	return outcome.records[0], CommitReceipt{Committed: outcome.committed}, err
+}
+
+// AppendAgentStepFinalization atomically persists the final Step payloads,
+// exactly one boundary fact, and removal of a matching pending model recovery.
+func (c MaterializedEventLog) AppendAgentStepFinalization(
+	stepID string,
+	payloads []EventRecordPayload,
+) ([]EventRecord, CommitReceipt, error) {
+	normalizedStepID := strings.TrimSpace(stepID)
+	if normalizedStepID == "" {
+		return nil, CommitReceipt{}, errors.New("agent step identity is required")
+	}
+	if c.store == nil {
+		return nil, CommitReceipt{}, errors.New("materialized event log owning Store is required")
+	}
+	sessionID := strings.TrimSpace(c.store.Meta().SessionID)
+	inputs := make([]recordAppendInput, 0, len(payloads)+1)
+	stepIDRef := &normalizedStepID
+	for _, payload := range payloads {
+		inputs = append(inputs, recordAppendInput{stepID: stepIDRef, payload: payload})
+	}
+	inputs = append(inputs, recordAppendInput{
+		stepID:  stepIDRef,
+		payload: AgentStepBoundaryRecord{SessionID: sessionID},
+	})
+	outcome, err := c.appendRecordInputsAtomic(inputs, func(meta *Meta) (bool, error) {
+		recovery := meta.PendingModelRecovery
+		if recovery != nil && strings.TrimSpace(recovery.StepID) == normalizedStepID {
+			meta.PendingModelRecovery = nil
+		}
+		return true, nil
+	})
+	if len(outcome.records) != len(inputs) {
+		err = errors.Join(err, fmt.Errorf(
+			"agent step finalization produced %d records, want %d",
+			len(outcome.records),
+			len(inputs),
+		))
+	}
+	return outcome.records, CommitReceipt{Committed: outcome.committed}, err
 }
 
 func (c MaterializedEventLog) AppendGeneratedRecoveredWarning(
