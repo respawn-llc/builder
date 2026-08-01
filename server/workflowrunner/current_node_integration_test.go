@@ -770,8 +770,8 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	})
 	f.waitForControllerCurrentNodeFinalized(t, currentNode)
 	if err := f.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *agentruntime.Engine) error {
-		if engine.CurrentNodeExecutionConfigured() {
-			t.Fatal("finalized workflow execution remained bound to attached runtime")
+		if !engine.CurrentNodeExecutionConfigured() {
+			t.Fatal("finalized workflow execution discarded the retained Session contract")
 		}
 		return nil
 	}); err != nil {

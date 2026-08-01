@@ -22,9 +22,10 @@ type WorkflowAssignmentSteer struct {
 }
 
 type workflowAssignmentSteerState struct {
-	done chan struct{}
-	once sync.Once
-	err  error
+	done    chan struct{}
+	once    sync.Once
+	receipt session.CommitReceipt
+	err     error
 }
 
 type queuedWorkflowAssignment struct {
@@ -36,32 +37,36 @@ func newWorkflowAssignmentSteer() WorkflowAssignmentSteer {
 	return WorkflowAssignmentSteer{state: &workflowAssignmentSteerState{done: make(chan struct{})}}
 }
 
-func CompletedWorkflowAssignmentSteer(err error) WorkflowAssignmentSteer {
+func CompletedWorkflowAssignmentSteer(receipt session.CommitReceipt, err error) WorkflowAssignmentSteer {
 	steer := newWorkflowAssignmentSteer()
-	steer.complete(err)
+	steer.complete(receipt, err)
 	return steer
 }
 
-func (s WorkflowAssignmentSteer) Wait(ctx context.Context) error {
+func (s WorkflowAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
 	if s.state == nil {
-		return errors.New("workflow assignment steer is uninitialized")
+		return session.CommitReceipt{}, errors.New("workflow assignment steer is uninitialized")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case <-s.state.done:
-		return s.state.err
+		return s.state.receipt, s.state.err
 	case <-ctx.Done():
-		return context.Cause(ctx)
+		return session.CommitReceipt{}, context.Cause(ctx)
 	}
 }
 
-func (s WorkflowAssignmentSteer) complete(err error) {
+func (s WorkflowAssignmentSteer) complete(receipt session.CommitReceipt, err error) {
 	if s.state == nil {
 		return
 	}
+	if err == nil && !receipt.Committed {
+		err = errors.New("workflow assignment message was not committed")
+	}
 	s.state.once.Do(func() {
+		s.state.receipt = receipt
 		s.state.err = err
 		close(s.state.done)
 	})
@@ -93,18 +98,15 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 		return nil
 	})
 	if err != nil {
-		steer.complete(err)
+		steer.complete(session.CommitReceipt{}, err)
 		return steer, err
 	}
 	if active {
 		return steer, nil
 	}
 	receipt, err := e.steerWithCommitReceipt("", intent)
-	if err == nil && !receipt.Committed {
-		err = errors.New("workflow assignment message was not committed")
-	}
-	steer.complete(err)
-	return steer, err
+	steer.complete(receipt, err)
+	return steer, nil
 }
 
 func SteerPersistedWorkflowAssignment(store *session.Store, assignment WorkflowAssignment) (WorkflowAssignmentSteer, error) {
@@ -116,13 +118,7 @@ func SteerPersistedWorkflowAssignment(store *session.Store, assignment WorkflowA
 		return WorkflowAssignmentSteer{}, err
 	}
 	receipt, err := SteerPersistedMessage(store, "", message)
-	if err != nil {
-		return WorkflowAssignmentSteer{}, err
-	}
-	if !receipt.Committed {
-		return WorkflowAssignmentSteer{}, errors.New("workflow assignment message was not committed")
-	}
-	return CompletedWorkflowAssignmentSteer(nil), nil
+	return CompletedWorkflowAssignmentSteer(receipt, err), nil
 }
 
 func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {
@@ -132,13 +128,17 @@ func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {
 	e.workflowAssignmentMu.Unlock()
 	for index, assignment := range pending {
 		receipt, err := e.steerWithCommitReceipt(stepID, assignment.intent)
-		if err == nil && !receipt.Committed {
-			err = errors.New("workflow assignment message was not committed")
-		}
-		assignment.steer.complete(err)
+		assignment.steer.complete(receipt, err)
 		if err != nil {
 			for _, remaining := range pending[index+1:] {
-				remaining.steer.complete(err)
+				remaining.steer.complete(session.CommitReceipt{}, err)
+			}
+			return err
+		}
+		if !receipt.Committed {
+			err = errors.New("workflow assignment message was not committed")
+			for _, remaining := range pending[index+1:] {
+				remaining.steer.complete(session.CommitReceipt{}, err)
 			}
 			return err
 		}
@@ -152,6 +152,6 @@ func (e *Engine) failPendingWorkflowAssignments(err error) {
 	e.pendingWorkflowAssignments = nil
 	e.workflowAssignmentMu.Unlock()
 	for _, assignment := range pending {
-		assignment.steer.complete(err)
+		assignment.steer.complete(session.CommitReceipt{}, err)
 	}
 }
