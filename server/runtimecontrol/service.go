@@ -335,6 +335,13 @@ func (s *Service) acceptRuntimeInput(ctx context.Context, sessionID string, appl
 	return acceptance.Commit()
 }
 
+func (s *Service) acceptRuntimeInputAtOrderedTurn(ctx context.Context, sessionID string, apply func() error) error {
+	// The caller already owns the session's Runtime Command turn. BeginInput
+	// only advances the completion fence; re-entering the command queue here
+	// would wait on the permit held by that same turn.
+	return s.acceptRuntimeInput(ctx, sessionID, apply)
+}
+
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
 	return sessionruntime.MergeContexts(contexts...)
 }

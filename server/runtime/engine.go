@@ -682,6 +682,7 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	if lease != nil {
 		if err := lease.Commit(); err != nil {
 			_ = lease.Abort(err)
+			return false
 		}
 	}
 	return true

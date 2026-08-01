@@ -39,18 +39,8 @@ func TestBackgroundTransitionRegistersBeforePresentationFailureAndTerminalExit(t
 
 	select {
 	case event := <-events:
-		if event.Type != EventBackgrounded {
-			t.Fatalf("first lifecycle event = %q, want %q", event.Type, EventBackgrounded)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for background registration")
+		t.Fatalf("aborted transition published lifecycle event: %q", event.Type)
+	case <-time.After(300 * time.Millisecond):
 	}
-	select {
-	case event := <-events:
-		if event.Type != EventCompleted {
-			t.Fatalf("terminal lifecycle event = %q, want %q", event.Type, EventCompleted)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for terminal delivery")
-	}
+	waitForManagerCount(t, manager, 0, 2*time.Second)
 }

@@ -121,6 +121,7 @@ func (t *PendingBackgroundTransition) Abort() error {
 		}
 	}
 	if abortErr != nil {
+		t.manager.releaseEntry(t.entry.id)
 		return abortErr
 	}
 	t.manager.releaseEntry(t.entry.id)

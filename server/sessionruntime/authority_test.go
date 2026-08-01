@@ -1779,13 +1779,11 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	if !started.Backgrounded {
 		t.Fatalf("shell must transition to background, got %+v", started)
 	}
-	select {
-	case update := <-updates:
-		if update.Type != runtime.BackgroundShellEventBackgrounded || update.ID != started.SessionID {
-			t.Fatalf("background registration update = %+v", update)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("background registration did not reach predecessor runtime")
+	if started.PendingTransition == nil {
+		t.Fatal("backgrounded shell did not return a pending transition")
+	}
+	if err := started.PendingTransition.Commit(); err != nil {
+		t.Fatalf("commit background transition: %v", err)
 	}
 	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release predecessor runtime: %v", err)

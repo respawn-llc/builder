@@ -37,7 +37,7 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
 		var resp serverapi.RuntimeLiveSteerResponse
 		err := s.withOrderedRuntime(ctx, memoReq.SessionID.String(), func(callbackCtx context.Context, engine *runtime.Engine) error {
-			return s.acceptRuntimeInput(callbackCtx, memoReq.SessionID.String(), func() error {
+			return s.acceptRuntimeInputAtOrderedTurn(callbackCtx, memoReq.SessionID.String(), func() error {
 				if !engine.HasActiveLiveRunGroup() {
 					return serverapi.ErrRuntimeNoActiveRun
 				}

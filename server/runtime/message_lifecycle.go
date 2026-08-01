@@ -449,17 +449,17 @@ func (m *defaultMessageLifecycle) FailPendingUserInjections(reason QueuedUserMes
 	if m == nil || m.queue == nil {
 		return nil
 	}
-	return m.failPendingUserInjections(m.queue.Drain(), reason)
+	return m.failPendingUserInjections(m.queue.Drain())
 }
 
 func (m *defaultMessageLifecycle) FailPendingUserInjectionsByID(ids map[string]struct{}, reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	if m == nil || m.queue == nil || len(ids) == 0 {
 		return nil
 	}
-	return m.failPendingUserInjections(m.queue.DrainByID(ids), reason)
+	return m.failPendingUserInjections(m.queue.DrainByID(ids))
 }
 
-func (m *defaultMessageLifecycle) failPendingUserInjections(pending []queuedUserSteeringIntent, _ QueuedUserMessageFailureReason) []QueuedUserMessage {
+func (m *defaultMessageLifecycle) failPendingUserInjections(pending []queuedUserSteeringIntent) []QueuedUserMessage {
 	messages := make([]QueuedUserMessage, 0, len(pending))
 	for _, item := range pending {
 		messages = append(messages, item.message)

@@ -618,6 +618,12 @@ func (e *Engine) startPendingGoalLoop() error {
 	if e == nil {
 		return nil
 	}
+	if e.goalContinuationHeld.Load() {
+		e.activeStepGoalMutationsMu.Lock()
+		e.pendingGoalLoopStart = true
+		e.activeStepGoalMutationsMu.Unlock()
+		return nil
+	}
 	e.activeStepGoalMutationsMu.Lock()
 	pending := e.pendingGoalLoopStart
 	e.pendingGoalLoopStart = false

@@ -78,6 +78,7 @@ func TestBeginHandoffMutationFailureAbortsGateJoinsOwnerAndReleasesPermit(t *tes
 
 	ownerStarted := make(chan struct{})
 	owner := &testHandoffOwner{joined: make(chan struct{})}
+	mutationErr := errors.New("mutation failed")
 	handoff, err := BeginHandoff(
 		context.Background(),
 		authority,
@@ -91,16 +92,14 @@ func TestBeginHandoffMutationFailureAbortsGateJoinsOwnerAndReleasesPermit(t *tes
 			return owner, nil
 		},
 		func(Turn) (string, error) {
-			return "", errors.New("mutation failed")
+			return "", mutationErr
 		},
 	)
 	if err != nil {
 		t.Fatalf("begin handoff: %v", err)
 	}
-	if _, _, err := handoff.Await(context.Background()); !errors.Is(err, errors.New("mutation failed")) {
-		if err == nil || err.Error() != "mutation failed" {
-			t.Fatalf("handoff mutation error = %v", err)
-		}
+	if _, _, err := handoff.Await(context.Background()); !errors.Is(err, mutationErr) {
+		t.Fatalf("handoff mutation error = %v, want %v", err, mutationErr)
 	}
 	select {
 	case <-ownerStarted:

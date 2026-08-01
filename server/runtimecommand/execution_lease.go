@@ -85,25 +85,23 @@ func (l *executionLease) Release() error {
 	l.released = true
 	l.mu.Unlock()
 	if l.continuation == nil {
+		reopenErr := error(nil)
+		if l.resource != nil {
+			reopenErr = l.resource.completionFence.Reopen()
+		}
 		l.resource.releasePermit()
-		return nil
+		return reopenErr
 	}
-	return l.continuation.Release()
+	releaseErr := l.continuation.Release()
+	if l.resource != nil {
+		releaseErr = errors.Join(releaseErr, l.resource.completionFence.Reopen())
+	}
+	return releaseErr
 }
 
 func (l *executionLease) OrderedMutation(ctx context.Context, apply func(runtimepkg.OrderedMutationTurn) error) error {
 	if l == nil || l.continuation == nil {
 		return ErrTurnExpired
 	}
-	future, err := Reenter(ctx, l.continuation, func(turn Turn) (struct{}, error) {
-		if apply == nil {
-			return struct{}{}, ErrCommandHandlerNeeded
-		}
-		return struct{}{}, apply(turn)
-	})
-	if err != nil {
-		return err
-	}
-	_, err = future.Await(ctx)
-	return err
+	return l.continuation.OrderedMutation(ctx, apply)
 }

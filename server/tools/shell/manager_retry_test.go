@@ -50,6 +50,7 @@ func TestRetryTerminalEventsRedeliversOnlyUndeliveredCompletion(t *testing.T) {
 	if !started.Backgrounded {
 		t.Fatalf("process must transition to background, got %+v", started)
 	}
+	commitManagerTransition(t, started)
 	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
 		t.Fatalf("release background shell: %v", err)
 	}

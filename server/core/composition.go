@@ -104,6 +104,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
 	var workflowController *workflowexecution.CurrentNodeController
+	runtimeCommandAuthority := runtimecommand.NewProcessAuthority()
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
@@ -125,7 +126,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 				workflowController.ExecutionFinalized(scope)
 			}
 		}),
+		CommandLifecycle:     runtimeCommandAuthority,
+		OrderedMutation:      runtimeCommandAuthority.Dispatch,
+		AgentOrderedMutation: runtimeCommandAuthority.DispatchAgent,
 	})
+	runtimeCommandAuthority.WithExecutionScopeAuthority(runtimeAuthority)
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		if publishErr := runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
@@ -177,10 +182,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority).WithCommandAuthority(runtimeCommandAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
+		WithRuntimeCommandAuthority(runtimeCommandAuthority).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
@@ -218,6 +224,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 			_ = workflowRuntimeStarter.Close()
 		}
 		_ = runtimeAuthority.Close(context.Background())
+		_ = runtimeCommandAuthority.Close(context.Background())
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		if runtimeSupport.Background != nil {
@@ -336,6 +343,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		metadataStore:           metadataStore,
 		runtimeRegistry:         runtimeRegistry,
 		runtimeAuthority:        runtimeAuthority,
+		runtimeCommandAuthority: runtimeCommandAuthority,
 		projectViews:            projectViews,
 		authBootstrapService:    authBootstrapService,
 		authStatusService:       authStatusService,

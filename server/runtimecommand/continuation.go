@@ -92,7 +92,8 @@ func enqueueContinuation[T any](
 	sequence := resource.seq
 	state := &turnState{retain: continuation}
 	state.valid.Store(true)
-	result := make(chan futureResult[T], 1)
+	done := make(chan struct{})
+	result := &futureResult[T]{}
 	resource.stages <- &stage{
 		sequence: sequence,
 		target:   continuation.target,
@@ -100,20 +101,23 @@ func enqueueContinuation[T any](
 		execute: func(turn Turn) bool {
 			if err := continuation.validateTarget(); err != nil {
 				state.valid.Store(false)
-				result <- futureResult[T]{err: err}
+				result.err = err
+				close(done)
 				continuation.stageFinished(terminal)
 				return !terminal
 			}
 			value, applyErr := apply(turn)
 			state.valid.Store(false)
-			result <- futureResult[T]{value: value, err: applyErr}
+			result.value = value
+			result.err = applyErr
+			close(done)
 			continuation.stageFinished(terminal)
 			return !terminal
 		},
 	}
 	resource.mu.Unlock()
 	continuation.mu.Unlock()
-	return Future[T]{done: result}, nil
+	return Future[T]{done: done, result: result}, nil
 }
 
 func (c *Continuation) validateTarget() error {
@@ -122,7 +126,7 @@ func (c *Continuation) validateTarget() error {
 	}
 	c.mu.Lock()
 	target := c.target
-	authority := c.resource.scopeAuthority
+	authority := c.resource.scopeExecutionAuthority()
 	c.mu.Unlock()
 	if target.kind != targetAgent {
 		return nil

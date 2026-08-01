@@ -9,12 +9,13 @@ import (
 var ErrMilestoneCompleted = errors.New("runtime command milestone is already completed")
 
 type SubmittedTurnResult[T any] struct {
-	done chan futureResult[T]
-	once sync.Once
+	done   chan struct{}
+	result futureResult[T]
+	once   sync.Once
 }
 
 func NewSubmittedTurnResult[T any]() *SubmittedTurnResult[T] {
-	return &SubmittedTurnResult[T]{done: make(chan futureResult[T], 1)}
+	return &SubmittedTurnResult[T]{done: make(chan struct{})}
 }
 
 func (m *SubmittedTurnResult[T]) Complete(value T, err error) error {
@@ -24,7 +25,8 @@ func (m *SubmittedTurnResult[T]) Complete(value T, err error) error {
 	completed := false
 	m.once.Do(func() {
 		completed = true
-		m.done <- futureResult[T]{value: value, err: err}
+		m.result = futureResult[T]{value: value, err: err}
+		close(m.done)
 	})
 	if !completed {
 		return ErrMilestoneCompleted
@@ -38,8 +40,8 @@ func (m *SubmittedTurnResult[T]) Await(ctx context.Context) (T, error) {
 		return zero, errors.New("runtime command submitted-turn result is required")
 	}
 	select {
-	case result := <-m.done:
-		return result.value, result.err
+	case <-m.done:
+		return m.result.value, m.result.err
 	case <-ctx.Done():
 		var zero T
 		return zero, context.Cause(ctx)

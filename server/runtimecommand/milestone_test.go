@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/shared/runtimeids"
 )
@@ -99,6 +100,35 @@ func TestSubmittedTurnResultCompletesExactlyOnce(t *testing.T) {
 	}
 	if got, err := milestone.Await(context.Background()); err != nil || got != "first" {
 		t.Fatalf("milestone result = %q, %v", got, err)
+	}
+	if got, err := milestone.Await(context.Background()); err != nil || got != "first" {
+		t.Fatalf("repeated milestone result = %q, %v", got, err)
+	}
+}
+
+func TestFutureDoneIsNonConsumingAndAwaitIsRepeatable(t *testing.T) {
+	authority := NewAuthority(1)
+	ref := testResourceRef(t)
+	if err := authority.Admit(ref); err != nil {
+		t.Fatalf("admit session: %v", err)
+	}
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+	future, err := Enqueue(context.Background(), authority, SessionTarget(ref), func(Turn) (string, error) {
+		return "done", nil
+	})
+	if err != nil {
+		t.Fatalf("enqueue command: %v", err)
+	}
+	select {
+	case <-future.Done():
+	case <-time.After(time.Second):
+		t.Fatal("future did not complete")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if got, err := future.Await(context.Background()); err != nil || got != "done" {
+			t.Fatalf("future await %d = %q, %v", attempt, got, err)
+		}
 	}
 }
 

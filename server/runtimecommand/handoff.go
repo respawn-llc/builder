@@ -69,36 +69,41 @@ func BeginHandoff[T any](
 			joinErr := owner.Join(context.Background())
 			return zeroValue[T](), errors.Join(retainErr, joinErr)
 		}
-		turn.queue.lifecycleMu.Lock()
-		defer turn.queue.lifecycleMu.Unlock()
-		turn.queue.mu.Lock()
-		closed := turn.queue.closed
-		turn.queue.mu.Unlock()
-		if closed {
-			_ = gate.Abort(ErrResourceUnavailable)
-			joinErr := owner.Join(context.Background())
-			_ = continuation.Release()
-			err := errors.Join(ErrResourceUnavailable, joinErr)
-			continuationResult <- handoffContinuationResult{err: err}
-			return zeroValue[T](), err
-		}
-		value, applyErr := apply(turn)
-		if applyErr != nil {
-			_ = gate.Abort(applyErr)
-			joinErr := owner.Join(context.Background())
-			_ = continuation.Release()
-			continuationResult <- handoffContinuationResult{err: errors.Join(applyErr, joinErr)}
-			return value, errors.Join(applyErr, joinErr)
-		}
-		if commitErr := gate.Commit(); commitErr != nil {
-			_ = gate.Abort(commitErr)
-			joinErr := owner.Join(context.Background())
-			_ = continuation.Release()
-			continuationResult <- handoffContinuationResult{err: errors.Join(commitErr, joinErr)}
-			return value, errors.Join(commitErr, joinErr)
-		}
-		continuationResult <- handoffContinuationResult{continuation: continuation}
-		return value, nil
+		var value T
+		reservationErr := turn.queue.withLifecycleReservation(func() error {
+			turn.queue.mu.Lock()
+			closed := turn.queue.closed
+			turn.queue.mu.Unlock()
+			if closed {
+				_ = gate.Abort(ErrResourceUnavailable)
+				joinErr := owner.Join(context.Background())
+				_ = continuation.Release()
+				err := errors.Join(ErrResourceUnavailable, joinErr)
+				continuationResult <- handoffContinuationResult{err: err}
+				return err
+			}
+			var applyErr error
+			value, applyErr = apply(turn)
+			if applyErr != nil {
+				_ = gate.Abort(applyErr)
+				joinErr := owner.Join(context.Background())
+				_ = continuation.Release()
+				err := errors.Join(applyErr, joinErr)
+				continuationResult <- handoffContinuationResult{err: err}
+				return err
+			}
+			if commitErr := gate.Commit(); commitErr != nil {
+				_ = gate.Abort(commitErr)
+				joinErr := owner.Join(context.Background())
+				_ = continuation.Release()
+				err := errors.Join(commitErr, joinErr)
+				continuationResult <- handoffContinuationResult{err: err}
+				return err
+			}
+			continuationResult <- handoffContinuationResult{continuation: continuation}
+			return nil
+		})
+		return value, reservationErr
 	})
 	if err != nil {
 		_ = gate.Abort(err)

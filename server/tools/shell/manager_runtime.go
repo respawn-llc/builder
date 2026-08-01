@@ -171,8 +171,21 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	if state == "killed" {
 		eventType = EventKilled
 	}
-	event := m.buildTerminalEvent(entry, eventType, snapshot)
-	m.emitCompletionEvent(entry, event)
+	entry.mu.Lock()
+	transition := entry.backgroundTransition
+	entry.mu.Unlock()
+	if transition != nil {
+		<-transition.done
+		if transition.terminalPublicationAllowed() {
+			event := m.buildTerminalEvent(entry, eventType, snapshot)
+			m.emitCompletionEvent(entry, event)
+		} else {
+			m.releaseEntry(entry.id)
+		}
+	} else {
+		event := m.buildTerminalEvent(entry, eventType, snapshot)
+		m.emitCompletionEvent(entry, event)
+	}
 	entry.finalizeClosedExit()
 }
 

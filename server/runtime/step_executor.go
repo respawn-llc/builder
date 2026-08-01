@@ -23,21 +23,27 @@ type defaultStepExecutor struct {
 	tools    toolExecutor
 }
 
-type completionAttemptController interface {
+type completionAttemptStarter interface {
 	BeginCompletionAttempt(context.Context, runtimeids.ExecutionScopeID) error
+}
+
+type completionAttemptAborter interface {
 	AbortCompletionAttempt(runtimeids.ExecutionScopeID) error
 }
 
-func (e *Engine) currentCompletionAttemptController() (completionAttemptController, runtimeids.ExecutionScopeID, bool) {
+func (e *Engine) currentCompletionAttemptCapabilities() (
+	completionAttemptStarter,
+	completionAttemptAborter,
+	runtimeids.ExecutionScopeID,
+	bool,
+) {
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.Controller == nil {
-		return nil, runtimeids.ExecutionScopeID{}, false
+		return nil, nil, runtimeids.ExecutionScopeID{}, false
 	}
-	controller, ok := execution.Controller.(completionAttemptController)
-	if !ok {
-		return nil, runtimeids.ExecutionScopeID{}, false
-	}
-	return controller, execution.ScopeID, true
+	starter, _ := execution.Controller.(completionAttemptStarter)
+	aborter, _ := execution.Controller.(completionAttemptAborter)
+	return starter, aborter, execution.ScopeID, starter != nil
 }
 
 type completedResponseNext uint8
@@ -93,10 +99,14 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		if controller, scopeID, ok := e.currentCompletionAttemptController(); ok {
-			if err := controller.BeginCompletionAttempt(ctx, scopeID); err != nil {
+		var completionAborter completionAttemptAborter
+		var completionScopeID runtimeids.ExecutionScopeID
+		if starter, aborter, scopeID, ok := e.currentCompletionAttemptCapabilities(); ok {
+			if err := starter.BeginCompletionAttempt(ctx, scopeID); err != nil {
 				return stepLoopResult{}, err
 			}
+			completionAborter = aborter
+			completionScopeID = scopeID
 		}
 
 		resp, err := e.generateWithMissingToolOutputRepair(
@@ -123,8 +133,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			},
 		)
 		if err != nil {
-			if controller, scopeID, ok := e.currentCompletionAttemptController(); ok {
-				_ = controller.AbortCompletionAttempt(scopeID)
+			if completionAborter != nil {
+				_ = completionAborter.AbortCompletionAttempt(completionScopeID)
 			}
 			return stepLoopResult{}, err
 		}

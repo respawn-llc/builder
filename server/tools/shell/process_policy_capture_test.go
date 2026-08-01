@@ -44,6 +44,7 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
 		t.Fatal("correlated process did not move to background")
 	}
+	commitPendingTransition(t, result)
 
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
@@ -52,15 +53,6 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	assertExecutionCorrelation(t, snapshots[0].ExecutionCorrelation, correlation, "snapshot")
 	if snapshots[0].ExecutionCorrelation == &correlation {
 		t.Fatal("snapshot reused caller execution correlation pointer")
-	}
-
-	backgrounded := <-events
-	if backgrounded.Type != EventBackgrounded {
-		t.Fatalf("first event type = %q, want %q", backgrounded.Type, EventBackgrounded)
-	}
-	assertExecutionCorrelation(t, backgrounded.Snapshot.ExecutionCorrelation, correlation, "background event")
-	if backgrounded.Snapshot.ExecutionCorrelation == snapshots[0].ExecutionCorrelation {
-		t.Fatal("background event reused snapshot execution correlation pointer")
 	}
 
 	processID, err := strconv.Atoi(snapshots[0].ID)
@@ -82,8 +74,8 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
 	}
 	assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
-	if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
-		t.Fatal("terminal event reused background event execution correlation pointer")
+	if terminal.Snapshot.ExecutionCorrelation == snapshots[0].ExecutionCorrelation {
+		t.Fatal("terminal event reused snapshot execution correlation pointer")
 	}
 	if manager.Count() != 0 {
 		t.Fatalf("background process count after completion = %d, want 0", manager.Count())
@@ -156,6 +148,7 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	if got := decodeStringToolOutput(t, startA); !strings.Contains(got, "RUNTIME_A") {
 		t.Fatalf("runtime A transition output = %q, want captured hook output", got)
 	}
+	commitPendingTransition(t, startA)
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
 		t.Fatalf("background process count = %d, want 1", len(snapshots))
@@ -210,6 +203,7 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	if autoA.IsError {
 		t.Fatalf("runtime A automatic completion start error: %s", string(autoA.Output))
 	}
+	commitPendingTransition(t, autoA)
 
 	select {
 	case event := <-events:
@@ -262,6 +256,7 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	if background.PresentationDelta == nil || !background.PresentationDelta.MovedToBackground {
 		t.Fatalf("raw background result did not report a background transition: %+v", background)
 	}
+	commitPendingTransition(t, background)
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
 		t.Fatalf("raw background process count = %d, want 1", len(snapshots))
@@ -312,6 +307,7 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 		if got := decodeStringToolOutput(t, result); !strings.Contains(got, name) {
 			t.Errorf("%s transition output = %q, want captured policy", name, got)
 		}
+		commitPendingTransition(t, result)
 	}
 
 	snapshots := manager.List()

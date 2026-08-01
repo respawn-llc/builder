@@ -112,3 +112,61 @@ func TestAuthorityCompletionFenceLinearizesAgainstSessionInput(t *testing.T) {
 		t.Fatalf("completion after accepted input = %v, want ErrCompletionSuperseded", err)
 	}
 }
+
+func TestCompletionFenceReservesOneLeaseAtATime(t *testing.T) {
+	ref := testResourceRef(t)
+	fence := NewCompletionFence(SessionTarget(ref))
+	firstAttempt, err := fence.Begin()
+	if err != nil {
+		t.Fatalf("begin first completion attempt: %v", err)
+	}
+	secondAttempt, err := fence.Begin()
+	if err != nil {
+		t.Fatalf("begin second completion attempt: %v", err)
+	}
+	first, err := firstAttempt.Acquire()
+	if err != nil {
+		t.Fatalf("acquire first completion lease: %v", err)
+	}
+	second, err := secondAttempt.Acquire()
+	if err != nil {
+		t.Fatalf("acquire second completion lease: %v", err)
+	}
+	if err := first.Reserve(); err != nil {
+		t.Fatalf("reserve first completion lease: %v", err)
+	}
+	if err := second.Reserve(); !errors.Is(err, ErrCompletionFenced) {
+		t.Fatalf("reserve sibling completion lease = %v, want ErrCompletionFenced", err)
+	}
+	if err := second.Abort(); !errors.Is(err, ErrCompletionFenced) {
+		t.Fatalf("abort sibling completion lease = %v, want ErrCompletionFenced", err)
+	}
+	if err := first.Abort(); err != nil {
+		t.Fatalf("abort first completion lease: %v", err)
+	}
+	if err := second.Reserve(); err != nil {
+		t.Fatalf("reserve second completion lease after first abort: %v", err)
+	}
+}
+
+func TestCompletionFenceReopensForNextExecutionLifecycle(t *testing.T) {
+	ref := testResourceRef(t)
+	fence := NewCompletionFence(SessionTarget(ref))
+	attempt, err := fence.Begin()
+	if err != nil {
+		t.Fatalf("begin completion attempt: %v", err)
+	}
+	lease, err := attempt.Acquire()
+	if err != nil {
+		t.Fatalf("acquire completion lease: %v", err)
+	}
+	if err := lease.Commit(); err != nil {
+		t.Fatalf("commit completion lease: %v", err)
+	}
+	if err := fence.Reopen(); err != nil {
+		t.Fatalf("reopen completion fence: %v", err)
+	}
+	if _, err := fence.Begin(); err != nil {
+		t.Fatalf("begin completion attempt after reopen: %v", err)
+	}
+}

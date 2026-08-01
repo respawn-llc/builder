@@ -100,6 +100,7 @@ func TestSharedManagerWriteStdinHarvestLeavesProcessOwnerNoticeUnsuppressed(t *t
 	if !started.Backgrounded {
 		t.Fatalf("owner process must transition to background, got %+v", started)
 	}
+	commitManagerTransition(t, started)
 	if _, err := manager.WriteStdin(context.Background(), WriteRequest{
 		SessionID:      started.SessionID,
 		YieldTime:      15 * time.Second,

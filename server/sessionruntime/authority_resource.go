@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"core/server/runlog"
 	"core/server/runtime"
@@ -387,14 +388,21 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	engine := r.engine
 	commandAdmitted := r.commandAdmitted
 	r.mu.Unlock()
+	cleanupCtx := ctx
+	cleanupCancel := func() {}
+	if ctx.Err() != nil {
+		cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), 5*time.Second)
+	}
+	defer cleanupCancel()
 	var interruptErr error
 	if engine != nil {
 		interruptErr = engine.Interrupt()
 	}
 	var lifecycleErr error
 	if notifyDraining {
-		lifecycleErr = r.authority.options.resourceLifecycle.ResourceDraining(ctx, descriptor)
+		lifecycleErr = r.authority.options.resourceLifecycle.ResourceDraining(cleanupCtx, descriptor)
 	}
+	var waitErr error
 	r.mu.Lock()
 	for r.pins != 0 || r.callbacks != 0 || r.steps != 0 || r.current != nil {
 		changed := r.changed
@@ -402,9 +410,19 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			return context.Cause(ctx)
+			waitErr = context.Cause(ctx)
+			cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			select {
+			case <-changed:
+			case <-cleanupCtx.Done():
+				waitErr = errors.Join(waitErr, context.Cause(cleanupCtx))
+			}
 		}
 		r.mu.Lock()
+		if waitErr != nil {
+			break
+		}
 	}
 	closeEngine := r.close
 	r.state = AgentResourceClosed
@@ -412,12 +430,12 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	r.mu.Unlock()
 	var commandErr error
 	if commandAdmitted && r.authority.options.commandLifecycle != nil {
-		commandErr = r.authority.options.commandLifecycle.CloseResource(ctx, descriptor.Ref)
+		commandErr = r.authority.options.commandLifecycle.CloseResource(cleanupCtx, descriptor.Ref)
 	}
 	if closeEngine == nil {
-		return errors.Join(lifecycleErr, commandErr)
+		return errors.Join(lifecycleErr, interruptErr, commandErr, waitErr)
 	}
-	return errors.Join(lifecycleErr, interruptErr, commandErr, closeEngine())
+	return errors.Join(lifecycleErr, interruptErr, commandErr, waitErr, closeEngine())
 }
 
 func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
@@ -656,7 +674,7 @@ func (a *Authority) closeAdmittedResourceLocked(ctx context.Context, resource *a
 	return closed, closeErr
 }
 
-func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (ExecutionHandle, error) {
+func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecutionRequest) (handle ExecutionHandle, err error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -726,6 +744,16 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			return nil, err
 		}
 	}
+	commandLeaseTransferred := false
+	cleanupCommandLease := request.CommandLease == nil && commandLease != nil
+	defer func() {
+		if !cleanupCommandLease || commandLeaseTransferred {
+			return
+		}
+		cleanupErr := commandLease.Abort(err)
+		cleanupErr = errors.Join(cleanupErr, commandLease.Release())
+		err = errors.Join(err, cleanupErr)
+	}()
 	var workflowBinding *runtime.CurrentNodeExecutionBinding
 	closeWorkflowBinding := func() error {
 		if workflowBinding == nil {
@@ -828,6 +856,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
+	commandLeaseTransferred = true
 
 	go func() {
 		if commandLease != nil {

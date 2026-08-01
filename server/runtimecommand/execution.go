@@ -134,14 +134,14 @@ func (a *ExecutionAdapter) runAgentExecutionOrdered(
 		if prepare != nil {
 			if prepareErr := prepare(turn); prepareErr != nil {
 				_ = lease.Abort(prepareErr)
-				_ = lease.Release()
-				return orderedExecutionStart{}, prepareErr
+				_, waitErr := handle.Wait(context.Background())
+				return orderedExecutionStart{}, errors.Join(prepareErr, waitErr)
 			}
 		}
 		if commitErr := lease.Commit(); commitErr != nil {
 			_ = lease.Abort(commitErr)
-			_ = lease.Release()
-			return orderedExecutionStart{}, commitErr
+			_, waitErr := handle.Wait(context.Background())
+			return orderedExecutionStart{}, errors.Join(commitErr, waitErr)
 		}
 		return orderedExecutionStart{handle: handle, submitted: submitted}, nil
 	})

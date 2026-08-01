@@ -14,8 +14,9 @@ type CompletionFence struct {
 	mu         sync.Mutex
 	target     Target
 	generation uint64
+	nextLease  uint64
 	fenced     bool
-	reserved   bool
+	reserved   uint64
 }
 
 type CompletionAttempt struct {
@@ -26,6 +27,7 @@ type CompletionAttempt struct {
 type CompletionLease struct {
 	fence      *CompletionFence
 	generation uint64
+	leaseID    uint64
 	mu         sync.Mutex
 	terminal   bool
 }
@@ -51,7 +53,7 @@ func (f *CompletionFence) Begin() (CompletionAttempt, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced || f.reserved {
+	if f.fenced || f.reserved != 0 {
 		return CompletionAttempt{}, ErrCompletionFenced
 	}
 	return CompletionAttempt{fence: f, generation: f.generation}, nil
@@ -74,7 +76,7 @@ func (f *CompletionFence) BeginInput() (InputAcceptance, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fenced || f.reserved {
+	if f.fenced || f.reserved != 0 {
 		return InputAcceptance{}, ErrCompletionFenced
 	}
 	previous := f.generation
@@ -120,13 +122,21 @@ func (a CompletionAttempt) Acquire() (CompletionLease, error) {
 	}
 	a.fence.mu.Lock()
 	defer a.fence.mu.Unlock()
-	if a.fence.fenced || a.fence.reserved {
+	if a.fence.fenced || a.fence.reserved != 0 {
 		return CompletionLease{}, ErrCompletionFenced
 	}
 	if a.fence.generation != a.generation {
 		return CompletionLease{}, ErrCompletionSuperseded
 	}
-	return CompletionLease{fence: a.fence, generation: a.generation}, nil
+	a.fence.nextLease++
+	if a.fence.nextLease == 0 {
+		panic("runtime command completion lease ID overflow")
+	}
+	return CompletionLease{
+		fence:      a.fence,
+		generation: a.generation,
+		leaseID:    a.fence.nextLease,
+	}, nil
 }
 
 func (l *CompletionLease) Reserve() error {
@@ -143,7 +153,10 @@ func (l *CompletionLease) Reserve() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
-	l.fence.reserved = true
+	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+		return ErrCompletionFenced
+	}
+	l.fence.reserved = l.leaseID
 	return nil
 }
 
@@ -161,8 +174,11 @@ func (l *CompletionLease) Commit() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
+	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+		return ErrCompletionFenced
+	}
 	l.fence.fenced = true
-	l.fence.reserved = false
+	l.fence.reserved = 0
 	l.terminal = true
 	return nil
 }
@@ -181,7 +197,31 @@ func (l *CompletionLease) Abort() error {
 	if l.fence.generation != l.generation {
 		return ErrCompletionSuperseded
 	}
-	l.fence.reserved = false
+	if l.fence.reserved != 0 && l.fence.reserved != l.leaseID {
+		return ErrCompletionFenced
+	}
+	if l.fence.reserved == l.leaseID {
+		l.fence.reserved = 0
+	}
 	l.terminal = true
+	return nil
+}
+
+// Reopen starts a new exact execution lifecycle after the prior command lease
+// has been released. Open attempts from the old lifecycle become superseded.
+func (f *CompletionFence) Reopen() error {
+	if f == nil {
+		return errors.New("runtime command completion fence is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reserved != 0 {
+		return errors.New("runtime command completion fence has a reserved lease")
+	}
+	f.generation++
+	if f.generation == 0 {
+		panic("runtime command completion generation overflow")
+	}
+	f.fenced = false
 	return nil
 }

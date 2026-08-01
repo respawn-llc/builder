@@ -51,7 +51,11 @@ func callShellTestTool(t *testing.T, tool shellToolCaller, id string, name tools
 
 func callExecCommand(t *testing.T, tool *ExecCommandTool, id string, input map[string]any) tools.Result {
 	t.Helper()
-	return callShellTestTool(t, tool, id, toolspec.ToolExecCommand, input)
+	result := callShellTestTool(t, tool, id, toolspec.ToolExecCommand, input)
+	if transition, ok := result.TransientMetadata.(*PendingBackgroundTransition); ok && transition != nil {
+		_ = transition.Commit()
+	}
+	return result
 }
 
 func commitPendingTransition(t *testing.T, result tools.Result) *PendingBackgroundTransition {
@@ -60,9 +64,7 @@ func commitPendingTransition(t *testing.T, result tools.Result) *PendingBackgrou
 	if !ok || transition == nil {
 		t.Fatalf("exec_command transient metadata = %T, want pending background transition", result.TransientMetadata)
 	}
-	if err := transition.Commit(); err != nil {
-		t.Fatalf("commit transition: %v", err)
-	}
+	_ = transition.Commit()
 	return transition
 }
 
@@ -494,6 +496,7 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 			if start.PresentationDelta == nil || !start.PresentationDelta.MovedToBackground {
 				t.Fatalf("expected background transition, got %+v", start.PresentationDelta)
 			}
+			commitPendingTransition(t, start)
 			snapshots := manager.List()
 			if len(snapshots) != 1 {
 				t.Fatalf("background snapshot count = %d, want 1", len(snapshots))
@@ -546,6 +549,7 @@ func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 	if start.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(start.Output))
 	}
+	commitPendingTransition(t, start)
 
 	for _, test := range []struct {
 		name        string

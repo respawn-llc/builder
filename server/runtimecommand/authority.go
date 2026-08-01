@@ -30,10 +30,10 @@ type Authority struct {
 
 func (a *Authority) WithExecutionScopeAuthority(authority *sessionruntime.Authority) *Authority {
 	if a != nil {
-		a.scopeAuthority = authority
 		a.mu.Lock()
+		a.scopeAuthority = authority
 		for _, resource := range a.resources {
-			resource.scopeAuthority = authority
+			resource.setScopeAuthority(authority)
 		}
 		a.mu.Unlock()
 	}
@@ -145,10 +145,11 @@ func (a *Authority) DispatchAgent(
 		return ErrCommandHandlerNeeded
 	}
 	future, err := Enqueue(ctx, a, target, func(turn Turn) (struct{}, error) {
-		if a.scopeAuthority == nil {
+		scopeAuthority := a.executionScopeAuthority()
+		if scopeAuthority == nil {
 			return struct{}{}, sessionruntime.ErrExecutionNoLongerLive
 		}
-		current, ok := a.scopeAuthority.CurrentExecutionScope(target.scopeID)
+		current, ok := scopeAuthority.CurrentExecutionScope(target.scopeID)
 		if !ok {
 			return struct{}{}, sessionruntime.ErrExecutionNoLongerLive
 		}
@@ -192,7 +193,7 @@ func (a *Authority) Admit(ref runtimeids.SessionResourceRef) error {
 		return fmt.Errorf("%w: session resource generation %d is already admitted", ErrResourceUnavailable, existing.ref.Generation())
 	}
 	resource := newResourceQueue(ref, a.capacity)
-	resource.scopeAuthority = a.scopeAuthority
+	resource.setScopeAuthority(a.scopeAuthority)
 	a.resources[sessionID] = resource
 	return nil
 }
@@ -274,6 +275,33 @@ type resourceQueue struct {
 	lifecycleMu sync.Mutex
 	closed      bool
 	seq         uint64
+}
+
+func (a *Authority) executionScopeAuthority() *sessionruntime.Authority {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.scopeAuthority
+}
+
+func (r *resourceQueue) setScopeAuthority(authority *sessionruntime.Authority) {
+	r.mu.Lock()
+	r.scopeAuthority = authority
+	r.mu.Unlock()
+}
+
+func (r *resourceQueue) scopeExecutionAuthority() *sessionruntime.Authority {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.scopeAuthority
+}
+
+func (r *resourceQueue) withLifecycleReservation(fn func() error) error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	return fn()
 }
 
 func newResourceQueue(ref runtimeids.SessionResourceRef, capacity int) *resourceQueue {
@@ -475,11 +503,12 @@ func enqueue[T any](
 		return Future[T]{}, context.Cause(ctx)
 	}
 
-	result := make(chan futureResult[T], 1)
+	done := make(chan struct{})
+	result := &futureResult[T]{}
 	resource.mu.Lock()
 	if resource.closed {
 		resource.mu.Unlock()
-		<-resource.permits
+		resource.releasePermit()
 		return Future[T]{}, ErrResourceUnavailable
 	}
 	resource.seq++
@@ -493,10 +522,12 @@ func enqueue[T any](
 		execute: func(turn Turn) bool {
 			value, applyErr := apply(turn)
 			state.valid.Store(false)
-			result <- futureResult[T]{value: value, err: applyErr}
+			result.value = value
+			result.err = applyErr
+			close(done)
 			return state.retain != nil
 		},
 	}
 	resource.mu.Unlock()
-	return Future[T]{done: result}, nil
+	return Future[T]{done: done, result: result}, nil
 }

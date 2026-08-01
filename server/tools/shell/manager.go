@@ -297,7 +297,6 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (result ExecResult
 	entry.mu.Lock()
 	entry.backgroundTransition = backgroundTransition.state
 	entry.mu.Unlock()
-	m.emitEvent(newBackgroundedEvent(snapshot))
 	processed, err := m.applyPostprocessing(ctx, entry, string(output), nil, true, maxOutputChars)
 	if err != nil {
 		return ExecResult{}, err

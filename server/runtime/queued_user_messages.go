@@ -114,7 +114,7 @@ func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUser
 	matched := make([]queuedUserSteeringIntent, 0, len(ids))
 	remaining := s.pending[:0]
 	for _, pending := range s.pending {
-		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok {
+		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok && !pending.claimed {
 			matched = append(matched, pending)
 			continue
 		}

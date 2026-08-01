@@ -13,6 +13,7 @@ import (
 	"core/server/promptcontrol"
 	"core/server/registry"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
 	"core/server/serverstatus"
 	"core/server/sessionlaunch"
@@ -177,6 +178,7 @@ type bundleCompositionInput struct {
 	metadataStore           *metadata.Store
 	runtimeRegistry         *registry.RuntimeRegistry
 	runtimeAuthority        *sessionruntime.Authority
+	runtimeCommandAuthority *runtimecommand.Authority
 	projectViews            apicontract.ProjectViewService
 	authBootstrapService    *authservice.BootstrapService
 	authStatusService       *authservice.StatusService
@@ -219,6 +221,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 					return nil
 				}
 				return in.runtimeAuthority.Close(context.Background())
+			}},
+			{name: "runtime command authority", close: func() error {
+				if in.runtimeCommandAuthority == nil {
+					return nil
+				}
+				return in.runtimeCommandAuthority.Close(context.Background())
 			}},
 			{name: "workflow runtime starter", close: func() error {
 				if in.workflowRuntimeStarter == nil {

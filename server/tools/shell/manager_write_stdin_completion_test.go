@@ -39,6 +39,7 @@ func TestWriteStdinHarvestWaitsForTerminalEventDelivery(t *testing.T) {
 	if !started.Backgrounded {
 		t.Fatalf("process must transition to background, got %+v", started)
 	}
+	commitManagerTransition(t, started)
 
 	writeDone := make(chan error, 1)
 	go func() {
@@ -106,6 +107,7 @@ func TestWriteStdinHarvestCancellationDoesNotWaitForTerminalEventDelivery(t *tes
 	if !started.Backgrounded {
 		t.Fatalf("process must transition to background, got %+v", started)
 	}
+	commitManagerTransition(t, started)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	writeDone := make(chan error, 1)
