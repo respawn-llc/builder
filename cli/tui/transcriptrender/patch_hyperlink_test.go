@@ -4,12 +4,24 @@ import (
 	"core/shared/clientui"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
+	"strings"
 	"testing"
 )
 
 func TestPatchHyperlinks(t *testing.T) {
 	patch := "*** Begin Patch\n*** Update File: dir/file.go\n-old\n+new\n*** End Patch\n"
 	rendered := patchformat.Render(patch, "/worktree")
+	status := "ok"
+	statusRow := patchRow(rendered)
+	statusRow.Tool.ResultSummary = &status
+	if strings.Contains(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0].Plain(), status) {
+		t.Fatal("successful patch row displayed result suffix")
+	}
+	status = "failed"
+	statusRow.Tool.IsError = true
+	if !strings.Contains(RenderCommittedRow(statusRow, 80, "dark", ModeOngoing).Lines[0].Plain(), status) {
+		t.Fatal("failed patch row omitted failure status")
+	}
 	assertPatchLink(t, RenderCommittedRow(patchRow(rendered), 80, "dark", ModeOngoing).Lines, "./dir/file.go", "file:///worktree/dir/file.go")
 	assertPatchLink(t, RenderCommittedRow(patchRow(rendered), 12, "dark", ModeDetailExpanded).Lines, "/worktree/dir/file.go", "file:///worktree/dir/file.go")
 	moved := patchformat.Render("*** Begin Patch\n*** Update File: old.go\n*** Move to: new.go\n-old\n+new\n*** End Patch\n", "/worktree")
@@ -21,8 +33,10 @@ func TestPatchHyperlinks(t *testing.T) {
 		}
 	}
 	raw := clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{ToolName: "patch", Text: patch}}
-	if text, _ := patchLink(RenderCommittedRow(raw, 80, "dark", ModeOngoing).Lines); text != "" {
-		t.Fatalf("raw patch path linked as %q", text)
+	for _, row := range []clientui.TranscriptCommittedRow{patchRow(legacy), raw} {
+		if text, _ := patchLink(RenderCommittedRow(row, 80, "dark", ModeOngoing).Lines); text != "" {
+			t.Fatalf("unstructured patch path linked as %q", text)
+		}
 	}
 }
 func patchRow(rendered patchformat.RenderedPatch) clientui.TranscriptCommittedRow {
@@ -40,7 +54,6 @@ func patchLink(lines []Line) (text, url string) {
 	return text, url
 }
 func assertPatchLink(t *testing.T, lines []Line, text, url string) {
-	t.Helper()
 	got, gotURL := patchLink(lines)
 	if got != text || gotURL != url {
 		t.Fatalf("patch link = (%q, %q), want (%q, %q)", got, gotURL, text, url)
