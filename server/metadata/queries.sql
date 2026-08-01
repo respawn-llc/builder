@@ -1580,7 +1580,8 @@ live_task_states AS (
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
     FROM args, json_each(args.live_task_states_json)
 ),
 effective_status AS (
@@ -1590,6 +1591,7 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 'done'
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0 THEN 'waiting_approval'
             WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
             WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
@@ -1599,6 +1601,7 @@ effective_status AS (
         CASE
             WHEN durable.is_done != 0 THEN 1
             WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0 THEN 3
             WHEN durable.kind = 'waiting_approval' THEN 3
             WHEN COALESCE(live.has_running, 0) != 0 THEN 5
             WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
@@ -1607,13 +1610,22 @@ effective_status AS (
         END AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN durable.is_done != 0 OR COALESCE(live.waiting_question, 0) = 0 THEN durable.attention_types_json
+            WHEN durable.is_done != 0 OR (
+                COALESCE(live.waiting_question, 0) = 0
+                AND COALESCE(live.has_waiting_approval, 0) = 0
+            ) THEN durable.attention_types_json
             WHEN EXISTS (
                 SELECT 1
                 FROM json_each(durable.attention_types_json) existing_attention
                 WHERE existing_attention.value = 'question'
-            ) THEN durable.attention_types_json
-            ELSE json_insert(durable.attention_types_json, '$[#]', 'question')
+            ) AND COALESCE(live.waiting_question, 0) != 0 THEN durable.attention_types_json
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'approval'
+            ) AND COALESCE(live.has_waiting_approval, 0) != 0 THEN durable.attention_types_json
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN json_insert(durable.attention_types_json, '$[#]', 'question')
+            ELSE json_insert(durable.attention_types_json, '$[#]', 'approval')
         END AS attention_types_json
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
