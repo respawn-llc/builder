@@ -67,21 +67,23 @@ type Coordinator struct {
 }
 
 type sessionLedger struct {
-	records                    map[string]clientui.RuntimeInputReconciliation
-	terminal                   map[string]time.Time
-	terminalOrder              []string
-	evicted                    map[string]clientui.RuntimeOperationRef
-	evictedAt                  map[string]time.Time
-	evictedOrder               []string
-	operations                 map[string]*operationEntry
-	tombstones                 map[string]clientui.RuntimeOperationRef
-	tombstoneAt                map[string]time.Time
-	failedReqs                 map[string]any
-	queuedByClientRequestID    map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
-	queuedByQueueItemID        map[runtimeids.QueueItemID]*queuedOperationIdentity
-	queuedByOperationKey       map[string]*queuedOperationIdentity
-	commitBarriers             map[string]*operationCommitBarrier
-	nextCompactAcceptanceOrder uint64
+	records                       map[string]clientui.RuntimeInputReconciliation
+	terminal                      map[string]time.Time
+	terminalOrder                 []string
+	evicted                       map[string]clientui.RuntimeOperationRef
+	evictedAt                     map[string]time.Time
+	evictedOrder                  []string
+	operations                    map[string]*operationEntry
+	tombstones                    map[string]clientui.RuntimeOperationRef
+	tombstoneAt                   map[string]time.Time
+	failedReqs                    map[string]any
+	queuedByClientRequestID       map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity
+	queuedByQueueItemID           map[runtimeids.QueueItemID]*queuedOperationIdentity
+	queuedByOperationKey          map[string]*queuedOperationIdentity
+	commitBarriers                map[string]*operationCommitBarrier
+	nextCompactAcceptanceOrder    uint64
+	settledCompactAcceptanceOrder uint64
+	settledCompactAcceptances     map[uint64]struct{}
 }
 
 type queuedOperationIdentity struct {
@@ -133,6 +135,7 @@ type Attempt struct {
 	ctx                context.Context
 	acceptanceOrder    uint64
 	hasAcceptanceOrder bool
+	acceptanceBaseline func() uint64
 }
 
 func (a Attempt) Context() context.Context {
@@ -144,6 +147,16 @@ func (a Attempt) Context() context.Context {
 
 func (a Attempt) AcceptanceOrder() (uint64, bool) {
 	return a.acceptanceOrder, a.hasAcceptanceOrder
+}
+
+func (a Attempt) AcceptanceBaseline() (uint64, bool) {
+	if !a.hasAcceptanceOrder {
+		return 0, false
+	}
+	if a.acceptanceBaseline == nil {
+		return 0, true
+	}
+	return a.acceptanceBaseline(), true
 }
 
 func Do[Req any, Resp any](
@@ -228,6 +241,11 @@ func Do[Req any, Resp any](
 			ctx:                attemptCtx,
 			acceptanceOrder:    acceptanceOrder,
 			hasAcceptanceOrder: hasAcceptanceOrder,
+			acceptanceBaseline: func() uint64 {
+				coord.mu.Lock()
+				defer coord.mu.Unlock()
+				return ledger.settledCompactAcceptanceOrder
+			},
 		})
 
 		coord.mu.Lock()
@@ -245,6 +263,9 @@ func Do[Req any, Resp any](
 		var retained retainedTerminalOutcome
 		entry.retained = err != nil && errors.As(err, &retained)
 		entry.completedAt = coord.now()
+		if hasAcceptanceOrder {
+			markCompactAcceptanceSettledLocked(ledger, acceptanceOrder)
+		}
 		if err != nil {
 			if committedSideEffect {
 				delete(ledger.failedReqs, key)
@@ -517,19 +538,38 @@ func (c *Coordinator) ledgerLocked(sessionID string) *sessionLedger {
 		return ledger
 	}
 	ledger := &sessionLedger{
-		records:                 make(map[string]clientui.RuntimeInputReconciliation),
-		terminal:                make(map[string]time.Time),
-		evicted:                 make(map[string]clientui.RuntimeOperationRef),
-		evictedAt:               make(map[string]time.Time),
-		operations:              make(map[string]*operationEntry),
-		tombstones:              make(map[string]clientui.RuntimeOperationRef),
-		tombstoneAt:             make(map[string]time.Time),
-		failedReqs:              make(map[string]any),
-		queuedByClientRequestID: make(map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity),
-		queuedByQueueItemID:     make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
-		queuedByOperationKey:    make(map[string]*queuedOperationIdentity),
-		commitBarriers:          make(map[string]*operationCommitBarrier),
+		records:                   make(map[string]clientui.RuntimeInputReconciliation),
+		terminal:                  make(map[string]time.Time),
+		evicted:                   make(map[string]clientui.RuntimeOperationRef),
+		evictedAt:                 make(map[string]time.Time),
+		operations:                make(map[string]*operationEntry),
+		tombstones:                make(map[string]clientui.RuntimeOperationRef),
+		tombstoneAt:               make(map[string]time.Time),
+		failedReqs:                make(map[string]any),
+		queuedByClientRequestID:   make(map[runtimeids.RuntimeClientRequestID]*queuedOperationIdentity),
+		queuedByQueueItemID:       make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
+		queuedByOperationKey:      make(map[string]*queuedOperationIdentity),
+		commitBarriers:            make(map[string]*operationCommitBarrier),
+		settledCompactAcceptances: make(map[uint64]struct{}),
 	}
 	c.sessions[key] = ledger
 	return ledger
+}
+
+func markCompactAcceptanceSettledLocked(ledger *sessionLedger, order uint64) {
+	if ledger == nil || order == 0 {
+		return
+	}
+	if ledger.settledCompactAcceptances == nil {
+		ledger.settledCompactAcceptances = make(map[uint64]struct{})
+	}
+	ledger.settledCompactAcceptances[order] = struct{}{}
+	for {
+		next := ledger.settledCompactAcceptanceOrder + 1
+		if _, ok := ledger.settledCompactAcceptances[next]; !ok {
+			return
+		}
+		delete(ledger.settledCompactAcceptances, next)
+		ledger.settledCompactAcceptanceOrder = next
+	}
 }

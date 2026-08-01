@@ -73,11 +73,19 @@ func (c *manualBoundaryCoordinator) signalLocked() {
 	c.changed = make(chan struct{})
 }
 
-func (c *manualBoundaryCoordinator) registerAcceptance(order *uint64) {
+func (c *manualBoundaryCoordinator) registerAcceptance(order *uint64, settledThrough *uint64) {
 	if c == nil || order == nil {
 		return
 	}
 	c.mu.Lock()
+	if settledThrough != nil && *settledThrough > c.resolvedAcceptanceOrder {
+		c.resolvedAcceptanceOrder = *settledThrough
+		for resolved := range c.resolvedAcceptance {
+			if resolved <= c.resolvedAcceptanceOrder {
+				delete(c.resolvedAcceptance, resolved)
+			}
+		}
+	}
 	if c.highestAcceptedOrder == nil || *order > *c.highestAcceptedOrder {
 		c.highestAcceptedOrder = cloneManualCompactionAcceptanceOrder(order)
 	}

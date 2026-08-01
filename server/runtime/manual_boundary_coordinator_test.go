@@ -90,7 +90,7 @@ func TestManualBoundaryCoordinatorWaitsForEarlierAcceptanceBeforeSealing(t *test
 	coordinator.beginGeneration()
 	firstOrder := uint64(1)
 	secondOrder := uint64(2)
-	coordinator.registerAcceptance(&secondOrder)
+	coordinator.registerAcceptance(&secondOrder, nil)
 	second, err := coordinator.enqueueForGenerationOrdered(
 		context.Background(),
 		compactionInstructionsInput{},
@@ -111,7 +111,7 @@ func TestManualBoundaryCoordinatorWaitsForEarlierAcceptanceBeforeSealing(t *test
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	coordinator.registerAcceptance(&firstOrder)
+	coordinator.registerAcceptance(&firstOrder, nil)
 	first, err := coordinator.enqueueForGenerationOrdered(
 		context.Background(),
 		compactionInstructionsInput{},
@@ -128,6 +128,27 @@ func TestManualBoundaryCoordinatorWaitsForEarlierAcceptanceBeforeSealing(t *test
 		}
 	case <-time.After(time.Second):
 		t.Fatal("boundary did not seal after all earlier accepted requests arrived")
+	}
+}
+
+func TestManualBoundaryCoordinatorRebasesSettledAcceptanceOrder(t *testing.T) {
+	coordinator := newManualBoundaryCoordinator()
+	coordinator.beginGeneration()
+	order := uint64(3)
+	settledThrough := uint64(2)
+	coordinator.registerAcceptance(&order, &settledThrough)
+	entry, err := coordinator.enqueueForGenerationOrdered(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		&order,
+	)
+	if err != nil {
+		t.Fatalf("enqueue replacement-runtime request: %v", err)
+	}
+	entries := coordinator.sealAndTake()
+	if len(entries) != 1 || entries[0] != entry {
+		t.Fatalf("replacement-runtime entries = %+v, want one settled request", entries)
 	}
 }
 
@@ -234,7 +255,7 @@ func TestOwnedManualCompactionWaitsForCompletionAfterCallerCancellation(t *testi
 	defer cancel()
 	resultDone := make(chan manualCompactionResult, 1)
 	go func() {
-		receipt, err := compactor.compactManualContext(ctx, compactionInstructionsInput{}, nil, true, nil)
+		receipt, err := compactor.compactManualContext(ctx, compactionInstructionsInput{}, nil, true, nil, nil)
 		resultDone <- manualCompactionResult{receipt: receipt, err: err}
 	}()
 

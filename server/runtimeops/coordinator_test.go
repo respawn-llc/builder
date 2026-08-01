@@ -3,6 +3,7 @@ package runtimeops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,9 @@ func TestCoordinatorAssignsAcceptanceOrderBeforeRunningOperation(t *testing.T) {
 			if !ok {
 				return struct{}{}, errors.New("first operation has no acceptance order")
 			}
+			if baseline, baselineOK := attempt.AcceptanceBaseline(); !baselineOK || baseline != 0 {
+				return struct{}{}, fmt.Errorf("first acceptance baseline = %d/%t, want 0/true", baseline, baselineOK)
+			}
 			return struct{}{}, nil
 		},
 	)
@@ -77,6 +81,9 @@ func TestCoordinatorAssignsAcceptanceOrderBeforeRunningOperation(t *testing.T) {
 			secondOrder, ok = attempt.AcceptanceOrder()
 			if !ok {
 				return struct{}{}, errors.New("second operation has no acceptance order")
+			}
+			if baseline, baselineOK := attempt.AcceptanceBaseline(); !baselineOK || baseline != firstOrder {
+				return struct{}{}, fmt.Errorf("second acceptance baseline = %d/%t, want %d/true", baseline, baselineOK, firstOrder)
 			}
 			return struct{}{}, nil
 		},

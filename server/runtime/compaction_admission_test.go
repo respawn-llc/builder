@@ -138,6 +138,29 @@ func TestManualCompactionRechecksEligibilityAfterQueuedRunNextOwnership(t *testi
 	}
 }
 
+func TestManualCompactionNoBoundaryDoesNotMisreportActiveCompaction(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeCompactionClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+	})
+	compactor := engine.compactionFlow.(*defaultContextCompactor)
+	compactor.steps = &stubExclusiveStepLifecycle{
+		snapshot: &RunSnapshot{ActiveKind: ActiveKindUserTurn},
+	}
+	coordinator := engine.compactionRuntimeState().manualBoundaryCoordinator()
+	coordinator.armNextGeneration()
+	coordinator.abortArmedGeneration(nil)
+
+	_, err := compactor.compactManualContext(
+		context.Background(),
+		compactionInstructionsInput{},
+		nil,
+		true,
+		nil,
+		nil,
+	)
+	assertManualCompactionAdmissionReason(t, err, ManualCompactionAdmissionReasonTooSoon)
+}
+
 func TestQueuedManualCompactionsRecheckEligibilitySerially(t *testing.T) {
 	store := mustCreateTestSession(t)
 	appendAgentStepBoundaryForEligibilityTest(t, store, "queued-repeat-seed")
