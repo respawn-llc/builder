@@ -9,6 +9,7 @@ import (
 	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/runtimeids"
 )
 
@@ -35,9 +36,9 @@ func newCompletionAttemptWorkflowController(
 	base workflowruntime.Controller,
 	authority *sessionruntime.Authority,
 	commands *runtimecommand.Authority,
-) workflowruntime.Controller {
+) *completionAttemptWorkflowController {
 	if base == nil || authority == nil || commands == nil {
-		return base
+		return nil
 	}
 	return &completionAttemptWorkflowController{
 		Controller: base,
@@ -69,8 +70,11 @@ func (c *completionAttemptWorkflowController) BeginCompletionAttempt(
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if state, exists := c.attempts[scopeID]; exists && state.lease != nil {
-		return fmt.Errorf("workflow completion attempt already reserved for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
+	if state, exists := c.attempts[scopeID]; exists {
+		if state.lease != nil {
+			return fmt.Errorf("workflow completion attempt already reserved for scope %s: %w", scopeID, runtimecommand.ErrCompletionFenced)
+		}
+		return nil
 	}
 	c.attempts[scopeID] = completionAttemptState{attempt: attempt}
 	return nil
@@ -90,29 +94,42 @@ func (c *completionAttemptWorkflowController) CompleteCurrentNode(
 	ctx context.Context,
 	req workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
+	return runCompletionAttempt(c, req.ScopeID, func() (workflowruntime.CompletionResult, error) {
+		return c.Controller.CompleteCurrentNode(ctx, req)
+	})
+}
+
+func runCompletionAttempt[T any](
+	c *completionAttemptWorkflowController,
+	scopeID runtimeids.ExecutionScopeID,
+	complete func() (T, error),
+) (T, error) {
+	var zero T
+	if c == nil || complete == nil {
+		return zero, errors.New("workflow completion attempt is unavailable")
+	}
 	c.mu.Lock()
-	state, hasAttempt := c.attempts[req.ScopeID]
+	state, hasAttempt := c.attempts[scopeID]
 	if hasAttempt {
 		lease, err := state.attempt.Acquire()
 		if err != nil {
-			delete(c.attempts, req.ScopeID)
+			delete(c.attempts, scopeID)
 			c.mu.Unlock()
-			return workflowruntime.CompletionResult{}, err
+			return zero, err
 		}
 		if err := lease.Reserve(); err != nil {
-			delete(c.attempts, req.ScopeID)
+			delete(c.attempts, scopeID)
 			c.mu.Unlock()
-			return workflowruntime.CompletionResult{}, err
+			return zero, err
 		}
 		state.lease = &lease
-		c.attempts[req.ScopeID] = state
+		c.attempts[scopeID] = state
 	}
-	result, completionErr := c.Controller.CompleteCurrentNode(ctx, req)
+	result, completionErr := complete()
 	if hasAttempt {
-		delete(c.attempts, req.ScopeID)
+		delete(c.attempts, scopeID)
 	}
 	c.mu.Unlock()
-
 	if !hasAttempt {
 		return result, completionErr
 	}
@@ -121,6 +138,67 @@ func (c *completionAttemptWorkflowController) CompleteCurrentNode(
 		return result, errors.Join(completionErr, lease.Abort())
 	}
 	return result, errors.Join(completionErr, lease.Commit())
+}
+
+type CompletionFencedCurrentNodeExecution struct {
+	*CurrentNodeController
+	completion *completionAttemptWorkflowController
+}
+
+func NewCompletionFencedCurrentNodeExecution(
+	controller *CurrentNodeController,
+	authority *sessionruntime.Authority,
+	commands *runtimecommand.Authority,
+) (*CompletionFencedCurrentNodeExecution, error) {
+	if controller == nil {
+		return nil, errors.New("current node workflow controller is required")
+	}
+	if authority == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if commands == nil {
+		return nil, errors.New("runtime command authority is required")
+	}
+	completion := newCompletionAttemptWorkflowController(controller, authority, commands)
+	if completion == nil {
+		return nil, errors.New("completion attempt workflow controller is unavailable")
+	}
+	return &CompletionFencedCurrentNodeExecution{
+		CurrentNodeController: controller,
+		completion:            completion,
+	}, nil
+}
+
+func (c *CompletionFencedCurrentNodeExecution) CompleteCurrentNode(
+	ctx context.Context,
+	req workflowruntime.CompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	if c == nil || c.completion == nil {
+		return workflowruntime.CompletionResult{}, errors.New("workflow completion attempt controller is unavailable")
+	}
+	return c.completion.CompleteCurrentNode(ctx, req)
+}
+
+func (c *CompletionFencedCurrentNodeExecution) CompleteSessionCurrentNode(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	transitionID string,
+	outputValues map[string]string,
+	commentary string,
+) (workflowstore.CurrentNodeCompletionResult, error) {
+	if c == nil || c.CurrentNodeController == nil || c.completion == nil {
+		return workflowstore.CurrentNodeCompletionResult{}, errors.New("workflow completion attempt controller is unavailable")
+	}
+	req, err := c.CurrentNodeController.sessionCurrentNodeCompletionRequest(sessionID, transitionID, outputValues, commentary)
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	if err := c.completion.BeginCompletionAttempt(ctx, req.ScopeID); err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	return runCompletionAttempt(c.completion, req.ScopeID, func() (workflowstore.CurrentNodeCompletionResult, error) {
+		return c.CurrentNodeController.completeLiveCurrentNode(ctx, req)
+	})
 }
 
 func (c *completionAttemptWorkflowController) takeAttempt(

@@ -201,6 +201,7 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/workflowexecution.NewMutationPermit",
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
+		"core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution",
 		"core/server/workflowsvc.New",
 		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
@@ -226,15 +227,19 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	authorityType := types.NewPointer(authority)
 	starterType := types.NewPointer(starter)
 	controllerType := types.NewPointer(controller)
+	completionFencedController := index.named["core/server/workflowexecution.CompletionFencedCurrentNodeExecution"]
+	completionFencedType := types.NewPointer(completionFencedController)
 	permitObject := assignedVariableOfType(calls["core/server/workflowexecution.NewMutationPermit"][0], permitType)
 	authorityObject := assignedVariableOfType(calls["core/server/sessionruntime.NewAuthority"][0], authorityType)
 	starterObject := assignedVariableOfType(calls["core/server/workflowrunner.NewStarter"][0], starterType)
 	controllerObject := assignedVariableOfType(controllerCalls[0], controllerType)
+	completionFencedObject := assignedVariableOfType(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], completionFencedType)
 	for name, object := range map[string]*types.Var{
-		"workflow mutation permit":      permitObject,
-		"session runtime authority":     authorityObject,
-		"workflow runtime starter":      starterObject,
-		"workflow execution controller": controllerObject,
+		"workflow mutation permit":                        permitObject,
+		"session runtime authority":                       authorityObject,
+		"workflow runtime starter":                        starterObject,
+		"workflow execution controller":                   controllerObject,
+		"completion-fenced workflow execution controller": completionFencedObject,
 	} {
 		if object == nil {
 			findings = append(findings, currentNodeStructureFinding{
@@ -281,7 +286,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	for _, key := range []string{
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/projectview.WithWorkflowExecution",
-		"core/server/workflowsvc.WithCurrentNodeExecution",
 		"core/server/workflowexecution.Recover",
 	} {
 		if !callReferencesExactly(calls[key][0], controllerType, controllerObject) {
@@ -290,6 +294,19 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 				position: key + " must reference the one production Workflow Execution controller",
 			})
 		}
+	}
+	if !callReferencesExactly(calls["core/server/workflowsvc.WithCurrentNodeExecution"][0], completionFencedType, completionFencedObject) {
+		findings = append(findings, currentNodeStructureFinding{
+			kind:     findingControllerComposition,
+			position: "core/server/workflowsvc.WithCurrentNodeExecution must reference the completion-fenced Workflow Execution controller",
+		})
+	}
+	if !callReferencesExactly(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], controllerType, controllerObject) ||
+		!callReferencesExactly(calls["core/server/workflowexecution.NewCompletionFencedCurrentNodeExecution"][0], authorityType, authorityObject) {
+		findings = append(findings, currentNodeStructureFinding{
+			kind:     findingControllerComposition,
+			position: "NewCompletionFencedCurrentNodeExecution must wrap the one production workflow controller and Session runtime Authority",
+		})
 	}
 
 	controllerPosition := controllerCalls[0].call.Pos()
@@ -404,7 +421,7 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 	authoritativeImplementations := make([]*types.Named, 0, len(implementations))
 	for _, implementation := range implementations {
 		if !types.Identical(implementation, canonicalController) {
-			if isCurrentNodeControllerDecorator(implementation, controllerInterface) {
+			if isCurrentNodeControllerDecorator(implementation, controllerInterface, canonicalController) {
 				continue
 			}
 			findings = append(findings, currentNodeStructureFinding{
@@ -472,14 +489,19 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 	return findings
 }
 
-func isCurrentNodeControllerDecorator(named *types.Named, controllerInterface *types.Named) bool {
+func isCurrentNodeControllerDecorator(named *types.Named, controllerInterface, canonicalController *types.Named) bool {
 	structure, ok := named.Underlying().(*types.Struct)
 	if !ok {
 		return false
 	}
 	for fieldIndex := 0; fieldIndex < structure.NumFields(); fieldIndex++ {
 		field := structure.Field(fieldIndex)
-		if !field.Embedded() || !types.Identical(types.Unalias(field.Type()), controllerInterface) {
+		if !field.Embedded() {
+			continue
+		}
+		fieldType := types.Unalias(field.Type())
+		if !types.Identical(fieldType, controllerInterface) &&
+			!types.Identical(fieldType, types.NewPointer(canonicalController)) {
 			continue
 		}
 		return true

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -36,8 +37,8 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	memoReq := liveSteerMemoRequest{SessionID: sessionID, Text: strings.TrimSpace(req.Text)}
 	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
 		var resp serverapi.RuntimeLiveSteerResponse
-		err := s.withOrderedRuntime(ctx, memoReq.SessionID.String(), func(callbackCtx context.Context, engine *runtime.Engine) error {
-			return s.acceptRuntimeInputAtOrderedTurn(callbackCtx, memoReq.SessionID.String(), func() error {
+		queue := func(callbackCtx context.Context, engine *runtime.Engine, accept func(func() error) error) error {
+			return accept(func() error {
 				if !engine.HasActiveLiveRunGroup() {
 					return serverapi.ErrRuntimeNoActiveRun
 				}
@@ -64,7 +65,44 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 				resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 				return nil
 			})
-		})
+		}
+		var err error
+		if s.commands == nil {
+			err = s.withOrderedRuntime(ctx, memoReq.SessionID.String(), func(callbackCtx context.Context, engine *runtime.Engine) error {
+				return queue(callbackCtx, engine, func(apply func() error) error {
+					return s.acceptRuntimeInputAtOrderedTurn(callbackCtx, memoReq.SessionID.String(), apply)
+				})
+			})
+		} else {
+			handle, active := s.authority.SessionExecution(memoReq.SessionID)
+			if !active || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent {
+				return resp, serverapi.ErrRuntimeNoActiveRun
+			}
+			scope := handle.Scope()
+			resource, resourceAvailable := scope.Resource()
+			if !resourceAvailable {
+				return resp, serverapi.ErrRuntimeNoActiveRun
+			}
+			err = s.commands.DispatchAgent(ctx, scope, func(turn runtime.OrderedMutationTurn) error {
+				return s.authority.WithExactExecutionRuntime(context.Background(), scope.ID(), func(callbackCtx context.Context, engine *runtime.Engine) error {
+					return turn.Apply(func() error {
+						return queue(callbackCtx, engine, func(apply func() error) error {
+							acceptance, acceptErr := s.commands.BeginInput(callbackCtx, resource)
+							if acceptErr != nil {
+								return acceptErr
+							}
+							if applyErr := apply(); applyErr != nil {
+								return errors.Join(applyErr, acceptance.Abort())
+							}
+							return acceptance.Commit()
+						})
+					})
+				})
+			})
+			if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+				err = serverapi.ErrRuntimeNoActiveRun
+			}
+		}
 		return resp, err
 	})
 }

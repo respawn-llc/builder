@@ -688,37 +688,6 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	return true
 }
 
-func (e *Engine) launchLifecycleTaskWithLease(task func(context.Context), lease OrderedMutationLease) bool {
-	if lease == nil {
-		return e.launchLifecycleTask(task)
-	}
-	if e == nil || task == nil {
-		return false
-	}
-	e.ensureLifecycle()
-	e.lifecycleMu.Lock()
-	if e.lifecycleClosed {
-		e.lifecycleMu.Unlock()
-		return false
-	}
-	e.lifecycleWG.Add(1)
-	ctx := e.lifecycleCtx
-	e.lifecycleMu.Unlock()
-	go func() {
-		defer func() {
-			_ = lease.Release()
-			e.lifecycleWG.Done()
-			if e.cfg.LifecycleTaskFinished != nil {
-				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
-			}
-		}()
-		binding := e.BindExecutionMutation(ExecutionMutation(lease.OrderedMutation))
-		defer e.ClearExecutionMutationIf(binding)
-		task(ctx)
-	}()
-	return true
-}
-
 type QueuedUserMessage struct {
 	ID              string
 	Text            string

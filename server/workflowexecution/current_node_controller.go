@@ -252,26 +252,45 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	if sessionID.IsZero() {
 		return workflowstore.CurrentNodeCompletionResult{}, errors.New("session id is required")
 	}
+	req, err := c.sessionCurrentNodeCompletionRequest(sessionID, transitionID, outputValues, commentary)
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	return c.completeLiveCurrentNode(ctx, req)
+}
+
+func (c *CurrentNodeController) sessionCurrentNodeCompletionRequest(
+	sessionID runtimeids.SessionID,
+	transitionID string,
+	outputValues map[string]string,
+	commentary string,
+) (workflowruntime.CompletionRequest, error) {
+	if c == nil {
+		return workflowruntime.CompletionRequest{}, errors.New("current node workflow controller is required")
+	}
+	if sessionID.IsZero() {
+		return workflowruntime.CompletionRequest{}, errors.New("session id is required")
+	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowruntime.CompletionRequest{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	scopeRef, workflowScoped := handle.Scope().Workflow()
 	if !workflowScoped {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowruntime.CompletionRequest{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	c.mu.Lock()
 	owned, ownedLive := c.live[handle.Scope().ID()]
 	c.mu.Unlock()
 	if !ownedLive || !owned.reference.Equal(scopeRef.CurrentNode) {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowruntime.CompletionRequest{}, sessionruntime.ErrExecutionNoLongerLive
 	}
-	return c.completeLiveCurrentNode(ctx, workflowruntime.CompletionRequest{
+	return workflowruntime.CompletionRequest{
 		ScopeID:      handle.Scope().ID(),
 		TransitionID: transitionID,
 		OutputValues: outputValues,
 		Commentary:   commentary,
-	})
+	}, nil
 }
 
 // AnswerWorkflowQuestion delivers an answer only after resolving one exact

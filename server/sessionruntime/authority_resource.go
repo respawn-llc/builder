@@ -973,6 +973,9 @@ func RunSubmittedAgentExecution(
 				return err
 			}
 		}
+		if !engine.GoalLoopRunning() && engine.GoalLoopContinuationPending() {
+			releaseGoalContinuation()
+		}
 		if engine.GoalLoopRunning() {
 			return engine.WaitForGoalLoop(executionCtx)
 		}
@@ -1041,6 +1044,41 @@ func (a *Authority) WithExecutionMutation(
 			return a.options.agentOrderedMutation(callbackCtx, handle.Scope(), callback)
 		}
 		return engine.ApplyExecutionMutation(callbackCtx, callback)
+	})
+}
+
+// WithExactExecutionRuntime keeps the captured Agent scope live while the
+// callback uses its runtime. A resource generation alone is insufficient:
+// a successor execution may reuse that resource after the captured scope
+// retires.
+func (a *Authority) WithExactExecutionRuntime(
+	ctx context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if scopeID.IsZero() {
+		return errors.New("execution scope id is required")
+	}
+	if callback == nil {
+		return errors.New("exact execution runtime callback is required")
+	}
+	handle, ok := a.ExecutionByScope(scopeID)
+	if !ok || handle.Scope().Kind() != ExecutionScopeAgent {
+		return ErrExecutionNoLongerLive
+	}
+	resource, ok := handle.Scope().Resource()
+	if !ok {
+		return ErrExecutionNoLongerLive
+	}
+	return a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+		agent := a.resources[resource.SessionID()]
+		if agent == nil {
+			return ErrExecutionNoLongerLive
+		}
+		return agent.withEngine(ctx, resource, callback)
 	})
 }
 
