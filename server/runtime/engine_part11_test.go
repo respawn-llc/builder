@@ -63,7 +63,6 @@ func assertRequestHasUserMessage(t *testing.T, request llm.Request, content stri
 }
 
 func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
-	t.Parallel()
 	client, started, release := newGatedHookClient(
 		llm.Response{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
