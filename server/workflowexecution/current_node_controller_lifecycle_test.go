@@ -65,6 +65,48 @@ func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testi
 	}
 }
 
+func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterScopeRetires(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	source := currentNodeReferenceForControllerTest(t, "task-retained-session-violation", "node-source")
+	sourceNode := workflow.CurrentNode{
+		Reference: source,
+		SessionID: &sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	request := workflowruntime.ViolationRequest{
+		ScopeID:   runtimeids.NewExecutionScopeID(),
+		SessionID: &sessionID,
+		Kind:      workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount:  2,
+	}
+
+	first, err := controller.RecordProtocolViolation(context.Background(), request)
+	if err != nil {
+		t.Fatalf("record first retained Session protocol violation: %v", err)
+	}
+	if first.Count != 1 || first.Interrupted {
+		t.Fatalf("first retained Session protocol violation = %+v", first)
+	}
+	second, err := controller.RecordProtocolViolation(context.Background(), request)
+	if err != nil {
+		t.Fatalf("record second retained Session protocol violation: %v", err)
+	}
+	if second.Count != 2 || !second.Interrupted {
+		t.Fatalf("second retained Session protocol violation = %+v", second)
+	}
+}
+
 func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-target")
 	approval := workflow.PendingApproval{

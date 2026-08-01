@@ -45,6 +45,10 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 	if !active || execution.Controller == nil {
 		return workflowruntime.ViolationResult{}, nil
 	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return workflowruntime.ViolationResult{}, err
+	}
 	maxCount := execution.MaxInvalidCompletionAttempts
 	if maxCount <= 0 {
 		maxCount = workflowInvalidCompletionFailClosedMaxCount
@@ -54,10 +58,11 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 		"detail": strings.TrimSpace(detail),
 	})
 	return execution.Controller.RecordProtocolViolation(ctx, workflowruntime.ViolationRequest{
-		ScopeID:  execution.ScopeID,
-		Kind:     kind,
-		MaxCount: maxCount,
-		Detail:   string(payload),
+		ScopeID:   execution.ScopeID,
+		SessionID: &sessionID,
+		Kind:      kind,
+		MaxCount:  maxCount,
+		Detail:    string(payload),
 	})
 }
 
@@ -96,9 +101,9 @@ func (e *Engine) completeWorkflowCurrentNode(
 	if !active || execution.Controller == nil {
 		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
 	}
-	sessionID, err := runtimeids.ParseSessionID(e.SessionID())
+	sessionID, err := e.workflowSessionID()
 	if err != nil {
-		return workflowruntime.CompletionResult{}, fmt.Errorf("parse workflow Session identity: %w", err)
+		return workflowruntime.CompletionResult{}, err
 	}
 	return execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
 		ScopeID:      execution.ScopeID,
@@ -107,6 +112,14 @@ func (e *Engine) completeWorkflowCurrentNode(
 		OutputValues: parsed.OutputValues,
 		Commentary:   parsed.Commentary,
 	})
+}
+
+func (e *Engine) workflowSessionID() (runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(e.SessionID())
+	if err != nil {
+		return runtimeids.SessionID{}, fmt.Errorf("parse workflow Session identity: %w", err)
+	}
+	return sessionID, nil
 }
 
 func workflowCompletionCallCount(calls []llm.ToolCall) int {

@@ -171,10 +171,11 @@ type Controller interface {
 }
 
 type ViolationRequest struct {
-	ScopeID  runtimeids.ExecutionScopeID
-	Kind     ViolationKind
-	MaxCount int
-	Detail   string
+	ScopeID   runtimeids.ExecutionScopeID
+	SessionID *runtimeids.SessionID
+	Kind      ViolationKind
+	MaxCount  int
+	Detail    string
 }
 
 type ViolationResetRequest struct {
