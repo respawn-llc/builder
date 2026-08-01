@@ -217,7 +217,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	if err != nil {
 		t.Fatalf("new Task status projection: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
 	if err != nil {
 		t.Fatalf("new Task dependency projection: %v", err)
 	}

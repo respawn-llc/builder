@@ -197,7 +197,7 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
 	definitions := mustDefinitionProjection(t, fixture.store)
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

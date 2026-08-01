@@ -15,10 +15,10 @@ import (
 )
 
 type TaskDependencies struct {
-	queries      *sqlitegen.Queries
-	projection   *TaskStatusProjection
-	satisfaction taskDependencySatisfaction
-	policy       workflow.TaskDependencyPolicy
+	queries    *sqlitegen.Queries
+	projection *TaskStatusProjection
+	counter    *TaskDependencyCounter
+	policy     workflow.TaskDependencyPolicy
 }
 
 type taskDependencySatisfaction struct {
@@ -48,6 +48,7 @@ type taskDependencyRowKey struct {
 func NewTaskDependencies(
 	metadataStore *metadata.Store,
 	projection *TaskStatusProjection,
+	counter *TaskDependencyCounter,
 ) (*TaskDependencies, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
@@ -55,14 +56,14 @@ func NewTaskDependencies(
 	if projection == nil {
 		return nil, errors.New("task status projection is required")
 	}
+	if counter == nil {
+		return nil, errors.New("task dependency counter is required")
+	}
 	return &TaskDependencies{
 		queries:    metadataStore.Queries(),
 		projection: projection,
-		satisfaction: taskDependencySatisfaction{
-			queries:   metadataStore.Queries(),
-			projector: projection.projector,
-		},
-		policy: workflow.TaskDependencyPolicy{},
+		counter:    counter,
+		policy:     workflow.TaskDependencyPolicy{},
 	}, nil
 }
 
@@ -89,7 +90,7 @@ func (d *TaskDependencies) CountUnsatisfiedBlockers(ctx context.Context, taskID 
 	if trimmedTaskID == "" {
 		return 0, errors.New("task id is required")
 	}
-	return d.satisfaction.CountUnsatisfiedBlockers(ctx, trimmedTaskID)
+	return d.counter.CountUnsatisfiedBlockers(ctx, trimmedTaskID)
 }
 
 func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID string, requestedDirection *serverapi.WorkflowTaskDependencyDirection) (serverapi.WorkflowTaskDependencyListResponse, error) {

@@ -10,14 +10,14 @@ import (
 
 func TestNewTaskDependenciesRequiresTaskStatusProjection(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	if _, err := NewTaskDependencies(fixture.metadata, nil); err == nil {
+	if _, err := NewTaskDependencies(fixture.metadata, nil, fixture.dependencyCounter); err == nil {
 		t.Fatal("NewTaskDependencies accepted a nil TaskStatusProjection")
 	}
 }
 
 func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 
 func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithoutTouchingBlockedTask(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 
 func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 
 func TestListTaskDependenciesSortsBothDirectionsUnfinishedFirstThenShortID(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

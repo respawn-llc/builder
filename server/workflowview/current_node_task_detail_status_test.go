@@ -303,7 +303,7 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}

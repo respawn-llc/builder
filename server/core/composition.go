@@ -312,7 +312,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task search: %w", err)
 	}
-	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskStatusProjection)
+	workflowTaskDependencies, err := workflowview.NewTaskDependencies(metadataStore, workflowTaskStatusProjection, workflowTaskDependencyCounter)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)

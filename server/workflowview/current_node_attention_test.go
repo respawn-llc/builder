@@ -269,7 +269,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if len(unrelatedAttention.Items) != 0 {
 		t.Fatalf("unrelated task attention = %+v, want none", unrelatedAttention.Items)
 	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
