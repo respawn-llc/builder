@@ -322,11 +322,14 @@ type executionPromptEntry struct {
 
 type executionPromptStore struct {
 	authority *Authority
-	mu        sync.RWMutex
-	scope     ExecutionScope
-	feed      ExecutionPromptFeed
-	closed    bool
-	pending   map[string]*executionPromptEntry
+	// mu is the sole synchronization for pending prompts. Prompt lifecycle
+	// mutations must not acquire Authority.mu because status snapshots hold it
+	// while reading live execution state.
+	mu      sync.RWMutex
+	scope   ExecutionScope
+	feed    ExecutionPromptFeed
+	closed  bool
+	pending map[string]*executionPromptEntry
 }
 
 func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
@@ -358,31 +361,25 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	if s.authority == nil {
 		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
 	}
-	s.authority.mu.Lock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		s.authority.mu.Unlock()
 		return tools.AskQuestionResponse{}, context.Canceled
 	}
 	if _, exists := s.pending[requestID]; exists {
 		s.mu.Unlock()
-		s.authority.mu.Unlock()
 		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
-	s.authority.mu.Unlock()
 	s.publishPending(snapshot)
 	defer func() {
-		s.authority.mu.Lock()
 		s.mu.Lock()
 		current := s.pending[requestID]
 		if current == entry {
 			delete(s.pending, requestID)
 		}
 		s.mu.Unlock()
-		s.authority.mu.Unlock()
 		if current == entry {
 			s.publishResolved(snapshot)
 		}
@@ -403,24 +400,20 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	if s.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
-	s.authority.mu.Lock()
 	s.mu.Lock()
 	entry := s.pending[requestID]
 	if entry == nil {
 		s.mu.Unlock()
-		s.authority.mu.Unlock()
 		return fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
 	}
 	if submitErr == nil {
 		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
 			s.mu.Unlock()
-			s.authority.mu.Unlock()
 			return err
 		}
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
-	s.authority.mu.Unlock()
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	s.publishResolved(entry.snapshot)
 	return nil
@@ -433,11 +426,9 @@ func (s *executionPromptStore) Close(err error) {
 	if s.authority == nil {
 		return
 	}
-	s.authority.mu.Lock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		s.authority.mu.Unlock()
 		return
 	}
 	s.closed = true
@@ -447,7 +438,6 @@ func (s *executionPromptStore) Close(err error) {
 		delete(s.pending, requestID)
 	}
 	s.mu.Unlock()
-	s.authority.mu.Unlock()
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)

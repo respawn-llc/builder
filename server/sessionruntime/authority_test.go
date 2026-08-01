@@ -2349,6 +2349,73 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 }
 
+func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	sessionID := runtimeids.NewSessionID()
+	resource, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+	if err != nil {
+		t.Fatalf("new session resource ref: %v", err)
+	}
+	workflowRef := workflowExecutionRefForTest(t, "task-prompt-lock", "node-prompt-lock", nil)
+	scope := newAgentExecutionScope(
+		runtimeids.NewExecutionScopeID(),
+		1,
+		resource,
+		&workflowRef,
+	)
+	feed := make(authorityPromptFeed, 2)
+	store := newExecutionPromptStore(authority, scope, feed)
+	request := tools.AskQuestionRequest{
+		ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
+	}
+	response := tools.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}
+
+	authority.mu.Lock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			authority.mu.Unlock()
+		}
+	}()
+
+	awaitDone := make(chan executionPromptResult, 1)
+	go func() {
+		answer, awaitErr := store.Await(context.Background(), request)
+		awaitDone <- executionPromptResult{response: answer, err: awaitErr}
+	}()
+	select {
+	case pending := <-feed:
+		if pending.requestID != request.ID || pending.resolved {
+			t.Fatalf("pending prompt event = %+v, want pending request %q", pending, request.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt registration waited for the Authority lock")
+	}
+
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- store.Submit(response, nil)
+	}()
+	select {
+	case submitErr := <-submitDone:
+		if submitErr != nil {
+			t.Fatalf("submit prompt response: %v", submitErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt response waited for the Authority lock")
+	}
+	select {
+	case result := <-awaitDone:
+		if result.err != nil || result.response != response {
+			t.Fatalf("prompt result = %+v, error = %v, want %+v", result.response, result.err, response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt cleanup waited for the Authority lock")
+	}
+	authority.mu.Unlock()
+	unlocked = true
+}
+
 func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
