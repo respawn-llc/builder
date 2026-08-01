@@ -34,6 +34,9 @@ func typedPathOwnershipViolations(pkg *packages.Package) []string {
 			continue
 		}
 		separators := pathSeparatorObjects(pkg, file)
+		if typedBuilderPathAssembly(pkg, file, identity, separators) {
+			violations = append(violations, "typed Workspace identity builder path construction")
+		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch current := node.(type) {
 			case *ast.FuncDecl:
@@ -345,7 +348,7 @@ func typedForbiddenPathCall(pkg *packages.Package, call *ast.CallExpr, identity 
 			return false
 		}
 	case "fmt":
-		if function.Name() != "Sprintf" {
+		if function.Name() != "Sprintf" && function.Name() != "Sprint" {
 			return false
 		}
 	default:
@@ -360,6 +363,90 @@ func typedForbiddenPathCall(pkg *packages.Package, call *ast.CallExpr, identity 
 		}
 	}
 	return false
+}
+
+type builderPathFact struct {
+	identity  bool
+	separator bool
+}
+
+func typedBuilderPathAssembly(pkg *packages.Package, file *ast.File, identity workspaceIdentityAnalysis, separators map[types.Object]bool) bool {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			continue
+		}
+		facts := make(map[types.Object]builderPathFact)
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !isStringsBuilderMethod(pkg, selector) {
+				return true
+			}
+			receiver := typedExpressionObject(pkg, selector.X)
+			if receiver == nil {
+				return true
+			}
+			fact := facts[receiver]
+			for _, argument := range call.Args {
+				fact.identity = fact.identity ||
+					typedContainsWorkspaceIdentity(pkg, argument, identity, workspaceTypeForPackage(pkg))
+				fact.separator = fact.separator ||
+					typedContainsPathSeparator(pkg, argument, separators)
+			}
+			facts[receiver] = fact
+			return true
+		})
+		for _, fact := range facts {
+			if fact.identity && fact.separator {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isStringsBuilderMethod(pkg *packages.Package, selector *ast.SelectorExpr) bool {
+	selection := pkg.TypesInfo.Selections[selector]
+	if selection == nil || selection.Obj().Pkg() == nil {
+		return false
+	}
+	if selection.Obj().Pkg().Path() != "strings" {
+		return false
+	}
+	switch selection.Obj().Name() {
+	case "Write", "WriteByte", "WriteRune", "WriteString":
+	default:
+		return false
+	}
+	receiver := selection.Recv()
+	if pointer, ok := receiver.(*types.Pointer); ok {
+		receiver = pointer.Elem()
+	}
+	named, ok := receiver.(*types.Named)
+	return ok && named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == "strings" &&
+		named.Obj().Name() == "Builder"
+}
+
+func typedExpressionObject(pkg *packages.Package, expression ast.Expr) types.Object {
+	switch current := expression.(type) {
+	case *ast.Ident:
+		if object := pkg.TypesInfo.Uses[current]; object != nil {
+			return object
+		}
+		return pkg.TypesInfo.Defs[current]
+	case *ast.SelectorExpr:
+		if selection := pkg.TypesInfo.Selections[current]; selection != nil {
+			return selection.Obj()
+		}
+		return pkg.TypesInfo.Uses[current.Sel]
+	default:
+		return nil
+	}
 }
 
 func isWorkspaceIDSource(object types.Object) bool {
@@ -402,6 +489,24 @@ func automatic(base string, workspace Workspace) string {
 import "fmt"
 type Workspace struct { ID string }
 func automatic(base string, workspace Workspace) string { return fmt.Sprintf("%s%c%s", base, '/', workspace.ID) }`,
+		`package fixture
+import ("fmt"; "path/filepath")
+type Workspace struct { ID string }
+func automatic(base string, workspace Workspace) string {
+	return fmt.Sprint(base, string(filepath.Separator), workspace.ID, string(filepath.Separator), "leaf")
+}`,
+		`package fixture
+import ("path/filepath"; "strings")
+type Workspace struct { ID string }
+func automatic(base string, workspace Workspace) string {
+	var builder strings.Builder
+	builder.WriteString(base)
+	builder.WriteRune(filepath.Separator)
+	builder.WriteString(workspace.ID)
+	builder.WriteRune(filepath.Separator)
+	builder.WriteString("leaf")
+	return builder.String()
+}`,
 		`package fixture
 import "path/filepath"
 func caller(base string, workspaceID string) string { return managedRoot(base, workspaceID) }
