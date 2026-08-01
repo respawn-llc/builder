@@ -23,6 +23,23 @@ type defaultStepExecutor struct {
 	tools    toolExecutor
 }
 
+type completionAttemptController interface {
+	BeginCompletionAttempt(context.Context, runtimeids.ExecutionScopeID) error
+	AbortCompletionAttempt(runtimeids.ExecutionScopeID) error
+}
+
+func (e *Engine) currentCompletionAttemptController() (completionAttemptController, runtimeids.ExecutionScopeID, bool) {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
+		return nil, runtimeids.ExecutionScopeID{}, false
+	}
+	controller, ok := execution.Controller.(completionAttemptController)
+	if !ok {
+		return nil, runtimeids.ExecutionScopeID{}, false
+	}
+	return controller, execution.ScopeID, true
+}
+
 type completedResponseNext uint8
 
 const (
@@ -76,13 +93,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		if e.currentNodeExecutionActive() {
-			if starter, ok := e.cfg.CurrentNodeExecution.Controller.(interface {
-				BeginCompletionAttempt(context.Context, runtimeids.ExecutionScopeID) error
-			}); ok {
-				if err := starter.BeginCompletionAttempt(ctx, e.cfg.CurrentNodeExecution.ScopeID); err != nil {
-					return stepLoopResult{}, err
-				}
+		if controller, scopeID, ok := e.currentCompletionAttemptController(); ok {
+			if err := controller.BeginCompletionAttempt(ctx, scopeID); err != nil {
+				return stepLoopResult{}, err
 			}
 		}
 
@@ -110,12 +123,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			},
 		)
 		if err != nil {
-			if e.currentNodeExecutionActive() {
-				if aborter, ok := e.cfg.CurrentNodeExecution.Controller.(interface {
-					AbortCompletionAttempt(runtimeids.ExecutionScopeID) error
-				}); ok {
-					_ = aborter.AbortCompletionAttempt(e.cfg.CurrentNodeExecution.ScopeID)
-				}
+			if controller, scopeID, ok := e.currentCompletionAttemptController(); ok {
+				_ = controller.AbortCompletionAttempt(scopeID)
 			}
 			return stepLoopResult{}, err
 		}

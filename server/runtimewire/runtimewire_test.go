@@ -476,7 +476,16 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 			t.Fatalf("exec_command transition metadata = %T, want pending transition", result.TransientMetadata)
 		}
 		snapshot := transition.Snapshot()
-		transition.Commit()
+		if err := transition.Commit(); err != nil {
+			t.Fatalf("commit background transition: %v", err)
+		}
+		event := nextEvent()
+		if event.Type != shelltool.EventBackgrounded {
+			t.Fatalf("event type = %q, want %q", event.Type, shelltool.EventBackgrounded)
+		}
+		if event.Snapshot.ID != snapshot.ID {
+			t.Fatalf("background event process ID = %q, want %q", event.Snapshot.ID, snapshot.ID)
+		}
 		return snapshot
 	}
 	assertCorrelation := func(location string, got *runtimeids.ExecutionCorrelation, want *runtimeids.ExecutionCorrelation) {
