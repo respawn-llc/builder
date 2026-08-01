@@ -491,18 +491,23 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	parentCreatedConcurrently := false
 	var capturedParent os.FileInfo
 	var capturedMarker os.FileInfo
-	cleanup := func() error {
-		if !claimed || !createdParent || capturedParent == nil {
-			return nil
+	cleanup := func() (bool, error) {
+		if !claimed || !createdParent {
+			return true, nil
 		}
-		return rollbackCreatedWorkspaceParent(parent, workspaceParentMarker, capturedParent, capturedMarker)
+		if capturedParent == nil {
+			return false, nil
+		}
+		cleanupErr := rollbackCreatedWorkspaceParent(parent, workspaceParentMarker, capturedParent, capturedMarker)
+		return cleanupErr == nil, cleanupErr
 	}
 	defer func() {
 		if err != nil {
-			if cleanupErr := cleanup(); cleanupErr != nil {
+			cleanupComplete, cleanupErr := cleanup()
+			if cleanupErr != nil {
 				err = errors.Join(err, cleanupErr)
 			}
-			if claimed && a.metadata != nil {
+			if claimed && cleanupComplete && a.metadata != nil {
 				if releaseErr := a.metadata.ReleaseWorkspacePathKey(context.Background(), workspaceID, key); releaseErr != nil {
 					err = errors.Join(err, releaseErr)
 				}
@@ -562,12 +567,8 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	if err != nil {
 		return "", fmt.Errorf("read workspace parent marker %q: %w", marker, err)
 	}
-	var markerData workspaceParentMarkerData
-	if err := json.Unmarshal(raw, &markerData); err != nil {
-		return "", fmt.Errorf("decode workspace parent marker %q: %w", marker, err)
-	}
-	if markerData.Version != workspaceParentMarkerVer || markerData.WorkspaceID != workspaceID {
-		return "", fmt.Errorf("workspace parent marker %q ownership/version mismatch", marker)
+	if _, err := validateWorkspaceParentMarker(raw, marker, workspaceID); err != nil {
+		return "", err
 	}
 	finalParent, err := os.Lstat(parent)
 	if err != nil {
@@ -594,14 +595,21 @@ func (a *managedRootAllocator) materializeWorkspaceParent(workspaceID string, ke
 	if err != nil {
 		return "", fmt.Errorf("read revalidated workspace parent marker %q: %w", marker, err)
 	}
-	var finalMarkerData workspaceParentMarkerData
-	if err := json.Unmarshal(finalRaw, &finalMarkerData); err != nil {
-		return "", fmt.Errorf("decode revalidated workspace parent marker %q: %w", marker, err)
-	}
-	if finalMarkerData.Version != workspaceParentMarkerVer || finalMarkerData.WorkspaceID != workspaceID {
-		return "", fmt.Errorf("workspace parent marker %q ownership/version mismatch after revalidation", marker)
+	if _, err := validateWorkspaceParentMarker(finalRaw, marker, workspaceID); err != nil {
+		return "", fmt.Errorf("revalidate workspace parent marker %q: %w", marker, err)
 	}
 	return filepath.Clean(parent), nil
+}
+
+func validateWorkspaceParentMarker(raw []byte, marker string, workspaceID string) (workspaceParentMarkerData, error) {
+	var markerData workspaceParentMarkerData
+	if err := json.Unmarshal(raw, &markerData); err != nil {
+		return workspaceParentMarkerData{}, fmt.Errorf("decode workspace parent marker %q: %w", marker, err)
+	}
+	if markerData.Version != workspaceParentMarkerVer || markerData.WorkspaceID != workspaceID {
+		return workspaceParentMarkerData{}, fmt.Errorf("workspace parent marker %q ownership/version mismatch", marker)
+	}
+	return markerData, nil
 }
 
 func waitForWorkspaceParentMarker(marker string) (os.FileInfo, error) {
