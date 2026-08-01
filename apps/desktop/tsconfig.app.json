@@ -19,7 +19,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@app/native-bridge": ["./packages/native-bridge/src/index.ts"],
-      "@app/ui-kit": ["./packages/ui-kit/dist/index.d.ts"],
+      "@app/ui-kit": ["./packages/ui-kit/src/index.ts"],
       "@xyflow/react": ["./src/vendor/xyflow-react-types.ts"],
       "elkjs/lib/elk-api": ["./src/vendor/elkjs-types.ts"],
       "elkjs/lib/elk.bundled.js": ["./src/vendor/elkjs-bundled-types.ts"]
