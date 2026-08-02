@@ -90,7 +90,7 @@ func (c uiInputController) requestIdleRuntimeControlCommittedRefresh(origin uiCo
 func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	token := m.beginSubmitAttempt("", "", operationRef)
+	token := m.beginSubmitAttempt("", "", operationRef, activeSubmitOriginQueued)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {

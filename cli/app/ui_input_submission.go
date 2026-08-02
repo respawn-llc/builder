@@ -21,6 +21,10 @@ const (
 )
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
+	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, activeSubmitOriginDirect)
+}
+
+func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -40,12 +44,16 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 	}
 	m.layout().syncViewport()
 	if isUserShell {
-		return tea.Batch(c.submitUserShellCmd(text, command), m.reconcileSpinnerTicking(false))
+		return tea.Batch(c.submitUserShellCmd(text, command, origin), m.reconcileSpinnerTicking(false))
 	}
-	return tea.Batch(c.submitCmd(text, queuedID), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.submitCmd(text, queuedID, origin), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
+	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text, queuePosition, queuedID, activeSubmitOriginDirect)
+}
+
+func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -54,15 +62,15 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 		return blockCmd
 	}
 	m.rememberPromptHistoryLocally(text)
-	return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID)
+	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, origin)
 }
 
-func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
+func (c uiInputController) submitCmd(text string, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	preSubmitCompactionRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
 	m.addPendingRuntimeOperation(preSubmitCompactionRef)
-	token := m.beginSubmitAttempt(text, queuedID, operationRef)
+	token := m.beginSubmitAttempt(text, queuedID, operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
@@ -85,10 +93,10 @@ func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 	}
 }
 
-func (c uiInputController) submitUserShellCmd(originalText, command string) tea.Cmd {
+func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell)
-	token := m.beginSubmitAttempt(originalText, "", operationRef)
+	token := m.beginSubmitAttempt(originalText, "", operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
@@ -105,7 +113,7 @@ func (c uiInputController) submitUserShellCmd(originalText, command string) tea.
 	}
 }
 
-func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef clientui.RuntimeOperationRef) uint64 {
+func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef clientui.RuntimeOperationRef, origin activeSubmitOrigin) uint64 {
 	if m == nil {
 		return 0
 	}
@@ -113,7 +121,7 @@ func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef 
 	if m.submitToken == 0 {
 		m.submitToken++
 	}
-	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, operationRef: operationRef, restoreOnInterrupt: true}
+	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, origin: origin, operationRef: operationRef, restoreOnInterrupt: true}
 	return m.submitToken
 }
 
@@ -199,6 +207,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		restoreSubmittedText = restore
 	}
 	activeQueuedID := m.activeSubmit.queuedID
+	submitOrigin := m.activeSubmit.origin
 	m.activeSubmit = activeSubmitState{}
 	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindPreSubmitCompact)
 	c.finishRuntimeOperationAffordance(false)
@@ -223,7 +232,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
-		if activeQueuedID == "" {
+		if submitOrigin != activeSubmitOriginQueued {
 			m.activity = uiActivityError
 		}
 		m.logf("step.error err=%q", detailErr)

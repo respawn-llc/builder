@@ -121,6 +121,13 @@ type compactDoneMsg struct {
 	err error
 }
 
+type activeSubmitOrigin uint8
+
+const (
+	activeSubmitOriginDirect activeSubmitOrigin = iota
+	activeSubmitOriginQueued
+)
+
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
@@ -128,6 +135,7 @@ type activeSubmitState struct {
 	stepID             string
 	text               string
 	queuedID           string
+	origin             activeSubmitOrigin
 	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool

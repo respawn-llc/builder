@@ -276,17 +276,22 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 }
 
-func TestQueuedSubmitFailurePreservesActivity(t *testing.T) {
+func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
 	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
 	model.setRuntimeActivityBusyForTest(true)
-	model.activeSubmit = activeSubmitState{token: 1, text: "queued message", queuedID: "queued-id"}
 	beforeActivity := model.activity
+	if cmd := model.inputController().dispatchQueuedInput(queuedInputItem{ID: "queued-shell-id", Text: "$ echo queued"}); cmd == nil {
+		t.Fatal("queued shell dispatch produced no submit command")
+	}
+	if model.activeSubmit.origin != activeSubmitOriginQueued {
+		t.Fatalf("submit origin = %d, want queued", model.activeSubmit.origin)
+	}
 
 	next, cmd := model.Update(submitDoneMsg{
-		token:         1,
-		submittedText: "queued message",
+		token:         model.activeSubmit.token,
+		submittedText: "$ echo queued",
 		err:           io.EOF,
 	})
 	updated := next.(*uiModel)
