@@ -26,8 +26,7 @@ Usage of kent task:
   kent task comment delete <comment-id>
   kent task comments <add|list|replace|delete> ... (alias of kent task comment)
 
-Create tasks, start or resume their workflow work, inspect progress, and manage
-task comments.
+Create tasks, start or resume their workflow work, inspect progress, and manage task comments.
 
 Task references:
   Commands accept a task ID or project-scoped short ID such as `KENT-123`.
@@ -35,33 +34,21 @@ Task references:
   project attached to the current workspace.
 
 Workflow selection:
-  Workflow selectors are bare canonical UUIDv4 values.
   Task creation uses `--workflow` when supplied. Otherwise it uses the project
   default, or the lone linked workflow when the project has no default.
 
 Labels:
-  Label selectors are literal repeatable `--label` and `--not-label` values. A canonical UUIDv4
-  selects a label ID; every other value is trimmed and matched as a complete
-  case-insensitive Unicode label name. Values are never comma-split.
+  Label selectors are literal repeatable `--label` and `--not-label` values.
   Catalog deletion is immediate and removes the label from every Project task.
-  Create, add, and remove resolve every selector before one atomic task mutation.
-
-Selecting an execution target:
-  Task start and move never prompt. If a workflow requires target
-  selection, rerun the action with
-  `--execution-target none|head|default-branch|ref:<revision>`. The override
-  applies only to an unlocked task and does not edit its workflow.
 
 Starting ahead of dependencies:
-  Task start and executable manual move never prompt. If direct unsatisfied
-  dependencies require confirmation, inspect them with `kent task show <task>`
-  and rerun with `--ignore-dependencies` to proceed for that invocation.
+  If direct unsatisfied dependencies require confirmation, inspect them with `kent task show <task>` and rerun with `--ignore-dependencies` to proceed despite the risk of conflicts or confusion.
 
 Completing workflow work:
 For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Humans, and humans only, can pass `--force` and exactly one of `--session` or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted.
 If you are an agent, refer to the developer guidance you received for how to mark your task as completed if you are confused, or ask the User a question if stuck or unable to complete the task for any reason.
 
-Subcommands `interrupt`, `resume`, `approve`, `move`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
+Subcommand `delete` is available only to humans. Do not try to circumvent this restriction, and give the user the command they have to run instead.
 
 Listing tasks:
   Task listing is always project-scoped. `--project` defaults to the project
@@ -74,15 +61,5 @@ Listing tasks:
   positions belong to one workflow.
   `--sort` accepts `created`, `updated`, `status`, `column`, or `title`
   followed by `:asc` or `:desc`.
-  `--label-match` defaults to `any`; `all` requires every included and excluded
-  label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`,
-  or an explicit `--label-match`.
+  `--label-match` defaults to `any`; `all` requires every included and excluded label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`, or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.
-
-Searching tasks:
-  Search spans every Project unless one or more `--project` selectors narrow
-  it. A Project selector accepts a Project ID or registered workspace path.
-  The default search treats the query as a literal substring. `--fts5` treats
-  it as a raw FTS5 expression; `--case-sensitive` applies only to literal
-  search. `--include-comments` adds Task Comments to the searchable sources.
-  Repeatable or comma-separated `--status` filters primary typed Task status.

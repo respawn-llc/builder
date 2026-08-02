@@ -270,6 +270,8 @@ New tasks start in Backlog and follow the project's default workflow unless you 
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
 
+A workflow Session may start, interrupt, resume, approve, or manually move another Task. It cannot target its own Task; Kent derives that ownership from the invoking Session.
+
 ### Current Work, Sessions, And Activity
 
 Task detail shows the task's Current Nodes and retained Session count. A retained Session can outlive the Current Node that used it, so it remains available through the Session picker after the workflow moves on.
@@ -350,24 +352,14 @@ kent task move <task> <target-node-id> --ignore-dependencies
 
 ### Search Tasks
 
-Task search spans every Project unless `--project` narrows it. Project selectors accept a Project ID or registered workspace path and can repeat. `--status` accepts repeatable or comma-separated primary Task-status filters.
+Search Task titles and bodies from the CLI. Add `--include-comments` to search Task Comments, or `--project` and `--status` to narrow the result.
 
 ```bash
 kent task search "retry policy"
 kent task search "retry policy" --project . --status backlog,running
 ```
 
-Literal search is the default. It ignores search operators and requires at least one searchable trigram. `--case-sensitive` requires exact original case and diacritics. `--include-comments` adds Task Comments.
-
-```bash
-kent task search "RetryPolicy" --case-sensitive --include-comments
-```
-
-`--fts5` accepts a raw FTS5 expression with `title`, `body`, and `comment` columns. `--case-sensitive` cannot be combined with `--fts5`. Use `--context` for literal context or raw snippet budget. Continue a breadth-first result stream with the reported zero-based `--offset`; index changes between requests can repeat or skip hits. `--json` returns grouped structured results.
-
-```bash
-kent task search 'title:"retry policy"' --fts5 --page-size 20 --json
-```
+Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
 
 ### Complete Work From The CLI
 

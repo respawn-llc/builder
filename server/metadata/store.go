@@ -2101,24 +2101,35 @@ func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, p
 // SessionHasWorkflowTask reports whether direct Session ownership links the
 // Session to a retained workflow Task.
 func (s *Store) SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error) {
+	taskID, err := s.WorkflowTaskIDForSession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return taskID != nil, nil
+}
+
+// WorkflowTaskIDForSession resolves the direct workflow Task ownership of a
+// Session. A Session without Task ownership returns nil.
+func (s *Store) WorkflowTaskIDForSession(ctx context.Context, sessionID string) (*string, error) {
 	if s == nil || s.queries == nil {
-		return false, errors.New("metadata store is required")
+		return nil, errors.New("metadata store is required")
 	}
 	id := strings.TrimSpace(sessionID)
 	if id == "" {
-		return false, errors.New("session id is required")
+		return nil, errors.New("session id is required")
 	}
 	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("list session workflow task ids: %w", err)
+		return nil, fmt.Errorf("list session workflow task ids: %w", err)
 	}
 	if len(taskIDs) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
-		return false, fmt.Errorf("session %q has invalid workflow task ownership", id)
+		return nil, fmt.Errorf("session %q has invalid workflow task ownership", id)
 	}
-	return true, nil
+	taskID := taskIDs[0].String
+	return &taskID, nil
 }
 
 func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID string) (sqlitegen.GetSessionExecutionTargetByIDRow, error) {

@@ -41,6 +41,80 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	for _, request := range []interface{ Validate() error }{
+		WorkflowTaskStartRequest{
+			TaskID:            "task",
+			InvokingSessionID: &sessionID,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
+		},
+		WorkflowTaskApproveRequest{
+			ApprovalID:        "approval",
+			InvokingSessionID: &sessionID,
+		},
+		WorkflowTaskMoveRequest{
+			TaskID:            "task",
+			InvokingSessionID: &sessionID,
+			TargetNodeID:      "node",
+		},
+		WorkflowTaskResumeRequest{
+			TaskID:            "task",
+			InvokingSessionID: &sessionID,
+		},
+		WorkflowTaskInterruptRequest{
+			TaskID:            "task",
+			InvokingSessionID: &sessionID,
+		},
+	} {
+		if err := request.Validate(); err != nil {
+			t.Fatalf("%T valid invoking Session rejected: %v", request, err)
+		}
+	}
+
+	zero := runtimeids.SessionID{}
+	for _, request := range []interface{ Validate() error }{
+		WorkflowTaskStartRequest{
+			TaskID:            "task",
+			InvokingSessionID: &zero,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
+		},
+		WorkflowTaskApproveRequest{
+			ApprovalID:        "approval",
+			InvokingSessionID: &zero,
+		},
+		WorkflowTaskMoveRequest{
+			TaskID:            "task",
+			InvokingSessionID: &zero,
+			TargetNodeID:      "node",
+		},
+		WorkflowTaskResumeRequest{
+			TaskID:            "task",
+			InvokingSessionID: &zero,
+		},
+		WorkflowTaskInterruptRequest{
+			TaskID:            "task",
+			InvokingSessionID: &zero,
+		},
+	} {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("%T accepted zero invoking Session", request)
+		}
+	}
+}
+
+func TestWorkflowTaskMutationSelfTargetErrorRoundTripsRPCData(t *testing.T) {
+	original := &WorkflowTaskMutationSelfTargetError{TaskID: "task-1"}
+	decoded := DecodeWorkflowTaskMutationSelfTargetError(original.RPCErrorData(), original.Error())
+	var target *WorkflowTaskMutationSelfTargetError
+	if !errors.As(decoded, &target) || target.TaskID != original.TaskID {
+		t.Fatalf("decoded error = %#v, want self-target task %q", decoded, original.TaskID)
+	}
+	if original.RPCErrorCode() != protocol.ErrCodeWorkflowTaskMutationSelfTarget {
+		t.Fatalf("RPC error code = %d", original.RPCErrorCode())
+	}
+}
+
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{

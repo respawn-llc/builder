@@ -67,6 +67,54 @@ func TestAddTaskDependencySameProjectCrossWorkflowTouchesBothTasks(t *testing.T)
 	}
 }
 
+func TestTaskDependencyMutationsAdvanceCollidingTimestamps(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	blocker := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Blocker", Body: "Body"})
+	blocked := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Blocked", Body: "Body"})
+	pinned := time.Now().UTC().UnixMilli()
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET updated_at_unix_ms = ?
+		WHERE id IN (?, ?)
+	`, pinned, blocker.ID, blocked.ID); err != nil {
+		t.Fatalf("pin task timestamps: %v", err)
+	}
+	store.now = func() time.Time { return time.UnixMilli(pinned) }
+
+	if _, err := store.AddTaskDependency(ctx, TaskDependencyAddRequest{BlockerTaskID: blocker.ID, BlockedTaskID: blocked.ID}); err != nil {
+		t.Fatalf("AddTaskDependency: %v", err)
+	}
+	for _, taskID := range []workflow.TaskID{blocker.ID, blocked.ID} {
+		if got := taskUpdatedAt(t, store, taskID); got != pinned+1 {
+			t.Fatalf("task %q timestamp after add = %d, want %d", taskID, got, pinned+1)
+		}
+	}
+
+	store.now = func() time.Time { return time.UnixMilli(pinned + 1) }
+	if _, err := store.RemoveTaskDependency(ctx, TaskDependencyRemoveRequest{BlockerTaskID: blocker.ID, BlockedTaskID: blocked.ID}); err != nil {
+		t.Fatalf("RemoveTaskDependency: %v", err)
+	}
+	for _, taskID := range []workflow.TaskID{blocker.ID, blocked.ID} {
+		if got := taskUpdatedAt(t, store, taskID); got != pinned+2 {
+			t.Fatalf("task %q timestamp after remove = %d, want %d", taskID, got, pinned+2)
+		}
+	}
+
+	store.now = func() time.Time { return time.UnixMilli(pinned + 2) }
+	if _, err := store.AddTaskDependency(ctx, TaskDependencyAddRequest{BlockerTaskID: blocker.ID, BlockedTaskID: blocked.ID}); err != nil {
+		t.Fatalf("re-add dependency: %v", err)
+	}
+	store.now = func() time.Time { return time.UnixMilli(pinned + 3) }
+	if _, err := store.DeleteTask(ctx, blocked.ID); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	if got := taskUpdatedAt(t, store, blocker.ID); got != pinned+4 {
+		t.Fatalf("surviving task timestamp after dependency deletion = %d, want %d", got, pinned+4)
+	}
+}
+
 func TestAddTaskDependencyIsIdempotentBeforeAndAtTheLimit(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

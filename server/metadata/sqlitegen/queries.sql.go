@@ -224,6 +224,29 @@ func (q *Queries) AdmitSerialCurrentNode(ctx context.Context, arg AdmitSerialCur
 	return result.RowsAffected()
 }
 
+const advanceTaskUpdatedAt = `-- name: AdvanceTaskUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    ?1
+)
+WHERE id = ?2
+`
+
+type AdvanceTaskUpdatedAtParams struct {
+	UpdatedAtUnixMs interface{}
+	TaskID          string
+}
+
+func (q *Queries) AdvanceTaskUpdatedAt(ctx context.Context, arg AdvanceTaskUpdatedAtParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, advanceTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
+	err = recordQueryError(ctx, err, advanceTaskUpdatedAt, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const allocateProjectTaskSequence = `-- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET
@@ -8196,12 +8219,15 @@ func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAt
 
 const touchTasksUpdatedAt = `-- name: TouchTasksUpdatedAt :execrows
 UPDATE tasks
-SET updated_at_unix_ms = ?1
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    ?1
+)
 WHERE id IN (/*SLICE:task_ids*/?)
 `
 
 type TouchTasksUpdatedAtParams struct {
-	UpdatedAtUnixMs int64
+	UpdatedAtUnixMs interface{}
 	TaskIds         []string
 }
 

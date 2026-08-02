@@ -798,6 +798,47 @@ func DecodeWorkflowTaskCreateConflictError(data json.RawMessage, message string)
 	return &WorkflowTaskCreateConflictError{Reason: envelope.Reason}
 }
 
+type WorkflowTaskMutationSelfTargetError struct {
+	TaskID string
+}
+
+func (e *WorkflowTaskMutationSelfTargetError) Error() string {
+	if e == nil {
+		return "workflow task mutation self-target denied"
+	}
+	return fmt.Sprintf("workflow task mutation self-target denied for task %q", e.TaskID)
+}
+
+func (e *WorkflowTaskMutationSelfTargetError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskMutationSelfTarget
+}
+
+func (e *WorkflowTaskMutationSelfTargetError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type   string `json:"type"`
+		TaskID string `json:"task_id"`
+	}{
+		Type:   "workflow_task_mutation_self_target_error",
+		TaskID: e.TaskID,
+	})
+}
+
+func DecodeWorkflowTaskMutationSelfTargetError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type   string `json:"type"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Type != "workflow_task_mutation_self_target_error" ||
+		strings.TrimSpace(envelope.TaskID) == "" {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return &WorkflowTaskMutationSelfTargetError{TaskID: envelope.TaskID}
+}
+
 type WorkflowTaskUpdateRequest struct {
 	TaskID            string  `json:"task_id"`
 	Title             *string `json:"title,omitempty"`
@@ -811,6 +852,7 @@ type WorkflowTaskUpdateResponse struct {
 
 type WorkflowTaskStartRequest struct {
 	TaskID                     string                            `json:"task_id"`
+	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
@@ -834,7 +876,8 @@ type WorkflowTaskCurrentNode struct {
 }
 
 type WorkflowTaskResumeRequest struct {
-	TaskID string `json:"task_id"`
+	TaskID            string                `json:"task_id"`
+	InvokingSessionID *runtimeids.SessionID `json:"invoking_session_id,omitempty"`
 }
 
 type WorkflowTaskResumeResponse struct {
@@ -842,7 +885,8 @@ type WorkflowTaskResumeResponse struct {
 }
 
 type WorkflowTaskApproveRequest struct {
-	ApprovalID string `json:"approval_id"`
+	ApprovalID        string                `json:"approval_id"`
+	InvokingSessionID *runtimeids.SessionID `json:"invoking_session_id,omitempty"`
 }
 
 type WorkflowTaskApproveResponse struct {
@@ -858,6 +902,7 @@ type WorkflowTaskApproveApplied struct {
 
 type WorkflowTaskMoveRequest struct {
 	TaskID                     string                            `json:"task_id"`
+	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	TargetNodeID               string                            `json:"target_node_id"`
 	OutputValues               map[string]string                 `json:"output_values,omitempty"`
 	Commentary                 string                            `json:"commentary,omitempty"`
@@ -946,9 +991,10 @@ type WorkflowTaskDeleteRequest struct {
 }
 
 type WorkflowTaskInterruptRequest struct {
-	TaskID    string `json:"task_id"`
-	SessionID string `json:"session_id,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	TaskID            string                `json:"task_id"`
+	InvokingSessionID *runtimeids.SessionID `json:"invoking_session_id,omitempty"`
+	SessionID         string                `json:"session_id,omitempty"`
+	Reason            string                `json:"reason,omitempty"`
 }
 
 type WorkflowTaskInterruptResponse struct {
@@ -2654,6 +2700,9 @@ func (r WorkflowTaskStartRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
+	if err := validateWorkflowTaskInvokingSession(r.InvokingSessionID); err != nil {
+		return err
+	}
 	if err := r.SetupOperationID.Validate(); err != nil {
 		return err
 	}
@@ -2664,19 +2713,35 @@ func (r WorkflowTaskStartRequest) Validate() error {
 }
 
 func (r WorkflowTaskResumeRequest) Validate() error {
-	return validateRequired("task_id", r.TaskID)
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return validateWorkflowTaskInvokingSession(r.InvokingSessionID)
 }
 
 func (r WorkflowTaskApproveRequest) Validate() error {
-	return validateRequired("approval_id", r.ApprovalID)
+	if err := validateRequired("approval_id", r.ApprovalID); err != nil {
+		return err
+	}
+	return validateWorkflowTaskInvokingSession(r.InvokingSessionID)
 }
 
 func (r WorkflowTaskMoveRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
 		return err
 	}
+	if err := validateWorkflowTaskInvokingSession(r.InvokingSessionID); err != nil {
+		return err
+	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
+	}
+	return nil
+}
+
+func validateWorkflowTaskInvokingSession(sessionID *runtimeids.SessionID) error {
+	if sessionID != nil && sessionID.IsZero() {
+		return workflowRequestError(WorkflowRequestErrorRequired, "invoking_session_id", "invoking_session_id is required when supplied")
 	}
 	return nil
 }
@@ -2719,7 +2784,10 @@ func (r WorkflowTaskDeleteRequest) Validate() error {
 }
 
 func (r WorkflowTaskInterruptRequest) Validate() error {
-	return validateRequired("task_id", r.TaskID)
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return validateWorkflowTaskInvokingSession(r.InvokingSessionID)
 }
 
 func validateWorkflowTaskCompleteActor(r WorkflowTaskCompleteRequest) error {
