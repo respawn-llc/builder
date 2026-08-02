@@ -2,16 +2,22 @@ import { useCallback, type KeyboardEvent as ReactKeyboardEvent, type KeyboardEve
 import type { NativePlatform } from "@app/native-bridge";
 import { useAppServices } from "./useAppServices";
 type TextFieldSubmitKeyEvent = Readonly<{
-  ctrlKey: boolean; defaultPrevented: boolean; isComposing?: boolean | undefined; key: string; metaKey: boolean;
-  nativeEvent?: Readonly<{ isComposing?: boolean | undefined }> | undefined; preventDefault(): void; repeat: boolean;
+  ctrlKey: boolean;
+  defaultPrevented: boolean;
+  isComposing?: boolean | undefined;
+  key: string;
+  metaKey: boolean;
+  nativeEvent?: Readonly<{ isComposing?: boolean | undefined }> | undefined;
+  preventDefault(): void;
+  repeat: boolean;
   stopPropagation(): void;
 }>;
 type DirectShortcutOptions = Readonly<{ kind: "direct"; action: (() => void) | null; available: boolean }>;
 type FormShortcutOptions = Readonly<{ kind: "form"; available: boolean }>;
+export function useTextFieldSubmitShortcut(options: DirectShortcutOptions): KeyboardEventHandler<HTMLElement>;
 export function useTextFieldSubmitShortcut(
-  options: DirectShortcutOptions,
-): KeyboardEventHandler<HTMLElement>;
-export function useTextFieldSubmitShortcut(options: FormShortcutOptions): KeyboardEventHandler<HTMLFormElement>;
+  options: FormShortcutOptions,
+): KeyboardEventHandler<HTMLFormElement>;
 export function useTextFieldSubmitShortcut(
   options: DirectShortcutOptions | FormShortcutOptions,
 ): KeyboardEventHandler<HTMLElement | HTMLFormElement> {
@@ -30,7 +36,10 @@ export function useTextFieldSubmitShortcut(
 }
 
 export function isTextFieldSubmitShortcut(
-  event: Pick<TextFieldSubmitKeyEvent, "ctrlKey" | "isComposing" | "key" | "metaKey" | "nativeEvent" | "repeat">,
+  event: Pick<
+    TextFieldSubmitKeyEvent,
+    "ctrlKey" | "isComposing" | "key" | "metaKey" | "nativeEvent" | "repeat"
+  >,
   platform: NativePlatform,
 ): boolean {
   if (event.key !== "Enter" || event.isComposing === true || event.nativeEvent?.isComposing === true) {

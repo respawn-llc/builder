@@ -386,10 +386,7 @@ export function PropertiesIsland({
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-        <TaskPropertyLine
-          label={t("task.sessions")}
-          value={detail.retainedSessionCount.toString()}
-        />
+        <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
@@ -491,9 +488,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
             </Button>
           ))
         : null}
-      {openError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p>
-      ) : null}
+      {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>
   );
 }
