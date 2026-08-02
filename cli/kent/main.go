@@ -16,6 +16,7 @@ import (
 	"core/cli/app"
 	"core/prompts"
 	"core/shared/config"
+	"core/shared/imagefileio"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -52,6 +53,7 @@ var runLiveStopApp = app.RunLiveStop
 var runLiveWaitApp = app.RunLiveWait
 
 func main() {
+	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	redirectServiceLogs()
 	if exitCode := rootCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); exitCode != 0 {
 		os.Exit(exitCode)

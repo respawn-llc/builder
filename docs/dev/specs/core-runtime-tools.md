@@ -53,6 +53,7 @@
 - Outside-workspace edits require approval unless `allow_non_cwd_edits=true`; the default is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
 - `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes are blocked. Outside-workspace image reads use the same approval policy as edits.
 - Approved outside-workspace image reads appear in run logs with the requested and resolved paths.
+- `view_image` opens and reads each local file in an isolated worker. Kent terminates the worker and returns a recoverable tool error when opening or reading takes longer than 10 seconds or the Agent Step is interrupted.
 - When a successful patch cannot accurately describe its whole-file deletion count, Kent never invents a count or reverses the filesystem change. Debug mode fails fast with diagnostics. Production preserves the successful path-only result, records an operator diagnostic excluded from model context, and continues.
 - For supported non-raw raster images of at least 100 KiB, `view_image` attempts JPEG or WEBP re-encoding after validation. Kent keeps the validated original when optimization fails or is not smaller, and always enforces the attachment-size limit.
 

@@ -26,6 +26,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
+	"core/shared/imagefileio"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -34,6 +35,11 @@ import (
 
 	"core/shared/sessioncontract"
 )
+
+func TestMain(m *testing.M) {
+	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	os.Exit(m.Run())
+}
 
 type mismatchedDeletionPresentationHandler struct{}
 

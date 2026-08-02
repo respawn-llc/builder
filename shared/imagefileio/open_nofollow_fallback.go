@@ -1,6 +1,6 @@
 //go:build !darwin && !linux && !windows
 
-package readimage
+package imagefileio
 
 import (
 	"errors"
