@@ -9,13 +9,8 @@ import (
 	"core/shared/sessionenv"
 )
 
-func isAgentShell() bool {
-	_, ok := sessionenv.LookupSessionID(os.LookupEnv)
-	return ok
-}
-
 func denyAgentHumanOnlyTaskAction(stderr io.Writer) bool {
-	if !isAgentShell() {
+	if _, ok := sessionenv.LookupSessionID(os.LookupEnv); !ok {
 		return false
 	}
 	fmt.Fprintln(stderr, prompts.WorkflowHumanOnlyTaskActionDeniedPrompt)

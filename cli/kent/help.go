@@ -204,24 +204,14 @@ var (
 	detachUsage             = commandUsage{helpFile: "detach.txt", includeEmbeddedFlags: true}
 	projectListUsage        = commandUsage{helpFile: "project_list.txt"}
 	projectCreateUsage      = commandUsage{helpFile: "project_create.txt", includeEmbeddedFlags: true}
-	projectDeleteUsage      = leafCommandUsage(
-		config.Command+" project delete <project-id> [--confirm] [--json]",
-		"Delete a Project by canonical ID.",
-		"",
-		"Deletion is non-interactive and requires --confirm.",
-		"Selection accepts only the canonical Project ID; --json emits one stable result envelope.",
-		"Agent shells are denied only when the Project contains unfinished work, including Backlog Tasks.",
-		"Task state may change before deletion is processed; server blockers remain authoritative.",
-		"Workspace files are never deleted.",
-	)
-	attachUsage           = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}
-	rebindUsage           = commandUsage{helpFile: "rebind.txt"}
-	serveUsage            = commandUsage{helpFile: "serve.txt", includeEmbeddedFlags: true}
-	serviceUsage          = commandUsage{helpFile: "service.txt"}
-	serviceStatusUsage    = commandUsage{helpFile: "service_status.txt", includeEmbeddedFlags: true}
-	serviceInstallUsage   = commandUsage{helpFile: "service_install.txt", includeEmbeddedFlags: true}
-	serviceUninstallUsage = commandUsage{helpFile: "service_uninstall.txt", includeEmbeddedFlags: true}
-	serviceRestartUsage   = commandUsage{helpFile: "service_restart.txt", includeEmbeddedFlags: true}
+	attachUsage             = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}
+	rebindUsage             = commandUsage{helpFile: "rebind.txt"}
+	serveUsage              = commandUsage{helpFile: "serve.txt", includeEmbeddedFlags: true}
+	serviceUsage            = commandUsage{helpFile: "service.txt"}
+	serviceStatusUsage      = commandUsage{helpFile: "service_status.txt", includeEmbeddedFlags: true}
+	serviceInstallUsage     = commandUsage{helpFile: "service_install.txt", includeEmbeddedFlags: true}
+	serviceUninstallUsage   = commandUsage{helpFile: "service_uninstall.txt", includeEmbeddedFlags: true}
+	serviceRestartUsage     = commandUsage{helpFile: "service_restart.txt", includeEmbeddedFlags: true}
 )
 
 var (

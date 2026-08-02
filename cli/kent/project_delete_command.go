@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 )
 
 type projectDeleteOperations interface {
@@ -53,7 +55,7 @@ type projectDeleteJSONEnvelope struct {
 }
 
 func projectDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" project delete", stderr, projectDeleteUsage)
+	fs := newCommandFlagSet(config.Command+" project delete", stderr, projectUsage)
 	confirm := fs.Bool("confirm", false, "confirm project deletion")
 	jsonOut := fs.Bool("json", false, "write a stable JSON envelope")
 	positionals, ok, exitCode := parseInterspersedPositionals(fs, args)
@@ -78,7 +80,8 @@ func projectDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
-	outcome := runProjectDeleteUseCase(ctx, remote, projectID, *confirm, isAgentShell())
+	_, agent := sessionenv.LookupSessionID(os.LookupEnv)
+	outcome := runProjectDeleteUseCase(ctx, remote, projectID, *confirm, agent)
 	exitCode = writeProjectDeleteOutcome(stdout, stderr, outcome, *jsonOut)
 	if closeErr := closeCommandRemote(remote, "project deletion", nil); closeErr != nil {
 		fmt.Fprintln(stderr, closeErr)
