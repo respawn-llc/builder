@@ -24,6 +24,10 @@ func (sessionLaunchRuntimeClient) Generate(context.Context, llm.Request) (llm.Re
 	return llm.Response{}, errors.New("unexpected model request")
 }
 
+func (sessionLaunchRuntimeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()

@@ -862,6 +862,10 @@ func (c *rollbackInterruptBlockingClient) Generate(ctx context.Context, _ llm.Re
 	return llm.Response{}, ctx.Err()
 }
 
+func (*rollbackInterruptBlockingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func detailTestRollbackUserRow(text, rollbackTargetID string) clientui.TranscriptCommittedRow {
 	target := rollbackTargetID
 	row := detailTestUserRow(text)

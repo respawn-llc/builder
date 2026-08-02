@@ -59,13 +59,11 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	sort.Slice(executions, func(i, j int) bool {
 		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
 	})
-	running := make([]*execution, 0, len(executions))
+	locked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	for _, execution := range executions {
 		switch execution.phase {
 		case executionPhaseRunning:
-			execution.prompts.mu.Lock()
-			running = append(running, execution)
 			selection.Interruptible = append(selection.Interruptible, executionHandle{execution: execution})
 		case executionPhaseQueued:
 			selection.Queued = append(selection.Queued, executionHandle{execution: execution})
@@ -74,10 +72,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		default:
 			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
 		}
+		execution.prompts.mu.Lock()
+		locked = append(locked, execution)
 	}
 	hasQuestion := false
 	hasApproval := false
-	for _, execution := range running {
+	for _, execution := range locked {
 		for _, entry := range execution.prompts.pending {
 			if entry == nil {
 				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
@@ -90,8 +90,8 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		}
 	}
 	if hasQuestion || hasApproval {
-		for _, locked := range running {
-			locked.prompts.mu.Unlock()
+		for _, execution := range locked {
+			execution.prompts.mu.Unlock()
 		}
 		if hasQuestion {
 			return ErrWorkflowQuestionPending
@@ -100,23 +100,23 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	}
 	err := operation(selection)
 	if err != nil {
-		for _, locked := range running {
-			locked.prompts.mu.Unlock()
+		for _, execution := range locked {
+			execution.prompts.mu.Unlock()
 		}
 		return err
 	}
 	resolved := make([]struct {
 		store     *executionPromptStore
 		snapshots []ExecutionPromptSnapshot
-	}, 0, len(running))
-	for _, execution := range running {
+	}, 0, len(locked))
+	for _, execution := range locked {
 		resolved = append(resolved, struct {
 			store     *executionPromptStore
 			snapshots []ExecutionPromptSnapshot
 		}{store: &execution.prompts, snapshots: execution.prompts.closeLocked(context.Canceled)})
 	}
-	for _, locked := range running {
-		locked.prompts.mu.Unlock()
+	for _, execution := range locked {
+		execution.prompts.mu.Unlock()
 	}
 	a.mu.Unlock()
 	unlocked = true
