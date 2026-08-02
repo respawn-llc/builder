@@ -22,13 +22,7 @@ func (s promptCommandCatalogService) GetPromptCommandCatalog(context.Context, se
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, publicPromptCommandError(err)
 	}
-	response := serverapi.PromptCommandCatalogResponse{Commands: make([]serverapi.PromptCommandCatalogEntry, 0, len(entries))}
-	for _, entry := range entries {
-		response.Commands = append(response.Commands, serverapi.PromptCommandCatalogEntry{
-			Name:    entry.Name,
-			Preview: entry.Preview,
-		})
-	}
+	response := serverapi.PromptCommandCatalogResponse{Commands: append([]serverapi.PromptCommandCatalogEntry(nil), entries...)}
 	return response, response.Validate()
 }
 
@@ -85,16 +79,16 @@ func (e *promptCommandPublicError) Error() string {
 	return e.err.Error()
 }
 
-func (e *promptCommandPublicError) Unwrap() error {
-	return e.cause
-}
-
 func (e *promptCommandPublicError) As(target any) bool {
 	if typed, ok := target.(**serverapi.PromptCommandError); ok {
 		*typed = e.err
 		return true
 	}
-	return errors.As(e.cause, target)
+	return false
+}
+
+func (e *promptCommandPublicError) diagnosticCause() error {
+	return e.cause
 }
 
 func (e *promptCommandPublicError) RPCErrorCode() int {
@@ -107,16 +101,6 @@ func (e *promptCommandPublicError) RPCErrorData() json.RawMessage {
 
 func (s *Core) PromptCommandCatalogClientForProjectWorkspace(ctx context.Context, projectID, workspaceRoot string) (apicontract.PromptCommandCatalogService, error) {
 	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
-	return promptCommandCatalogService{
-		catalog: promptcommands.New(projectCtx.config.PersistenceRoot, projectCtx.projectRoot),
-	}, nil
-}
-
-func (s *Core) PromptCommandCatalogClientForProjectWorkspaceID(ctx context.Context, projectID, workspaceID string) (apicontract.PromptCommandCatalogService, error) {
-	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
 	if err != nil {
 		return nil, err
 	}

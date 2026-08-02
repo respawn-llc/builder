@@ -6,16 +6,13 @@ import (
 	"core/shared/runtimeinput"
 )
 
-type PromptCommandCatalogEntry struct {
-	Name    string
-	Preview string
-}
+type PromptCommandCatalogEntry = runtimeinput.PromptCommandCatalogEntry
 
 func NewDefaultRegistryWithPromptCatalog(entries []PromptCommandCatalogEntry) *Registry {
 	r := NewDefaultRegistry()
 	for _, entry := range entries {
 		name, err := runtimeinput.ParsePromptCommandName(entry.Name)
-		if err != nil || name.String() == "prompt:review" || name.String() == "prompt:init" {
+		if err != nil {
 			continue
 		}
 		commandName := name.String()

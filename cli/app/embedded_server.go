@@ -20,16 +20,6 @@ func (s *embeddedAppServer) PresentationTheme() string {
 	return theme.Resolve(s.Config().Settings.Theme)
 }
 
-func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context) (apicontract.PromptCommandCatalogService, error) {
-	if s == nil || s.inner == nil {
-		return nil, errors.New("embedded server is required")
-	}
-	if workspaceID := strings.TrimSpace(s.boundWorkspaceID); workspaceID != "" {
-		return s.inner.PromptCommandCatalogClientForProjectWorkspaceID(ctx, s.ProjectID(), workspaceID)
-	}
-	return s.inner.PromptCommandCatalogClientForProjectWorkspace(ctx, s.ProjectID(), s.inner.Config().WorkspaceRoot)
-}
-
 type appServerCore interface {
 	Close() error
 	OwnsServer() bool

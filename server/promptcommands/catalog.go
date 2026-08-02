@@ -2,12 +2,11 @@ package promptcommands
 
 import (
 	"strings"
+
+	"core/shared/runtimeinput"
 )
 
-type CatalogEntry struct {
-	Name    string `json:"name"`
-	Preview string `json:"preview"`
-}
+type CatalogEntry = runtimeinput.PromptCommandCatalogEntry
 
 func (s Service) Catalog() ([]CatalogEntry, error) {
 	if err := s.validateRoots(ErrorKindCatalogRead); err != nil {

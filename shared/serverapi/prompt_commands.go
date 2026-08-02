@@ -16,10 +16,7 @@ func (PromptCommandCatalogRequest) Validate() error {
 	return nil
 }
 
-type PromptCommandCatalogEntry struct {
-	Name    string `json:"name"`
-	Preview string `json:"preview"`
-}
+type PromptCommandCatalogEntry = runtimeinput.PromptCommandCatalogEntry
 
 type PromptCommandCatalogResponse struct {
 	Commands []PromptCommandCatalogEntry `json:"commands"`

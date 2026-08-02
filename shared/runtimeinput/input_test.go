@@ -17,7 +17,7 @@ func TestCommandTokenParsesNamespaceStructurally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token.Namespace != "prompt" || token.Identifier != "review" {
+	if token.Namespace != NamespacePrompt || token.Identifier == nil || *token.Identifier != "review" {
 		t.Fatalf("token = %+v", token)
 	}
 	if _, err := ParsePromptCommandName("prompt:Review"); err == nil {

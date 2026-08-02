@@ -14,12 +14,13 @@ import (
 func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea.Model, tea.Cmd) {
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
+	_, reservedPrompt := promptCommandToken(text)
 	if selection.shouldAutocomplete() {
 		m.replaceMainInputAtEnd(selection.autocompleteText())
 		return true, m, nil
 	}
 	if !selection.hasCommand || selection.commandText() == "" {
-		if promptCommandToken(text) != "" {
+		if reservedPrompt {
 			return true, m, m.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 		return false, m, nil
@@ -34,8 +35,9 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, tea.Model, tea.Cmd) {
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
+	_, reservedPrompt := promptCommandToken(text)
 	if !selection.hasCommand {
-		if promptCommandToken(text) != "" {
+		if reservedPrompt {
 			return true, m, m.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 		return false, m, nil
@@ -67,16 +69,16 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 	return false, m, nil
 }
 
-func promptCommandToken(text string) string {
+func promptCommandToken(text string) (runtimeinput.CommandToken, bool) {
 	parsed := parseSlashCommandInput(text)
 	if !parsed.active || parsed.token == "" {
-		return ""
+		return runtimeinput.CommandToken{}, false
 	}
 	token, err := runtimeinput.ParseCommandToken(parsed.token)
-	if err == nil && token.Namespace == "prompt" {
-		return "prompt:" + strings.ToLower(strings.TrimSpace(token.Identifier))
+	if err == nil && token.Namespace == runtimeinput.NamespacePrompt {
+		return token, true
 	}
-	return ""
+	return runtimeinput.CommandToken{}, false
 }
 
 func (m *uiModel) clearCommandInput(command commands.Command, draft *tuiinput.EditorSnapshot) {

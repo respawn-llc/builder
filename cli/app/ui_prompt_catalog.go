@@ -10,6 +10,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func promptCatalogSnapshot(response serverapi.PromptCommandCatalogResponse) ([]commands.PromptCommandCatalogEntry, error) {
+	if err := response.Validate(); err != nil {
+		return nil, err
+	}
+	return append([]commands.PromptCommandCatalogEntry(nil), response.Commands...), nil
+}
+
 func (m *uiModel) removePromptCatalogEntry(name string) {
 	if m == nil {
 		return
@@ -41,12 +48,9 @@ func (m *uiModel) startPromptCatalogRefresh(name string) tea.Cmd {
 		if err != nil {
 			return promptCatalogRefreshDoneMsg{token: token, err: err}
 		}
-		if err := response.Validate(); err != nil {
+		entries, err := promptCatalogSnapshot(response)
+		if err != nil {
 			return promptCatalogRefreshDoneMsg{token: token, err: err}
-		}
-		entries := make([]commands.PromptCommandCatalogEntry, 0, len(response.Commands))
-		for _, entry := range response.Commands {
-			entries = append(entries, commands.PromptCommandCatalogEntry{Name: entry.Name, Preview: entry.Preview})
 		}
 		return promptCatalogRefreshDoneMsg{token: token, entries: entries}
 	}

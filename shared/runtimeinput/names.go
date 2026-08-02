@@ -10,26 +10,37 @@ type PromptCommandName struct {
 	Identifier string
 }
 
+const NamespacePrompt = "prompt"
+
 type CommandToken struct {
 	Namespace  string
-	Identifier string
+	Identifier *string
 }
 
 func ParseCommandToken(raw string) (CommandToken, error) {
 	namespace, identifier, found := strings.Cut(strings.TrimSpace(raw), ":")
-	if !found || namespace == "" || identifier == "" {
-		return CommandToken{}, fmt.Errorf("command token %q must contain a namespace and identifier", raw)
+	if !found || namespace == "" {
+		return CommandToken{}, fmt.Errorf("command token %q must contain a namespace", raw)
 	}
-	return CommandToken{Namespace: namespace, Identifier: identifier}, nil
+	token := CommandToken{Namespace: strings.ToLower(namespace)}
+	if identifier != "" {
+		token.Identifier = &identifier
+	}
+	return token, nil
 }
 
 func ParsePromptCommandName(raw string) (PromptCommandName, error) {
 	token, err := ParseCommandToken(raw)
-	if err != nil || token.Namespace != "prompt" {
+	if err != nil || token.Namespace != NamespacePrompt || token.Identifier == nil {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q must use the prompt namespace", raw)
 	}
-	normalized := NormalizeIdentifier(token.Identifier)
-	if normalized == "" || normalized != token.Identifier {
+	rawNamespace, _, _ := strings.Cut(strings.TrimSpace(raw), ":")
+	if rawNamespace != NamespacePrompt {
+		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
+	}
+	identifier := *token.Identifier
+	normalized := NormalizeIdentifier(identifier)
+	if normalized == "" || normalized != identifier {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
 	}
 	return PromptCommandName{Identifier: normalized}, nil
@@ -37,9 +48,9 @@ func ParsePromptCommandName(raw string) (PromptCommandName, error) {
 
 func (n PromptCommandName) String() string {
 	if n.Identifier == "" {
-		return ""
+		panic("invalid empty prompt command name")
 	}
-	return "prompt:" + n.Identifier
+	return NamespacePrompt + ":" + n.Identifier
 }
 
 func NormalizeIdentifier(raw string) string {

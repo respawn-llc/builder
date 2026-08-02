@@ -25,7 +25,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		if err != nil {
 			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		m.rememberPromptHistoryLocally(canonical)
+		m.rememberPromptCommandHistoryLocally(canonical)
 		return m, c.startTypedSubmissionWithPreSubmitQueuePosition(
 			canonical,
 			runtimeinput.Command(invocation.Name, invocation.Arguments),

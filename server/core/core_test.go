@@ -101,7 +101,7 @@ func TestPromptCommandCatalogUsesRequestedWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func TestPromptCommandCatalogPreservesFilesystemCauseInternallyAndRedactsWireError(t *testing.T) {
+func TestPromptCommandCatalogRedactsFilesystemCauseAtClientBoundary(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
@@ -127,9 +127,9 @@ func TestPromptCommandCatalogPreservesFilesystemCauseInternallyAndRedactsWireErr
 		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
 	}
 	_, err = client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
-	var pathErr *os.PathError
-	if !errors.As(err, &pathErr) {
-		t.Fatalf("catalog error = %T %v, want wrapped filesystem cause", err, err)
+	var typed *serverapi.PromptCommandError
+	if !errors.As(err, &typed) {
+		t.Fatalf("catalog error = %T %v, want typed prompt command error", err, err)
 	}
 	if strings.Contains(err.Error(), workspace) {
 		t.Fatalf("catalog error exposed workspace path: %v", err)

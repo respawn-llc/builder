@@ -73,6 +73,7 @@ func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 func TestPromptCatalogProxiesExposeOnlyPreviewAndTypedInvocation(t *testing.T) {
 	registry := NewDefaultRegistryWithPromptCatalog([]PromptCommandCatalogEntry{
 		{Name: "prompt:review_plan", Preview: "Review **changed** files"},
+		{Name: "prompt:review", Preview: "server review"},
 	})
 	command, ok := registry.Command("/prompt:review_plan")
 	if !ok || command.Description != "Review **changed** files" {
@@ -84,6 +85,9 @@ func TestPromptCatalogProxiesExposeOnlyPreviewAndTypedInvocation(t *testing.T) {
 	}
 	if result.PromptCommand.Name != "prompt:review_plan" || result.PromptCommand.Arguments != "src" {
 		t.Fatalf("invocation = %+v", result.PromptCommand)
+	}
+	if command, ok := registry.Command("/prompt:review"); !ok || command.Description != "server review" {
+		t.Fatalf("namespaced built-in collision = %+v, %v", command, ok)
 	}
 }
 
