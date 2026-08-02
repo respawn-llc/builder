@@ -228,6 +228,7 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "project label", request: label},
 		{name: "project label catalog", request: catalog},
 		{name: "project label catalog response", request: WorkflowProjectLabelCatalogResponse{Catalog: catalog}},
+		{name: "project label reorder request", request: WorkflowProjectLabelReorderRequest{ProjectID: "project-1", LabelIDs: []string{workflowLabelIDAlpha}}},
 		{name: "project label create response", request: WorkflowProjectLabelCreateResponse{Label: label}},
 		{name: "project label rename response", request: WorkflowProjectLabelRenameResponse{Label: label}},
 		{name: "project label delete response", request: WorkflowProjectLabelDeleteResponse{LabelID: workflowLabelIDAlpha}},
@@ -256,6 +257,19 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "list item requires task ID", request: WorkflowTaskListItem{LabelIDs: []string{workflowLabelIDAlpha}}, field: "task_id", code: WorkflowRequestErrorRequired},
 		{name: "board card requires task ID", request: WorkflowBoardTaskCard{LabelIDs: []string{workflowLabelIDAlpha}}, field: "task_id", code: WorkflowRequestErrorRequired},
 	})
+}
+
+func TestWorkflowProjectLabelReorderedEventValidation(t *testing.T) {
+	event := WorkflowProjectEvent{
+		ProjectID:        stringPointerForTest("project-1"),
+		Resource:         WorkflowProjectEventResourceLabel,
+		Action:           WorkflowProjectEventActionReordered,
+		PrimaryEntityID:  "project-1",
+		OccurredAtUnixMs: 1,
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("reordered project label event validation: %v", err)
+	}
 }
 
 func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing.T) {
@@ -316,6 +330,30 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 			request: WorkflowTaskCreateRequest{ProjectID: projectID, Title: "Task", LabelIDs: []string{workflowLabelIDAlpha, workflowLabelIDAlpha}},
 			field:   "label_ids[1]",
 			code:    WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name:    "project label reorder requires project",
+			request: WorkflowProjectLabelReorderRequest{LabelIDs: []string{workflowLabelIDAlpha}},
+			field:   "project_id",
+			code:    WorkflowRequestErrorRequired,
+		},
+		{
+			name:    "project label reorder rejects duplicate IDs",
+			request: WorkflowProjectLabelReorderRequest{ProjectID: projectID, LabelIDs: []string{workflowLabelIDAlpha, workflowLabelIDAlpha}},
+			field:   "label_ids[1]",
+			code:    WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name:    "project label reorder rejects invalid ID",
+			request: WorkflowProjectLabelReorderRequest{ProjectID: projectID, LabelIDs: []string{"not-a-label-id"}},
+			field:   "label_ids[0]",
+			code:    WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name:    "project label reorder raw 101 IDs wins over malformed IDs",
+			request: WorkflowProjectLabelReorderRequest{ProjectID: projectID, LabelIDs: raw101},
+			field:   "label_ids",
+			code:    WorkflowRequestErrorTooLong,
 		},
 		{
 			name: "task label mutation rejects overlap",

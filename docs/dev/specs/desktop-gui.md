@@ -202,21 +202,25 @@
 - Filter changes apply immediately through server filtering while the chooser remains open. There is no Apply step. Existing cards remain visible without a replacement loading state until new content arrives. Active filters change each column count to the matching Task count.
 - Deleting a participating Label removes its included or excluded condition from the saved filter. Removing the last named Label condition clears the named restriction; deleting another Label does not change an active `No labels` filter.
 - One chooser manages filtering, Task Label assignment, and Label creation, renaming, and deletion. There is no separate Project Label page.
-- Search is case-insensitive substring matching with case-insensitive alphabetical results. When no exact case-insensitive name exists, offer `Create “…”`; creation immediately selects the Label for the invoking use.
+- Search is case-insensitive substring matching and preserves the Project's manual Label sequence. While search has text, the chooser hides reorder handles and does not permit reordering. When no exact case-insensitive name exists, offer `Create “…”`.
 - A Project permits at most 100 Labels. At the limit, search and selection remain available and creation explains its unavailability; deletion restores creation.
 - The chooser shows at most 10 scrolling result rows, keeps search and context controls visible, remains open through selection and management actions, and discards an uncommitted rename on close.
-- In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser enters the included state.
+- In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser remains neutral.
+- In the board filter chooser, `No labels` remains fixed before the Project Labels and has no reorder handle. Each Project Label has a six-dot reorder handle when at least two Project Labels exist.
+- Only the reorder handle starts a drag. Pointer dragging scrolls the result list near its vertical edges. Keyboard reordering keeps the destination in view and supports start, movement, drop, and cancellation.
+- Dragging previews the requested sequence. Dropping persists it once. The chooser immediately projects the requested sequence, disables Label catalog mutation controls and reorder handles while saving, adopts the authoritative response on success, and reloads the catalog with a reorder failure notification on failure.
+- While create, rename, delete, or reorder is pending in an open chooser, Label selection remains available but that chooser's Label catalog mutation controls and reorder handles are unavailable. Separate choosers and windows do not coordinate their requests.
 - Rename edits in place and can be committed or cancelled; validation failures remain inline. Deleting a Label requires confirmation and removes it from all Tasks.
-- Assignment omits OR/AND and `No labels` and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. Labels are neutral chips, ordered case-insensitively in the chooser, Task Detail, and board cards. Renaming can reposition them.
+- Assignment omits OR/AND and `No labels` and keeps binary row selection. It otherwise has the same chooser search and Label-management behavior. A Label created from an assignment chooser appears and becomes selected after creation succeeds. Labels are neutral chips ordered by the Project's manual Label sequence in the chooser, Task Detail, and board cards.
 - Board cards show fitting complete Labels in their footer and replace the last fitting position with `+N` when needed. Task Detail places Labels directly after Task ID; the entire Label value opens the chooser.
 - A board card lays out its dependency-progress chip before Label chips. Labels
   use only the remaining width and retain their existing `+N` behavior.
-- Labels can change in every Task state. The interface updates immediately, then adopts the server result; failures restore the prior state and show a persistent Retry error.
+- Task Label assignments can change in every Task state. Assignment changes update immediately, then adopt the server result; failures restore the prior state and show a persistent Retry error.
 
 ## Tasks
 
 - New Task requires title and accepts optional body, Project Labels, hidden source information, and source workspace. Workflow selection is outside the form. The workspace defaults to the opened workspace or Project default workspace. With one workspace, selection is shown but unavailable.
-- Selected existing Labels are assigned atomically with Task creation. Creating a Label during Task creation selects it immediately; it remains a Project Label if Task creation is cancelled.
+- Selected existing Labels are assigned atomically with Task creation. Creating a Label during Task creation selects it after Label creation succeeds; Create Task is unavailable while Label creation is pending. The Label remains in the Project if Task creation is cancelled or fails.
 - Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.

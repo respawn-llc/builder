@@ -74,16 +74,12 @@ export function BoardColumnDataOwner({
     }),
     [board.attachedWorkspaceCount, board.defaultWorkspaceID],
   );
-  const labelNamesByID = useMemo(
-    () => new Map(labelCatalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
-    [labelCatalog.data?.labels],
-  );
   const cardVMs = useMemo(
     () =>
       queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext, labelNamesByID))
+        .map((card) => toKanbanCardVM(card, workspaceContext, labelCatalog.data ?? null))
         .filter((card) => cardBelongsToColumn(column, card)),
-    [column, labelNamesByID, queryCards, workspaceContext],
+    [column, labelCatalog.data, queryCards, workspaceContext],
   );
   const {
     error,
@@ -206,11 +202,12 @@ export function BoardColumnDataOwner({
 
   useEffect(() => {
     const activeFilterGeneration = filterGeneration.snapshot.active.generation;
-    const cause: BoardColumnUpdateCause = hydratedFilterGenerationRef.current !== activeFilterGeneration
-      ? "hydration"
-      : paginationInFlightRef.current
-        ? "pagination"
-        : "domain";
+    const cause: BoardColumnUpdateCause =
+      hydratedFilterGenerationRef.current !== activeFilterGeneration
+        ? "hydration"
+        : paginationInFlightRef.current
+          ? "pagination"
+          : "domain";
     generationRef.current += 1;
     onReportColumnSnapshot(column.id, {
       cause,

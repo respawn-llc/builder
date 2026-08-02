@@ -1,3 +1,16 @@
+import type { ProjectLabel, ProjectLabelCatalog } from "@/api";
+
+export function orderedAssignedLabels(
+  catalog: ProjectLabelCatalog | null,
+  assignedLabelIDs: readonly string[],
+): readonly ProjectLabel[] {
+  if (catalog === null) {
+    return [];
+  }
+  const assigned = new Set(assignedLabelIDs);
+  return catalog.labels.filter((label) => assigned.has(label.id));
+}
+
 export {
   createLabelFilterState,
   reconcileLabelFilterState,

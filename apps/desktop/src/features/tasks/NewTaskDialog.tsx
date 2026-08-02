@@ -6,10 +6,15 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
-import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
+import {
+  LabelChooser,
+  ProjectLabelsProvider,
+  orderedAssignedLabels,
+  useProjectLabelCatalog,
+} from "@/shared/labels";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
 import { Badge, Button, Dialog, FieldShell, SelectField, TextArea, TextInput } from "@/ui";
@@ -161,6 +166,7 @@ function NewTaskFormContent({
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
+  const [labelCreatePending, setLabelCreatePending] = useState(false);
   const effectiveSelectedLabelIDs = useMemo(() => {
     if (catalog.data === undefined) {
       return selectedLabelIDs;
@@ -168,7 +174,7 @@ function NewTaskFormContent({
     const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
     return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
   }, [catalog.data, selectedLabelIDs]);
-  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID;
+  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
   const initialWorkspaceID = resolveInitialSourceWorkspaceID(
     initialSourceWorkspaceID,
@@ -181,23 +187,21 @@ function NewTaskFormContent({
     defaultValues: {
       title: "",
       body: "",
-      sourceWorkspaceID: initialWorkspaceID ?? "",
+      sourceWorkspaceID: initialWorkspaceID,
     },
   });
-  const canSubmit =
-    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID !== undefined;
 
   useEffect(() => {
-    if (!initializedRef.current && initialWorkspaceID !== undefined) {
+    if (!initializedRef.current && initialWorkspaceID.length > 0) {
       form.reset({ title: "", body: "", sourceWorkspaceID: initialWorkspaceID });
       initializedRef.current = true;
     }
   }, [form, initialWorkspaceID]);
   async function submit(values: NewTaskFormValues): Promise<void> {
-    if (!canSubmit) {
+    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
+    if (sourceWorkspaceID.length === 0) {
       return;
     }
-    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
       await createTask.mutateAsync({
@@ -227,16 +231,16 @@ function NewTaskFormContent({
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
   const displayedWorkspaceID =
-    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : (initialWorkspaceID ?? "");
-  const formShortcut = useTextFieldSubmitShortcut({
-    available: canSubmit,
-    kind: "form",
-  });
+    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
+  const disabled =
+    connection.phase !== "connected" ||
+    createTask.isPending ||
+    labelCreatePending ||
+    initialWorkspaceID.length === 0;
 
   return (
     <form
       className={cx("grid gap-[var(--space-3)]", className)}
-      onKeyDown={formShortcut}
       onSubmit={(event) => void form.handleSubmit(submit)(event)}
     >
       <TextInput
@@ -252,6 +256,7 @@ function NewTaskFormContent({
       />
       <NewTaskLabels
         disabled={connection.phase !== "connected"}
+        onCreatePendingChange={setLabelCreatePending}
         onSelectionChange={(labelID, selected) => {
           setSelectedLabelIDs((current) => {
             if (selected) {
@@ -293,7 +298,7 @@ function NewTaskFormContent({
       {createTask.error !== null ? (
         <p className="m-0 text-[var(--color-error)]">{errorMessage(createTask.error)}</p>
       ) : null}
-      <Button className="mx-auto w-full max-w-[400px]" disabled={!canSubmit} type="submit" variant="primary">
+      <Button className="mx-auto w-full max-w-[400px]" disabled={disabled} type="submit" variant="primary">
         {t("task.create")}
       </Button>
     </form>
@@ -302,18 +307,19 @@ function NewTaskFormContent({
 
 function NewTaskLabels({
   disabled,
+  onCreatePendingChange,
   onSelectionChange,
   selectedLabelIDs,
 }: Readonly<{
   disabled: boolean;
+  onCreatePendingChange(pending: boolean): void;
   onSelectionChange(labelID: string, selected: boolean): void;
   selectedLabelIDs: readonly string[];
 }>) {
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const inputID = useId();
-  const selected = new Set(selectedLabelIDs);
-  const labels = catalog.data?.labels.filter((label) => selected.has(label.id)) ?? [];
+  const labels = catalog.data === undefined ? [] : orderedAssignedLabels(catalog.data, selectedLabelIDs);
   return (
     <FieldShell
       errorId={`${inputID}-error`}
@@ -324,6 +330,7 @@ function NewTaskLabels({
       <LabelChooser
         invocation={{
           kind: "assignment",
+          onCreatePendingChange,
           selectedLabelIDs,
           onSelectionChange,
         }}
@@ -357,17 +364,17 @@ function NewTaskLabels({
 
 function resolveInitialSourceWorkspaceID(
   requestedWorkspaceID: string | undefined,
-  defaultWorkspaceID: string | undefined,
+  defaultWorkspaceID: string,
   workspaceItems: readonly { id: string }[],
-): string | undefined {
+): string {
   if (
     requestedWorkspaceID !== undefined &&
     workspaceItems.some((workspace) => workspace.id === requestedWorkspaceID)
   ) {
     return requestedWorkspaceID;
   }
-  if (defaultWorkspaceID !== undefined) {
+  if (defaultWorkspaceID.length > 0) {
     return defaultWorkspaceID;
   }
-  return workspaceItems[0]?.id;
+  return workspaceItems[0]?.id ?? "";
 }

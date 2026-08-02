@@ -3,6 +3,7 @@
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" },
-    { "path": "./packages/native-bridge" }
+    { "path": "./packages/native-bridge" },
+    { "path": "./packages/ui-kit" }
   ]
 }

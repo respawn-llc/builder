@@ -19,6 +19,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@app/native-bridge": ["./packages/native-bridge/src/index.ts"],
+      "@app/ui-kit": ["./packages/ui-kit/src/ReorderableList.tsx"],
       "@xyflow/react": ["./src/vendor/xyflow-react-types.ts"],
       "elkjs/lib/elk-api": ["./src/vendor/elkjs-types.ts"],
       "elkjs/lib/elk.bundled.js": ["./src/vendor/elkjs-bundled-types.ts"]
@@ -32,5 +33,5 @@
     "types": ["vitest/globals", "@testing-library/jest-dom/vitest"]
   },
   "include": ["src", "test"],
-  "references": [{ "path": "./packages/native-bridge" }]
+  "references": [{ "path": "./packages/native-bridge" }, { "path": "./packages/ui-kit" }]
 }

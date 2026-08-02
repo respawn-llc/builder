@@ -131,6 +131,28 @@ var (
 	ErrManualMoveNoSourcePosition = errors.New("manual move has no active placement or pending approval to move from")
 )
 
+type ProjectLabelReorderErrorReason string
+
+const (
+	ProjectLabelReorderWrongCount   ProjectLabelReorderErrorReason = "wrong_count"
+	ProjectLabelReorderDuplicateID  ProjectLabelReorderErrorReason = "duplicate_id"
+	ProjectLabelReorderUnknownID    ProjectLabelReorderErrorReason = "unknown_id"
+	ProjectLabelReorderWrongProject ProjectLabelReorderErrorReason = "wrong_project"
+)
+
+type ProjectLabelReorderError struct {
+	ProjectID string
+	LabelID   *string
+	Reason    ProjectLabelReorderErrorReason
+}
+
+func (e ProjectLabelReorderError) Error() string {
+	if e.LabelID == nil {
+		return fmt.Sprintf("project %q label reorder failed: %s", e.ProjectID, e.Reason)
+	}
+	return fmt.Sprintf("project %q label reorder failed for label %q: %s", e.ProjectID, *e.LabelID, e.Reason)
+}
+
 type ProjectLabelNotFoundError struct {
 	ProjectID string
 	LabelID   string

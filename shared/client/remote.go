@@ -480,6 +480,11 @@ func (c *Remote) ListWorkflowProjectLabels(ctx context.Context, req serverapi.Wo
 	return validateWorkflowResponse("list workflow project labels", response, err)
 }
 
+func (c *Remote) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelReorderRequest, serverapi.WorkflowProjectLabelCatalogResponse](c, ctx, protocol.MethodWorkflowProjectLabelReorder, req)
+	return validateWorkflowResponse("reorder workflow project labels", response, err)
+}
+
 func (c *Remote) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelRenameRequest, serverapi.WorkflowProjectLabelRenameResponse](c, ctx, protocol.MethodWorkflowProjectLabelRename, req)
 	return validateWorkflowResponse("rename workflow project label", response, err)

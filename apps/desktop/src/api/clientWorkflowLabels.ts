@@ -61,6 +61,21 @@ export async function createProjectLabel(
   );
 }
 
+export async function reorderProjectLabels(
+  transport: RpcTransport,
+  projectID: string,
+  labelIDs: readonly string[],
+): Promise<ProjectLabelCatalog> {
+  return parse(
+    "workflow.project.label.reorder",
+    projectLabelCatalogSchema,
+    await transport.call("workflow.project.label.reorder", {
+      project_id: projectID,
+      label_ids: labelIDs,
+    }),
+  );
+}
+
 export async function renameProjectLabel(
   transport: RpcTransport,
   projectID: string,
@@ -152,8 +167,7 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
       "workflow.task.list",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id:
-          input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+        workflow_id: input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],

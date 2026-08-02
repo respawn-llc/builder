@@ -1,10 +1,10 @@
-import { Check, Pencil, Trash2, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { Check, GripVertical, Pencil, Trash2, X } from "lucide-react";
+import { useCallback, useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
 import type { ProjectLabel } from "@/api";
-import { useTextFieldSubmitShortcut } from "@/app-facade";
+import type { ReorderableListItemRenderProps } from "@app/ui-kit";
 import {
   ActionableListRow,
   Button,
@@ -59,20 +59,12 @@ export function LabelRenameEditor({
   rename: RenameState;
 }>) {
   const { t } = useTranslation();
-  const canSubmit = !rename.pending;
-  const formShortcut = useTextFieldSubmitShortcut({
-    available: canSubmit,
-    kind: "form",
-  });
   return (
     <form
       className="grid gap-[var(--space-1)] rounded-[var(--radius-s)] bg-[var(--color-island-1)] p-[var(--space-1)]"
-      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        if (canSubmit) {
-          onCommit();
-        }
+        onCommit();
       }}
       role="listitem"
     >
@@ -81,14 +73,14 @@ export function LabelRenameEditor({
           aria-label={t("labels.renameField")}
           autoFocus
           className={`${fieldInputClassName} min-w-0 flex-1 py-[var(--space-1)]`}
-          disabled={!canSubmit}
+          disabled={rename.pending}
           onChange={(event) => {
             onChange(event.currentTarget.value);
           }}
           value={rename.draft}
         />
         <IconTooltipButton
-          disabled={!canSubmit}
+          disabled={rename.pending}
           label={t("labels.saveRename")}
           onClick={onCommit}
           size="icon-sm"
@@ -115,6 +107,7 @@ export function LabelRenameEditor({
 }
 
 export function LabelResultRow({
+  catalogMutationPending = false,
   deletion,
   highlighted,
   label,
@@ -122,8 +115,10 @@ export function LabelResultRow({
   onDeleteOpenChange,
   onRename,
   onSelect,
+  reorder,
   selection,
 }: Readonly<{
+  catalogMutationPending?: boolean;
   deletion: DeleteState | null;
   highlighted: boolean;
   label: ProjectLabel;
@@ -131,13 +126,27 @@ export function LabelResultRow({
   onDeleteOpenChange(open: boolean): void;
   onRename(): void;
   onSelect(): void;
+  reorder?: ReorderableListItemRenderProps | undefined;
   selection: LabelResultRowSelection;
 }>) {
   const { t } = useTranslation();
+  const reorderActivatorRef = useCallback(
+    (element: HTMLButtonElement | null) => {
+      reorder?.activatorRef(element);
+    },
+    [reorder],
+  );
+  const reorderAttributes = reorder?.activatorAttributes;
+  const reorderListeners = reorder?.activatorListeners;
   const deleteAction = (
     <Popover onOpenChange={onDeleteOpenChange} open={deletion !== null}>
       <PopoverTrigger asChild>
-        <Button aria-label={t("labels.delete", { name: label.name })} size="icon-sm" variant="ghost">
+        <Button
+          aria-label={t("labels.delete", { name: label.name })}
+          disabled={catalogMutationPending}
+          size="icon-sm"
+          variant="ghost"
+        >
           <Trash2 aria-hidden="true" className="text-[var(--color-error)]" size={14} strokeWidth={1.8} />
         </Button>
       </PopoverTrigger>
@@ -160,6 +169,7 @@ export function LabelResultRow({
         <>
           {deleteAction}
           <IconTooltipButton
+            disabled={catalogMutationPending}
             label={t("labels.rename", { name: label.name })}
             onClick={onRename}
             size="icon-sm"
@@ -171,6 +181,21 @@ export function LabelResultRow({
       highlighted={highlighted}
       name={label.name}
       onSelect={onSelect}
+      actions={
+        reorder === undefined ? undefined : (
+          <Button
+            aria-label={t("labels.reorder", { name: label.name })}
+            disabled={catalogMutationPending}
+            ref={reorderActivatorRef}
+            {...reorderAttributes}
+            {...reorderListeners}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <GripVertical aria-hidden="true" size={15} strokeWidth={1.8} />
+          </Button>
+        )
+      }
       selection={selection}
     />
   );
@@ -198,12 +223,14 @@ export function UnlabeledResultRow({
 }
 
 function LabelSelectionRow({
+  actions,
   contextualActions,
   highlighted,
   name,
   onSelect,
   selection,
 }: Readonly<{
+  actions?: ReactNode;
   contextualActions?: ReactNode;
   highlighted: boolean;
   name: string;
@@ -232,6 +259,7 @@ function LabelSelectionRow({
         };
   return (
     <ActionableListRow
+      actions={actions}
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
       contextualActions={contextualActions}
       role="listitem"

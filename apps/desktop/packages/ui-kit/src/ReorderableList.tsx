@@ -1,0 +1,185 @@
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+  type DragEndEvent,
+  type KeyboardCoordinateGetter,
+  type UniqueIdentifier,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type RefObject,
+} from "react";
+
+export type ReorderableListItemRenderProps = Readonly<{
+  activatorAttributes: DraggableAttributes;
+  activatorListeners: DraggableSyntheticListeners;
+  activatorRef: (element: HTMLElement | null) => void;
+  itemRef: (element: HTMLElement | null) => void;
+  style: CSSProperties;
+  isDragging: boolean;
+}>;
+
+export type ReorderableListProps<Item, ID extends UniqueIdentifier = UniqueIdentifier> = Readonly<{
+  activationDistance?: number;
+  disabled?: boolean;
+  getItemID: (item: Item) => ID;
+  items: readonly Item[];
+  onCommit: (items: readonly Item[]) => void;
+  renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
+}>;
+
+export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdentifier>({
+  activationDistance = 6,
+  disabled = false,
+  getItemID,
+  items,
+  onCommit,
+  renderItem,
+}: ReorderableListProps<Item, ID>) {
+  const itemIDs = items.map(getItemID);
+  const itemNodes = useRef(new Map<ID, HTMLElement>());
+  const reducedMotion = useReducedMotion();
+  const keyboardCoordinates = useCallback<KeyboardCoordinateGetter>(
+    (event, args) => {
+      const coordinates = sortableKeyboardCoordinates(event, args);
+      if (coordinates !== undefined) {
+        const activeIndex = itemIDs.findIndex((id) => id === args.active);
+        const destinationIndex =
+          event.code === "ArrowDown"
+            ? activeIndex + 1
+            : event.code === "ArrowUp"
+              ? activeIndex - 1
+              : activeIndex;
+        const destinationID = itemIDs[destinationIndex];
+        if (destinationID !== undefined) {
+          itemNodes.current.get(destinationID)?.scrollIntoView({ block: "nearest" });
+        }
+      }
+      return coordinates;
+    },
+    [itemIDs],
+  );
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: activationDistance } }),
+    useSensor(KeyboardSensor, { coordinateGetter: keyboardCoordinates }),
+  );
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const overID = event.over?.id;
+      if (overID === undefined || event.active.id === overID) {
+        return;
+      }
+      const activeIndex = itemIDs.findIndex((id) => id === event.active.id);
+      const overIndex = itemIDs.findIndex((id) => id === overID);
+      if (activeIndex < 0 || overIndex < 0) {
+        return;
+      }
+      const nextItems = arrayMove([...items], activeIndex, overIndex);
+      if (nextItems.every((item, index) => getItemID(item) === itemIDs[index])) {
+        return;
+      }
+      onCommit(nextItems);
+    },
+    [getItemID, itemIDs, items, onCommit],
+  );
+  return (
+    <DndContext autoScroll collisionDetection={closestCenter} onDragEnd={handleDragEnd} sensors={sensors}>
+      <SortableContext items={itemIDs} strategy={verticalListSortingStrategy}>
+        {items.map((item) => (
+          <ReorderableListItem
+            disabled={disabled}
+            item={item}
+            itemID={getItemID(item)}
+            itemNodes={itemNodes}
+            key={getItemID(item)}
+            reducedMotion={reducedMotion}
+            renderItem={renderItem}
+          />
+        ))}
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function ReorderableListItem<Item, ID extends UniqueIdentifier>({
+  disabled,
+  item,
+  itemID,
+  itemNodes,
+  reducedMotion,
+  renderItem,
+}: Readonly<{
+  disabled: boolean;
+  item: Item;
+  itemID: ID;
+  itemNodes: RefObject<Map<ID, HTMLElement>>;
+  reducedMotion: boolean;
+  renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
+}>) {
+  const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } =
+    useSortable({
+      disabled,
+      id: itemID,
+    });
+  const setTrackedNodeRef = useCallback(
+    (element: HTMLElement | null) => {
+      setNodeRef(element);
+      if (element === null) {
+        itemNodes.current.delete(itemID);
+      } else {
+        itemNodes.current.set(itemID, element);
+      }
+    },
+    [itemID, itemNodes, setNodeRef],
+  );
+  const style: CSSProperties = {
+    transform:
+      transform === null
+        ? undefined
+        : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
+    transition: reducedMotion ? undefined : transition,
+  };
+  return renderItem(item, {
+    activatorAttributes: attributes,
+    activatorListeners: listeners,
+    activatorRef: setActivatorNodeRef,
+    isDragging,
+    itemRef: setTrackedNodeRef,
+    style,
+  });
+}
+
+function useReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handleChange = () => {
+      setReducedMotion(media.matches);
+    };
+    media.addEventListener("change", handleChange);
+    return () => {
+      media.removeEventListener("change", handleChange);
+    };
+  }, []);
+  return reducedMotion;
+}

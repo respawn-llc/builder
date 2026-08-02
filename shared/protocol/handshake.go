@@ -854,6 +854,7 @@ const (
 	WorkflowProjectEventActionCreated                WorkflowProjectEventAction = "created"
 	WorkflowProjectEventActionUpdated                WorkflowProjectEventAction = "updated"
 	WorkflowProjectEventActionRenamed                WorkflowProjectEventAction = "renamed"
+	WorkflowProjectEventActionReordered              WorkflowProjectEventAction = "reordered"
 	WorkflowProjectEventActionDeleted                WorkflowProjectEventAction = "deleted"
 	WorkflowProjectEventActionNodeAdded              WorkflowProjectEventAction = "node_added"
 	WorkflowProjectEventActionNodeUpdated            WorkflowProjectEventAction = "node_updated"

@@ -308,6 +308,23 @@ func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
 		t.Fatalf("listed catalog = %+v, want created label", listed.Catalog)
 	}
 
+	var second serverapi.WorkflowProjectLabelCreateResponse
+	callGateway(t, conn, "create-second-project-label", protocol.MethodWorkflowProjectLabelCreate, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: appCore.ProjectID(),
+		Name:      "Second",
+	}, &second)
+	var reordered serverapi.WorkflowProjectLabelCatalogResponse
+	callGateway(t, conn, "reorder-project-labels", protocol.MethodWorkflowProjectLabelReorder, serverapi.WorkflowProjectLabelReorderRequest{
+		ProjectID: appCore.ProjectID(),
+		LabelIDs:  []string{created.Label.ID, second.Label.ID},
+	}, &reordered)
+	if reordered.Catalog.ProjectID != appCore.ProjectID() ||
+		len(reordered.Catalog.Labels) != 2 ||
+		reordered.Catalog.Labels[0] != created.Label ||
+		reordered.Catalog.Labels[1] != second.Label {
+		t.Fatalf("reordered catalog = %+v, want created then second", reordered.Catalog)
+	}
+
 	duplicate := callGatewayExpectError(t, conn, "duplicate-project-label", protocol.MethodWorkflowProjectLabelCreate, serverapi.WorkflowProjectLabelCreateRequest{
 		ProjectID: appCore.ProjectID(),
 		Name:      "priority",

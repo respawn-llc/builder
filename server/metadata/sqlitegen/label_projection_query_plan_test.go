@@ -42,7 +42,7 @@ CREATE TABLE task_label_assignments (
 INSERT INTO project_labels (id, name, ordinal) VALUES
 	('label-zulu', 'Zulu', 1),
 	('label-alpha', 'alpha', 2),
-	('label-unrelated', 'Unrelated', 1);
+	('label-unrelated', 'Unrelated', 3);
 INSERT INTO task_label_assignments (task_id, label_id) VALUES
 	('task-selected', 'label-zulu'),
 	('task-selected', 'label-alpha'),

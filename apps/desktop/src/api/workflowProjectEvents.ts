@@ -12,6 +12,7 @@ export const workflowProjectEventActions = [
   "updated",
   "renamed",
   "deleted",
+  "reordered",
   "node_added",
   "node_updated",
   "node_group_added",
@@ -67,7 +68,7 @@ const workflowProjectEventActionSchema = z.enum(workflowProjectEventActions);
 const allowedActions: Readonly<
   Record<WorkflowProjectEventResource, ReadonlySet<WorkflowProjectEventAction>>
 > = {
-  label: new Set(["created", "renamed", "deleted"]),
+  label: new Set(["created", "renamed", "deleted", "reordered"]),
   task: new Set([
     "created",
     "updated",

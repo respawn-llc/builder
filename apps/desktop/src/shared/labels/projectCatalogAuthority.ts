@@ -2,13 +2,15 @@ import { CancelledError, type QueryClient } from "@tanstack/react-query";
 
 import { workflowLabelMaxIDs, type ProjectLabel, type ProjectLabelCatalog } from "@/api";
 import { queryKeys } from "@/app-facade";
-import { compareLabelNames } from "./labelComparison";
 
 export type ProjectCatalogAuthority = Readonly<{
   read(signal: AbortSignal): Promise<ProjectLabelCatalog>;
   applyCreate(label: ProjectLabel): void;
+  applyReorder(labelIDs: readonly string[]): void;
   applyRename(label: ProjectLabel): void;
   applyDelete(labelID: string): void;
+  acceptCatalog(catalog: ProjectLabelCatalog): void;
+  restoreCatalog(catalog: ProjectLabelCatalog): void;
   requestRefresh(): void;
 }>;
 
@@ -59,13 +61,34 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
 
   applyCreate(label: ProjectLabel): void {
     this.#advance();
-    this.#patchLabel(label);
+    this.#patchLabel(label, true);
     this.#startRefreshIfIdle();
+  }
+
+  applyReorder(labelIDs: readonly string[]): void {
+    const catalog = this.#queryClient.getQueryData<ProjectLabelCatalog>(this.#queryKey);
+    if (catalog === undefined) {
+      return;
+    }
+    const labelsByID = new Map(catalog.labels.map((label) => [label.id, label]));
+    const labels: ProjectLabel[] = [];
+    for (const labelID of labelIDs) {
+      const label = labelsByID.get(labelID);
+      if (label === undefined) {
+        throw new Error(`Cannot reorder unknown Project label ${labelID} in Project ${this.#projectID}.`);
+      }
+      labels.push(label);
+      labelsByID.delete(labelID);
+    }
+    if (labels.length !== catalog.labels.length || labelsByID.size !== 0) {
+      throw new Error(`Project label reorder omitted a catalog label in Project ${this.#projectID}.`);
+    }
+    this.#queryClient.setQueryData(this.#queryKey, { ...catalog, labels });
   }
 
   applyRename(label: ProjectLabel): void {
     this.#advance();
-    this.#patchLabel(label);
+    this.#patchLabel(label, false);
     this.#startRefreshIfIdle();
   }
 
@@ -94,6 +117,17 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
+  acceptCatalog(catalog: ProjectLabelCatalog): void {
+    this.#assertProject(catalog);
+    this.#deletedLabelIDs.clear();
+    this.#queryClient.setQueryData(this.#queryKey, catalog);
+  }
+
+  restoreCatalog(catalog: ProjectLabelCatalog): void {
+    this.#assertProject(catalog);
+    this.#queryClient.setQueryData(this.#queryKey, catalog);
+  }
+
   #advance(): void {
     this.#generation += 1;
     this.#refreshNeeded = true;
@@ -109,20 +143,33 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     );
   }
 
-  #patchLabel(label: ProjectLabel): void {
+  #patchLabel(label: ProjectLabel, prepend: boolean): void {
     this.#deletedLabelIDs.delete(label.id);
     this.#queryClient.setQueryData<ProjectLabelCatalog>(this.#queryKey, (catalog) => {
       if (catalog === undefined) {
         return undefined;
       }
-      const labels = catalog.labels.filter((candidate) => candidate.id !== label.id);
-      labels.push(label);
-      labels.sort(compareProjectLabels);
+      const index = catalog.labels.findIndex((candidate) => candidate.id === label.id);
+      if (!prepend && index < 0) {
+        return catalog;
+      }
+      const labels =
+        index < 0
+          ? [label, ...catalog.labels]
+          : catalog.labels.map((candidate, candidateIndex) => (candidateIndex === index ? label : candidate));
       return {
         ...catalog,
         labels,
       };
     });
+  }
+
+  #assertProject(catalog: ProjectLabelCatalog): void {
+    if (catalog.projectID !== this.#projectID) {
+      throw new Error(
+        `Project catalog authority received ${catalog.projectID} while serving ${this.#projectID}.`,
+      );
+    }
   }
 
   #startRead(generation: number): ActiveCatalogRead {
@@ -163,9 +210,4 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
       })
       .catch(() => undefined);
   }
-}
-
-function compareProjectLabels(left: ProjectLabel, right: ProjectLabel): number {
-  const byName = compareLabelNames(left.name, right.name);
-  return byName === 0 ? left.id.localeCompare(right.id) : byName;
 }

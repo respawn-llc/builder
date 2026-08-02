@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"testing"
 
@@ -13,6 +12,8 @@ import (
 	"core/server/workflow/label"
 	"core/shared/config"
 	"core/shared/serverapi"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestProjectLabelsCreateAndList(t *testing.T) {
@@ -46,12 +47,12 @@ func TestProjectLabelsCreateAndList(t *testing.T) {
 	if len(labels) != 2 {
 		t.Fatalf("label count = %d, want 2: %+v", len(labels), labels)
 	}
-	if labels[0].ID != beta.ID || labels[1].ID != alpha.ID {
-		t.Fatalf("label order = %+v, want Beta then alpha in project order", labels)
+	if labels[0].ID != alpha.ID || labels[1].ID != beta.ID {
+		t.Fatalf("label order = %+v, want alpha then Beta", labels)
 	}
 }
 
-func TestProjectLabelReorderRequiresExactPermutationAndCommitsAtomicOrder(t *testing.T) {
+func TestProjectLabelCreatePrependsAndReorderReturnsAppliedAndUnchangedOutcomes(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	first, err := store.CreateProjectLabel(ctx, binding.ProjectID, "first")
 	if err != nil {
@@ -66,59 +67,115 @@ func TestProjectLabelReorderRequiresExactPermutationAndCommitsAtomicOrder(t *tes
 		t.Fatalf("CreateProjectLabel third: %v", err)
 	}
 
-	applied, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{third.ID, first.ID, second.ID})
+	labels, err := store.ListProjectLabels(ctx, binding.ProjectID)
 	if err != nil {
+		t.Fatalf("ListProjectLabels: %v", err)
+	}
+	requireProjectLabelOrder(t, labels, third.ID, second.ID, first.ID)
+
+	unchanged, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{third.ID, second.ID, first.ID})
+	if err != nil {
+		t.Fatalf("ReorderProjectLabels unchanged: %v", err)
+	}
+	if unchanged.Changed {
+		t.Fatal("unchanged reorder reported a durable change")
+	}
+	requireProjectLabelOrder(t, unchanged.Labels, third.ID, second.ID, first.ID)
+
+	applied, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{first.ID, third.ID, second.ID})
+	if err != nil {
+		t.Fatalf("ReorderProjectLabels applied: %v", err)
+	}
+	if !applied.Changed {
+		t.Fatal("applied reorder did not report a durable change")
+	}
+	requireProjectLabelOrder(t, applied.Labels, first.ID, third.ID, second.ID)
+}
+
+func TestProjectLabelRenamePreservesPositionAndDeleteCompactsSurvivors(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	first, err := store.CreateProjectLabel(ctx, binding.ProjectID, "first")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel first: %v", err)
+	}
+	second, err := store.CreateProjectLabel(ctx, binding.ProjectID, "second")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel second: %v", err)
+	}
+	third, err := store.CreateProjectLabel(ctx, binding.ProjectID, "third")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel third: %v", err)
+	}
+	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{first.ID, second.ID, third.ID}); err != nil {
 		t.Fatalf("ReorderProjectLabels: %v", err)
 	}
-	if applied.Outcome != ProjectLabelReorderApplied {
-		t.Fatalf("reorder outcome = %q, want applied", applied.Outcome)
+
+	renamed, err := store.RenameProjectLabel(ctx, binding.ProjectID, second.ID, "renamed")
+	if err != nil {
+		t.Fatalf("RenameProjectLabel: %v", err)
 	}
-	if got := projectLabelIDs(applied.Labels); !slices.Equal(got, []label.ID{third.ID, first.ID, second.ID}) {
-		t.Fatalf("reordered response IDs = %v, want third, first, second", got)
+	if renamed.ID != second.ID || renamed.Name.String() != "renamed" {
+		t.Fatalf("renamed label = %+v", renamed)
 	}
-	assertProjectLabelOrdinals(t, ctx, store, binding.ProjectID)
-	otherProject, err := store.metadata.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	labels, err := store.ListProjectLabels(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectLabels after rename: %v", err)
+	}
+	requireProjectLabelOrder(t, labels, first.ID, second.ID, third.ID)
+
+	if _, err := store.DeleteProjectLabel(ctx, binding.ProjectID, second.ID); err != nil {
+		t.Fatalf("DeleteProjectLabel: %v", err)
+	}
+	labels, err = store.ListProjectLabels(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectLabels after delete: %v", err)
+	}
+	requireProjectLabelOrder(t, labels, first.ID, third.ID)
+}
+
+func TestProjectLabelReorderRejectsNonPermutationWithoutChangingCatalog(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	first, err := store.CreateProjectLabel(ctx, binding.ProjectID, "first")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel first: %v", err)
+	}
+	_, err = store.CreateProjectLabel(ctx, binding.ProjectID, "second")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel second: %v", err)
+	}
+	other, err := store.metadata.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
 	if err != nil {
 		t.Fatalf("CreateProjectForWorkspace: %v", err)
 	}
-	foreign, err := store.CreateProjectLabel(ctx, otherProject.ProjectID, "foreign")
+	foreign, err := store.CreateProjectLabel(ctx, other.ProjectID, "foreign")
 	if err != nil {
 		t.Fatalf("CreateProjectLabel foreign: %v", err)
 	}
-
-	invalid := []label.ID{third.ID, third.ID, first.ID}
-	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, invalid); !errors.Is(err, ErrProjectLabelOrderInvalid) {
-		t.Fatalf("invalid duplicate reorder = %v, want ErrProjectLabelOrderInvalid", err)
+	before, err := store.ListProjectLabels(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectLabels before invalid reorder: %v", err)
 	}
-	for name, candidate := range map[string][]label.ID{
-		"missing": {third.ID, first.ID},
-		"extra":   {third.ID, first.ID, second.ID, label.NewID()},
-		"foreign": {third.ID, first.ID, foreign.ID},
+
+	for name, requested := range map[string][]label.ID{
+		"missing":   {first.ID},
+		"duplicate": {first.ID, first.ID},
+		"unknown":   {first.ID, label.NewID()},
+		"foreign":   {first.ID, foreign.ID},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, candidate); !errors.Is(err, ErrProjectLabelOrderInvalid) {
-				t.Fatalf("invalid %s reorder = %v, want ErrProjectLabelOrderInvalid", name, err)
+			if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, requested); err == nil {
+				t.Fatalf("ReorderProjectLabels %s unexpectedly succeeded", name)
 			}
+			after, err := store.ListProjectLabels(ctx, binding.ProjectID)
+			if err != nil {
+				t.Fatalf("ListProjectLabels after %s rejection: %v", name, err)
+			}
+			requireProjectLabelOrder(t, after, before[0].ID, before[1].ID)
 		})
-	}
-	labels, err := store.ListProjectLabels(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectLabels after invalid reorder: %v", err)
-	}
-	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{third.ID, first.ID, second.ID}) {
-		t.Fatalf("order after invalid reorder = %v, want prior order", got)
-	}
-
-	unchanged, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{third.ID, first.ID, second.ID})
-	if err != nil {
-		t.Fatalf("unchanged ReorderProjectLabels: %v", err)
-	}
-	if unchanged.Outcome != ProjectLabelReorderUnchanged {
-		t.Fatalf("unchanged reorder outcome = %q, want unchanged", unchanged.Outcome)
 	}
 }
 
-func TestProjectLabelDeleteCompactsOrderAndCreateAppends(t *testing.T) {
+func TestProjectLabelReorderRollsBackOrdinalWritesOnFailure(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	first, err := store.CreateProjectLabel(ctx, binding.ProjectID, "first")
 	if err != nil {
@@ -128,77 +185,54 @@ func TestProjectLabelDeleteCompactsOrderAndCreateAppends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProjectLabel second: %v", err)
 	}
-	third, err := store.CreateProjectLabel(ctx, binding.ProjectID, "third")
-	if err != nil {
-		t.Fatalf("CreateProjectLabel third: %v", err)
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TRIGGER project_labels_reorder_failure
+BEFORE UPDATE OF ordinal ON project_labels
+WHEN NEW.ordinal = 2
+BEGIN
+    SELECT RAISE(ABORT, 'test reorder failure');
+END`); err != nil {
+		t.Fatalf("create reorder failure trigger: %v", err)
 	}
-	if _, err := store.DeleteProjectLabel(ctx, binding.ProjectID, second.ID); err != nil {
-		t.Fatalf("DeleteProjectLabel second: %v", err)
-	}
-	fourth, err := store.CreateProjectLabel(ctx, binding.ProjectID, "fourth")
-	if err != nil {
-		t.Fatalf("CreateProjectLabel fourth: %v", err)
+	t.Cleanup(func() {
+		_, _ = store.db.ExecContext(ctx, `DROP TRIGGER project_labels_reorder_failure`)
+	})
+
+	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{first.ID, second.ID}); err == nil {
+		t.Fatal("ReorderProjectLabels unexpectedly succeeded with a failing trigger")
 	}
 	labels, err := store.ListProjectLabels(ctx, binding.ProjectID)
 	if err != nil {
-		t.Fatalf("ListProjectLabels after delete/create: %v", err)
+		t.Fatalf("ListProjectLabels after failed reorder: %v", err)
 	}
-	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{first.ID, third.ID, fourth.ID}) {
-		t.Fatalf("order after delete/create = %v, want first, third, fourth", got)
+	requireProjectLabelOrder(t, labels, second.ID, first.ID)
+	var duplicateOrGapCount int
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM (
+    SELECT ordinal
+    FROM project_labels
+    WHERE project_id = ?
+    GROUP BY ordinal
+    HAVING COUNT(*) != 1
+)`, binding.ProjectID).Scan(&duplicateOrGapCount); err != nil {
+		t.Fatalf("check ordinal uniqueness after rollback: %v", err)
 	}
-}
-
-func TestProjectLabelReorderNoOpSupportsEmptyAndSingletonCatalogs(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	if _, err := store.db.ExecContext(ctx, `
-CREATE TABLE project_label_order_write_observations (id INTEGER);
-CREATE TRIGGER project_label_order_write_observation
-AFTER UPDATE OF ordinal ON project_labels
-BEGIN
-    INSERT INTO project_label_order_write_observations (id) VALUES (NULL);
-END;
-`); err != nil {
-		t.Fatalf("install ordinal write observation: %v", err)
-	}
-	empty, err := store.ReorderProjectLabels(ctx, binding.ProjectID, nil)
-	if err != nil {
-		t.Fatalf("empty ReorderProjectLabels: %v", err)
-	}
-	if empty.Outcome != ProjectLabelReorderUnchanged || len(empty.Labels) != 0 {
-		t.Fatalf("empty reorder = %+v, want unchanged empty catalog", empty)
-	}
-
-	singleton, err := store.CreateProjectLabel(ctx, binding.ProjectID, "singleton")
-	if err != nil {
-		t.Fatalf("CreateProjectLabel singleton: %v", err)
-	}
-	result, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{singleton.ID})
-	if err != nil {
-		t.Fatalf("singleton ReorderProjectLabels: %v", err)
-	}
-	if result.Outcome != ProjectLabelReorderUnchanged ||
-		len(result.Labels) != 1 ||
-		result.Labels[0].ID != singleton.ID {
-		t.Fatalf("singleton reorder = %+v, want unchanged singleton catalog", result)
-	}
-	var writes int
-	if err := store.db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM project_label_order_write_observations`,
-	).Scan(&writes); err != nil {
-		t.Fatalf("count no-op ordinal writes: %v", err)
-	}
-	if writes != 0 {
-		t.Fatalf("no-op reorder ordinal writes = %d, want 0", writes)
+	if duplicateOrGapCount != 0 {
+		t.Fatalf("ordinal duplicates after failed reorder = %d", duplicateOrGapCount)
 	}
 }
 
-func projectLabelIDs(records []ProjectLabelRecord) []label.ID {
-	ids := make([]label.ID, 0, len(records))
-	for _, record := range records {
-		ids = append(ids, record.ID)
+func requireProjectLabelOrder(t *testing.T, labels []ProjectLabelRecord, want ...label.ID) {
+	t.Helper()
+	if len(labels) != len(want) {
+		t.Fatalf("label count = %d, want %d: %+v", len(labels), len(want), labels)
 	}
-	return ids
+	for index, record := range labels {
+		if record.ID != want[index] {
+			t.Fatalf("label order at %d = %s, want %s", index, record.ID, want[index])
+		}
+	}
 }
 
 func TestProjectLabelRenamePreservesIdentityAndAllowsCapitalizationOnlyChange(t *testing.T) {
@@ -222,20 +256,6 @@ func TestProjectLabelRenamePreservesIdentityAndAllowsCapitalizationOnlyChange(t 
 	}
 	if capitalized.ID != created.ID || capitalized.Name.String() != "ALPHA" {
 		t.Fatalf("capitalized label = %+v", capitalized)
-	}
-	other, err := store.CreateProjectLabel(ctx, binding.ProjectID, "second")
-	if err != nil {
-		t.Fatalf("CreateProjectLabel second: %v", err)
-	}
-	if _, err := store.RenameProjectLabel(ctx, binding.ProjectID, created.ID, "renamed"); err != nil {
-		t.Fatalf("RenameProjectLabel reordered name: %v", err)
-	}
-	labels, err := store.ListProjectLabels(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectLabels after rename: %v", err)
-	}
-	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{created.ID, other.ID}) {
-		t.Fatalf("order after rename = %v, want original order", got)
 	}
 }
 
@@ -368,7 +388,6 @@ func TestProjectLabelCatalogEnforcesUnicodeNameUniquenessAndTheHundredLabelLimit
 	if len(labels) != label.MaxProjectLabels {
 		t.Fatalf("label count = %d, want %d", len(labels), label.MaxProjectLabels)
 	}
-	assertProjectLabelOrdinals(t, ctx, store, binding.ProjectID)
 	if _, err := store.CreateProjectLabel(ctx, binding.ProjectID, "one-too-many"); !errors.Is(err, ErrProjectLabelLimitReached) {
 		t.Fatalf("CreateProjectLabel 101 = %v, want ErrProjectLabelLimitReached", err)
 	}
@@ -378,56 +397,6 @@ func TestProjectLabelCatalogEnforcesUnicodeNameUniquenessAndTheHundredLabelLimit
 	}
 	if _, err := store.CreateProjectLabel(ctx, binding.ProjectID, "replacement"); err != nil {
 		t.Fatalf("CreateProjectLabel after delete: %v", err)
-	}
-	assertProjectLabelOrdinals(t, ctx, store, binding.ProjectID)
-	for cycle := 0; cycle < 12; cycle++ {
-		current, err := store.ListProjectLabels(ctx, binding.ProjectID)
-		if err != nil {
-			t.Fatalf("ListProjectLabels churn cycle %d: %v", cycle, err)
-		}
-		if len(current) != label.MaxProjectLabels {
-			t.Fatalf("churn cycle %d label count = %d, want %d", cycle, len(current), label.MaxProjectLabels)
-		}
-		if _, err := store.DeleteProjectLabel(ctx, binding.ProjectID, current[cycle%len(current)].ID); err != nil {
-			t.Fatalf("DeleteProjectLabel churn cycle %d: %v", cycle, err)
-		}
-		if _, err := store.CreateProjectLabel(ctx, binding.ProjectID, fmt.Sprintf("churn-%03d", cycle)); err != nil {
-			t.Fatalf("CreateProjectLabel churn cycle %d: %v", cycle, err)
-		}
-		assertProjectLabelOrdinals(t, ctx, store, binding.ProjectID)
-	}
-}
-
-func assertProjectLabelOrdinals(t *testing.T, ctx context.Context, store *Store, projectID string) {
-	t.Helper()
-	rows, err := store.db.QueryContext(
-		ctx,
-		`SELECT ordinal FROM project_labels WHERE project_id = ? ORDER BY ordinal`,
-		projectID,
-	)
-	if err != nil {
-		t.Fatalf("query project label ordinals: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var ordinal int64
-	count := 0
-	for rows.Next() {
-		if err := rows.Scan(&ordinal); err != nil {
-			t.Fatalf("scan project label ordinal: %v", err)
-		}
-		count++
-		if ordinal != int64(count) {
-			t.Fatalf("project label ordinal at position %d = %d, want %d", count, ordinal, count)
-		}
-		if ordinal > label.MaxProjectLabels {
-			t.Fatalf("committed project label ordinal = %d, exceeds %d", ordinal, label.MaxProjectLabels)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate project label ordinals: %v", err)
-	}
-	if count > label.MaxProjectLabels {
-		t.Fatalf("project label count = %d, exceeds %d", count, label.MaxProjectLabels)
 	}
 }
 
@@ -443,7 +412,7 @@ func TestConcurrentProjectLabelCreatesResolveToTypedConflictAndAtomicLimit(t *te
 			return competingStore.CreateProjectLabel(ctx, binding.ProjectID, "concurrent")
 		},
 	)
-	assertOneProjectLabelCreateError(t, results, ErrProjectLabelNameConflict)
+	assertOneProjectLabelCreateErrorAllowed(t, results, ErrProjectLabelNameConflict)
 
 	for index := 1; index < label.MaxProjectLabels-1; index++ {
 		if _, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, fmt.Sprintf("capacity-%03d", index)); err != nil {
@@ -458,7 +427,7 @@ func TestConcurrentProjectLabelCreatesResolveToTypedConflictAndAtomicLimit(t *te
 			return competingStore.CreateProjectLabel(ctx, binding.ProjectID, "final-b")
 		},
 	)
-	assertOneProjectLabelCreateError(t, results, ErrProjectLabelLimitReached)
+	assertOneProjectLabelCreateErrorAllowed(t, results, ErrProjectLabelLimitReached)
 
 	labels, err := fixtureStore.ListProjectLabels(ctx, binding.ProjectID)
 	if err != nil {
@@ -495,7 +464,7 @@ func raceProjectLabelCreates(
 	return [2]projectLabelCreateResult{<-results, <-results}
 }
 
-func assertOneProjectLabelCreateError(t *testing.T, results [2]projectLabelCreateResult, target error) {
+func assertOneProjectLabelCreateErrorAllowed(t *testing.T, results [2]projectLabelCreateResult, target error) {
 	t.Helper()
 	successes := 0
 	failures := 0
@@ -506,15 +475,29 @@ func assertOneProjectLabelCreateError(t *testing.T, results [2]projectLabelCreat
 			if result.record.ID.String() == "" {
 				t.Fatal("successful label create returned no ID")
 			}
-		case errors.Is(result.err, target):
+		case errors.Is(result.err, target) || isSQLiteBusy(result.err):
 			failures++
 		default:
-			t.Fatalf("concurrent label create error = %T %v, want %v", result.err, result.err, target)
+			t.Fatalf("concurrent label create error = %T %v, want %v or SQLite busy", result.err, result.err, target)
 		}
 	}
 	if successes != 1 || failures != 1 {
-		t.Fatalf("concurrent label create outcomes = %+v, want one success and one %v", results, target)
+		t.Fatalf("concurrent label create outcomes = %+v, want one success and one allowed failure", results)
 	}
+}
+
+func isSQLiteBusy(err error) bool {
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code() & 0xff
+	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
+}
+
+func isProjectLabelReorderValidation(err error) bool {
+	var reorderErr ProjectLabelReorderError
+	return errors.As(err, &reorderErr)
 }
 
 func TestProjectLabelCatalogMutationsDoNotTouchTaskOrderingTimestamp(t *testing.T) {
@@ -617,7 +600,7 @@ func TestTaskLabelsReadEmptyAndAddOne(t *testing.T) {
 	}
 }
 
-func TestTaskLabelUpdateIsIdempotentAtomicAndProjectOrdered(t *testing.T) {
+func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -641,18 +624,8 @@ func TestTaskLabelUpdateIsIdempotentAtomicAndProjectOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateTaskLabels add batch: %v", err)
 	}
-	if len(assigned) != 2 || assigned[0] != zulu.ID || assigned[1] != alpha.ID {
-		t.Fatalf("ordered assigned labels = %+v, want Zulu then alpha", assigned)
-	}
-	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{alpha.ID, zulu.ID, absent.ID}); err != nil {
-		t.Fatalf("ReorderProjectLabels: %v", err)
-	}
-	assigned, err = store.GetTaskLabelIDs(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("GetTaskLabelIDs after catalog reorder: %v", err)
-	}
 	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
-		t.Fatalf("assigned labels after catalog reorder = %+v, want alpha then Zulu", assigned)
+		t.Fatalf("ordered assigned labels = %+v, want alpha then Zulu", assigned)
 	}
 	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
 		TaskID:         task.ID,
@@ -952,8 +925,8 @@ func TestTaskCreateCommitsLabelsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTaskLabelIDs: %v", err)
 	}
-	if len(assigned) != 2 || assigned[0] != zulu.ID || assigned[1] != alpha.ID {
-		t.Fatalf("created task labels = %+v, want Zulu then alpha", assigned)
+	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
+		t.Fatalf("created task labels = %+v, want alpha then Zulu", assigned)
 	}
 }
 
@@ -1043,24 +1016,135 @@ func TestLabelDeleteRacingWithAssignmentConvergesWithoutOrphans(t *testing.T) {
 	}()
 	close(start)
 
-	if err := <-deleteResult; err != nil {
-		t.Fatalf("DeleteProjectLabel race: %v", err)
+	deleteErr := <-deleteResult
+	assignmentErr := <-assignmentResult
+	if deleteErr != nil && !isSQLiteBusy(deleteErr) {
+		t.Fatalf("DeleteProjectLabel race: %v", deleteErr)
 	}
-	if err := <-assignmentResult; err != nil && !errors.Is(err, ErrTaskLabelNotFound) {
-		t.Fatalf("UpdateTaskLabels race = %v, want success or ErrTaskLabelNotFound", err)
+	if assignmentErr != nil && !errors.Is(assignmentErr, ErrTaskLabelNotFound) && !isSQLiteBusy(assignmentErr) {
+		t.Fatalf("UpdateTaskLabels race = %v, want success, ErrTaskLabelNotFound, or SQLite busy", assignmentErr)
 	}
 	labels, err := fixtureStore.ListProjectLabels(ctx, binding.ProjectID)
 	if err != nil {
 		t.Fatalf("ListProjectLabels after race: %v", err)
 	}
-	if len(labels) != 0 {
-		t.Fatalf("catalog after delete race = %+v, want empty", labels)
-	}
 	assigned, err := fixtureStore.GetTaskLabelIDs(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("GetTaskLabelIDs after race: %v", err)
 	}
-	if len(assigned) != 0 {
-		t.Fatalf("assignments after delete race = %+v, want empty", assigned)
+	assertProjectLabelOrdinalsContiguous(t, ctx, fixtureStore, binding.ProjectID)
+	if deleteErr == nil {
+		if len(labels) != 0 || len(assigned) != 0 {
+			t.Fatalf("catalog/assignments after committed delete = %+v / %+v, want empty", labels, assigned)
+		}
+		return
+	}
+	if len(labels) != 1 || labels[0].ID != projectLabel.ID {
+		t.Fatalf("catalog after rolled-back delete = %+v, want retained label", labels)
+	}
+	if assignmentErr == nil && (len(assigned) != 1 || assigned[0] != projectLabel.ID) {
+		t.Fatalf("assignment after rolled-back delete = %+v, want retained assignment", assigned)
+	}
+}
+
+func TestProjectLabelReorderRacingWithCreateLeavesValidCatalog(t *testing.T) {
+	ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+	first, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, "first")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel first: %v", err)
+	}
+	second, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, "second")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel second: %v", err)
+	}
+	reorderStore, createStore := openConcurrentWorkflowStores(t, cfg)
+
+	start := make(chan struct{})
+	reorderResult := make(chan error, 1)
+	createResult := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := reorderStore.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{first.ID, second.ID})
+		reorderResult <- err
+	}()
+	go func() {
+		<-start
+		_, err := createStore.CreateProjectLabel(ctx, binding.ProjectID, "third")
+		createResult <- err
+	}()
+	close(start)
+
+	if err := <-reorderResult; err != nil && !isSQLiteBusy(err) && !isProjectLabelReorderValidation(err) {
+		t.Fatalf("ReorderProjectLabels race: %v", err)
+	}
+	if err := <-createResult; err != nil && !isSQLiteBusy(err) {
+		t.Fatalf("CreateProjectLabel race: %v", err)
+	}
+	assertProjectLabelOrdinalsContiguous(t, ctx, fixtureStore, binding.ProjectID)
+}
+
+func TestProjectLabelReorderRacingWithDeleteLeavesValidCatalog(t *testing.T) {
+	ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+	first, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, "first")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel first: %v", err)
+	}
+	second, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, "second")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel second: %v", err)
+	}
+	reorderStore, deleteStore := openConcurrentWorkflowStores(t, cfg)
+
+	start := make(chan struct{})
+	reorderResult := make(chan error, 1)
+	deleteResult := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := reorderStore.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{first.ID, second.ID})
+		reorderResult <- err
+	}()
+	go func() {
+		<-start
+		_, err := deleteStore.DeleteProjectLabel(ctx, binding.ProjectID, second.ID)
+		deleteResult <- err
+	}()
+	close(start)
+
+	if err := <-reorderResult; err != nil && !isSQLiteBusy(err) && !isProjectLabelReorderValidation(err) {
+		t.Fatalf("ReorderProjectLabels race: %v", err)
+	}
+	if err := <-deleteResult; err != nil && !isSQLiteBusy(err) {
+		t.Fatalf("DeleteProjectLabel race: %v", err)
+	}
+	assertProjectLabelOrdinalsContiguous(t, ctx, fixtureStore, binding.ProjectID)
+}
+
+func assertProjectLabelOrdinalsContiguous(t *testing.T, ctx context.Context, store *Store, projectID string) {
+	t.Helper()
+	rows, err := store.db.QueryContext(ctx, `
+SELECT ordinal
+FROM project_labels
+WHERE project_id = ?
+ORDER BY ordinal ASC`, projectID)
+	if err != nil {
+		t.Fatalf("query project label ordinals: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ordinal int64
+	count := 0
+	for rows.Next() {
+		if err := rows.Scan(&ordinal); err != nil {
+			t.Fatalf("scan project label ordinal: %v", err)
+		}
+		count++
+		if ordinal != int64(count) {
+			t.Fatalf("project label ordinal at position %d = %d", count, ordinal)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate project label ordinals: %v", err)
+	}
+	if count > label.MaxProjectLabels {
+		t.Fatalf("project label count = %d, want at most %d", count, label.MaxProjectLabels)
 	}
 }

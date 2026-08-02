@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +152,22 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 			t.Fatalf("project_labels.%s should not exist", column)
 		}
 	}
+	if !columnExists(t, store.db, "project_labels", "ordinal") {
+		t.Fatal("project_labels.ordinal should exist")
+	}
+	var ordinalNotNull int
+	if err := store.db.QueryRow(`
+SELECT "notnull"
+FROM pragma_table_info('project_labels')
+WHERE name = 'ordinal'`).Scan(&ordinalNotNull); err != nil {
+		t.Fatalf("inspect project_labels.ordinal: %v", err)
+	}
+	if ordinalNotNull != 1 {
+		t.Fatalf("project_labels.ordinal not-null flag = %d, want 1", ordinalNotNull)
+	}
+	if !indexExists(t, store.db, "project_labels_project_ordinal_unique") {
+		t.Fatal("project_labels_project_ordinal_unique should support per-project order uniqueness")
+	}
 	if !indexExists(t, store.db, "task_label_assignments_label_task_idx") {
 		t.Fatal("task_label_assignments_label_task_idx should support reverse label membership")
 	}
@@ -187,6 +204,72 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+}
+
+func TestProjectLabelsOrderMigrationBackfillsExistingCatalogInLegacyOrder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 69)
+	if err != nil {
+		t.Fatalf("open version 69 metadata database: %v", err)
+	}
+	now := int64(1)
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-label-order-migration', 'Project', ?, ?, '{}')`, now, now)
+	execSeed(t, db, "labels", `
+INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
+VALUES
+    ('label-zulu', 'project-label-order-migration', 'Zulu', ?, ?),
+    ('label-alpha', 'project-label-order-migration', 'alpha', ?, ?),
+    ('label-beta', 'project-label-order-migration', 'Beta', ?, ?)`,
+		now, now, now, now, now, now,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 69 database: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated metadata store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	rows, err := store.db.Query(`
+SELECT id, ordinal
+FROM project_labels
+WHERE project_id = 'project-label-order-migration'
+ORDER BY ordinal ASC`)
+	if err != nil {
+		t.Fatalf("query migrated label ordinals: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []struct {
+		id      string
+		ordinal int64
+	}
+	for rows.Next() {
+		var row struct {
+			id      string
+			ordinal int64
+		}
+		if err := rows.Scan(&row.id, &row.ordinal); err != nil {
+			t.Fatalf("scan migrated label ordinal: %v", err)
+		}
+		got = append(got, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated label ordinals: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("migrated label rows = %+v, want 3 rows", got)
+	}
+	for index, wantID := range []string{"label-alpha", "label-beta", "label-zulu"} {
+		if got[index].id != wantID || got[index].ordinal != int64(index+1) {
+			t.Fatalf("migrated row %d = %+v, want id=%s ordinal=%d", index, got[index], wantID, index+1)
+		}
 	}
 }
 
