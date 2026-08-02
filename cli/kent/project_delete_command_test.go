@@ -354,6 +354,19 @@ func TestProjectDeletePlainOutputUsesExpectedStreams(t *testing.T) {
 	}
 }
 
+func TestProjectDeletePlainOutputFailureReturnsNonZero(t *testing.T) {
+	outcome := projectDeleteOutcome{
+		Result: &projectDeleteResult{ProjectID: "project-123"},
+	}
+	var stderr bytes.Buffer
+	if exitCode := writeProjectDeleteOutcome(bindingMutationFailingWriter{}, &stderr, outcome, false); exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("stderr is empty, want write diagnostic")
+	}
+}
+
 func TestProjectDeletePlainBlockerRenderingPreservesOptionalCount(t *testing.T) {
 	var withoutCount bytes.Buffer
 	absent, err := projectDeleteBlockerCount(nil)

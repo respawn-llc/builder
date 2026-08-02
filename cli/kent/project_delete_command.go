@@ -282,7 +282,12 @@ func writeProjectDeleteOutcome(stdout io.Writer, stderr io.Writer, outcome proje
 		}
 		return writeCommandJSON(stdout, stderr, envelope)
 	}
-	fmt.Fprintf(stdout, "Deleted project %s. Workspace files were not deleted.\n", outcome.Result.ProjectID)
+	if _, err := fmt.Fprintf(stdout, "Deleted project %s. Workspace files were not deleted.\n", outcome.Result.ProjectID); err != nil {
+		if _, stderrErr := fmt.Fprintf(stderr, "write project deletion result: %v\n", err); stderrErr != nil {
+			return 1
+		}
+		return 1
+	}
 	return 0
 }
 
