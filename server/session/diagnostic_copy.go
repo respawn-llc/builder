@@ -11,14 +11,18 @@ import (
 	"sync"
 )
 
-// DiagnosticSessionCopy owns an isolated durable copy of one Session. Runtime
-// inspection can migrate and mutate the copy through ordinary persistence
-// paths without changing the source Session.
+// DiagnosticSessionCopy owns an isolated durable copy of one Session's active
+// event-log segment. Runtime inspection can mutate the copy through ordinary
+// persistence paths without changing the source Session.
 type DiagnosticSessionCopy struct {
 	mu    sync.Mutex
 	root  string
 	store *Store
 }
+
+var ErrDiagnosticLegacyEventLogUnsupported = errors.New(
+	"diagnostic request inspection does not support legacy session event logs",
+)
 
 func OpenDiagnosticSessionCopy(
 	ctx context.Context,
@@ -107,51 +111,29 @@ func copyDiagnosticSessionEvents(
 	initial PersistedSessionRecord,
 	destinationDir string,
 ) (_ PersistedSessionRecord, resultErr error) {
-	copyWithStableSource := func() (PersistedSessionRecord, error) {
-		record, err := resolver.ResolvePersistedSession(ctx, sessionID)
-		if err != nil {
-			return PersistedSessionRecord{}, err
-		}
-		if err := validatePersistedSessionRecord(sessionID, record); err != nil {
-			return PersistedSessionRecord{}, err
-		}
-		if record.SessionDir != initial.SessionDir {
-			return PersistedSessionRecord{}, fmt.Errorf(
-				"diagnostic Session source moved from %q to %q",
-				initial.SessionDir,
-				record.SessionDir,
-			)
-		}
-		if err := copyDiagnosticEventLog(
-			filepath.Join(record.SessionDir, eventsFile),
-			filepath.Join(destinationDir, eventsFile),
-		); err != nil {
-			return PersistedSessionRecord{}, err
-		}
-		return record, nil
-	}
-
-	lockPath := filepath.Join(initial.SessionDir, eventLogPersistenceLockFile)
-	if _, err := os.Lstat(lockPath); errors.Is(err, os.ErrNotExist) {
-		record, copyErr := copyWithStableSource()
-		if copyErr != nil {
-			return PersistedSessionRecord{}, copyErr
-		}
-		if err := initializeEventLogPersistenceLock(destinationDir); err != nil {
-			return PersistedSessionRecord{}, err
-		}
-		return record, nil
-	} else if err != nil {
-		return PersistedSessionRecord{}, fmt.Errorf("inspect source event-log lock: %w", err)
-	}
-
 	lock, stableLockPath, err := acquireEventLogPersistenceLock(initial.SessionDir)
 	if err != nil {
 		return PersistedSessionRecord{}, err
 	}
 	defer joinEventLogPersistenceLockRelease(&resultErr, lock, stableLockPath)
-	record, err := copyWithStableSource()
+	record, err := resolver.ResolvePersistedSession(ctx, sessionID)
 	if err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	if err := validatePersistedSessionRecord(sessionID, record); err != nil {
+		return PersistedSessionRecord{}, err
+	}
+	if record.SessionDir != initial.SessionDir {
+		return PersistedSessionRecord{}, fmt.Errorf(
+			"diagnostic Session source moved from %q to %q",
+			initial.SessionDir,
+			record.SessionDir,
+		)
+	}
+	if err := copyDiagnosticEventLog(
+		filepath.Join(record.SessionDir, eventsFile),
+		filepath.Join(destinationDir, eventsFile),
+	); err != nil {
 		return PersistedSessionRecord{}, err
 	}
 	if err := initializeEventLogPersistenceLock(destinationDir); err != nil {
@@ -161,6 +143,33 @@ func copyDiagnosticSessionEvents(
 }
 
 func copyDiagnosticEventLog(sourcePath, destinationPath string) (resultErr error) {
+	classification, err := classifyEventLogSource(sourcePath)
+	if err != nil {
+		return fmt.Errorf("classify source event log for diagnostic copy: %w", err)
+	}
+	switch classification.source {
+	case eventLogSourceCurrent:
+	case eventLogSourceEmpty:
+		if _, err := createCurrentEventLog(destinationPath); err != nil {
+			return fmt.Errorf("create empty diagnostic event log: %w", err)
+		}
+		return nil
+	case eventLogSourceLegacy:
+		return ErrDiagnosticLegacyEventLogUnsupported
+	default:
+		return fmt.Errorf(
+			"diagnostic request inspection requires a current event log: source=%d",
+			classification.source,
+		)
+	}
+	log, err := openCurrentEventLog(sourcePath, currentEventLogReadOnly)
+	if err != nil {
+		return fmt.Errorf("open source event log for diagnostic copy: %w", err)
+	}
+	window, err := log.readActiveSegment()
+	if err != nil {
+		return fmt.Errorf("read active event-log segment for diagnostic copy: %w", err)
+	}
 	source, err := openSessionFileReadOnly(sourcePath)
 	if err != nil {
 		return fmt.Errorf("open source event log for diagnostic copy: %w", err)
@@ -175,11 +184,41 @@ func copyDiagnosticEventLog(sourcePath, destinationPath string) (resultErr error
 	defer func() {
 		resultErr = errors.Join(resultErr, destination.Close())
 	}()
-	if _, err := io.Copy(destination, source); err != nil {
-		return fmt.Errorf("copy diagnostic event log: %w", err)
+	if err := copyDiagnosticEventLogRange(destination, source, 0, log.firstEventOffset); err != nil {
+		return err
+	}
+	if err := copyDiagnosticEventLogRange(
+		destination,
+		source,
+		window.StartOffset,
+		window.EndOffset-window.StartOffset,
+	); err != nil {
+		return err
 	}
 	if err := destination.Sync(); err != nil {
 		return fmt.Errorf("sync diagnostic event log copy: %w", err)
+	}
+	return nil
+}
+
+func copyDiagnosticEventLogRange(destination, source *os.File, offset, length int64) error {
+	if length == 0 {
+		return nil
+	}
+	if _, err := source.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek source event log for diagnostic copy: %w", err)
+	}
+	written, err := io.CopyN(destination, source, length)
+	if err != nil {
+		return fmt.Errorf("copy diagnostic event-log range: %w", err)
+	}
+	if written != length {
+		return fmt.Errorf(
+			"copy diagnostic event-log range at byte %d wrote %d bytes, want %d",
+			offset,
+			written,
+			length,
+		)
 	}
 	return nil
 }
