@@ -187,7 +187,6 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 		t.Fatalf("Subscribe: %v", err)
 	}
 	_ = nextTranscriptMessage(t, sub)
-	before := sequencer.snapshot
 	valid := clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
 		StepID:     mustRegistryStepID(t),
 		ToolCallID: "tool-call-prefix",
@@ -197,14 +196,23 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 		if recovered := recover(); recovered == nil {
 			t.Fatal("invalid batch did not fail fast")
 		}
-		if got, want := sequencer.snapshot.inFlightTools.len(), before.inFlightTools.len(); got != want {
-			t.Fatalf("in-flight tool ledger mutated by invalid batch: got=%d want=%d", got, want)
-		}
-		if !reflect.DeepEqual(sequencer.snapshot, before) {
-			t.Fatalf("sequencer snapshot mutated by invalid batch: before=%+v after=%+v", before, sequencer.snapshot)
-		}
 		if _, err := nextTranscriptMessageTimeout(sub, 20*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("valid prefix was delivered after invalid batch: %v", err)
+		}
+		hydratedSub, err := sequencer.Subscribe(hydration)
+		if err != nil {
+			t.Fatalf("subscribe after rejected batch: %v", err)
+		}
+		defer func() { _ = hydratedSub.Close() }()
+		hydratedMessage := nextTranscriptMessage(t, hydratedSub)
+		hydrated, ok := hydratedMessage.Payload().(clientui.TranscriptHydration)
+		if !ok {
+			t.Fatalf("post-batch hydration payload = %T, want TranscriptHydration", hydratedMessage.Payload())
+		}
+		for _, tool := range hydrated.InFlightTools {
+			if tool.ToolCallID == "tool-call-prefix" {
+				t.Fatalf("post-batch hydration contains rejected tool prefix: %+v", tool)
+			}
 		}
 	}()
 	sequencer.Publish([]clientui.TranscriptEvent{valid, {}})

@@ -163,6 +163,9 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	if !errors.Is(nextErr, io.EOF) {
 		t.Fatalf("subscription close error = %v, want EOF", nextErr)
 	}
+	if lastMessage.Event().IsZero() {
+		t.Fatalf("no transcript message was delivered before EOF")
+	}
 	if lastMessage.Kind() != clientui.TranscriptMessageRuntimeReadModelUpdate ||
 		transcriptPayload[clientui.RuntimeReadModelUpdate](t, lastMessage).Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("last transcript message before EOF = %+v, want unavailable runtime read-model update", lastMessage)
