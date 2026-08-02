@@ -270,6 +270,24 @@ func TestManagedTargetLockUsesCapturedWorkspaceAfterSourceRebind(t *testing.T) {
 	if targetContext.SourceWorkspaceID != binding.WorkspaceID {
 		t.Fatalf("locked source workspace = %q, want captured workspace %q", targetContext.SourceWorkspaceID, binding.WorkspaceID)
 	}
+	editedAfterLockTitle := "edited after lock"
+	editedAfterLockBody := "body edited after lock"
+	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID: task.ID,
+		Title:  &editedAfterLockTitle,
+		Body:   &editedAfterLockBody,
+	}); err != nil {
+		t.Fatalf("UpdateTask after target lock: %v", err)
+	}
+	row, err = store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after ordinary edit: %v", err)
+	}
+	if row.Title != editedAfterLockTitle || row.Body != editedAfterLockBody ||
+		row.SourceWorkspaceID.String != newBinding.WorkspaceID {
+		t.Fatalf("task after ordinary edit = title %q, body %q, workspace %q; want edited fields and workspace %q",
+			row.Title, row.Body, row.SourceWorkspaceID.String, newBinding.WorkspaceID)
+	}
 	laterTask := createDefaultTask(t, ctx, store, binding.ProjectID)
 	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
 		TaskID:            laterTask.ID,

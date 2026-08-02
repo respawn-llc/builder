@@ -45,6 +45,7 @@ WHEN NEW.managed_worktree_id IS NOT NULL
     JOIN workspaces worktree_workspace ON worktree_workspace.id = wt.workspace_id
     JOIN project_workflow_links pwl ON pwl.id = NEW.project_workflow_link_id
     WHERE wt.id = NEW.managed_worktree_id
+      AND worktree_workspace.project_id = pwl.project_id
       AND (
           wt.workspace_id = NEW.source_workspace_id
           OR (
@@ -60,7 +61,10 @@ WHEN NEW.managed_worktree_id IS NOT NULL
               AND NEW.execution_target_provenance IN ('resolved', 'legacy_observed')
           )
       )
-      AND worktree_workspace.project_id = pwl.project_id
+      OR (
+          OLD.source_workspace_id IS NEW.source_workspace_id
+          AND OLD.managed_worktree_id IS NEW.managed_worktree_id
+      )
  )
 BEGIN
     SELECT RAISE(ABORT, 'managed worktree must belong to task source workspace');
