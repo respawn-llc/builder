@@ -16,6 +16,7 @@ import (
 const workspacePathKeyMaxBytes = 24
 
 var errManagedRootBaseInvalid = errors.New("managed worktree base is not a directory")
+var errManagedRootOverlapsSourceWorkspace = errors.New("automatic managed worktree root overlaps source workspace")
 
 type managedRootBase struct {
 	path string
@@ -148,6 +149,15 @@ func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (stri
 	if !sameOrDescendantPath(base, parent) {
 		return "", fmt.Errorf("managed workspace parent %q escapes base %q", parent, base)
 	}
+	if sameOrDescendantPath(canonicalWorkspaceRoot, parent) ||
+		sameOrDescendantPath(parent, canonicalWorkspaceRoot) {
+		return "", fmt.Errorf(
+			"managed workspace parent %q overlaps source workspace %q: %w",
+			parent,
+			canonicalWorkspaceRoot,
+			errManagedRootOverlapsSourceWorkspace,
+		)
+	}
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("create managed workspace parent %q: %w", parent, err)
 	}
@@ -269,6 +279,13 @@ func reserveManagedLeaf(parent string, leaf string) (string, bool, error) {
 		return "", false, fmt.Errorf("reserved managed worktree root %q is not a directory", root)
 	}
 	return root, false, nil
+}
+
+func removeEmptyManagedRootAfterAddFailure(root string) error {
+	if err := os.Remove(root); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove empty reserved managed worktree root %q after Git add failure: %w", root, err)
+	}
+	return nil
 }
 
 func (a *managedRootAllocator) randomDecimal(width int) (string, error) {
