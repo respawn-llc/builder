@@ -271,7 +271,11 @@ function BoardContent({
     },
     [push, t],
   );
-  const { actionsDisabled, initiatingAction, runCardAction } = useBoardInitiatingActionController({
+  const {
+    actionsDisabled: initiatingActionsDisabled,
+    initiatingAction,
+    runCardAction,
+  } = useBoardInitiatingActionController({
     api,
     connected: connection.phase === "connected",
     moveErrorTitle: t("board.moveFailed"),
@@ -287,6 +291,7 @@ function BoardContent({
     onPreviewError: reportMoveError,
     runAction: runCardAction,
   });
+  const actionsDisabled = initiatingActionsDisabled || manualMove.actionsDisabled;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),

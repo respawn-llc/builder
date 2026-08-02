@@ -29,16 +29,20 @@ export function useManualMoveController({
   runAction,
 }: ManualMoveControllerOptions) {
   const [pending, setPending] = useState<PendingManualMove | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const sequence = useRef(0);
 
   const cancel = useCallback(() => {
     sequence.current += 1;
+    setPreviewing(false);
     setPending(null);
   }, []);
 
   const preview = useCallback(
     (taskID: string, targetNodeID: string): void => {
       const id = ++sequence.current;
+      setPreviewing(true);
+      setPending(null);
       void api
         .previewMoveTask(taskID, targetNodeID)
         .then((preview) => {
@@ -54,6 +58,11 @@ export function useManualMoveController({
         .catch((error: unknown) => {
           if (id === sequence.current) {
             onPreviewError(error);
+          }
+        })
+        .finally(() => {
+          if (id === sequence.current) {
+            setPreviewing(false);
           }
         });
     },
@@ -80,5 +89,11 @@ export function useManualMoveController({
     [cancel, pending, runAction],
   );
 
-  return { cancel, pending, preview, submit };
+  return {
+    actionsDisabled: previewing || pending !== null,
+    cancel,
+    pending,
+    preview,
+    submit,
+  };
 }
