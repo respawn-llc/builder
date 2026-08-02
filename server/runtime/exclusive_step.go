@@ -124,6 +124,11 @@ func (s *defaultExclusiveStepLifecycle) ReleaseReservation(reservation *exclusiv
 		if index >= 0 {
 			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
 		}
+		if s.boundaryDone != nil {
+			close(s.boundaryDone)
+			s.boundaryDone = nil
+			s.boundaryReady = false
+		}
 		delete(s.reservationWaiters, reservation)
 	}
 	delete(s.reservations, reservation)
