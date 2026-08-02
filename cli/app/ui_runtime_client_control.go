@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -202,12 +203,24 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
 			ClientRequestID:                 id,
 			SessionID:                       c.sessionID,
-			Text:                            req.Text,
+			Input:                           req.Input,
 			OperationRef:                    req.OperationRef,
 			PreSubmitCompactionOperationRef: req.PreSubmitCompactionOperationRef,
 		})
 	})
-	return userTurnSubmissionFromResponse(resp, req.Text, requestID), err
+	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req), requestID), err
+}
+
+func newRuntimeTextInput(text string) runtimeinput.Input {
+	return runtimeinput.Text(text)
+}
+
+func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
+	text, err := input.Input.CanonicalHistoryText()
+	if err != nil {
+		panic("runtime submit input must validate before projection: " + err.Error())
+	}
+	return text
 }
 
 func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {

@@ -33,6 +33,20 @@ import (
 
 type missingMetadataPersistedSessionResolver struct{}
 
+type runtimeControlPromptCommandResolver struct {
+	content string
+	err     error
+	calls   int
+}
+
+func (r *runtimeControlPromptCommandResolver) ResolvePromptCommand(context.Context, string, string, string) (string, error) {
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.content, nil
+}
+
 func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
 	return session.PersistedSessionRecord{SessionDir: "/tmp/session"}, nil
 }
@@ -1553,6 +1567,75 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHistory(t *testing.T) {
+	client := finalResponseRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded current body"}
+	service.WithPromptCommandResolver(resolver)
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID.String(),
+		SessionID:       store.Meta().SessionID,
+		Input:           serverapi.NewRuntimePromptCommandInput("prompt:review", "src/internal"),
+		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
+	}
+	resp, err := service.SubmitUserTurn(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if resp.Message != "" {
+		t.Fatalf("prompt command response message = %q, want omitted execution text", resp.Message)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if got := countUserMessagesWithContent(t, store, "expanded current body"); got != 1 {
+		t.Fatalf("expanded user message count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/prompt:review src/internal"); got != 1 {
+		t.Fatalf("canonical history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded current body"); got != 0 {
+		t.Fatalf("expanded body history count = %d, want 0", got)
+	}
+}
+
+func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(t *testing.T) {
+	client := finalResponseRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{content: "first body"}
+	service.WithPromptCommandResolver(resolver)
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID.String(),
+		SessionID:       store.Meta().SessionID,
+		Input:           serverapi.NewRuntimePromptCommandInput("prompt:review", "src"),
+		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
+	}
+	if _, err := service.SubmitUserTurn(context.Background(), req); err != nil {
+		t.Fatalf("first SubmitUserTurn: %v", err)
+	}
+	resolver.content = "changed body"
+	if _, err := service.SubmitUserTurn(context.Background(), req); err != nil {
+		t.Fatalf("retry SubmitUserTurn: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if got := countUserMessagesWithContent(t, store, "changed body"); got != 0 {
+		t.Fatalf("changed body user messages = %d, want 0", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/prompt:review src"); got != 1 {
+		t.Fatalf("canonical history count = %d, want 1", got)
+	}
+}
+
 func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1579,7 +1662,7 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 	req := serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Text:            "flush before model completes",
+		Input:           serverapi.NewRuntimeTextInput("flush before model completes"),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,
@@ -2181,7 +2264,7 @@ func runtimeControlUserTurnRequest(store *session.Store, _ string, text string) 
 	return serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Text:            text,
+		Input:           serverapi.NewRuntimeTextInput(text),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,

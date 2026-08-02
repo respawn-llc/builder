@@ -82,7 +82,7 @@ func TestRuntimeClientInputRequestUsesCallerOperationIdentity(t *testing.T) {
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
 		OperationRef:                    ref,
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           newRuntimeTextInput("hello"),
 	}); err != nil {
 		t.Fatalf("SubmitRuntimeInput: %v", err)
 	}

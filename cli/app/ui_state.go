@@ -103,6 +103,9 @@ type uiInputFeatureState struct {
 	spinnerGeneration         uint64
 	spinnerTickToken          uint64
 	commandRegistry           *commands.Registry
+	promptCatalog             apicontract.PromptCommandCatalogService
+	promptCatalogEntries      []commands.PromptCommandCatalogEntry
+	promptCatalogRefreshToken uint64
 	finalAnswerOperation      *uiFinalAnswerOperation
 	finalAnswerOperationToken uint64
 	authSlashCommand          authSlashCommandKind

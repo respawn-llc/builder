@@ -34,6 +34,14 @@ func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsRespo
 		imports:       onboardingImportDiscoveryFromFacts(facts.Imports),
 		debug:         cfg.Settings.Debug,
 	}
+	if id := state.imports.commandRecommendationID; id != "" {
+		for _, choice := range state.imports.commandChoices {
+			if choice.OptionID == id {
+				state.selections.commandImport = onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
+				break
+			}
+		}
+	}
 	state.recomputeSkillEnablement(&state.selections)
 	if err := state.validateInvariant("construction", "theme"); err != nil {
 		return onboardingFlowState{}, err
@@ -109,6 +117,7 @@ func onboardingSelectionsFromConfig(cfg config.App, facts serverapi.CapabilityFa
 		supervisor:              supervisor,
 		compaction:              compaction,
 		skillImport:             onboardingImportSelection{Mode: onboardingImportModeNone},
+		commandImport:           onboardingImportSelection{Mode: onboardingImportModeNone},
 		skillEnablement:         map[string]bool{},
 		pendingPrimaryThinking:  onboardingThinkingEdit{kind: onboardingThinkingEditNone},
 		pendingReviewerThinking: onboardingThinkingEdit{kind: onboardingThinkingEditNone},

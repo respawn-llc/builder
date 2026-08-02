@@ -141,11 +141,25 @@ func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
 	if discovery.err != nil {
 		t.Fatalf("command-only import error must not become a skill error: %v", discovery.err)
 	}
+	if discovery.commandErr == nil {
+		t.Fatal("command-only import error was discarded")
+	}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = discovery
 	for _, step := range newOnboardingWorkflow(state).steps {
 		if step.id == "skills_import" && step.visible(state) {
 			t.Fatal("command-only import error must not make the skills import step visible")
+		}
+	}
+	for _, step := range newOnboardingWorkflow(state).steps {
+		if step.id == onboardingStepCommandsImport {
+			if !step.visible(state) {
+				t.Fatal("command-only import error must keep the command import step visible")
+			}
+			screen := step.build(state)
+			if screen.ErrorText == "" || len(screen.Options) != 1 {
+				t.Fatalf("command import error screen = %+v", screen)
+			}
 		}
 	}
 }

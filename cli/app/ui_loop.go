@@ -10,6 +10,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/tui/ongoing"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -37,6 +38,9 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
+	initialTransientStatus       *string
+	promptCatalog                apicontract.PromptCommandCatalogService
+	promptCatalogEntries         []commands.PromptCommandCatalogEntry
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
@@ -134,6 +138,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
+		WithUIPromptCommandCatalog(request.promptCatalog),
+		WithUIPromptCommandCatalogEntries(request.promptCatalogEntries),
 		WithUITurnQueueHook(request.wiring.turnQueueHook),
 		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
 		WithUIWorktreeClient(request.wiring.worktrees),
@@ -162,6 +168,13 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 			_ = tuiLogger.Close()
 		}
 		return nil, errors.New("projected UI model has unexpected type")
+	}
+	if request.initialTransientStatus != nil {
+		model.startupCmds = append(model.startupCmds, model.showTransientStatusNotice(uiStatusNotice{
+			Text:     *request.initialTransientStatus,
+			Kind:     uiStatusNoticeError,
+			Duration: transientStatusDuration,
+		}))
 	}
 	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)

@@ -473,7 +473,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           newRuntimeTextInput("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -522,7 +522,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           newRuntimeTextInput("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -731,7 +731,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           newRuntimeTextInput("hello"),
 	})
 	message := submission.Message
 	if err != nil {

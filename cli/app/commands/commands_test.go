@@ -70,6 +70,23 @@ func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 	}
 }
 
+func TestPromptCatalogProxiesExposeOnlyPreviewAndTypedInvocation(t *testing.T) {
+	registry := NewDefaultRegistryWithPromptCatalog([]PromptCommandCatalogEntry{
+		{Name: "prompt:review_plan", Preview: "Review **changed** files"},
+	})
+	command, ok := registry.Command("/prompt:review_plan")
+	if !ok || command.Description != "Review **changed** files" {
+		t.Fatalf("command = %+v, ok = %v", command, ok)
+	}
+	result := registry.Execute("/prompt:review_plan src")
+	if !result.Handled || result.PromptCommand == nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.PromptCommand.Name != "prompt:review_plan" || result.PromptCommand.Arguments != "src" {
+		t.Fatalf("invocation = %+v", result.PromptCommand)
+	}
+}
+
 func TestExecuteUnknown(t *testing.T) {
 	registry := NewDefaultRegistry()
 	if command, ok := registry.Command("/nope"); ok || command != (Command{}) {

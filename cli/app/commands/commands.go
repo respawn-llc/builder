@@ -2,6 +2,7 @@ package commands
 
 import (
 	"core/prompts"
+	"core/shared/runtimeinput"
 	"sort"
 	"strings"
 	"unicode"
@@ -48,6 +49,7 @@ type Result struct {
 	Args               string
 	SubmitUser         bool
 	User               string
+	PromptCommand      *runtimeinput.PromptCommand
 	FreshConversation  bool
 	SessionName        string
 	ThinkingLevel      string

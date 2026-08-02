@@ -7,6 +7,7 @@ import (
 	"core/cli/app/commands"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,6 +19,20 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
 	m := c.model
+	if commandResult.PromptCommand != nil {
+		invocation := commandResult.PromptCommand
+		canonical, err := runtimeinput.CanonicalCommandText(invocation.Name, invocation.Arguments)
+		if err != nil {
+			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
+		m.rememberPromptHistoryLocally(canonical)
+		return m, c.startTypedSubmissionWithPreSubmitQueuePosition(
+			canonical,
+			runtimeinput.Command(invocation.Name, invocation.Arguments),
+			queuePosition,
+			"",
+		)
+	}
 	if commandResult.SubmitUser {
 		if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, commandResult.User); blocked {
 			return m, disconnectCmd

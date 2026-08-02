@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/server/auth"
 	"core/server/authservice"
@@ -112,10 +111,6 @@ func (s *testEmbeddedServer) workspaceRetargetContext() *sessionWorkspaceRetarge
 }
 
 func (s *testEmbeddedServer) PresentationTheme() string { return "dark" }
-
-func (s *testEmbeddedServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
-	return commands.NewClientPromptRoots()
-}
 
 func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {

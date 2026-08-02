@@ -39,6 +39,10 @@ type PromptHistoryStore interface {
 	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error)
 }
 
+type PromptCommandResolver interface {
+	ResolvePromptCommand(ctx context.Context, sessionID, name, arguments string) (string, error)
+}
+
 type WorkflowTaskSessionResolver interface {
 	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
 }
@@ -51,6 +55,7 @@ type Service struct {
 	goalAuthority  *runtimecommand.GoalAuthority
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
+	promptCommands PromptCommandResolver
 	workflowTasks  WorkflowTaskSessionResolver
 	persisted      session.PersistedSessionResolver
 	operations     *runtimeops.Coordinator
@@ -94,6 +99,14 @@ type sessionBoolMemoRequest struct {
 type sessionTextMemoRequest struct {
 	SessionID string
 	Text      string
+}
+
+type sessionUserTurnMemoRequest struct {
+	SessionID string
+	Kind      serverapi.RuntimeUserTurnInputKind
+	Text      string
+	Name      string
+	Arguments string
 }
 
 type liveSteerMemoRequest struct {
@@ -232,6 +245,14 @@ func (s *Service) WithPromptHistoryStore(store PromptHistoryStore) *Service {
 		return nil
 	}
 	s.promptStore = store
+	return s
+}
+
+func (s *Service) WithPromptCommandResolver(resolver PromptCommandResolver) *Service {
+	if s == nil {
+		return nil
+	}
+	s.promptCommands = resolver
 	return s
 }
 

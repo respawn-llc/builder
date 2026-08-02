@@ -1,8 +1,6 @@
 package commands
 
-import "strings"
-
-const promptArgumentsPlaceholder = "$ARGUMENTS"
+import "core/shared/textutil"
 
 type promptCommandSpec struct {
 	Name         string
@@ -37,16 +35,5 @@ func registerPromptCommands(r *Registry, specs []promptCommandSpec) {
 }
 
 func buildPromptSubmission(prompt, args string) string {
-	trimmedArgs := strings.TrimSpace(args)
-	if strings.Contains(prompt, promptArgumentsPlaceholder) {
-		return strings.ReplaceAll(prompt, promptArgumentsPlaceholder, trimmedArgs)
-	}
-	if trimmedArgs == "" {
-		return prompt
-	}
-	base := strings.TrimRight(prompt, "\n")
-	if base == "" {
-		return trimmedArgs
-	}
-	return base + "\n\n" + trimmedArgs
+	return textutil.ExpandPromptTemplate(prompt, args)
 }

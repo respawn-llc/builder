@@ -50,7 +50,7 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 					Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
 					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 				},
-				Text: "steer me",
+				Input: serverapi.NewRuntimeTextInput("steer me"),
 			})
 			if err != nil {
 				t.Fatalf("SubmitUserTurn during active run: %v", err)

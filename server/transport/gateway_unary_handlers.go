@@ -114,6 +114,19 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
+	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		projectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return decodeAndHandle(req, func(params serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
+			return catalog.GetPromptCommandCatalog(ctx, params)
+		})
+	},
 	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := decodeParams[serverapi.OnboardingFinalizeRequest](req.Params)
 		if err != nil {

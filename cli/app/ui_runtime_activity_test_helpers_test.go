@@ -37,6 +37,6 @@ func submitRuntimeClientForTest(t *testing.T, client clientui.RuntimeClient, tex
 			Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
-		Text: text,
+		Input: newRuntimeTextInput(text),
 	})
 }

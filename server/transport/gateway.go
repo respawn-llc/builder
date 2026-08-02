@@ -45,6 +45,7 @@ type GatewayDependencies interface {
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
+	GatewayPromptCommandDependencies
 	GatewayProcessDependencies
 	GatewayWorktreeDependencies
 }
@@ -102,6 +103,10 @@ type GatewayPromptDependencies interface {
 	ApprovalViewClient() apicontract.ApprovalViewService
 	PromptControlClient() apicontract.PromptControlService
 	AttentionNotificationClient() apicontract.AttentionNotificationService
+}
+
+type GatewayPromptCommandDependencies interface {
+	PromptCommandCatalogClientForProjectWorkspace(context.Context, string, string) (apicontract.PromptCommandCatalogService, error)
 }
 
 type GatewayProcessDependencies interface {

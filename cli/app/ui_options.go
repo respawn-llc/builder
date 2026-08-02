@@ -128,6 +128,18 @@ func WithUICommandRegistry(registry *commands.Registry) UIOption {
 	}
 }
 
+func WithUIPromptCommandCatalog(catalog apicontract.PromptCommandCatalogService) UIOption {
+	return func(m *uiModelConstruction) {
+		m.promptCatalog = catalog
+	}
+}
+
+func WithUIPromptCommandCatalogEntries(entries []commands.PromptCommandCatalogEntry) UIOption {
+	return func(m *uiModelConstruction) {
+		m.promptCatalogEntries = append([]commands.PromptCommandCatalogEntry(nil), entries...)
+	}
+}
+
 func WithUIStartupSubmit(text string) UIOption {
 	return func(m *uiModelConstruction) {
 		m.startupSubmit = text

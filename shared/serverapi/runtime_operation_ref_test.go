@@ -17,7 +17,7 @@ func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
 		"submit": (RuntimeSubmitUserTurnRequest{
 			ClientRequestID:                 submitID.String(),
 			SessionID:                       "session-1",
-			Text:                            "hello",
+			Input:                           NewRuntimeTextInput("hello"),
 			OperationRef:                    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID},
 			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
 		}).Validate(),
@@ -63,7 +63,7 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 			req: RuntimeSubmitUserTurnRequest{
 				ClientRequestID: submitID.String(),
 				SessionID:       "session-1",
-				Text:            "hello",
+				Input:           NewRuntimeTextInput("hello"),
 			},
 		},
 		{
@@ -71,7 +71,7 @@ func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *tes
 			req: RuntimeSubmitUserTurnRequest{
 				ClientRequestID: submitID.String(),
 				SessionID:       "session-1",
-				Text:            "hello",
+				Input:           NewRuntimeTextInput("hello"),
 				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: submitID},
 			},
 		},

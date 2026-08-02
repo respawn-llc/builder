@@ -7,6 +7,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 type RuntimeSetSessionNameRequest struct {
@@ -85,9 +86,27 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 type RuntimeSubmitUserTurnRequest struct {
 	ClientRequestID                 string                       `json:"client_request_id"`
 	SessionID                       string                       `json:"session_id"`
-	Text                            string                       `json:"text"`
+	Input                           RuntimeUserTurnInput         `json:"input"`
 	OperationRef                    clientui.RuntimeOperationRef `json:"operation_ref"`
 	PreSubmitCompactionOperationRef clientui.RuntimeOperationRef `json:"pre_submit_compaction_operation_ref,omitempty"`
+}
+
+type RuntimeUserTurnInputKind = runtimeinput.Kind
+
+const (
+	RuntimeUserTurnInputKindText          = runtimeinput.KindText
+	RuntimeUserTurnInputKindPromptCommand = runtimeinput.KindPromptCommand
+)
+
+type RuntimePromptCommandInput = runtimeinput.PromptCommand
+type RuntimeUserTurnInput = runtimeinput.Input
+
+func NewRuntimeTextInput(text string) RuntimeUserTurnInput {
+	return runtimeinput.Text(text)
+}
+
+func NewRuntimePromptCommandInput(name, arguments string) RuntimeUserTurnInput {
+	return runtimeinput.Command(name, arguments)
 }
 
 type RuntimeSubmitUserTurnResponse struct {
@@ -336,6 +355,9 @@ func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if err := r.Input.Validate(); err != nil {
 		return err
 	}
 	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {

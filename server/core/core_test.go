@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	modelstub "core/internal/testharness/pty/blackbox"
@@ -62,6 +63,87 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	}
 	if facts.Defaults.PrimaryModelID == "" {
 		t.Fatalf("capability facts missing defaults: %+v", facts)
+	}
+}
+
+func TestPromptCommandCatalogUsesRequestedWorkspaceRoot(t *testing.T) {
+	home := t.TempDir()
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspaceA})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	bindingA, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspaceA)
+	if err != nil {
+		t.Fatalf("RegisterBinding A: %v", err)
+	}
+	bindingB, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspaceB)
+	if err != nil {
+		t.Fatalf("RegisterBinding B: %v", err)
+	}
+	writeCorePromptFixture(t, workspaceA, "only-a", "A")
+	writeCorePromptFixture(t, workspaceB, "only_b", "B")
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), bindingB.ProjectID, workspaceB)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("GetPromptCommandCatalog: %v", err)
+	}
+	if len(response.Commands) != 1 || response.Commands[0].Name != "prompt:only_b" {
+		t.Fatalf("workspace B catalog = %+v, want only_b (A binding %q, B binding %q)", response.Commands, bindingA.ProjectID, bindingB.ProjectID)
+	}
+}
+
+func TestPromptCommandCatalogPreservesFilesystemCauseInternallyAndRedactsWireError(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	promptRoot := filepath.Join(workspace, ".kent", "prompts")
+	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missingTarget := filepath.Join(promptRoot, "missing-target.md")
+	if err := os.Symlink(missingTarget, filepath.Join(promptRoot, "broken.md")); err != nil {
+		t.Fatal(err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	_, err = client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("catalog error = %T %v, want wrapped filesystem cause", err, err)
+	}
+	if strings.Contains(err.Error(), workspace) {
+		t.Fatalf("catalog error exposed workspace path: %v", err)
+	}
+}
+
+func writeCorePromptFixture(t *testing.T, workspace, name, content string) {
+	t.Helper()
+	root := filepath.Join(workspace, ".kent", "prompts")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, name+".md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

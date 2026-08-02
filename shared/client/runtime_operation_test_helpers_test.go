@@ -12,7 +12,7 @@ func runtimeSubmitUserTurnRequestForTest(sessionID, text string) serverapi.Runti
 	return serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: submitID.String(),
 		SessionID:       sessionID,
-		Text:            text,
+		Input:           serverapi.NewRuntimeTextInput(text),
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
 			ClientRequestID: submitID,

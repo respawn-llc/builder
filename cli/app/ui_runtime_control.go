@@ -148,7 +148,7 @@ func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (cl
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
 		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            text,
+		Input:                           newRuntimeTextInput(text),
 	})
 }
 
