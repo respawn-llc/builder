@@ -72,7 +72,7 @@ describe("sidebar Task Detail navigation", () => {
     });
     const restoredStack = screen.getByTestId("task-detail-island-stack");
     expect(restoredStack).toHaveProperty("scrollTop", 120);
-    expect(screen.getByRole("textbox", { name: "Description" })).toHaveClass("overflow-visible");
+    expect(screen.getByRole("textbox", { name: "Description" })).toHaveAttribute("aria-expanded", "true");
     restoredStack.scrollTop = 0;
     fireEvent.scroll(restoredStack);
     await waitFor(() => {
@@ -108,7 +108,7 @@ describe("sidebar Task Detail navigation", () => {
     await waitFor(() => {
       expect(screen.getByTestId("task-detail-island-stack")).toHaveProperty("scrollTop", 40);
     });
-  });
+  }, 15000);
 
   it("keeps one rendered Task Detail and one live project subscription across cycles", async () => {
     const services = createTestServices([

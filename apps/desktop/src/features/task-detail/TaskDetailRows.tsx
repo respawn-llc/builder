@@ -246,6 +246,7 @@ function DescriptionReadView({
     <div className="relative min-w-0">
       <div
         aria-label={t("task.description")}
+        aria-expanded={expanded}
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1),

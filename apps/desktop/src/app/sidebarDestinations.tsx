@@ -21,6 +21,7 @@ export function SidebarDestinationView({
 }>): ReactElement {
   const {
     activeToken,
+    activeActivationID,
     removeSidebarEntry,
     replaceSidebarIfCurrent,
     resolveSidebarIfCurrent,
@@ -61,6 +62,7 @@ export function SidebarDestinationView({
         enabled
         initialFocus={destination.initialFocus}
         sidebarSnapshot={activeSnapshot?.kind === "taskDetail" ? activeSnapshot : undefined}
+        sidebarActivationID={activeActivationID}
         onMissingTask={() => {
           if (activeToken !== null) {
             removeSidebarEntry(activeToken);

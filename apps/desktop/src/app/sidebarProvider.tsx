@@ -47,6 +47,7 @@ type PendingSidebarRoutePreservation = Readonly<{
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [stackState, setStackState] = useState<SidebarStackState | null>(null);
+  const [activeActivationID, setActiveActivationID] = useState<string | null>(null);
   const [activeWidthProfile, setActiveWidthProfile] =
     useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
   const [phase, setPhase] = useState<SidebarPhase>("open");
@@ -60,7 +61,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextIDRef = useRef(0);
 
-  const nextID = useCallback((prefix: "lifecycle" | "entry"): string => {
+  const nextID = useCallback((prefix: "activation" | "lifecycle" | "entry"): string => {
     nextIDRef.current += 1;
     return `${prefix}-${nextIDRef.current.toString()}`;
   }, []);
@@ -131,6 +132,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const pending = pendingRef.current;
       pendingRef.current = null;
       preserveRouteChangeRef.current = null;
+      setActiveActivationID(null);
       clearAllCaptures();
       pending?.resolve({ status: "canceled", reason });
       if (state !== null) {
@@ -187,6 +189,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
       const lifecycleID = nextID("lifecycle");
       const entryID = nextID("entry");
+      const activationID = nextID("activation");
+      setActiveActivationID(activationID);
       const nextProfile = sidebarWidthProfile(destination);
       setActiveWidthProfile(nextProfile);
       setSidebarWidths((current) => {
@@ -223,6 +227,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
       const nextProfile = sidebarWidthProfile(destination);
+      setActiveActivationID(nextID("activation"));
       setActiveWidthProfile(nextProfile);
       setSidebarWidths((current) =>
         sidebarWidthForProfile(current, nextProfile) === undefined
@@ -285,11 +290,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearCloseTimeout();
       clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
       const nextDestination = existingTask?.destination ?? destination;
+      const activationID = nextID("activation");
       setActiveWidthProfile(sidebarWidthProfile(nextDestination));
       setPhase("open");
       void runViewTransition({
         scope: "sidebar-push",
         update: () => {
+          setActiveActivationID(activationID);
           dispatchStack({
             type: "push",
             lifecycleID: state.lifecycleID,
@@ -316,10 +323,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     }
     clearCloseTimeout();
     setActiveWidthProfile(sidebarWidthProfile(previousEntry.destination));
+    const activationID = nextID("activation");
     setPhase("open");
     void runViewTransition({
       scope: "sidebar-back",
       update: () => {
+        setActiveActivationID(activationID);
         dispatchStack({
           type: "back",
           lifecycleID: state.lifecycleID,
@@ -327,7 +336,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         });
       },
     });
-  }, [clearCapture, clearCloseTimeout, dispatchStack]);
+  }, [clearCapture, clearCloseTimeout, dispatchStack, nextID]);
 
   const resolveSidebar = useCallback(
     (result: Exclude<SidebarResult, SidebarCanceledResult>) => {
@@ -335,6 +344,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const pending = pendingRef.current;
       pendingRef.current = null;
       preserveRouteChangeRef.current = null;
+      setActiveActivationID(null);
       clearAllCaptures();
       pending?.resolve(result);
       if (state !== null) {
@@ -386,13 +396,16 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         closeSidebar("closed");
         return;
       }
+      if (state.entries.at(-1)?.entryID === token.entryID) {
+        setActiveActivationID(nextID("activation"));
+      }
       dispatchStack({
         type: "remove",
         lifecycleID: token.lifecycleID,
         entryID: token.entryID,
       });
     },
-    [clearCapture, clearSidebarRouteChangePreservation, closeSidebar, dispatchStack],
+    [clearCapture, clearSidebarRouteChangePreservation, closeSidebar, dispatchStack, nextID],
   );
 
   const closeSidebarIfCurrent = useCallback(
@@ -452,6 +465,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const value = useMemo<SidebarController>(
     () => ({
       activeDestination,
+      activeActivationID,
       activeSnapshot,
       activeToken,
       backSidebar,
@@ -477,6 +491,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     }),
     [
       activeDestination,
+      activeActivationID,
       activeSnapshot,
       activeToken,
       backSidebar,

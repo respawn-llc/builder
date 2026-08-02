@@ -13,6 +13,7 @@ import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } fro
 export type TaskDetailSurfaceProps = Readonly<{
   taskId: string;
   enabled: boolean;
+  sidebarActivationID?: string | null | undefined;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
@@ -22,6 +23,7 @@ export type TaskDetailSurfaceProps = Readonly<{
 export function TaskDetailSurface({
   taskId,
   enabled,
+  sidebarActivationID,
   initialFocus,
   onMutated,
   sidebarSnapshot,
@@ -46,45 +48,17 @@ export function TaskDetailSurface({
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
   const openLink = useOpenExternalLink();
-  const refetchDetail = detail.refetch;
-  const refetchAttention = attention.refetch;
-  const refetchActivity = activity.refetch;
-  const refetchComments = comments.refetch;
-  const restorationSnapshotKey =
-    sidebarSnapshot === undefined ? null : JSON.stringify(sidebarSnapshot);
-  const [completedRestorationSnapshotKey, setCompletedRestorationSnapshotKey] = useState<string | null>(null);
-  useEffect(() => {
-    if (restorationSnapshotKey === null) {
-      return;
-    }
-    let canceled = false;
-    void Promise.all([
-      refetchDetail(),
-      refetchAttention(),
-      refetchActivity(),
-      refetchComments(),
-    ]).then(
-      () => {
-        if (!canceled) {
-          setCompletedRestorationSnapshotKey(restorationSnapshotKey);
-        }
-      },
-      () => {
-        if (!canceled) {
-          setCompletedRestorationSnapshotKey(restorationSnapshotKey);
-        }
-      },
-    );
-    return () => {
-      canceled = true;
-    };
-  }, [
-    refetchActivity,
-    refetchAttention,
-    refetchComments,
-    refetchDetail,
-    restorationSnapshotKey,
-  ]);
+  const restorationActivationKey =
+    sidebarSnapshot === undefined || sidebarActivationID === null || sidebarActivationID === undefined
+      ? null
+      : `${sidebarActivationID}:${taskId}`;
+  const restoredDataRefreshComplete = useTaskDetailRestorationRefresh({
+    activationKey: restorationActivationKey,
+    refetchActivity: activity.refetch,
+    refetchAttention: attention.refetch,
+    refetchComments: comments.refetch,
+    refetchDetail: detail.refetch,
+  });
   const missingTask = detail.isError && isWorkflowTaskNotFound(detail.error);
   useEffect(() => {
     if (missingTask) {
@@ -109,9 +83,9 @@ export function TaskDetailSurface({
           initialFocus={initialFocus}
           onMutated={onMutated}
           openLink={openLink}
+          sidebarActivationID={sidebarActivationID}
           restoredDataReady={
-            (restorationSnapshotKey === null ||
-              completedRestorationSnapshotKey === restorationSnapshotKey) &&
+            restoredDataRefreshComplete &&
             !detail.isFetching &&
             !attention.isFetching &&
             !activity.isFetching &&
@@ -140,6 +114,46 @@ export function TaskDetailSurface({
       <div className="min-h-0">{content}</div>
     </div>
   );
+}
+
+type RestorationRefetch = () => Promise<unknown>;
+
+function useTaskDetailRestorationRefresh({
+  activationKey,
+  refetchActivity,
+  refetchAttention,
+  refetchComments,
+  refetchDetail,
+}: Readonly<{
+  activationKey: string | null;
+  refetchActivity: RestorationRefetch;
+  refetchAttention: RestorationRefetch;
+  refetchComments: RestorationRefetch;
+  refetchDetail: RestorationRefetch;
+}>): boolean {
+  const [completedActivationKey, setCompletedActivationKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (activationKey === null) {
+      return;
+    }
+    let canceled = false;
+    void Promise.all([refetchDetail(), refetchAttention(), refetchActivity(), refetchComments()]).then(
+      () => {
+        if (!canceled) {
+          setCompletedActivationKey(activationKey);
+        }
+      },
+      () => {
+        if (!canceled) {
+          setCompletedActivationKey(activationKey);
+        }
+      },
+    );
+    return () => {
+      canceled = true;
+    };
+  }, [activationKey, refetchActivity, refetchAttention, refetchComments, refetchDetail]);
+  return activationKey === null || completedActivationKey === activationKey;
 }
 
 function isWorkflowTaskNotFound(error: unknown): boolean {

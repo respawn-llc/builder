@@ -65,8 +65,10 @@ describe("SidebarProvider stack contract", () => {
       });
     });
     const rootToken = result.current.activeToken;
+    const rootActivationID = result.current.activeActivationID;
 
     expect(rootToken).not.toBeNull();
+    expect(rootActivationID).not.toBeNull();
     expect(result.current.stackDestinations).toEqual([
       { kind: "taskDetail", taskID: "task-1" },
     ]);
@@ -87,6 +89,8 @@ describe("SidebarProvider stack contract", () => {
       kind: "taskDetail",
       taskID: "task-2",
     });
+    const pushedActivationID = result.current.activeActivationID;
+    expect(pushedActivationID).not.toBe(rootActivationID);
     expect(result.current.canGoBack).toBe(true);
 
     act(() => {
@@ -96,6 +100,7 @@ describe("SidebarProvider stack contract", () => {
       kind: "taskDetail",
       taskID: "task-1",
     });
+    expect(result.current.activeActivationID).not.toBe(pushedActivationID);
     expect(result.current.canGoBack).toBe(false);
 
     act(() => {

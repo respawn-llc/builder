@@ -139,6 +139,7 @@ export type SidebarStateCapture = () => SidebarDestinationSnapshot | null;
 
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
+  activeActivationID: string | null;
   activeSnapshot: SidebarDestinationSnapshot | null;
   activeToken: SidebarEntryToken | null;
   backSidebar(): void;

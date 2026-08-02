@@ -261,6 +261,7 @@ export function TaskDetailContent({
   initialFocus,
   onMutated,
   openLink,
+  sidebarActivationID,
   restoredDataReady,
   sidebarSnapshot,
 }: Readonly<{
@@ -271,6 +272,7 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
+  sidebarActivationID?: string | null | undefined;
   restoredDataReady: boolean;
   sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
 }>) {
@@ -408,9 +410,13 @@ export function TaskDetailContent({
       updatePending={update.isPending}
       initialScrollOffset={restoredSnapshot?.scrollTop}
       initialScrollOffsetRequestKey={
-        activeToken === null || restoredSnapshot === undefined || !restoredDataReady
+        activeToken === null ||
+        sidebarActivationID === null ||
+        sidebarActivationID === undefined ||
+        restoredSnapshot === undefined ||
+        !restoredDataReady
           ? undefined
-          : `${activeToken.entryID}:${restoredSnapshot.scrollTop.toString()}`
+          : `${sidebarActivationID}:${detail.id}:${restoredSnapshot.scrollTop.toString()}`
       }
       onScrollElementChange={(element) => {
         scrollElementRef.current = element;

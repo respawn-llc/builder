@@ -7,6 +7,7 @@ export function createTestSidebarController(
 ): SidebarController {
   return {
     activeDestination: null,
+    activeActivationID: null,
     activeSnapshot: null,
     activeToken: null,
     backSidebar() {
