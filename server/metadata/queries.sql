@@ -1533,6 +1533,7 @@ args AS (
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.arg(offset_rows) AS INTEGER) AS offset_rows,
+        CAST(sqlc.arg(sort_selector_count) AS INTEGER) AS sort_selector_count,
         CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
         CAST(sqlc.arg(sort_1_desc) AS INTEGER) AS sort_1_desc,
         CAST(sqlc.arg(sort_2_field) AS TEXT) AS sort_2_field,
@@ -1548,13 +1549,13 @@ args AS (
         CAST(sqlc.arg(sort_7_field) AS TEXT) AS sort_7_field,
         CAST(sqlc.arg(sort_7_desc) AS INTEGER) AS sort_7_desc,
         CASE WHEN
-            CAST(sqlc.arg(sort_1_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_2_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_3_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_4_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_5_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_6_field) AS TEXT) = 'labels' OR
-            CAST(sqlc.arg(sort_7_field) AS TEXT) = 'labels'
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 1 AND CAST(sqlc.arg(sort_1_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 2 AND CAST(sqlc.arg(sort_2_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 3 AND CAST(sqlc.arg(sort_3_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 4 AND CAST(sqlc.arg(sort_4_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 5 AND CAST(sqlc.arg(sort_5_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 6 AND CAST(sqlc.arg(sort_6_field) AS TEXT) = 'labels') OR
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= 7 AND CAST(sqlc.arg(sort_7_field) AS TEXT) = 'labels')
         THEN 1 ELSE 0 END AS labels_requested,
         CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
@@ -1890,27 +1891,27 @@ page_rows AS (
     FROM scored_rows rows
     CROSS JOIN args
     ORDER BY
-        CASE WHEN args.labels_requested != 0 AND args.sort_1_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
-        CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_2_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
-        CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_3_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
-        CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_4_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
-        CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_5_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
-        CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_6_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_6_desc = 0 THEN rows.sort_6_value END ASC,
-        CASE WHEN args.sort_6_desc != 0 THEN rows.sort_6_value END DESC,
-        CASE WHEN args.labels_requested != 0 AND args.sort_7_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
-        CASE WHEN args.sort_7_desc = 0 THEN rows.sort_7_value END ASC,
-        CASE WHEN args.sort_7_desc != 0 THEN rows.sort_7_value END DESC,
+        CASE WHEN args.sort_selector_count >= 1 AND args.labels_requested != 0 AND args.sort_1_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 1 AND args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
+        CASE WHEN args.sort_selector_count >= 1 AND args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
+        CASE WHEN args.sort_selector_count >= 2 AND args.labels_requested != 0 AND args.sort_2_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 2 AND args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
+        CASE WHEN args.sort_selector_count >= 2 AND args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
+        CASE WHEN args.sort_selector_count >= 3 AND args.labels_requested != 0 AND args.sort_3_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 3 AND args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
+        CASE WHEN args.sort_selector_count >= 3 AND args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
+        CASE WHEN args.sort_selector_count >= 4 AND args.labels_requested != 0 AND args.sort_4_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 4 AND args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
+        CASE WHEN args.sort_selector_count >= 4 AND args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
+        CASE WHEN args.sort_selector_count >= 5 AND args.labels_requested != 0 AND args.sort_5_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 5 AND args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
+        CASE WHEN args.sort_selector_count >= 5 AND args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
+        CASE WHEN args.sort_selector_count >= 6 AND args.labels_requested != 0 AND args.sort_6_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 6 AND args.sort_6_desc = 0 THEN rows.sort_6_value END ASC,
+        CASE WHEN args.sort_selector_count >= 6 AND args.sort_6_desc != 0 THEN rows.sort_6_value END DESC,
+        CASE WHEN args.sort_selector_count >= 7 AND args.labels_requested != 0 AND args.sort_7_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc = 0 THEN rows.sort_7_value END ASC,
+        CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc != 0 THEN rows.sort_7_value END DESC,
         rows.id ASC
     LIMIT (SELECT limit_rows FROM args)
     OFFSET (SELECT offset_rows FROM args)
@@ -1949,27 +1950,27 @@ FROM args
 CROSS JOIN (SELECT 1) summary
 LEFT JOIN page_rows page ON TRUE
 ORDER BY
-    CASE WHEN args.labels_requested != 0 AND args.sort_1_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_1_desc = 0 THEN page.sort_1_value END ASC,
-    CASE WHEN args.sort_1_desc != 0 THEN page.sort_1_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_2_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_2_desc = 0 THEN page.sort_2_value END ASC,
-    CASE WHEN args.sort_2_desc != 0 THEN page.sort_2_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_3_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_3_desc = 0 THEN page.sort_3_value END ASC,
-    CASE WHEN args.sort_3_desc != 0 THEN page.sort_3_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_4_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_4_desc = 0 THEN page.sort_4_value END ASC,
-    CASE WHEN args.sort_4_desc != 0 THEN page.sort_4_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_5_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_5_desc = 0 THEN page.sort_5_value END ASC,
-    CASE WHEN args.sort_5_desc != 0 THEN page.sort_5_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_6_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_6_desc = 0 THEN page.sort_6_value END ASC,
-    CASE WHEN args.sort_6_desc != 0 THEN page.sort_6_value END DESC,
-    CASE WHEN args.labels_requested != 0 AND args.sort_7_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
-    CASE WHEN args.sort_7_desc = 0 THEN page.sort_7_value END ASC,
-    CASE WHEN args.sort_7_desc != 0 THEN page.sort_7_value END DESC,
+    CASE WHEN args.sort_selector_count >= 1 AND args.labels_requested != 0 AND args.sort_1_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 1 AND args.sort_1_desc = 0 THEN page.sort_1_value END ASC,
+    CASE WHEN args.sort_selector_count >= 1 AND args.sort_1_desc != 0 THEN page.sort_1_value END DESC,
+    CASE WHEN args.sort_selector_count >= 2 AND args.labels_requested != 0 AND args.sort_2_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 2 AND args.sort_2_desc = 0 THEN page.sort_2_value END ASC,
+    CASE WHEN args.sort_selector_count >= 2 AND args.sort_2_desc != 0 THEN page.sort_2_value END DESC,
+    CASE WHEN args.sort_selector_count >= 3 AND args.labels_requested != 0 AND args.sort_3_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 3 AND args.sort_3_desc = 0 THEN page.sort_3_value END ASC,
+    CASE WHEN args.sort_selector_count >= 3 AND args.sort_3_desc != 0 THEN page.sort_3_value END DESC,
+    CASE WHEN args.sort_selector_count >= 4 AND args.labels_requested != 0 AND args.sort_4_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 4 AND args.sort_4_desc = 0 THEN page.sort_4_value END ASC,
+    CASE WHEN args.sort_selector_count >= 4 AND args.sort_4_desc != 0 THEN page.sort_4_value END DESC,
+    CASE WHEN args.sort_selector_count >= 5 AND args.labels_requested != 0 AND args.sort_5_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 5 AND args.sort_5_desc = 0 THEN page.sort_5_value END ASC,
+    CASE WHEN args.sort_selector_count >= 5 AND args.sort_5_desc != 0 THEN page.sort_5_value END DESC,
+    CASE WHEN args.sort_selector_count >= 6 AND args.labels_requested != 0 AND args.sort_6_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 6 AND args.sort_6_desc = 0 THEN page.sort_6_value END ASC,
+    CASE WHEN args.sort_selector_count >= 6 AND args.sort_6_desc != 0 THEN page.sort_6_value END DESC,
+    CASE WHEN args.sort_selector_count >= 7 AND args.labels_requested != 0 AND args.sort_7_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc = 0 THEN page.sort_7_value END ASC,
+    CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc != 0 THEN page.sort_7_value END DESC,
     page.id ASC;
 
 
@@ -2364,239 +2365,6 @@ WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
 ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
 LIMIT sqlc.arg(limit_rows);
 
-
--- name: ListBoardNodeTasksGeneralized :many
-WITH
-board_sort_args AS (
-    SELECT
-        CAST(sqlc.narg(cursor_sort_value) AS TEXT) AS cursor_sort_value,
-        sqlc.arg(sort_field) AS sort_field,
-        sqlc.arg(cursor_direction) AS cursor_direction,
-        sqlc.narg(cursor_unlabeled) AS cursor_unlabeled,
-        sqlc.arg(sort_descending) AS sort_descending,
-        sqlc.narg(cursor_task_seq) AS cursor_task_seq
-),
-board_node_tasks AS (
-    SELECT
-        t.id,
-        t.project_id,
-        t.project_workflow_link_id,
-        t.workflow_id,
-        t.workflow_revision_seen,
-        t.task_seq,
-        t.short_id,
-        t.title,
-        t.body,
-        t.source_url,
-        t.source_workspace_id,
-        t.managed_worktree_id,
-        t.execution_target_mode,
-        t.execution_target_requested_ref,
-        t.execution_target_resolved_ref,
-        t.execution_target_commit_oid,
-        t.execution_target_provenance,
-        t.created_at_unix_ms,
-        t.updated_at_unix_ms,
-        t.metadata_json
-    FROM task_records t
-    WHERE t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-          sqlc.arg(label_filter_kind) = 'none'
-          OR (
-              sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.narg(label_filter_mode) = 'any'
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                        ON assignment.label_id = selected_label.value
-                      WHERE assignment.task_id = t.id
-                  )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                      WHERE NOT EXISTS (
-                          SELECT 1
-                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                          WHERE assignment.label_id = excluded_label.value
-                            AND assignment.task_id = t.id
-                      )
-                  )
-              )
-          )
-          OR (
-              sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.narg(label_filter_mode) = 'all'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
-                        AND assignment.task_id = t.id
-                  )
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = excluded_label.value
-                  WHERE assignment.task_id = t.id
-              )
-          )
-          OR (
-              sqlc.arg(label_filter_kind) = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = t.id
-              )
-          )
-      )
-      AND (
-          EXISTS (
-              SELECT 1
-              FROM task_current_nodes current_node
-              WHERE current_node.task_id = t.id
-                AND current_node.node_id = sqlc.arg(node_id)
-          )
-      )
-),
-board_node_task_label_values AS (
-    SELECT
-        board_task.id AS task_id,
-
-(
-    SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
-    FROM (
-        SELECT label.ordinal
-        FROM task_label_assignments assignment
-        JOIN project_labels label ON label.id = assignment.label_id
-        WHERE assignment.task_id = board_task.id
-        ORDER BY label.ordinal ASC, label.id ASC
-    ) ordered_label
-)
- AS label_ordinals
-    FROM board_node_tasks board_task
-    CROSS JOIN board_sort_args args
-    WHERE args.sort_field = 'labels'
-      AND EXISTS (
-          SELECT 1
-          FROM task_label_assignments assignment
-          WHERE assignment.task_id = board_task.id
-      )
-),
-board_node_task_labels AS (
-    SELECT
-        task_id,
-        CAST(label_ordinals AS TEXT) AS label_ordinals
-    FROM board_node_task_label_values
-),
-board_node_tasks_scored AS (
-    SELECT
-        t.*,
-        labels.label_ordinals,
-        CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled,
-        CASE args.sort_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
-            WHEN 'short_id' THEN printf('%020d', t.task_seq)
-            ELSE labels.label_ordinals
-        END AS sort_key
-    FROM board_node_tasks t
-    LEFT JOIN board_node_task_labels labels ON labels.task_id = t.id
-    CROSS JOIN board_sort_args args
-)
-SELECT
-    t.id,
-    t.project_id,
-    t.project_workflow_link_id,
-    t.workflow_id,
-    t.workflow_revision_seen,
-    t.task_seq,
-    t.short_id,
-    t.title,
-    t.body,
-    t.source_url,
-    t.source_workspace_id,
-    t.managed_worktree_id,
-    t.execution_target_mode,
-    t.execution_target_requested_ref,
-    t.execution_target_resolved_ref,
-    t.execution_target_commit_oid,
-    t.execution_target_provenance,
-    t.created_at_unix_ms,
-    t.updated_at_unix_ms,
-    t.metadata_json,
-    t.label_ordinals,
-    t.labels_unlabeled
-FROM board_node_tasks_scored t
-CROSS JOIN board_sort_args args
-WHERE sqlc.narg(cursor_task_seq) IS NULL
-   OR CASE
-        WHEN sqlc.arg(sort_field) = 'labels' THEN
-            CASE sqlc.arg(cursor_direction)
-                WHEN 'older' THEN
-                    t.labels_unlabeled > CAST(sqlc.narg(cursor_unlabeled) AS INTEGER)
-                    OR (
-                        t.labels_unlabeled = CAST(sqlc.narg(cursor_unlabeled) AS INTEGER)
-                        AND CASE
-                            WHEN sqlc.narg(cursor_unlabeled) != 0 THEN
-                                CASE WHEN sqlc.arg(sort_descending) = 0 THEN
-                                    t.task_seq > CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-                                ELSE
-                                    t.task_seq < CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-                                END
-                            WHEN sqlc.arg(sort_descending) = 0 THEN
-                                (t.label_ordinals, t.task_seq) > (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-                            ELSE
-                                (t.label_ordinals, t.task_seq) < (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-                        END
-                    )
-                WHEN 'newer' THEN
-                    t.labels_unlabeled < CAST(sqlc.narg(cursor_unlabeled) AS INTEGER)
-                    OR (
-                        t.labels_unlabeled = CAST(sqlc.narg(cursor_unlabeled) AS INTEGER)
-                        AND CASE
-                            WHEN sqlc.narg(cursor_unlabeled) != 0 THEN
-                                CASE WHEN sqlc.arg(sort_descending) = 0 THEN
-                                    t.task_seq < CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-                                ELSE
-                                    t.task_seq > CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-                                END
-                            WHEN sqlc.arg(sort_descending) = 0 THEN
-                                (t.label_ordinals, t.task_seq) < (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-                            ELSE
-                                (t.label_ordinals, t.task_seq) > (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-                        END
-                    )
-                ELSE 0
-            END
-        WHEN (sqlc.arg(sort_descending) = 0 AND sqlc.arg(cursor_direction) = 'older')
-          OR (sqlc.arg(sort_descending) != 0 AND sqlc.arg(cursor_direction) = 'newer') THEN
-            (t.sort_key, t.task_seq) > (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-        ELSE
-            (t.sort_key, t.task_seq) < (CAST(sqlc.narg(cursor_sort_value) AS TEXT), CAST(sqlc.narg(cursor_task_seq) AS INTEGER))
-      END
-ORDER BY
-    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'older' THEN t.labels_unlabeled END ASC,
-    CASE WHEN args.sort_field = 'labels' AND args.cursor_direction = 'newer' THEN t.labels_unlabeled END DESC,
-    CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
-              OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN
-        t.sort_key
-    END ASC,
-    CASE WHEN (args.sort_descending != 0 AND args.cursor_direction = 'older')
-              OR (args.sort_descending = 0 AND args.cursor_direction = 'newer') THEN
-        t.sort_key
-    END DESC,
-    CASE WHEN (args.sort_descending = 0 AND args.cursor_direction = 'older')
-              OR (args.sort_descending != 0 AND args.cursor_direction = 'newer') THEN t.task_seq END ASC,
-    CASE WHEN (args.sort_descending != 0 AND args.cursor_direction = 'older')
-              OR (args.sort_descending = 0 AND args.cursor_direction = 'newer') THEN t.task_seq END DESC
-LIMIT sqlc.arg(limit_rows);
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks

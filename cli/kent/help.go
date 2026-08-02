@@ -187,7 +187,7 @@ var (
 	taskSearchUsage         = commandUsage{helpFile: "task_search.txt", includeEmbeddedFlags: true}
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
-	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
+	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|move|remove|rename> ...", "Manage Project labels and task label assignments.")
 	taskLabelCreateUsage    = leafCommandUsage(config.Command+" task label create [--project <project>] [--json] <name>", "Create a Project label.")
 	taskLabelListUsage      = leafCommandUsage(config.Command+" task label list [--project <project>] [--name <name>] [--json]", "List labels in a Project catalog.")
 	taskLabelMoveUsage      = leafCommandUsage(config.Command+" task label move --label <name-or-uuid> (--first|--last|--before <name-or-uuid>|--after <name-or-uuid>) [--project <project>] [--json]", "Move a Project label within its authoritative catalog order.")

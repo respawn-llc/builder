@@ -120,6 +120,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
 		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
 		OffsetRows:           int64(req.offset),
+		SortSelectorCount:    int64(len(req.sortSelectors)),
 		Sort1Field:           string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),
 		Sort1Desc:            workflowTaskListSortDescending(req.sortSelectors, 0),
 		Sort2Field:           string(workflowTaskListSortSelector(req.sortSelectors, 1).Field),

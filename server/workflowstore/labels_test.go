@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -72,7 +73,7 @@ func TestProjectLabelReorderRequiresExactPermutationAndCommitsAtomicOrder(t *tes
 	if applied.Outcome != ProjectLabelReorderApplied {
 		t.Fatalf("reorder outcome = %q, want applied", applied.Outcome)
 	}
-	if got := projectLabelIDs(applied.Labels); !slicesEqual(got, []label.ID{third.ID, first.ID, second.ID}) {
+	if got := projectLabelIDs(applied.Labels); !slices.Equal(got, []label.ID{third.ID, first.ID, second.ID}) {
 		t.Fatalf("reordered response IDs = %v, want third, first, second", got)
 	}
 	assertProjectLabelOrdinals(t, ctx, store, binding.ProjectID)
@@ -104,7 +105,7 @@ func TestProjectLabelReorderRequiresExactPermutationAndCommitsAtomicOrder(t *tes
 	if err != nil {
 		t.Fatalf("ListProjectLabels after invalid reorder: %v", err)
 	}
-	if got := projectLabelIDs(labels); !slicesEqual(got, []label.ID{third.ID, first.ID, second.ID}) {
+	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{third.ID, first.ID, second.ID}) {
 		t.Fatalf("order after invalid reorder = %v, want prior order", got)
 	}
 
@@ -142,7 +143,7 @@ func TestProjectLabelDeleteCompactsOrderAndCreateAppends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProjectLabels after delete/create: %v", err)
 	}
-	if got := projectLabelIDs(labels); !slicesEqual(got, []label.ID{first.ID, third.ID, fourth.ID}) {
+	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{first.ID, third.ID, fourth.ID}) {
 		t.Fatalf("order after delete/create = %v, want first, third, fourth", got)
 	}
 }
@@ -200,18 +201,6 @@ func projectLabelIDs(records []ProjectLabelRecord) []label.ID {
 	return ids
 }
 
-func slicesEqual(left []label.ID, right []label.ID) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestProjectLabelRenamePreservesIdentityAndAllowsCapitalizationOnlyChange(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	created, err := store.CreateProjectLabel(ctx, binding.ProjectID, "Zulu")
@@ -245,7 +234,7 @@ func TestProjectLabelRenamePreservesIdentityAndAllowsCapitalizationOnlyChange(t 
 	if err != nil {
 		t.Fatalf("ListProjectLabels after rename: %v", err)
 	}
-	if got := projectLabelIDs(labels); !slicesEqual(got, []label.ID{created.ID, other.ID}) {
+	if got := projectLabelIDs(labels); !slices.Equal(got, []label.ID{created.ID, other.ID}) {
 		t.Fatalf("order after rename = %v, want original order", got)
 	}
 }

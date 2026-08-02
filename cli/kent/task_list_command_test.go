@@ -373,7 +373,7 @@ func TestTaskListSortSupportsLabelsShortIDAndSevenOrderedFields(t *testing.T) {
 	installWorkflowCommandRemote(t, remote)
 	args := []string{
 		"list", "--project", taskListCommandTestProjectID,
-		"--sort", "labels:desc,short-id:asc,created:asc",
+		"--sort", "labels:desc,short_id:asc,created:asc",
 		"--sort", "updated:desc,status:asc,column:desc,title:asc",
 	}
 	var stdout bytes.Buffer
@@ -400,7 +400,6 @@ func TestTaskListSortSupportsLabelsShortIDAndSevenOrderedFields(t *testing.T) {
 
 func TestTaskListSortRejectsUnapprovedSpellingsAndOverCapacity(t *testing.T) {
 	for _, raw := range []string{
-		"short_id:asc",
 		"label:asc",
 		"shortid:asc",
 		"labels:asc,short-id:asc,created:asc,updated:asc,status:asc,column:asc,title:asc,created:desc",

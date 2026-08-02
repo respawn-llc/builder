@@ -365,9 +365,9 @@ func parseTaskListSortField(value string) (serverapi.WorkflowTaskListSortField, 
 		return serverapi.WorkflowTaskListSortFieldTitle, nil
 	case "labels":
 		return serverapi.WorkflowTaskListSortFieldLabels, nil
-	case "short-id":
+	case "short-id", "short_id":
 		return serverapi.WorkflowTaskListSortFieldShortID, nil
 	default:
-		return "", fmt.Errorf("--sort field must be created, updated, status, column, title, labels, or short-id")
+		return "", fmt.Errorf("--sort field must be created, updated, status, column, title, labels, or short_id")
 	}
 }
