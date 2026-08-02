@@ -188,6 +188,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 				edge,
 				targetDefinition,
 				target,
+				preparedOutput.Commentary,
 				preparedOutput.OutputValues,
 				s.now().UTC(),
 			)

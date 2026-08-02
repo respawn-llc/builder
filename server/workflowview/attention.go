@@ -232,7 +232,7 @@ func approvalAttentionSnapshot(approval workflow.PendingApproval) serverapi.Work
 	return serverapi.WorkflowAttentionApprovalSnapshot{
 		SourceNodeDisplayName: approval.Transition.SourceDisplayName,
 		Targets:               targets,
-		Commentary:            "",
+		Commentary:            approval.Commentary,
 		OutputValues:          cloneOutputValues(approval.OutputValues),
 		WorkflowRevisionSeen:  approval.WorkflowVersion,
 	}

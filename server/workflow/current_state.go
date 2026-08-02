@@ -370,6 +370,7 @@ type PendingApproval struct {
 	SourceSessionID *runtimeids.SessionID
 	WorkflowVersion int64
 	Transition      PendingApprovalTransition
+	Commentary      string
 	OutputValues    map[string]string
 	Branches        []PendingApprovalBranch
 	CreatedAt       time.Time

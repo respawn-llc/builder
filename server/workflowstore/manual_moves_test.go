@@ -158,6 +158,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
 		OutputValues: map[string]string{"prior_summary": "manual proposal"},
+		Commentary:   "  Manual proposal is ready.  ",
 	})
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
@@ -189,6 +190,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 		t.Fatalf("manual move mutation = %+v, want no Current Node replacement before Approval", moved.CurrentNodeMutationResult)
 	}
 	if moved.PendingApproval.OutputValues["prior_summary"] != "manual proposal" ||
+		moved.PendingApproval.Commentary != "Manual proposal is ready." ||
 		len(moved.PendingApproval.Branches) != 1 ||
 		moved.PendingApproval.Branches[0].Target.CurrentNode.CurrentInputValues["prior_summary"] != "manual proposal" {
 		t.Fatalf("manual move pending Approval = %+v, want frozen manual values", moved.PendingApproval)
@@ -204,7 +206,9 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if err != nil {
 		t.Fatalf("ListPendingApprovals: %v", err)
 	}
-	if len(approvals) != 1 || approvals[0].ID != moved.PendingApproval.ID {
+	if len(approvals) != 1 ||
+		approvals[0].ID != moved.PendingApproval.ID ||
+		approvals[0].Commentary != "Manual proposal is ready." {
 		t.Fatalf("pending Approvals = %+v, want only replacement Approval", approvals)
 	}
 	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)

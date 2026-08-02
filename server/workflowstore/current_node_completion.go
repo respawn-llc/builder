@@ -175,6 +175,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			source,
 			currentSource,
 			targets,
+			prepared.Commentary,
 			prepared.OutputValues,
 			workflowRecord.Version,
 			group,
@@ -235,6 +236,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			target.Edge,
 			target.Node,
 			targetCurrentNode,
+			prepared.Commentary,
 			prepared.OutputValues,
 			nowTime,
 		)
