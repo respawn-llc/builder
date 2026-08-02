@@ -294,12 +294,8 @@ func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (Curr
 		return CurrentNodeCompletionRequest{}, err
 	}
 	req.TransitionID = strings.TrimSpace(req.TransitionID)
-	if len(req.Commentary) > workflow.MaxCommentaryBytes {
-		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
-			Code:    CompletionCodeCommentaryTooLarge,
-			Field:   "commentary",
-			Message: "commentary is too large",
-		}}}
+	if err := validateCommentarySize(req.Commentary); err != nil {
+		return CurrentNodeCompletionRequest{}, err
 	}
 	req.Commentary = strings.TrimSpace(req.Commentary)
 	req.OutputValues = cloneCurrentNodeOutputValues(req.OutputValues)
@@ -317,6 +313,17 @@ func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (Curr
 		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: issues}
 	}
 	return req, nil
+}
+
+func validateCommentarySize(commentary string) error {
+	if len(commentary) > workflow.MaxCommentaryBytes {
+		return CompletionValidationError{Issues: []CompletionValidationIssue{{
+			Code:    CompletionCodeCommentaryTooLarge,
+			Field:   "commentary",
+			Message: "commentary is too large",
+		}}}
+	}
+	return nil
 }
 
 func cloneCurrentNodeOutputValues(values map[string]string) map[string]string {

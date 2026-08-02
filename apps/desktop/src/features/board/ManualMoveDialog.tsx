@@ -233,7 +233,7 @@ function ManualMoveChoicePhase({
     <RadioGroup
       aria-label={t("board.manualMoveTransitionChoices")}
       onValueChange={onSelect}
-      value={selectedTransitionKey ?? ""}
+      value={selectedTransitionKey}
     >
       {choices.map((choice) => (
         <label className="flex items-start gap-[var(--space-2)]" key={choice.transitionKey}>

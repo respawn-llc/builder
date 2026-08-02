@@ -206,6 +206,17 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
   dependencyConfirmationRequiredResponseSchema,
 ]);
 
+const taskMoveNoOpResponseSchema = z
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
+  .strict()
+  .transform((value) => ({
+    outcome: value.outcome,
+    noOp: { currentNodes: value.no_op.current_nodes },
+  }));
+
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
   z
     .object({
@@ -225,16 +236,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
         }) as const,
     ),
   selectionRequiredResponseSchema,
-  z
-    .object({
-      outcome: z.literal("no_op"),
-      no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
-    })
-    .strict()
-    .transform((value) => ({
-      outcome: value.outcome,
-      noOp: { currentNodes: value.no_op.current_nodes },
-    })),
+  taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
 ]);
 
@@ -269,16 +271,7 @@ const manualMoveRequiredValueSchema = z
 export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
   "outcome",
   [
-    z
-      .object({
-        outcome: z.literal("no_op"),
-        no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
-      })
-      .strict()
-      .transform((value) => ({
-        outcome: value.outcome,
-        noOp: { currentNodes: value.no_op.current_nodes },
-      })),
+    taskMoveNoOpResponseSchema,
     z
       .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
       .strict()

@@ -46,6 +46,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 }
 
 func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreparation, error) {
+	if err := validateCommentarySize(req.Commentary); err != nil {
+		return ManualMovePreparation{}, err
+	}
 	preview, err := s.resolveManualMove(ctx, s.queries, req)
 	if err != nil {
 		return ManualMovePreparation{}, err

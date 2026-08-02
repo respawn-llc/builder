@@ -414,12 +414,16 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 }
 
 func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
-	if len(noOp.CurrentNodes) == 0 {
-		return errors.New("move no_op payload requires current_nodes")
+	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload")
+}
+
+func validateWorkflowTaskCurrentNodes(currentNodes []WorkflowTaskCurrentNode, payload string) error {
+	if len(currentNodes) == 0 {
+		return fmt.Errorf("%s requires current_nodes", payload)
 	}
-	for index, currentNode := range noOp.CurrentNodes {
+	for index, currentNode := range currentNodes {
 		if err := validateWorkflowTaskCurrentNode(currentNode); err != nil {
-			return fmt.Errorf("move no_op current node at index %d: %w", index, err)
+			return fmt.Errorf("%s current node at index %d: %w", payload, index, err)
 		}
 	}
 	return nil

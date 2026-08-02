@@ -2,10 +2,29 @@ package workflowstore
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"core/server/workflow"
 )
+
+func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	target := startTask(t, ctx, store, task.ID).Mutation.Created[0].Reference.NodeID
+
+	_, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: target,
+		Commentary:   strings.Repeat("x", workflow.MaxCommentaryBytes+1),
+	})
+	var validation CompletionValidationError
+	if !errors.As(err, &validation) || !validation.HasCode(CompletionCodeCommentaryTooLarge) {
+		t.Fatalf("PrepareManualMove error = %T %v, want oversized commentary validation", err, err)
+	}
+}
 
 func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)

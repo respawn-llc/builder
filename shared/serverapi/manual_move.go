@@ -137,15 +137,7 @@ func (b WorkflowTaskMovePreviewBlocked) Validate() error {
 }
 
 func validateWorkflowTaskMovePreviewNoOp(noOp WorkflowTaskMovePreviewNoOp) error {
-	if len(noOp.CurrentNodes) == 0 {
-		return errors.New("manual move preview no_op requires current_nodes")
-	}
-	for index, currentNode := range noOp.CurrentNodes {
-		if err := validateWorkflowTaskCurrentNode(currentNode); err != nil {
-			return fmt.Errorf("manual move preview no_op current node %d: %w", index, err)
-		}
-	}
-	return nil
+	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "manual move preview no_op")
 }
 
 func validateWorkflowTaskMovePreviewTransition(transition WorkflowTaskMovePreviewTransition) error {
