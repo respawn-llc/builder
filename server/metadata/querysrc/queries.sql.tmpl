@@ -1,3 +1,16 @@
+{{define "labelOrdinalSequence"}}
+(
+    SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
+    FROM (
+        SELECT label.ordinal
+        FROM task_label_assignments assignment
+        JOIN project_labels label ON label.id = assignment.label_id
+        WHERE assignment.task_id = {{.}}
+        ORDER BY label.ordinal ASC, label.id ASC
+    ) ordered_label
+)
+{{end}}
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -80,12 +93,18 @@ INSERT INTO project_labels (
     id,
     project_id,
     name,
+    ordinal,
     created_at_unix_ms,
     updated_at_unix_ms
 ) SELECT
     sqlc.arg(id),
     sqlc.arg(project_id),
     sqlc.arg(name),
+    (
+        SELECT COALESCE(MAX(project_labels.ordinal), 0) + 1
+        FROM project_labels
+        WHERE project_labels.project_id = sqlc.arg(project_id)
+    ),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
 FROM projects
@@ -95,14 +114,31 @@ WHERE projects.id = sqlc.arg(project_id)
       FROM project_labels
       WHERE project_labels.project_id = sqlc.arg(project_id)
   ) < CAST(sqlc.arg(catalog_limit) AS INTEGER)
-RETURNING id, project_id, name;
+RETURNING id, project_id, name, ordinal;
 
 -- name: ListProjectLabels :many
-SELECT id, project_id, name
+SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE project_id = sqlc.arg(project_id)
-ORDER BY name COLLATE kent_label_casefold_v1 ASC, id ASC
+ORDER BY ordinal ASC, id ASC
 LIMIT 101;
+
+-- name: AcquireProjectLabelWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = sqlc.arg(project_id)
+RETURNING id;
+
+-- name: SetProjectLabelOrdinal :execrows
+UPDATE project_labels
+SET ordinal = sqlc.arg(ordinal)
+WHERE id = sqlc.arg(id)
+  AND project_id = sqlc.arg(project_id);
+
+-- name: MoveProjectLabelOrdinalsToTemporaryBand :execrows
+UPDATE project_labels
+SET ordinal = ordinal + CAST(sqlc.arg(temporary_band_offset) AS INTEGER)
+WHERE project_id = sqlc.arg(project_id);
 
 -- name: RenameProjectLabel :one
 UPDATE project_labels
@@ -111,26 +147,26 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id)
-RETURNING id, project_id, name;
+RETURNING id, project_id, name, ordinal;
 
 -- name: DeleteProjectLabel :one
 DELETE FROM project_labels
 WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id)
-RETURNING id, project_id, name;
+RETURNING id, project_id, name, ordinal;
 
 -- name: ListTaskAssignedLabelIDsByTasks :many
 SELECT tla.task_id, pl.id AS label_id
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
 WHERE tla.task_id IN (sqlc.slice('task_ids'))
-ORDER BY tla.task_id ASC, pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC;
+ORDER BY tla.task_id ASC, pl.ordinal ASC, pl.id ASC;
 
 -- name: ListProjectLabelsByIDs :many
-SELECT id, project_id, name
+SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE id IN (sqlc.slice('label_ids'))
-ORDER BY id ASC;
+ORDER BY ordinal ASC, id ASC;
 
 -- name: InsertTaskLabelAssignment :exec
 INSERT INTO task_label_assignments (task_id, label_id)
@@ -146,103 +182,6 @@ WHERE id = (
     WHERE task_records.id = sqlc.arg(task_id)
 )
 RETURNING id;
-
--- name: GetTaskDependency :one
-SELECT blocker_task_id, blocked_task_id
-FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(blocker_task_id)
-  AND blocked_task_id = sqlc.arg(blocked_task_id)
-LIMIT 1;
-
--- name: AcquireTaskDependencyWriteLock :one
-UPDATE projects
-SET updated_at_unix_ms = updated_at_unix_ms
-WHERE id = (
-    SELECT task_records.project_id
-    FROM task_records
-    WHERE task_records.id = sqlc.arg(task_id)
-)
-RETURNING id;
-
--- name: CountTaskDependenciesByBlocker :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(blocker_task_id);
-
--- name: CountTaskDependenciesByBlocked :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocked_task_id = sqlc.arg(blocked_task_id);
-
--- name: InsertTaskDependency :exec
-INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
-VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
-
--- name: DeleteTaskDependency :execrows
-DELETE FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(blocker_task_id)
-  AND blocked_task_id = sqlc.arg(blocked_task_id);
-
--- name: ListTaskDependencyProjectionRows :many
-SELECT
-    CAST(
-        CASE
-            WHEN td.blocked_task_id = sqlc.arg(task_id) THEN 'blocked-by'
-            ELSE 'blocks'
-        END AS TEXT
-    ) AS direction,
-    related.id AS task_id,
-    related.short_id,
-    related.title,
-    CAST(related.workflow_id AS BLOB) AS workflow_id
-FROM task_dependencies td
-JOIN task_records related
-  ON related.id = CASE
-      WHEN td.blocked_task_id = sqlc.arg(task_id) THEN td.blocker_task_id
-      ELSE td.blocked_task_id
-  END
-WHERE td.blocker_task_id = sqlc.arg(task_id)
-   OR td.blocked_task_id = sqlc.arg(task_id)
-ORDER BY direction ASC, related.short_id ASC, related.id ASC
-LIMIT 101;
-
--- name: ListTaskDependencyBlockedByProjectionRows :many
-SELECT
-    CAST('blocked-by' AS TEXT) AS direction,
-    related.id AS task_id,
-    related.short_id,
-    related.title,
-    CAST(related.workflow_id AS BLOB) AS workflow_id
-FROM task_dependencies td
-JOIN task_records related ON related.id = td.blocker_task_id
-WHERE td.blocked_task_id = sqlc.arg(task_id)
-ORDER BY related.short_id ASC, related.id ASC
-LIMIT 51;
-
--- name: ListTaskDependencyNeighborIDs :many
-SELECT DISTINCT
-    CAST(CASE
-        WHEN td.blocker_task_id = sqlc.arg(task_id) THEN td.blocked_task_id
-        ELSE td.blocker_task_id
-    END AS TEXT) AS task_id
-FROM task_dependencies td
-WHERE td.blocker_task_id = sqlc.arg(task_id)
-   OR td.blocked_task_id = sqlc.arg(task_id)
-ORDER BY task_id ASC
-LIMIT 100;
-
--- name: DeleteTaskDependenciesByTask :execrows
-DELETE FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(task_id)
-   OR blocked_task_id = sqlc.arg(task_id);
-
--- name: TouchTasksUpdatedAt :execrows
-UPDATE tasks
-SET updated_at_unix_ms = MAX(
-    updated_at_unix_ms + 1,
-    sqlc.arg(updated_at_unix_ms)
-)
-WHERE id IN (sqlc.slice('task_ids'));
 
 -- name: DeleteTaskLabelAssignment :execrows
 DELETE FROM task_label_assignments
@@ -1050,69 +989,6 @@ SELECT id
 FROM task_records
 WHERE workflow_id = sqlc.arg(workflow_id);
 
--- name: AcquireWorkflowDependencyWriteLock :execrows
-UPDATE projects
-SET updated_at_unix_ms = updated_at_unix_ms
-WHERE id IN (
-    SELECT DISTINCT task_records.project_id
-    FROM task_records
-    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-);
-
--- name: TouchWorkflowDependencySurvivors :execrows
-UPDATE tasks
-SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE id IN (
-    SELECT DISTINCT CAST(
-        CASE
-            WHEN td.blocker_task_id IN (
-                SELECT id
-                FROM task_records
-                WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-            ) THEN td.blocked_task_id
-            ELSE td.blocker_task_id
-        END AS TEXT
-    ) AS task_id
-    FROM task_dependencies td
-    WHERE (
-        td.blocker_task_id IN (
-            SELECT id
-            FROM task_records
-            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-        )
-        OR td.blocked_task_id IN (
-            SELECT id
-            FROM task_records
-            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-        )
-    )
-    AND (
-        td.blocker_task_id NOT IN (
-            SELECT id
-            FROM task_records
-            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-        )
-        OR td.blocked_task_id NOT IN (
-            SELECT id
-            FROM task_records
-            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-        )
-    )
-);
-
--- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
-DELETE FROM task_dependencies
-WHERE blocker_task_id IN (
-    SELECT id
-    FROM task_records
-    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-)
-OR blocked_task_id IN (
-    SELECT id
-    FROM task_records
-    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
-);
-
 -- name: ListProjectTaskIDs :many
 SELECT id
 FROM task_records
@@ -1561,16 +1437,16 @@ args AS (
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.arg(offset_rows) AS INTEGER) AS offset_rows,
-        CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
-        CAST(sqlc.arg(sort_1_desc) AS INTEGER) AS sort_1_desc,
-        CAST(sqlc.arg(sort_2_field) AS TEXT) AS sort_2_field,
-        CAST(sqlc.arg(sort_2_desc) AS INTEGER) AS sort_2_desc,
-        CAST(sqlc.arg(sort_3_field) AS TEXT) AS sort_3_field,
-        CAST(sqlc.arg(sort_3_desc) AS INTEGER) AS sort_3_desc,
-        CAST(sqlc.arg(sort_4_field) AS TEXT) AS sort_4_field,
-        CAST(sqlc.arg(sort_4_desc) AS INTEGER) AS sort_4_desc,
-        CAST(sqlc.arg(sort_5_field) AS TEXT) AS sort_5_field,
-        CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
+        CAST(sqlc.arg(sort_selector_count) AS INTEGER) AS sort_selector_count,
+{{- range .TaskListSortSlots}}
+        CAST(sqlc.arg(sort_{{.Index}}_field) AS TEXT) AS sort_{{.Index}}_field,
+        CAST(sqlc.arg(sort_{{.Index}}_desc) AS INTEGER) AS sort_{{.Index}}_desc,
+{{- end}}
+        CASE WHEN
+{{- range .TaskListSortSlots}}
+            (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= {{.Index}} AND CAST(sqlc.arg(sort_{{.Index}}_field) AS TEXT) = 'labels'){{if not .Last}} OR{{end}}
+{{- end}}
+        THEN 1 ELSE 0 END AS labels_requested,
         CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
@@ -1609,8 +1485,62 @@ column_facts AS (
     )
     GROUP BY task_id
 ),
-{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
-selected_rows AS (
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM args, json_each(args.live_task_states_json)
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0 THEN 'waiting_approval'
+            WHEN durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0 THEN 3
+            WHEN durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 OR (
+                COALESCE(live.waiting_question, 0) = 0
+                AND COALESCE(live.has_waiting_approval, 0) = 0
+            ) THEN durable.attention_types_json
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'question'
+            ) AND COALESCE(live.waiting_question, 0) != 0 THEN durable.attention_types_json
+            WHEN EXISTS (
+                SELECT 1
+                FROM json_each(durable.attention_types_json) existing_attention
+                WHERE existing_attention.value = 'approval'
+            ) AND COALESCE(live.has_waiting_approval, 0) != 0 THEN durable.attention_types_json
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN json_insert(durable.attention_types_json, '$[#]', 'question')
+            ELSE json_insert(durable.attention_types_json, '$[#]', 'approval')
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+),
+eligible_rows AS (
     SELECT
         t.id,
         pwl.project_id,
@@ -1639,47 +1569,7 @@ selected_rows AS (
         CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
         CAST(status.node_ids_json AS TEXT) AS node_ids_json,
         CAST(status.attention_types_json AS TEXT) AS attention_types_json,
-        LOWER(t.title) AS title_sort,
-        CASE args.sort_1_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
-            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
-            ELSE ''
-        END AS sort_1_value,
-        CASE args.sort_2_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
-            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
-            ELSE ''
-        END AS sort_2_value,
-        CASE args.sort_3_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
-            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
-            ELSE ''
-        END AS sort_3_value,
-        CASE args.sort_4_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
-            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
-            ELSE ''
-        END AS sort_4_value,
-        CASE args.sort_5_field
-            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
-            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
-            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
-            WHEN 'title' THEN LOWER(t.title)
-            ELSE ''
-        END AS sort_5_value
+        CAST(kent_label_casefold_v1_fold(t.title) AS TEXT) AS title_sort
     FROM args
     CROSS JOIN project_workflow_links pwl
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
@@ -1715,6 +1605,42 @@ selected_rows AS (
 {{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
       )
 ),
+task_label_values AS (
+    SELECT
+        eligible.id AS task_id,
+{{template "labelOrdinalSequence" "eligible.id"}} AS label_ordinals
+    FROM args
+    CROSS JOIN eligible_rows eligible
+    WHERE args.labels_requested != 0
+      AND EXISTS (
+        SELECT 1
+        FROM task_label_assignments assignment
+        WHERE assignment.task_id = eligible.id
+    )
+),
+scored_rows AS (
+    SELECT
+        eligible.*,
+        labels.label_ordinals,
+        CASE WHEN args.labels_requested != 0 AND labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled,
+{{- range .TaskListSortSlots}}
+        CASE args.sort_{{.Index}}_field
+            WHEN 'created' THEN printf('%020d', eligible.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', eligible.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', eligible.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', eligible.column_rank)
+            WHEN 'title' THEN eligible.title_sort
+            WHEN 'labels' THEN labels.label_ordinals
+            WHEN 'short_id' THEN printf('%020d', eligible.task_seq)
+            ELSE ''
+        END AS sort_{{.Index}}_value{{if not .Last}},{{end}}
+{{- end}}
+    FROM args
+    CROSS JOIN eligible_rows eligible
+    LEFT JOIN task_label_values labels
+        ON args.labels_requested != 0
+       AND labels.task_id = eligible.id
+),
 matching_workflows AS (
     SELECT task_link.workflow_id
     FROM args
@@ -1723,7 +1649,7 @@ matching_workflows AS (
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND EXISTS (
           SELECT 1
-          FROM selected_rows eligible
+          FROM eligible_rows eligible
           WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
@@ -1731,19 +1657,14 @@ matching_workflows AS (
 ),
 page_rows AS (
     SELECT rows.*
-    FROM selected_rows rows
+    FROM scored_rows rows
     CROSS JOIN args
     ORDER BY
-        CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
-        CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
-        CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
-        CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
-        CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
-        CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
-        CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
-        CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
-        CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
-        CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
+{{- range .TaskListSortSlots}}
+        CASE WHEN args.sort_selector_count >= {{.Index}} AND args.labels_requested != 0 AND args.sort_{{.Index}}_field = 'labels' THEN rows.labels_unlabeled ELSE 0 END ASC,
+        CASE WHEN args.sort_selector_count >= {{.Index}} AND args.sort_{{.Index}}_desc = 0 THEN rows.sort_{{.Index}}_value END ASC,
+        CASE WHEN args.sort_selector_count >= {{.Index}} AND args.sort_{{.Index}}_desc != 0 THEN rows.sort_{{.Index}}_value END DESC,
+{{- end}}
         rows.id ASC
     LIMIT (SELECT limit_rows FROM args)
     OFFSET (SELECT offset_rows FROM args)
@@ -1782,155 +1703,69 @@ FROM args
 CROSS JOIN (SELECT 1) summary
 LEFT JOIN page_rows page ON TRUE
 ORDER BY
-    CASE WHEN args.sort_1_desc = 0 THEN page.sort_1_value END ASC,
-    CASE WHEN args.sort_1_desc != 0 THEN page.sort_1_value END DESC,
-    CASE WHEN args.sort_2_desc = 0 THEN page.sort_2_value END ASC,
-    CASE WHEN args.sort_2_desc != 0 THEN page.sort_2_value END DESC,
-    CASE WHEN args.sort_3_desc = 0 THEN page.sort_3_value END ASC,
-    CASE WHEN args.sort_3_desc != 0 THEN page.sort_3_value END DESC,
-    CASE WHEN args.sort_4_desc = 0 THEN page.sort_4_value END ASC,
-    CASE WHEN args.sort_4_desc != 0 THEN page.sort_4_value END DESC,
-    CASE WHEN args.sort_5_desc = 0 THEN page.sort_5_value END ASC,
-    CASE WHEN args.sort_5_desc != 0 THEN page.sort_5_value END DESC,
+{{- range .TaskListSortSlots}}
+    CASE WHEN args.sort_selector_count >= {{.Index}} AND args.labels_requested != 0 AND args.sort_{{.Index}}_field = 'labels' THEN page.labels_unlabeled ELSE 0 END ASC,
+    CASE WHEN args.sort_selector_count >= {{.Index}} AND args.sort_{{.Index}}_desc = 0 THEN page.sort_{{.Index}}_value END ASC,
+    CASE WHEN args.sort_selector_count >= {{.Index}} AND args.sort_{{.Index}}_desc != 0 THEN page.sort_{{.Index}}_value END DESC,
+{{- end}}
     page.id ASC;
 
--- name: ListBoardNodeTasks :many
-WITH board_node_tasks AS (
-    SELECT
-        t.id,
-        t.project_id,
-        t.project_workflow_link_id,
-        t.workflow_id,
-        t.workflow_revision_seen,
-        t.task_seq,
-        t.short_id,
-        t.title,
-        t.body,
-        t.source_url,
-        t.source_workspace_id,
-        t.managed_worktree_id,
-        t.execution_target_mode,
-        t.execution_target_requested_ref,
-        t.execution_target_resolved_ref,
-        t.execution_target_commit_oid,
-        t.execution_target_provenance,
-        t.created_at_unix_ms,
-        t.updated_at_unix_ms,
-        t.metadata_json
-    FROM task_records t
-    WHERE t.project_id = sqlc.arg(project_id)
-      AND t.workflow_id = sqlc.arg(workflow_id)
-      AND (
-{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
-      )
-      AND (
-          EXISTS (
-              SELECT 1
-              FROM task_current_nodes current_node
-              WHERE current_node.task_id = t.id
-                AND current_node.node_id = sqlc.arg(node_id)
-          )
-      )
-),
-older_page AS (
-    SELECT *
-    FROM board_node_tasks t
-    WHERE sqlc.arg(cursor_direction) = 'older'
-      AND (
-          sqlc.narg(cursor_updated_at_unix_ms) IS NULL
-          OR t.updated_at_unix_ms < sqlc.narg(cursor_updated_at_unix_ms)
-          OR (
-              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
-              AND t.id < sqlc.narg(cursor_task_id)
-          )
-      )
-    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT sqlc.arg(limit_rows)
-),
-newer_page AS (
-    SELECT *
-    FROM board_node_tasks t
-    WHERE sqlc.arg(cursor_direction) = 'newer'
-      AND sqlc.narg(cursor_updated_at_unix_ms) IS NOT NULL
-      AND (
-          t.updated_at_unix_ms > sqlc.narg(cursor_updated_at_unix_ms)
-          OR (
-              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
-              AND t.id > sqlc.narg(cursor_task_id)
-          )
-      )
-    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT sqlc.arg(limit_rows)
-),
-dependency_progress AS (
-    SELECT
-        td.blocked_task_id AS task_id,
-        CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
-        CAST(SUM(CASE WHEN (
-            SELECT status.is_done
-            FROM workflow_task_status_records status
-            WHERE status.task_id = td.blocker_task_id
-            LIMIT 1
-        ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
-    FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
-    WHERE td.blocked_task_id IN (
-        SELECT id FROM older_page
-        UNION ALL
-        SELECT id FROM newer_page
-    )
-    GROUP BY td.blocked_task_id
-)
+{{define "listBoardNodeTasksUpdated"}}
+-- name: {{.Name}} :many
 SELECT
-    page.id,
-    page.project_id,
-    page.project_workflow_link_id,
-    page.workflow_id,
-    page.workflow_revision_seen,
-    page.task_seq,
-    page.short_id,
-    page.title,
-    page.body,
-    page.source_url,
-    page.source_workspace_id,
-    page.managed_worktree_id,
-    page.execution_target_mode,
-    page.execution_target_requested_ref,
-    page.execution_target_resolved_ref,
-    page.execution_target_commit_oid,
-    page.execution_target_provenance,
-    page.created_at_unix_ms,
-    page.updated_at_unix_ms,
-    page.metadata_json,
-    dependency_progress.dependency_satisfied_count,
-    dependency_progress.dependency_total_count
-FROM older_page page
-LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-UNION ALL
-SELECT
-    page.id,
-    page.project_id,
-    page.project_workflow_link_id,
-    page.workflow_id,
-    page.workflow_revision_seen,
-    page.task_seq,
-    page.short_id,
-    page.title,
-    page.body,
-    page.source_url,
-    page.source_workspace_id,
-    page.managed_worktree_id,
-    page.execution_target_mode,
-    page.execution_target_requested_ref,
-    page.execution_target_resolved_ref,
-    page.execution_target_commit_oid,
-    page.execution_target_provenance,
-    page.created_at_unix_ms,
-    page.updated_at_unix_ms,
-    page.metadata_json,
-    dependency_progress.dependency_satisfied_count,
-    dependency_progress.dependency_total_count
-FROM newer_page page
-LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
+    task.id,
+    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
+    task.project_workflow_link_id,
+    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
+    task.workflow_revision_seen,
+    task.task_seq,
+    task.short_id,
+    task.title,
+    task.body,
+    task.source_url,
+    task.source_workspace_id,
+    task.managed_worktree_id,
+    task.execution_target_mode,
+    task.execution_target_requested_ref,
+    task.execution_target_resolved_ref,
+    task.execution_target_commit_oid,
+    task.execution_target_provenance,
+    task.created_at_unix_ms,
+    task.updated_at_unix_ms,
+    task.metadata_json
+FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
+WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
+  AND (
+{{taskLabelFilter "      " "task.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = task.id
+        AND current_node.node_id = sqlc.arg(node_id)
+  )
+{{if .Previous}}
+  AND sqlc.narg(cursor_task_seq) IS NOT NULL
+  AND (task.updated_at_unix_ms, task.task_seq) {{.CursorOperator}} (
+      CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
+      CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
+  )
+{{else}}
+  AND (
+      sqlc.narg(cursor_task_seq) IS NULL
+      OR (
+          sqlc.arg(cursor_direction) = 'older'
+          AND (task.updated_at_unix_ms, task.task_seq) {{.CursorOperator}} (
+              CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
+              CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
+          )
+      )
+  )
+{{end}}
+ORDER BY task.updated_at_unix_ms {{.OrderDirection}}, task.task_seq {{.OrderDirection}}
+LIMIT sqlc.arg(limit_rows);
+{{end}}
+{{range .BoardNodeTasksUpdated}}{{template "listBoardNodeTasksUpdated" .}}{{end}}
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks
@@ -2145,10 +1980,12 @@ WHERE node.kind IN ('agent', 'script')
       OR session.workspace_id = sqlc.arg(workspace_id)
   );
 
--- name: CountWorktreesByWorkspace :one
+-- name: CountManagedOwnedWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
-WHERE workspace_id = sqlc.arg(workspace_id);
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND managed <> 0
+  AND created_branch <> 0;
 
 -- name: CountTasksMissingSourceWorkspaceSnapshot :one
 SELECT CAST(COUNT(*) AS INTEGER) AS task_count
@@ -3062,14 +2899,6 @@ UPDATE tasks
 SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(task_id);
 
--- name: AdvanceTaskUpdatedAt :execrows
-UPDATE tasks
-SET updated_at_unix_ms = MAX(
-    updated_at_unix_ms + 1,
-    sqlc.arg(updated_at_unix_ms)
-)
-WHERE id = sqlc.arg(task_id);
-
 -- name: GetTaskProjectWorkflowIDs :one
 SELECT project_id, workflow_id
 FROM task_records
@@ -3204,17 +3033,6 @@ WHERE task_id = sqlc.arg(task_id)
         AND approval.source_node_id = task_current_nodes.node_id
         AND approval.source_transition_branch_key = task_current_nodes.transition_branch_key
   );
-
--- name: AcquireCurrentNodeResumeWriteLock :execrows
-UPDATE task_current_nodes
-SET scheduling_state = scheduling_state
-WHERE task_id = sqlc.arg(task_id)
-  AND node_id = sqlc.arg(node_id)
-  AND (
-      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
-      OR transition_branch_key = sqlc.narg(transition_branch_key)
-  )
-  AND scheduling_state = 'interrupted';
 
 -- name: InterruptSerialAdmittedCurrentNode :execrows
 UPDATE task_current_nodes
@@ -3485,6 +3303,356 @@ SELECT
 FROM task_pending_approval_branches
 WHERE approval_id = sqlc.arg(approval_id)
 ORDER BY transition_branch_key;
+-- name: GetTaskDependency :one
+SELECT blocker_task_id, blocked_task_id
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id)
+LIMIT 1;
+
+
+-- name: AcquireTaskDependencyWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = sqlc.arg(task_id)
+)
+RETURNING id;
+
+
+-- name: CountTaskDependenciesByBlocker :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id);
+
+
+-- name: CountTaskDependenciesByBlocked :one
+SELECT COUNT(*) AS dependency_count
+FROM task_dependencies
+WHERE blocked_task_id = sqlc.arg(blocked_task_id);
+
+
+-- name: InsertTaskDependency :exec
+INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
+
+
+-- name: DeleteTaskDependency :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(blocker_task_id)
+  AND blocked_task_id = sqlc.arg(blocked_task_id);
+
+
+-- name: ListTaskDependencyProjectionRows :many
+SELECT
+    CAST(
+        CASE
+            WHEN td.blocked_task_id = sqlc.arg(task_id) THEN 'blocked-by'
+            ELSE 'blocks'
+        END AS TEXT
+    ) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related
+  ON related.id = CASE
+      WHEN td.blocked_task_id = sqlc.arg(task_id) THEN td.blocker_task_id
+      ELSE td.blocked_task_id
+  END
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY direction ASC, related.short_id ASC, related.id ASC
+LIMIT 101;
+
+
+-- name: ListTaskDependencyBlockedByProjectionRows :many
+SELECT
+    CAST('blocked-by' AS TEXT) AS direction,
+    related.id AS task_id,
+    related.short_id,
+    related.title,
+    CAST(related.workflow_id AS BLOB) AS workflow_id
+FROM task_dependencies td
+JOIN task_records related ON related.id = td.blocker_task_id
+WHERE td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY related.short_id ASC, related.id ASC
+LIMIT 51;
+
+
+-- name: ListTaskDependencyNeighborIDs :many
+SELECT DISTINCT
+    CAST(CASE
+        WHEN td.blocker_task_id = sqlc.arg(task_id) THEN td.blocked_task_id
+        ELSE td.blocker_task_id
+    END AS TEXT) AS task_id
+FROM task_dependencies td
+WHERE td.blocker_task_id = sqlc.arg(task_id)
+   OR td.blocked_task_id = sqlc.arg(task_id)
+ORDER BY task_id ASC
+LIMIT 100;
+
+
+-- name: DeleteTaskDependenciesByTask :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id = sqlc.arg(task_id)
+   OR blocked_task_id = sqlc.arg(task_id);
+
+
+-- name: ListTaskDependencyProgressByTasks :many
+SELECT
+    td.blocked_task_id AS task_id,
+    CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+    CAST(SUM(CASE WHEN (
+        SELECT status.is_done
+        FROM workflow_task_status_records status
+        WHERE status.task_id = td.blocker_task_id
+        LIMIT 1
+    ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+WHERE td.blocked_task_id IN (sqlc.slice('task_ids'))
+GROUP BY td.blocked_task_id;
+
+
+-- name: TouchTasksUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    sqlc.arg(updated_at_unix_ms)
+)
+WHERE id IN (sqlc.slice('task_ids'));
+
+-- name: AdvanceTaskUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    sqlc.arg(updated_at_unix_ms)
+)
+WHERE id = sqlc.arg(task_id);
+
+
+-- name: AcquireWorkflowDependencyWriteLock :execrows
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id IN (
+    SELECT DISTINCT task_records.project_id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
+
+-- name: TouchWorkflowDependencySurvivors :execrows
+UPDATE tasks
+SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id IN (
+    SELECT DISTINCT CAST(
+        CASE
+            WHEN td.blocker_task_id IN (
+                SELECT id
+                FROM task_records
+                WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+            ) THEN td.blocked_task_id
+            ELSE td.blocker_task_id
+        END AS TEXT
+    ) AS task_id
+    FROM task_dependencies td
+    WHERE (
+        td.blocker_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+    AND (
+        td.blocker_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+        OR td.blocked_task_id NOT IN (
+            SELECT id
+            FROM task_records
+            WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+        )
+    )
+);
+
+
+-- name: DeleteWorkflowTaskDependenciesByWorkflowID :execrows
+DELETE FROM task_dependencies
+WHERE blocker_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+)
+OR blocked_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE task_records.workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: ListBoardNodeTasks :many
+WITH board_node_tasks AS (
+    SELECT
+        t.id,
+        t.project_id,
+        t.project_workflow_link_id,
+        t.workflow_id,
+        t.workflow_revision_seen,
+        t.task_seq,
+        t.short_id,
+        t.title,
+        t.body,
+        t.source_url,
+        t.source_workspace_id,
+        t.managed_worktree_id,
+        t.execution_target_mode,
+        t.execution_target_requested_ref,
+        t.execution_target_resolved_ref,
+        t.execution_target_commit_oid,
+        t.execution_target_provenance,
+        t.created_at_unix_ms,
+        t.updated_at_unix_ms,
+        t.metadata_json
+    FROM task_records t
+    WHERE t.project_id = sqlc.arg(project_id)
+      AND t.workflow_id = sqlc.arg(workflow_id)
+      AND (
+{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
+      )
+      AND (
+          EXISTS (
+              SELECT 1
+              FROM task_current_nodes current_node
+              WHERE current_node.task_id = t.id
+                AND current_node.node_id = sqlc.arg(node_id)
+          )
+      )
+),
+older_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'older'
+      AND (
+          sqlc.narg(cursor_updated_at_unix_ms) IS NULL
+          OR t.updated_at_unix_ms < sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id < sqlc.narg(cursor_task_id)
+          )
+      )
+    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
+    LIMIT sqlc.arg(limit_rows)
+),
+newer_page AS (
+    SELECT *
+    FROM board_node_tasks t
+    WHERE sqlc.arg(cursor_direction) = 'newer'
+      AND sqlc.narg(cursor_updated_at_unix_ms) IS NOT NULL
+      AND (
+          t.updated_at_unix_ms > sqlc.narg(cursor_updated_at_unix_ms)
+          OR (
+              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
+              AND t.id > sqlc.narg(cursor_task_id)
+          )
+      )
+    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
+    LIMIT sqlc.arg(limit_rows)
+),
+dependency_progress AS (
+    SELECT
+        td.blocked_task_id AS task_id,
+        CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
+        CAST(SUM(CASE WHEN (
+            SELECT status.is_done
+            FROM workflow_task_status_records status
+            WHERE status.task_id = td.blocker_task_id
+            LIMIT 1
+        ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
+    FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
+    WHERE td.blocked_task_id IN (
+        SELECT id FROM older_page
+        UNION ALL
+        SELECT id FROM newer_page
+    )
+    GROUP BY td.blocked_task_id
+)
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM older_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
+UNION ALL
+SELECT
+    page.id,
+    page.project_id,
+    page.project_workflow_link_id,
+    page.workflow_id,
+    page.workflow_revision_seen,
+    page.task_seq,
+    page.short_id,
+    page.title,
+    page.body,
+    page.source_url,
+    page.source_workspace_id,
+    page.managed_worktree_id,
+    page.execution_target_mode,
+    page.execution_target_requested_ref,
+    page.execution_target_resolved_ref,
+    page.execution_target_commit_oid,
+    page.execution_target_provenance,
+    page.created_at_unix_ms,
+    page.updated_at_unix_ms,
+    page.metadata_json,
+    dependency_progress.dependency_satisfied_count,
+    dependency_progress.dependency_total_count
+FROM newer_page page
+LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
+
+
+-- name: CountWorktreesByWorkspace :one
+SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
+FROM worktrees
+WHERE workspace_id = sqlc.arg(workspace_id);
+-- name: AcquireCurrentNodeResumeWriteLock :execrows
+UPDATE task_current_nodes
+SET scheduling_state = scheduling_state
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted';
+
 
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (
@@ -3496,6 +3664,7 @@ FROM requested_projects
 LEFT JOIN projects ON projects.id = requested_projects.project_id
 WHERE projects.id IS NULL
 ORDER BY requested_projects.project_id ASC;
+
 
 -- name: GetTaskSearchSourceByDocumentID :one
 SELECT
@@ -3511,6 +3680,7 @@ JOIN task_search_content content
   ON content.document_id = document.document_id
 WHERE document.document_id = sqlc.arg(document_id)
 LIMIT 1;
+
 
 -- name: ValidateTaskSearchFTS5Expression :many
 SELECT document.document_id

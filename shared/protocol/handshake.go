@@ -67,6 +67,7 @@ const (
 	MethodWorkflowProjectLabelList                      = "workflow.project.label.list"
 	MethodWorkflowProjectLabelRename                    = "workflow.project.label.rename"
 	MethodWorkflowProjectLabelDelete                    = "workflow.project.label.delete"
+	MethodWorkflowProjectLabelReorder                   = "workflow.project.label.reorder"
 	MethodWorkflowTaskLabelsGet                         = "workflow.task.labels.get"
 	MethodWorkflowTaskLabelsUpdate                      = "workflow.task.labels.update"
 	MethodWorkflowTaskCreate                            = "workflow.task.create"

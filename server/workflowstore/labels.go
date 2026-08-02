@@ -32,6 +32,18 @@ type TaskLabelScope struct {
 	WorkflowID runtimeids.WorkflowID
 }
 
+type ProjectLabelReorderOutcome string
+
+const (
+	ProjectLabelReorderApplied   ProjectLabelReorderOutcome = "applied"
+	ProjectLabelReorderUnchanged ProjectLabelReorderOutcome = "unchanged"
+)
+
+type ProjectLabelReorderResult struct {
+	Labels  []ProjectLabelRecord
+	Outcome ProjectLabelReorderOutcome
+}
+
 func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawName string) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
 	name, err := label.PrepareName(rawName)
@@ -67,7 +79,11 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 			}
 			return ProjectLabelRecord{}, err
 		}
-		return projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		if err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		return record, nil
 	})
 }
 
@@ -77,27 +93,7 @@ func (s *Store) ListProjectLabels(ctx context.Context, projectID string) ([]Proj
 		if err := requireProjectForLabels(ctx, q, trimmedProjectID); err != nil {
 			return nil, err
 		}
-		rows, err := q.ListProjectLabels(ctx, trimmedProjectID)
-		if err != nil {
-			return nil, err
-		}
-		if len(rows) > label.MaxProjectLabels {
-			return nil, fmt.Errorf(
-				"project %q label catalog has %d rows, exceeding invariant limit %d",
-				trimmedProjectID,
-				len(rows),
-				label.MaxProjectLabels,
-			)
-		}
-		records := make([]ProjectLabelRecord, 0, len(rows))
-		for _, row := range rows {
-			record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
-			if err != nil {
-				return nil, err
-			}
-			records = append(records, record)
-		}
-		return records, nil
+		return listProjectLabelCatalog(ctx, q, trimmedProjectID)
 	})
 }
 
@@ -132,7 +128,11 @@ func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id lab
 			}
 			return ProjectLabelRecord{}, err
 		}
-		return projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		if err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		return record, nil
 	})
 }
 
@@ -155,8 +155,215 @@ func (s *Store) DeleteProjectLabel(ctx context.Context, projectID string, id lab
 			}
 			return ProjectLabelRecord{}, err
 		}
-		return projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		if err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		if err := compactProjectLabelOrdinals(ctx, q, trimmedProjectID); err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		return record, nil
 	})
+}
+
+func (s *Store) ReorderProjectLabels(
+	ctx context.Context,
+	projectID string,
+	orderedIDs []label.ID,
+) (ProjectLabelReorderResult, error) {
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if len(orderedIDs) > label.MaxProjectLabels {
+		return ProjectLabelReorderResult{}, ProjectLabelOrderError{
+			ProjectID: trimmedProjectID,
+			Reason:    fmt.Sprintf("contains more than %d labels", label.MaxProjectLabels),
+		}
+	}
+	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelReorderResult, error) {
+		if err := acquireProjectLabelWriteLock(ctx, q, trimmedProjectID); err != nil {
+			return ProjectLabelReorderResult{}, err
+		}
+		current, err := listProjectLabelCatalog(ctx, q, trimmedProjectID)
+		if err != nil {
+			return ProjectLabelReorderResult{}, err
+		}
+		byID := make(map[string]ProjectLabelRecord, len(current))
+		for _, record := range current {
+			byID[record.ID.String()] = record
+		}
+		if len(orderedIDs) != len(current) {
+			return ProjectLabelReorderResult{}, ProjectLabelOrderError{
+				ProjectID: trimmedProjectID,
+				Reason:    "must contain every current label exactly once",
+			}
+		}
+		seen := make(map[string]struct{}, len(orderedIDs))
+		unchanged := true
+		for index, id := range orderedIDs {
+			canonicalID := id.String()
+			if _, exists := byID[canonicalID]; !exists {
+				return ProjectLabelReorderResult{}, ProjectLabelOrderError{
+					ProjectID: trimmedProjectID,
+					LabelID:   &canonicalID,
+					Reason:    "label is not in the current catalog",
+				}
+			}
+			if _, exists := seen[canonicalID]; exists {
+				return ProjectLabelReorderResult{}, ProjectLabelOrderError{
+					ProjectID: trimmedProjectID,
+					LabelID:   &canonicalID,
+					Reason:    "label occurs more than once",
+				}
+			}
+			seen[canonicalID] = struct{}{}
+			if current[index].ID != id {
+				unchanged = false
+			}
+		}
+		if unchanged {
+			return ProjectLabelReorderResult{
+				Labels:  current,
+				Outcome: ProjectLabelReorderUnchanged,
+			}, nil
+		}
+		if err := rewriteProjectLabelOrdinals(ctx, q, trimmedProjectID, orderedIDs); err != nil {
+			return ProjectLabelReorderResult{}, err
+		}
+		labels, err := listProjectLabelCatalog(ctx, q, trimmedProjectID)
+		if err != nil {
+			return ProjectLabelReorderResult{}, err
+		}
+		return ProjectLabelReorderResult{
+			Labels:  labels,
+			Outcome: ProjectLabelReorderApplied,
+		}, nil
+	})
+}
+
+func acquireProjectLabelWriteLock(ctx context.Context, q *sqlitegen.Queries, projectID string) error {
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	if _, err := q.AcquireProjectLabelWriteLock(ctx, projectID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
+		}
+		return err
+	}
+	return nil
+}
+
+func listProjectLabelCatalog(ctx context.Context, q *sqlitegen.Queries, projectID string) ([]ProjectLabelRecord, error) {
+	rows, err := q.ListProjectLabels(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > label.MaxProjectLabels {
+		return nil, fmt.Errorf(
+			"project %q label catalog has %d rows, exceeding invariant limit %d",
+			projectID,
+			len(rows),
+			label.MaxProjectLabels,
+		)
+	}
+	records := make([]ProjectLabelRecord, 0, len(rows))
+	for index, row := range rows {
+		expectedOrdinal := int64(index + 1)
+		if row.ProjectID != projectID {
+			return nil, fmt.Errorf(
+				"project label %q belongs to project %q while reading project %q",
+				row.ID,
+				row.ProjectID,
+				projectID,
+			)
+		}
+		if row.Ordinal != expectedOrdinal {
+			return nil, fmt.Errorf(
+				"project %q label catalog ordinal %d at position %d violates contiguous order",
+				projectID,
+				row.Ordinal,
+				expectedOrdinal,
+			)
+		}
+		record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+func compactProjectLabelOrdinals(ctx context.Context, q *sqlitegen.Queries, projectID string) error {
+	rows, err := q.ListProjectLabels(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(rows) > label.MaxProjectLabels {
+		return fmt.Errorf("project %q label catalog exceeds the bounded limit", projectID)
+	}
+	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+		ProjectID:           projectID,
+		TemporaryBandOffset: int64(label.MaxProjectLabels),
+	}); err != nil {
+		return err
+	}
+	return rewriteProjectLabelOrdinalsFromRows(ctx, q, projectID, rows)
+}
+
+func rewriteProjectLabelOrdinals(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	projectID string,
+	orderedIDs []label.ID,
+) error {
+	if _, err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+		ProjectID:           projectID,
+		TemporaryBandOffset: int64(label.MaxProjectLabels),
+	}); err != nil {
+		return err
+	}
+	for index, id := range orderedIDs {
+		if err := setProjectLabelOrdinal(ctx, q, projectID, id.String(), int64(index+1)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteProjectLabelOrdinalsFromRows(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	projectID string,
+	rows []sqlitegen.ListProjectLabelsRow,
+) error {
+	for index, row := range rows {
+		if err := setProjectLabelOrdinal(ctx, q, projectID, row.ID, int64(index+1)); err != nil {
+			return err
+		}
+	}
+	_, err := listProjectLabelCatalog(ctx, q, projectID)
+	return err
+}
+
+func setProjectLabelOrdinal(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	projectID string,
+	id string,
+	ordinal int64,
+) error {
+	affected, err := q.SetProjectLabelOrdinal(ctx, sqlitegen.SetProjectLabelOrdinalParams{
+		Ordinal:   ordinal,
+		ID:        id,
+		ProjectID: projectID,
+	})
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("project %q label %q ordinal update affected %d rows", projectID, id, affected)
+	}
+	return nil
 }
 
 func projectLabelRecord(id string, projectID string, name string) (ProjectLabelRecord, error) {
@@ -193,7 +400,11 @@ func requireProjectForLabels(ctx context.Context, q *sqlitegen.Queries, projectI
 
 func (s *Store) GetTaskLabelIDs(ctx context.Context, taskID workflow.TaskID) ([]label.ID, error) {
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) ([]label.ID, error) {
-		if _, err := taskProjectForLabels(ctx, q, taskID); err != nil {
+		projectID, err := taskProjectForLabels(ctx, q, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := listProjectLabelCatalog(ctx, q, projectID); err != nil {
 			return nil, err
 		}
 		return listTaskLabelIDs(ctx, q, taskID)
