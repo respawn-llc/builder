@@ -270,6 +270,10 @@ export const englishResources = {
       view: "View deps",
       start: "Start",
     },
+    markdown: {
+      markComplete: "Mark item complete",
+      markIncomplete: "Mark item incomplete",
+    },
     workflowEditor: workflowEditorEnglish,
     workflowLibrary: {
       title: "Workflow Library",

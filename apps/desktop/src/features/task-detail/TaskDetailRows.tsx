@@ -133,6 +133,9 @@ export function DescriptionIsland({
         <DescriptionReadView
           disabled={disabled}
           expanded={presentation.expanded}
+          onChange={(body) => {
+            onDraftChange({ ...draft, body });
+          }}
           onEdit={() => {
             onPresentationChange({ editing: true, expanded: true });
           }}
@@ -191,12 +194,14 @@ function DescriptionEditor({
 function DescriptionReadView({
   disabled,
   expanded,
+  onChange,
   onEdit,
   onExpand,
   value,
 }: Readonly<{
   disabled: boolean;
   expanded: boolean;
+  onChange: (value: string) => void;
   onEdit: () => void;
   onExpand: () => void;
   value: string;
@@ -229,7 +234,14 @@ function DescriptionReadView({
       >
         <div ref={contentRef}>
           {value.trim().length > 0 ? (
-            <MarkdownText onOpenLink={openExternalLink} value={value} />
+            <MarkdownText
+              onOpenLink={openExternalLink}
+              taskListItemToggleLabel={(checked) =>
+                checked ? t("markdown.markIncomplete") : t("markdown.markComplete")
+              }
+              value={value}
+              {...(disabled ? {} : { onChange })}
+            />
           ) : (
             <span className="text-[var(--color-muted)]">{t("task.bodyPlaceholder")}</span>
           )}
