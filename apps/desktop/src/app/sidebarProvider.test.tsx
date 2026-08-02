@@ -312,12 +312,99 @@ describe("SidebarProvider stack contract", () => {
     });
 
     act(() => {
-      result.current.preserveSidebarOnNextRouteChange();
+      result.current.preserveSidebarOnNextRouteChange(rootToken, {
+        kind: "projectTaskCleared",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
       result.current.removeSidebarEntry(rootToken);
     });
 
     expect(result.current.stackDestinations).toEqual([{ kind: "taskDetail", taskID: "task-2" }]);
-    expect(result.current.consumeSidebarRouteChangePreservation()).toBe(true);
-    expect(result.current.consumeSidebarRouteChangePreservation()).toBe(false);
+    expect(
+      result.current.consumeSidebarRouteChangePreservation({
+        pathname: "/projects/project-1",
+        searchStr: "workflowId=workflow-1&taskId=",
+      }),
+    ).toBe(true);
+    expect(
+      result.current.consumeSidebarRouteChangePreservation({
+        pathname: "/projects/project-1",
+        searchStr: "workflowId=workflow-1&taskId=",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not preserve a mismatched route and clears failed deletion intent", () => {
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const token = result.current.activeToken;
+    if (token === null) {
+      throw new Error("Token was not created.");
+    }
+    act(() => {
+      result.current.preserveSidebarOnNextRouteChange(token, {
+        kind: "projectTaskCleared",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
+      result.current.clearSidebarRouteChangePreservation(token);
+    });
+
+    expect(
+      result.current.consumeSidebarRouteChangePreservation({
+        pathname: "/projects/project-1",
+        searchStr: "workflowId=workflow-1&taskId=",
+      }),
+    ).toBe(false);
+  });
+
+  it("clears route preservation when the final entry closes or a lifecycle is replaced", () => {
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const token = result.current.activeToken;
+    if (token === null) {
+      throw new Error("Token was not created.");
+    }
+    act(() => {
+      result.current.preserveSidebarOnNextRouteChange(token, {
+        kind: "projectTaskCleared",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
+      result.current.removeSidebarEntry(token);
+    });
+    expect(
+      result.current.consumeSidebarRouteChangePreservation({
+        pathname: "/projects/project-1",
+        searchStr: "workflowId=workflow-1&taskId=",
+      }),
+    ).toBe(false);
+
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-2" });
+    });
+    const replacementToken = result.current.activeToken;
+    if (replacementToken === null) {
+      throw new Error("Replacement token was not created.");
+    }
+    act(() => {
+      result.current.preserveSidebarOnNextRouteChange(replacementToken, {
+        kind: "projectTaskCleared",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
+      result.current.replaceSidebar({ kind: "taskDetail", taskID: "task-3" });
+    });
+    expect(
+      result.current.consumeSidebarRouteChangePreservation({
+        pathname: "/projects/project-1",
+        searchStr: "workflowId=workflow-1&taskId=",
+      }),
+    ).toBe(false);
   });
 });

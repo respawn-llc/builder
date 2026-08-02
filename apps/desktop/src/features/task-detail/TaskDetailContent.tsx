@@ -408,9 +408,9 @@ export function TaskDetailContent({
       updatePending={update.isPending}
       initialScrollOffset={restoredSnapshot?.scrollTop}
       initialScrollOffsetRequestKey={
-        activeToken === null
+        activeToken === null || restoredSnapshot === undefined || !restoredDataReady
           ? undefined
-          : `${activeToken.entryID}:${restoredDataReady ? "ready" : "loading"}`
+          : `${activeToken.entryID}:${restoredSnapshot.scrollTop.toString()}`
       }
       onScrollElementChange={(element) => {
         scrollElementRef.current = element;

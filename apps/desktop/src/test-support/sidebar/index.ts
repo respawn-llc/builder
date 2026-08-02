@@ -26,10 +26,17 @@ export function createTestSidebarController(
     pushSidebar(destination) {
       onOpen(destination);
     },
-    preserveSidebarOnNextRouteChange() {
+    preserveSidebarOnNextRouteChange(token, expectation) {
+      void token;
+      void expectation;
       return;
     },
-    consumeSidebarRouteChangePreservation() {
+    clearSidebarRouteChangePreservation(token) {
+      void token;
+      return;
+    },
+    consumeSidebarRouteChangePreservation(location) {
+      void location;
       return false;
     },
     registerSidebarStateCapture() {

@@ -9,6 +9,9 @@ import {
   type SidebarDestination,
   type SidebarEntryToken,
   type SidebarPhase,
+  sidebarRouteMatchesExpectation,
+  type SidebarRouteChangeExpectation,
+  type SidebarRouteLocation,
   type SidebarResult,
   type SidebarStateCapture,
 } from "@/app-facade";
@@ -37,6 +40,10 @@ type PendingSidebar = Readonly<{
   lifecycleID: string;
   resolve: (result: SidebarResult) => void;
 }>;
+type PendingSidebarRoutePreservation = Readonly<{
+  expectation: SidebarRouteChangeExpectation;
+  token: SidebarEntryToken;
+}>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [stackState, setStackState] = useState<SidebarStackState | null>(null);
@@ -49,7 +56,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const stackStateRef = useRef<SidebarStackState | null>(stackState);
   const pendingRef = useRef<PendingSidebar | null>(null);
   const captureRef = useRef(new Map<string, SidebarStateCapture>());
-  const preserveRouteChangeRef = useRef(false);
+  const preserveRouteChangeRef = useRef<PendingSidebarRoutePreservation | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextIDRef = useRef(0);
 
@@ -123,6 +130,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const state = stackStateRef.current;
       const pending = pendingRef.current;
       pendingRef.current = null;
+      preserveRouteChangeRef.current = null;
       clearAllCaptures();
       pending?.resolve({ status: "canceled", reason });
       if (state !== null) {
@@ -132,14 +140,40 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [animateClosed, clearAllCaptures],
   );
 
-  const preserveSidebarOnNextRouteChange = useCallback(() => {
-    preserveRouteChangeRef.current = true;
+  const preserveSidebarOnNextRouteChange = useCallback(
+    (token: SidebarEntryToken, expectation: SidebarRouteChangeExpectation) => {
+      const state = stackStateRef.current;
+      if (
+        state === null ||
+        pendingRef.current?.lifecycleID !== token.lifecycleID ||
+        state.lifecycleID !== token.lifecycleID ||
+        !state.entries.some((entry) => entry.entryID === token.entryID)
+      ) {
+        return;
+      }
+      preserveRouteChangeRef.current = { expectation, token };
+    },
+    [],
+  );
+
+  const clearSidebarRouteChangePreservation = useCallback((token: SidebarEntryToken) => {
+    const pending = preserveRouteChangeRef.current;
+    if (pending?.token.lifecycleID === token.lifecycleID && pending.token.entryID === token.entryID) {
+      preserveRouteChangeRef.current = null;
+    }
   }, []);
 
-  const consumeSidebarRouteChangePreservation = useCallback(() => {
-    const preserved = preserveRouteChangeRef.current;
-    preserveRouteChangeRef.current = false;
-    return preserved;
+  const consumeSidebarRouteChangePreservation = useCallback((location: SidebarRouteLocation): boolean => {
+    const pending = preserveRouteChangeRef.current;
+    preserveRouteChangeRef.current = null;
+    const state = stackStateRef.current;
+    return (
+      pending !== null &&
+      state !== null &&
+      state.lifecycleID === pending.token.lifecycleID &&
+      state.entries.length > 0 &&
+      sidebarRouteMatchesExpectation(location, pending.expectation)
+    );
   }, []);
 
   const openSidebar = useCallback(
@@ -147,6 +181,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearCloseTimeout();
       const previousPending = pendingRef.current;
       pendingRef.current = null;
+      preserveRouteChangeRef.current = null;
       clearAllCaptures();
       previousPending?.resolve({ status: "canceled", reason: "replaced" });
 
@@ -181,6 +216,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         throw new Error("Sidebar replacement requires an active destination lifecycle.");
       }
       clearCloseTimeout();
+      preserveRouteChangeRef.current = null;
       const currentEntry = state.entries.at(-1);
       if (currentEntry === undefined) {
         throw new Error("Sidebar replacement requires an active destination.");
@@ -298,6 +334,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const state = stackStateRef.current;
       const pending = pendingRef.current;
       pendingRef.current = null;
+      preserveRouteChangeRef.current = null;
       clearAllCaptures();
       pending?.resolve(result);
       if (state !== null) {
@@ -341,6 +378,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         state.lifecycleID !== token.lifecycleID ||
         !state.entries.some((entry) => entry.entryID === token.entryID)
       ) {
+        clearSidebarRouteChangePreservation(token);
         return;
       }
       clearCapture(token);
@@ -354,7 +392,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         entryID: token.entryID,
       });
     },
-    [clearCapture, closeSidebar, dispatchStack],
+    [clearCapture, clearSidebarRouteChangePreservation, closeSidebar, dispatchStack],
   );
 
   const closeSidebarIfCurrent = useCallback(
@@ -422,6 +460,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       closeSidebarIfCurrent,
       openSidebar,
       preserveSidebarOnNextRouteChange,
+      clearSidebarRouteChangePreservation,
       consumeSidebarRouteChangePreservation,
       pushSidebar,
       registerSidebarStateCapture,
@@ -445,6 +484,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       closeSidebarIfCurrent,
       openSidebar,
       preserveSidebarOnNextRouteChange,
+      clearSidebarRouteChangePreservation,
       consumeSidebarRouteChangePreservation,
       phase,
       pushSidebar,

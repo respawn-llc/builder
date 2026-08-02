@@ -51,13 +51,19 @@ export function SidebarRouteChangeCloser() {
   useLayoutEffect(() => {
     if (previousRouteKeyRef.current !== routeKey) {
       previousRouteKeyRef.current = routeKey;
-      if (stackDestinations.length > 0 && !consumeSidebarRouteChangePreservation()) {
+      const preserved = consumeSidebarRouteChangePreservation({
+        pathname: location.pathname,
+        searchStr: location.searchStr,
+      });
+      if (stackDestinations.length > 0 && !preserved) {
         closeSidebar("route_change");
       }
     }
   }, [
     closeSidebar,
     consumeSidebarRouteChangePreservation,
+    location.pathname,
+    location.searchStr,
     routeKey,
     stackDestinations.length,
   ]);

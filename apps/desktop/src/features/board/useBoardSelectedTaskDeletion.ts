@@ -1,6 +1,10 @@
 import { useCallback } from "react";
 
-import { useAppNavigation, useSidebar } from "@/app-facade";
+import {
+  useAppNavigation,
+  useSidebar,
+  type SidebarRouteChangeExpectation,
+} from "@/app-facade";
 import { sidebarEntryTokenForDeletedTask } from "./boardSidebarDeletion";
 
 export function useBoardSelectedTaskDeletion({
@@ -15,8 +19,13 @@ export function useBoardSelectedTaskDeletion({
   workflowId: string | undefined;
 }>) {
   const navigation = useAppNavigation();
-  const { preserveSidebarOnNextRouteChange, removeSidebarEntry, stackDestinations, stackEntryTokens } =
-    useSidebar();
+  const {
+    clearSidebarRouteChangePreservation,
+    preserveSidebarOnNextRouteChange,
+    removeSidebarEntry,
+    stackDestinations,
+    stackEntryTokens,
+  } = useSidebar();
   return useCallback(() => {
     const deletedToken = sidebarEntryTokenForDeletedTask(
       stackDestinations,
@@ -24,11 +33,22 @@ export function useBoardSelectedTaskDeletion({
       selectedTaskId,
     );
     if (deletedToken !== undefined) {
-      preserveSidebarOnNextRouteChange();
+      const expectation: SidebarRouteChangeExpectation = {
+        kind: "projectTaskCleared",
+        projectID: projectId,
+        workflowID: workflowId,
+      };
+      preserveSidebarOnNextRouteChange(deletedToken, expectation);
       removeSidebarEntry(deletedToken);
     }
-    void navigation.closeProjectTask(projectId, workflowId).catch(onNavigationError);
+    void navigation.closeProjectTask(projectId, workflowId).catch((error: unknown) => {
+      if (deletedToken !== undefined) {
+        clearSidebarRouteChangePreservation(deletedToken);
+      }
+      onNavigationError(error);
+    });
   }, [
+    clearSidebarRouteChangePreservation,
     navigation,
     onNavigationError,
     preserveSidebarOnNextRouteChange,

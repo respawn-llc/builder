@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, rpcErrorCodes, RpcError, type TaskDetail, type TaskLabelAssignment } from "@/api";
@@ -46,6 +46,45 @@ export function TaskDetailSurface({
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
   const openLink = useOpenExternalLink();
+  const refetchDetail = detail.refetch;
+  const refetchAttention = attention.refetch;
+  const refetchActivity = activity.refetch;
+  const refetchComments = comments.refetch;
+  const restorationSnapshotKey =
+    sidebarSnapshot === undefined ? null : JSON.stringify(sidebarSnapshot);
+  const [completedRestorationSnapshotKey, setCompletedRestorationSnapshotKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (restorationSnapshotKey === null) {
+      return;
+    }
+    let canceled = false;
+    void Promise.all([
+      refetchDetail(),
+      refetchAttention(),
+      refetchActivity(),
+      refetchComments(),
+    ]).then(
+      () => {
+        if (!canceled) {
+          setCompletedRestorationSnapshotKey(restorationSnapshotKey);
+        }
+      },
+      () => {
+        if (!canceled) {
+          setCompletedRestorationSnapshotKey(restorationSnapshotKey);
+        }
+      },
+    );
+    return () => {
+      canceled = true;
+    };
+  }, [
+    refetchActivity,
+    refetchAttention,
+    refetchComments,
+    refetchDetail,
+    restorationSnapshotKey,
+  ]);
   const missingTask = detail.isError && isWorkflowTaskNotFound(detail.error);
   useEffect(() => {
     if (missingTask) {
@@ -71,6 +110,8 @@ export function TaskDetailSurface({
           onMutated={onMutated}
           openLink={openLink}
           restoredDataReady={
+            (restorationSnapshotKey === null ||
+              completedRestorationSnapshotKey === restorationSnapshotKey) &&
             !detail.isFetching &&
             !attention.isFetching &&
             !activity.isFetching &&

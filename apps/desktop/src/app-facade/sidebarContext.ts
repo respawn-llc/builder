@@ -113,6 +113,17 @@ export type SidebarEntryToken = Readonly<{
   entryID: string;
 }>;
 
+export type SidebarRouteLocation = Readonly<{
+  pathname: string;
+  searchStr: string;
+}>;
+
+export type SidebarRouteChangeExpectation = Readonly<{
+  kind: "projectTaskCleared";
+  projectID: string;
+  workflowID: string | undefined;
+}>;
+
 export type SidebarTaskDetailSnapshot = Readonly<{
   kind: "taskDetail";
   scrollTop: number;
@@ -136,8 +147,12 @@ export type SidebarController = Readonly<{
   closeSidebarIfCurrent(token: SidebarEntryToken, reason?: SidebarCancelReason): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   pushSidebar(destination: SidebarDestination): void;
-  preserveSidebarOnNextRouteChange(): void;
-  consumeSidebarRouteChangePreservation(): boolean;
+  preserveSidebarOnNextRouteChange(
+    token: SidebarEntryToken,
+    expectation: SidebarRouteChangeExpectation,
+  ): void;
+  clearSidebarRouteChangePreservation(token: SidebarEntryToken): void;
+  consumeSidebarRouteChangePreservation(location: SidebarRouteLocation): boolean;
   registerSidebarStateCapture(token: SidebarEntryToken, capture: SidebarStateCapture): () => void;
   removeSidebarEntry(token: SidebarEntryToken): void;
   replaceSidebar(destination: SidebarDestination): void;
@@ -162,4 +177,16 @@ export function useSidebar(): SidebarController {
     throw new Error("SidebarProvider is required");
   }
   return value;
+}
+
+export function sidebarRouteMatchesExpectation(
+  location: SidebarRouteLocation,
+  expectation: SidebarRouteChangeExpectation,
+): boolean {
+  const search = new URLSearchParams(location.searchStr.startsWith("?") ? location.searchStr.slice(1) : location.searchStr);
+  return (
+    location.pathname === `/projects/${expectation.projectID}` &&
+    search.get("taskId") === "" &&
+    (search.get("workflowId") ?? undefined) === expectation.workflowID
+  );
 }

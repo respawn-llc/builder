@@ -1,7 +1,7 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import { useSidebar } from "@/app-facade";
@@ -55,6 +55,11 @@ describe("sidebar Task Detail navigation", () => {
     const description = screen.getByRole("textbox", { name: "Description" });
     await user.clear(description);
     await user.type(description, "Drafted body");
+    await user.type(screen.getByRole("textbox", { name: "Add comment" }), "Drafted comment");
+    await user.click(screen.getByRole("tab", { name: "Activity" }));
+    const scrollStack = screen.getByTestId("task-detail-island-stack");
+    scrollStack.scrollTop = 120;
+    fireEvent.scroll(scrollStack);
     await user.click(await screen.findByTestId("dependency-row-task-2"));
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Prepare");
@@ -64,6 +69,92 @@ describe("sidebar Task Detail navigation", () => {
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Drafted title");
       expect(screen.getByRole("textbox", { name: "Description" })).toHaveTextContent("Drafted body");
+    });
+    const restoredStack = screen.getByTestId("task-detail-island-stack");
+    expect(restoredStack).toHaveProperty("scrollTop", 120);
+    expect(screen.getByRole("textbox", { name: "Description" })).toHaveClass("overflow-visible");
+    restoredStack.scrollTop = 0;
+    fireEvent.scroll(restoredStack);
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    });
+    await user.click(screen.getByRole("tab", { name: /Comments/ }));
+    expect(screen.getByRole("textbox", { name: "Add comment" })).toHaveValue("Drafted comment");
+
+    const restoredScrollStack = screen.getByTestId("task-detail-island-stack");
+    restoredScrollStack.scrollTop = 40;
+    fireEvent.scroll(restoredScrollStack);
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toContainEqual({
+        method: "workflow.subscribeProject",
+        params: { project_id: "project-1" },
+      });
+    });
+    services.transport.connection.set("disconnected", "offline");
+    await waitFor(() => {
+      expect(services.transport.subscriptions).not.toContainEqual({
+        method: "workflow.subscribeProject",
+        params: { project_id: "project-1" },
+      });
+    });
+    services.transport.connection.set("connected");
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toContainEqual({
+        method: "workflow.subscribeProject",
+        params: { project_id: "project-1" },
+      });
+    });
+    services.transport.open("workflow.subscribeProject");
+    await waitFor(() => {
+      expect(screen.getByTestId("task-detail-island-stack")).toHaveProperty("scrollTop", 40);
+    });
+  });
+
+  it("keeps one rendered Task Detail and one live project subscription across cycles", async () => {
+    const services = createTestServices([
+      {
+        method: "workflow.project.label.list",
+        result: { catalog: { project_id: "project-1", labels: [] } },
+      },
+      {
+        method: "workflow.task.get",
+        handler: (params) => {
+          const taskID = z.object({ task_id: z.string() }).parse(params).task_id;
+          return taskWithDependency(taskID, taskID, "Body", undefined);
+        },
+      },
+      { method: "workflow.task.attention.list", result: emptyTaskAttentionResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+      { method: "workflow.task.comment.list", result: { comments: [], next_offset: null } },
+    ]);
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/tasks/task-0"] }),
+      routeTree: createRootRoute(),
+    });
+    render(
+      <RouterContextProvider router={router}>
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <SidebarTraversalScenario />
+          </SidebarProvider>
+        </TestAppProviders>
+      </RouterContextProvider>,
+    );
+
+    const user = userEvent.setup();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("task-0");
+    });
+    const initialActiveSubscriptionCount = services.transport.subscriptions.length;
+    expect(initialActiveSubscriptionCount).toBeGreaterThan(0);
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await user.click(screen.getByRole("button", { name: "Cycle" }));
+      await waitFor(() => {
+        expect(screen.getAllByTestId("task-detail-island-stack")).toHaveLength(1);
+      });
+    }
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toHaveLength(initialActiveSubscriptionCount);
     });
   });
 });
@@ -87,6 +178,50 @@ function SidebarScenario() {
     <>
       <button onClick={backSidebar} type="button">
         Back
+      </button>
+      <SidebarDestinationView
+        activeSnapshot={activeSnapshot}
+        closeSidebar={closeSidebar}
+        destination={activeDestination}
+        resolveSidebar={resolveSidebar}
+      />
+    </>
+  );
+}
+
+function SidebarTraversalScenario() {
+  const {
+    activeDestination,
+    activeSnapshot,
+    backSidebar,
+    canGoBack,
+    closeSidebar,
+    openSidebar,
+    pushSidebar,
+    resolveSidebar,
+  } = useSidebar();
+  const [nextTaskNumber, setNextTaskNumber] = useState(1);
+  useEffect(() => {
+    void openSidebar({ kind: "taskDetail", taskID: "task-0" });
+  }, [openSidebar]);
+  if (activeDestination === null) {
+    return null;
+  }
+  return (
+    <>
+      <button
+        onClick={() => {
+          if (canGoBack) {
+            backSidebar();
+            return;
+          }
+          const taskID = `task-${nextTaskNumber.toString()}`;
+          setNextTaskNumber((current) => current + 1);
+          pushSidebar({ kind: "taskDetail", taskID });
+        }}
+        type="button"
+      >
+        Cycle
       </button>
       <SidebarDestinationView
         activeSnapshot={activeSnapshot}
