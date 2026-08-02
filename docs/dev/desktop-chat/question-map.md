@@ -18,8 +18,9 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The browser stays recency ordered and adds no search or additional status filters.
 - Row click opens full-page Chat. Session rows have no secondary actions or context menu; separate-window access lives only in Chat chrome.
 - `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions. Workflow and headless launch modes create no additional category.
-- Primary New Session uses the project default workspace and opens an empty new-chat destination.
-- New in workspace opens a virtualized cursor-paginated workspace-picker sidebar; worktrees remain post-open.
+- Primary New Session uses the Project default workspace and resumes that workspace's outstanding lazy draft, or opens empty when none exists.
+- New in workspace opens a virtualized cursor-paginated workspace-picker sidebar and resumes the selected workspace's outstanding lazy draft when present; worktrees remain post-open.
+- Each Project workspace has at most one outstanding lazy draft. Materialization consumes it into the Session; there is no Drafts destination.
 - New Session has no setup/name/model/provider/role/worktree fields.
 - Creation is lazy: abandoning untouched new chat leaves no durable session; the first agentic trigger materializes it and replaces the route.
 - Session rows show no execution-target availability. Opening preserves the recorded target and follows the ordinary Session open, launch, and runtime path without Desktop-specific fallback, retarget, repair, or read-only behavior.

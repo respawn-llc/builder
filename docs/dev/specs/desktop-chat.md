@@ -21,7 +21,8 @@
 - Session rows do not expose execution-target availability or warnings.
 - Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.
 - Reopening a Session after navigation or relaunch opens its latest transcript position.
-- `New Session` opens an empty Chat using the Project default workspace. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list.
+- `New Session` opens the outstanding lazy Chat draft for the Project default workspace, or a new empty Chat when none exists. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list and resumes that workspace's outstanding lazy draft when present.
+- Each Project workspace has at most one outstanding lazy Chat draft. Materializing its Session consumes that draft into the new Session; Desktop adds no Drafts destination or orphaned-draft list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
 - New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; rename and settings remain available after Chat opens.
 - Opening and abandoning untouched new Chat creates neither a durable Session nor a session-browser row. The first nonblank user message, or another action that enters the agent loop, creates the Session.
@@ -139,6 +140,7 @@
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
 - The unsent message and complete settings draft persist and restore together across navigation, detachment, relaunch, and server restart. The server owns this one draft; there is no collaborative composer editing.
+- A pre-Session draft is owned by its Project workspace. Reopening New Chat for that workspace resumes the same aggregate until its Session materializes.
 - Setting changes create no transcript rows. Clicking away or Escape closes settings.
 - Choosing Agent or Supervisor keeps settings open.
 
