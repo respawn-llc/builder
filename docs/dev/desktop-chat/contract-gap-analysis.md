@@ -22,6 +22,12 @@ This document classifies the current contract surface. “Reusable” means the 
 - Tool, prompt, queue, runtime, compaction, goal, background, worktree, and diagnostic messages.
 - Existing typed tool start/end facts share `ToolCallID` and already support one merged tool row as used by the TUI. Desktop must reuse that seam rather than inventing a reconciliation subsystem or requiring a server-tool refactor.
 
+Hydration reads mutable facts from their authoritative domain owners. The
+session feed sequencer owns event ordering and continuity detection, not cached
+copies of Session or runtime state. A detected hydration/live boundary gap uses
+ordinary Scratch Rehydration; the contract does not require a globally atomic
+cross-owner snapshot, exactly-once boundary delivery, or restart equivalence.
+
 Provider/storage encodings, materialized-versus-synthesized provenance, repair paths, and deduplication bookkeeping are not Desktop product contracts. Suspected dead or legacy duplication is tracked separately in `KENT-303`.
 
 The TUI currently permits expanding a backgrounded Shell/process row while revealing no additional content. Desktop must not copy that behavior: backgrounded tool rows and later completion/kill rows expand to the exact model-visible result/notice payload.
@@ -57,14 +63,14 @@ These are client gaps, not reasons to duplicate server business logic in React.
 
 ### Worktree
 
-The existing server and shared contracts already own Worktree topology, current
+Server and shared contracts own Worktree topology, current
 target identity, selector resolution, create and optional setup, enter/leave,
 delete `Completed`/`Scheduled` outcomes, transition lifecycle, structured
 operational errors, and Worktree operation/setup identities. Desktop must adapt
 those contracts rather than reproduce selector matching, target authority,
 setup orchestration, transition scheduling, or mutation ordering.
 
-Four concrete gaps remain:
+Desktop Worktree requires four explicit seams:
 
 - Delete confirmation needs one typed, target-local preview operation with
   exhaustive `Clean`, `Dirty`, and `Unknown` results. `Dirty` carries the
@@ -85,9 +91,8 @@ Four concrete gaps remain:
 
 The Worktree surface uses explicit reads and mutation-triggered refreshes. It
 adds no polling, speculative reconnect recovery, client-wide mutation lock, or
-client-retained operation replay. Generic client request IDs are being removed
-by `KENT-346`; Desktop Worktree transport must be built after that compatibility
-cut while preserving domain-owned Worktree operation and setup identities.
+client-retained operation replay. Desktop Worktree transport uses domain-owned
+Worktree operation and setup identities, not generic client request identity.
 
 ## Confirmed Product/Contract Decisions Needed
 

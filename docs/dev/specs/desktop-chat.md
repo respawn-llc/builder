@@ -59,6 +59,8 @@
 - Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. A future authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. Desktop does not infer row identity from display text, role, position, or transport order.
+- Opening, reopening, and transcript recovery hydrate mutable Session facts from their authoritative server owners. Cached feed-ordering state never replaces fresher Session identity, execution-target, runtime, or transcript facts.
+- Desktop does not require a globally atomic cross-owner snapshot-plus-live handoff or exactly-once delivery across that boundary. If event-sequence continuity cannot be established, Desktop discards transient live state and repeats authoritative hydration instead of remaining silently stale.
 
 ## Tools And Processes
 
