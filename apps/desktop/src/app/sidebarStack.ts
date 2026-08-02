@@ -1,4 +1,8 @@
-import type { SidebarDestination, SidebarDestinationSnapshot } from "@/app-facade";
+import {
+  sidebarDestinationMatchesTask,
+  type SidebarDestination,
+  type SidebarDestinationSnapshot,
+} from "@/app-facade";
 
 export const sidebarStackCapacity = 50;
 
@@ -196,7 +200,7 @@ export function findTaskDetailIndex(
     return undefined;
   }
   const index = entries.findIndex(
-    (entry) => entry.destination.kind === "taskDetail" && entry.destination.taskID === destination.taskID,
+    (entry) => sidebarDestinationMatchesTask(entry.destination, destination.taskID),
   );
   return index === -1 ? undefined : index;
 }

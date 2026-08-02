@@ -137,6 +137,10 @@ export type SidebarTaskDetailSnapshot = Readonly<{
 export type SidebarDestinationSnapshot = SidebarTaskDetailSnapshot;
 export type SidebarStateCapture = () => SidebarDestinationSnapshot | null;
 
+export function sidebarDestinationMatchesTask(destination: SidebarDestination, taskID: string): boolean {
+  return destination.kind === "taskDetail" && destination.taskID === taskID;
+}
+
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
   activeActivationID: string | null;
