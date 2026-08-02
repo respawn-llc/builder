@@ -106,6 +106,10 @@ func (statusLineFakeClient) Generate(context.Context, llm.Request) (llm.Response
 	return llm.Response{}, errors.New("not implemented")
 }
 
+func (statusLineFakeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(80, 24)

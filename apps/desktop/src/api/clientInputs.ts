@@ -121,7 +121,8 @@ export type TaskEditInput = Readonly<{
 export type TaskMoveInput = Readonly<{
   taskID: string;
   targetNodeID: string;
-  outputValues?: Readonly<Record<string, string>>;
+  transitionKey?: string | undefined;
+  values?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
   proceedDespiteDependencies?: boolean | undefined;

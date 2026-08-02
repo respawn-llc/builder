@@ -148,7 +148,6 @@ function ExecutionTargetForm({
         if (selectedTarget === null) {
           return;
         }
-        continuation.close();
         onResult({
           kind: "continue",
           action: pending.action,

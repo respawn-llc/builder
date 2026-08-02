@@ -40,6 +40,13 @@ func (r *taskDependencyLifecycleRemote) MoveWorkflowTask(_ context.Context, req 
 	return r.moveResponse, nil
 }
 
+func (r *taskDependencyLifecycleRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
+	return serverapi.WorkflowTaskMovePreviewResponse{
+		Outcome: serverapi.WorkflowTaskMovePreviewOutcomeDirect,
+		Direct:  &serverapi.WorkflowTaskMovePreviewDirect{},
+	}, nil
+}
+
 func (r *taskDependencyLifecycleRemote) ApproveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
 	r.approveRequests = append(r.approveRequests, req)
 	return r.approveResponse, nil
@@ -65,7 +72,7 @@ func (canceledWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.Wo
 func (canceledWorktreeSetupSubscription) Close() error { return nil }
 
 func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	count := 2
 	for _, tt := range []struct {
 		name       string
@@ -141,11 +148,11 @@ func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 }
 
 func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	count := 1
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome:                    serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired,
+			Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
 			UnsatisfiedDependencyCount: &count,
 		},
 	}
@@ -168,7 +175,7 @@ func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if output.Outcome != serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired ||
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
 		output.UnsatisfiedDependencyCount == nil || *output.UnsatisfiedDependencyCount != 1 {
 		t.Fatalf("JSON output=%+v", output)
 	}
@@ -178,7 +185,7 @@ func TestTaskMoveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 			Applied: &serverapi.WorkflowTaskMoveApplied{
 				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
 			},
@@ -200,10 +207,10 @@ func TestTaskMoveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 }
 
 func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 			Applied: &serverapi.WorkflowTaskMoveApplied{
 				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
 			},
@@ -221,12 +228,68 @@ func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if output.Outcome != serverapi.WorkflowTaskActionOutcomeApplied ||
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
 		output.Applied == nil || len(output.Applied.CurrentNodes) != 1 {
 		t.Fatalf("JSON output=%+v", output)
 	}
 }
+func TestTaskMoveDependencyConfirmationMapsIgnoreFlag(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	count := 2
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+			UnsatisfiedDependencyCount: &count,
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
 
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand([]string{"task-1", "node-2", "--ignore-dependencies", "--json"}, &stdout, &stderr)
+
+	if exitCode != 1 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	if !remote.moveRequests[0].ProceedDespiteDependencies {
+		t.Fatalf("move request = %+v, want proceed despite dependencies", remote.moveRequests[0])
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
+		output.UnsatisfiedDependencyCount == nil || *output.UnsatisfiedDependencyCount != count {
+		t.Fatalf("JSON output=%+v", output)
+	}
+}
+
+func TestTaskMoveJSONWritesSubmittedNoOpTypedOutcome(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand([]string{"task-1", "node-2", "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		output.NoOp == nil || len(output.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("JSON output=%+v", output)
+	}
+}
 func TestTaskApproveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
 	remote := &taskDependencyLifecycleRemote{

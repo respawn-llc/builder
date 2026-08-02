@@ -361,6 +361,20 @@ kent task search "retry policy" --project . --status backlog,running
 
 Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
 
+### Manually Move A Task
+
+Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
+
+```bash
+kent task move <task> <target-node-id> --transition <transition-key> \
+  --values-json '{"plan":{"summary":"Approved plan"}}'
+kent task move <task> <target-node-id> --values-file ./move-values.json
+```
+
+Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
+
+Desktop shows the server's Transition choices and required values, including resolved values that can be edited. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
+
 ### Complete Work From The CLI
 
 An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.

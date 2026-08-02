@@ -479,11 +479,17 @@ func (e *Engine) ThinkingLevel() string {
 
 func (e *Engine) FastModeEnabled() bool {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	enabled := e.cfg.FastModeEnabled
 	if e.cfg.FastModeState != nil {
-		return e.cfg.FastModeState.Enabled()
+		enabled = e.cfg.FastModeState.Enabled()
 	}
-	return e.cfg.FastModeEnabled
+	e.mu.Unlock()
+	if !enabled {
+		return false
+	}
+	// The shared state stores the user's preference; callers need the
+	// provider-supported effective state so status and requests stay valid.
+	return e.FastModeAvailable()
 }
 
 func (e *Engine) FastModeAvailable() bool {

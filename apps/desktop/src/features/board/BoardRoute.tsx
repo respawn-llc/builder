@@ -1,4 +1,4 @@
-import type { DragEvent, SyntheticEvent } from "react";
+import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -6,7 +6,6 @@ import {
   hasSelectedWorkflow,
   type BoardColumn,
   type SelectedWorkflowBoard,
-  type WorkflowExecutionTargetSelection,
 } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
@@ -18,12 +17,8 @@ import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
-  executeTaskInitiatingAction,
-  moveTaskInitiatingAction,
   startTaskInitiatingAction,
-  type TaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
-  useTaskInitiatingActionController,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
@@ -38,15 +33,12 @@ import type { BoardColumnDropState } from "./BoardDragTypes";
 import type { ActiveBoardCardDrag } from "./BoardDragState";
 import { BoardBackgroundRefreshNotice } from "./BoardBackgroundRefreshNotice";
 import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
-import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
-import {
-  classifyDrop,
-  missingInputValues,
-  type PendingDrop,
-  type PendingMissingInputDrop,
-} from "./BoardDropActions";
+import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
-import { MissingInputsDialog, RollbackStartDialog } from "./BoardDropDialogs";
+import { ManualMoveDialog } from "./ManualMoveDialog";
+import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
+import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
+import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
@@ -61,6 +53,24 @@ export type BoardRouteProps = Readonly<{
 }>;
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
+
+const manualMoveBlockerTranslationKeys = {
+  invalid_workflow: "board.moveBlockedInvalidWorkflow",
+  no_source_position: "board.moveBlockedNoSource",
+  unsupported_destination: "board.moveBlockedUnsupportedDestination",
+  waiting_question: "board.moveBlockedWaitingQuestion",
+  lifecycle_conflict: "board.moveBlockedLifecycle",
+  context_session_unavailable: "board.moveBlockedContextSession",
+  no_usable_transition: "board.moveBlockedNoUsableTransition",
+  parallel_branch_requires_fan_out: "board.moveBlockedFanOut",
+} as const;
+
+function manualMoveBlockerCopy(reason: string, translate: (key: string) => string): string {
+  const key =
+    Object.entries(manualMoveBlockerTranslationKeys).find(([candidate]) => candidate === reason)?.[1] ??
+    "board.moveBlockedGeneric";
+  return translate(key);
+}
 
 export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const reportBoardLoadError = useBoardLoadErrorReporter();
@@ -217,8 +227,6 @@ function BoardContent({
   const [expandedEmptyColumns, setExpandedEmptyColumns] = useState<
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
   >(() => ({ ids: new Set(), scope: "" }));
-  const [rollbackDrop, setRollbackDrop] = useState<PendingDrop | null>(null);
-  const [missingInputDrop, setMissingInputDrop] = useState<PendingMissingInputDrop | null>(null);
   const { push } = useStatusController();
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
@@ -232,23 +240,58 @@ function BoardContent({
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const initiatingAction = useTaskInitiatingActionController({
-    execute: async (action, selection) => executeTaskInitiatingAction(api, action, selection),
-    onApplied: async () => {
-      await actions.refresh();
+  const reportActionError = useCallback(
+    (id: string, title: string, error: unknown) => {
+      const body = errorMessage(error);
+      push({ id, tone: "danger", title, body, durationMs: Infinity });
     },
-    onAppliedError: (error) => {
+    [push],
+  );
+  const reportStartError = useCallback(
+    (error: unknown) => {
+      reportActionError("board-start-error", t("board.startFailed"), error);
+    },
+    [reportActionError, t],
+  );
+  const reportMoveError = useCallback(
+    (error: unknown) => {
+      reportActionError("board-move-error", t("board.moveFailed"), error);
+    },
+    [reportActionError, t],
+  );
+  const reportMovePreviewBlocked = useCallback(
+    (reason: string) => {
       push({
-        body: errorMessage(error),
+        id: "board-move-preview-blocked",
+        tone: "warning",
+        title: t("board.moveBlocked"),
+        body: manualMoveBlockerCopy(reason, t),
         durationMs: Infinity,
-        id: "board-action-refresh-error",
-        title: t("board.loadFailed"),
-        tone: "danger",
       });
     },
+    [push, t],
+  );
+  const {
+    actionsDisabled: initiatingActionsDisabled,
+    initiatingAction,
+    runCardAction,
+  } = useBoardInitiatingActionController({
+    api,
+    connected: connection.phase === "connected",
+    moveErrorTitle: t("board.moveFailed"),
+    onActionError: reportActionError,
+    onApplied: actions.refresh,
+    onPendingMoveChange: setPendingCardMove,
+    refreshErrorTitle: t("board.loadFailed"),
+    startErrorTitle: t("board.startFailed"),
   });
-  const actionsDisabled =
-    connection.phase !== "connected" || initiatingAction.running || initiatingAction.pending !== null;
+  const manualMove = useManualMoveController({
+    api,
+    onPreviewBlocked: reportMovePreviewBlocked,
+    onPreviewError: reportMoveError,
+    runAction: runCardAction,
+  });
+  const actionsDisabled = initiatingActionsDisabled || manualMove.actionsDisabled;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -278,13 +321,6 @@ function BoardContent({
       ? expandedEmptyColumns.ids
       : emptyExpandedEmptyColumnIDs;
   useWindowChromeTitle(board.selectedWorkflow.name || board.projectName);
-  const reportActionError = useCallback(
-    (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
-    },
-    [push],
-  );
   const reportCardsLoadError = useCallback(
     (error: unknown) => {
       reportActionError("board-cards-load-error", t("board.cardsLoadFailed"), error);
@@ -362,28 +398,10 @@ function BoardContent({
       return;
     }
     if (dropAction.kind === "move") {
-      const moveInput = {
-        taskID: dragPayload.taskID,
-        targetNodeID: column.id,
-      };
-      const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
-      runCardAction(moveTaskInitiatingAction(moveInput), pendingMove);
+      manualMove.preview(dragPayload.taskID, column.id);
       return;
     }
-    if (dropAction.kind === "confirmRollback") {
-      setRollbackDrop({ taskID: dragPayload.taskID, targetColumn: column });
-      return;
-    }
-    if (dropAction.kind === "reject") {
-      reportRejectedDrop();
-      return;
-    }
-    setMissingInputDrop({
-      taskID: dragPayload.taskID,
-      targetColumn: column,
-      fields: column.transitionOutputFields,
-      values: missingInputValues(column.transitionOutputFields),
-    });
+    reportRejectedDrop();
   }
 
   function interruptTask(taskID: string): void {
@@ -410,14 +428,6 @@ function BoardContent({
     } catch (error) {
       reportDeleteError(error);
     }
-  }
-
-  function reportStartError(error: unknown): void {
-    reportActionError("board-start-error", t("board.startFailed"), error);
-  }
-
-  function reportMoveError(error: unknown): void {
-    reportActionError("board-move-error", t("board.moveFailed"), error);
   }
 
   function reportInterruptError(error: unknown): void {
@@ -449,8 +459,7 @@ function BoardContent({
       return "blocked";
     }
     const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
-    if (action.kind === "start") return "allowed";
-    return activeDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
+    return action.kind === "reject" ? "blocked" : "idle";
   }
 
   function columnIsCollapsed(column: BoardColumn): boolean {
@@ -470,53 +479,6 @@ function BoardContent({
     });
   }
 
-  function confirmRollbackDrop(): void {
-    if (rollbackDrop === null) {
-      return;
-    }
-    const drop = rollbackDrop;
-    setRollbackDrop(null);
-    const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    runCardAction(
-      moveTaskInitiatingAction({
-        taskID: drop.taskID,
-        targetNodeID: drop.targetColumn.id,
-      }),
-      pendingMove,
-    );
-  }
-
-  function submitMissingInputDrop(event: SyntheticEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    if (missingInputDrop === null) {
-      return;
-    }
-    const drop = missingInputDrop;
-    setMissingInputDrop(null);
-    const pendingMove = { taskID: drop.taskID, targetColumnID: drop.targetColumn.id };
-    runCardAction(
-      moveTaskInitiatingAction({
-        taskID: drop.taskID,
-        targetNodeID: drop.targetColumn.id,
-        outputValues: drop.values,
-      }),
-      pendingMove,
-    );
-  }
-
-  function runCardAction(
-    action: TaskInitiatingAction,
-    pendingMove: PendingBoardCardMove,
-    selection?: WorkflowExecutionTargetSelection,
-  ): void {
-    setPendingCardMove(pendingMove);
-    void initiatingAction
-      .run(action, selection)
-      .catch(action.kind === "start" ? reportStartError : reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
-  }
 
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {
@@ -539,14 +501,6 @@ function BoardContent({
         targetColumnID,
       },
       result.selection,
-    );
-  }
-
-  function clearPendingCardMove(pendingMove: PendingBoardCardMove): void {
-    setPendingCardMove((current) =>
-      current?.taskID === pendingMove.taskID && current.targetColumnID === pendingMove.targetColumnID
-        ? null
-        : current,
     );
   }
 
@@ -638,24 +592,11 @@ function BoardContent({
         </div>
         <BoardHorizontalScrollbar scrollportRef={scrollportRef} />
       </div>
-      <RollbackStartDialog
-        onClose={() => {
-          setRollbackDrop(null);
-        }}
-        onConfirm={confirmRollbackDrop}
-        open={rollbackDrop !== null}
-      />
-      <MissingInputsDialog
-        drop={missingInputDrop}
-        onClose={() => {
-          setMissingInputDrop(null);
-        }}
-        onSubmit={submitMissingInputDrop}
-        onValueChange={(fieldName, value) => {
-          setMissingInputDrop((current) =>
-            current === null ? null : { ...current, values: { ...current.values, [fieldName]: value } },
-          );
-        }}
+      <ManualMoveDialog
+        key={manualMove.pending?.id ?? "closed"}
+        onCancel={manualMove.cancel}
+        onSubmit={manualMove.submit}
+        preview={manualMove.pending?.preview ?? null}
       />
       <TaskInitiatingActionDialogs
         continuation={initiatingAction}

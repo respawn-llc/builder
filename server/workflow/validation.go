@@ -155,7 +155,7 @@ func (s *validationState) indexNodes() {
 }
 
 func (s *validationState) indexTransitionGroups() {
-	seenTransitionBySource := map[NodeID]map[string]TransitionGroupID{}
+	seenTransitions := map[string]TransitionGroupID{}
 	for _, group := range s.def.TransitionGroups {
 		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
 		if group.WorkflowID.IsZero() {
@@ -179,15 +179,10 @@ func (s *validationState) indexTransitionGroups() {
 		} else if !workflowkey.Valid(transitionID) {
 			s.addHard(CodeInvalidTransitionID, "transition id must "+workflowkey.Description, ref)
 		} else {
-			bySource := seenTransitionBySource[group.SourceNodeID]
-			if bySource == nil {
-				bySource = map[string]TransitionGroupID{}
-				seenTransitionBySource[group.SourceNodeID] = bySource
+			if _, exists := seenTransitions[transitionID]; exists {
+				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref)
 			}
-			if _, exists := bySource[transitionID]; exists {
-				s.addHard(CodeDuplicateTransitionID, "transition id must be unique per source node", ref)
-			}
-			bySource[transitionID] = group.ID
+			seenTransitions[transitionID] = group.ID
 		}
 		if !validDisplayName(group.DisplayName) {
 			s.addHard(CodeInvalidDisplayName, "transition group display name must be non-empty and at most 120 characters", ref)

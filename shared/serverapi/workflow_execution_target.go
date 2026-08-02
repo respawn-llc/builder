@@ -75,8 +75,10 @@ type WorkflowExecutionTargetSelectionRequirement struct {
 type WorkflowExecutionTargetActionOutcome string
 
 const (
-	WorkflowExecutionTargetActionOutcomeApplied           = "applied"
-	WorkflowExecutionTargetActionOutcomeSelectionRequired = "selection_required"
+	WorkflowExecutionTargetActionOutcomeApplied                        WorkflowExecutionTargetActionOutcome = "applied"
+	WorkflowExecutionTargetActionOutcomeNoOp                           WorkflowExecutionTargetActionOutcome = "no_op"
+	WorkflowExecutionTargetActionOutcomeSelectionRequired              WorkflowExecutionTargetActionOutcome = "selection_required"
+	WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired WorkflowExecutionTargetActionOutcome = "dependency_confirmation_required"
 )
 
 type WorkflowExecutionTargetResolutionErrorCode string
@@ -383,25 +385,48 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 }
 
 func (r WorkflowTaskMoveResponse) Validate() error {
-	if r.Outcome == WorkflowTaskActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
+		if r.NoOp == nil || r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
+			return errors.New("move action response no_op outcome requires only no_op payload")
+		}
+		return validateWorkflowTaskMoveNoOp(*r.NoOp)
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
+		if r.Applied == nil || r.NoOp != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskMoveApplied(*r.Applied)
 	}
-	if r.Outcome == WorkflowTaskActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
 	}
-	if r.Outcome == WorkflowTaskActionOutcomeDependencyConfirmationRequired {
-		if r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired != nil ||
+			r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
 			return errors.New("move action response dependency confirmation outcome requires only a positive count")
 		}
 		return nil
 	}
 	return errors.New("move action response outcome is invalid")
+}
+
+func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
+	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload")
+}
+
+func validateWorkflowTaskCurrentNodes(currentNodes []WorkflowTaskCurrentNode, payload string) error {
+	if len(currentNodes) == 0 {
+		return fmt.Errorf("%s requires current_nodes", payload)
+	}
+	for index, currentNode := range currentNodes {
+		if err := validateWorkflowTaskCurrentNode(currentNode); err != nil {
+			return fmt.Errorf("%s current node at index %d: %w", payload, index, err)
+		}
+	}
+	return nil
 }
 
 func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {

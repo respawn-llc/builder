@@ -11,6 +11,7 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -562,6 +563,46 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 			t.Fatalf("expected mode off on failure, got %q", mode)
 		}
 	})
+}
+
+func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{caps: llm.ProviderCapabilities{
+			ProviderID:           "azure-openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		}},
+		tools.NewRegistry(),
+		Config{
+			Model:         "gpt-5.3-codex",
+			FastModeState: NewFastModeState(true),
+		},
+	)
+
+	if eng.FastModeAvailable() {
+		t.Fatal("expected fast mode to be unavailable for non-OpenAI provider")
+	}
+	if eng.FastModeEnabled() {
+		t.Fatal("expected effective fast mode to be disabled when provider is unavailable")
+	}
+}
+
+func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
+	store := mustCreateTestSession(t)
+	capabilityErr := errors.New("provider capability lookup failed")
+
+	_, err := New(
+		store,
+		mustMaterializeTestEventLog(t, store),
+		&fakeClient{capsErr: capabilityErr},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	if !errors.Is(err, capabilityErr) {
+		t.Fatalf("New error = %v, want provider capability error", err)
+	}
 }
 
 func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {

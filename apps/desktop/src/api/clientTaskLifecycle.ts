@@ -4,12 +4,14 @@ import { compactJsonObject } from "./json";
 import type {
   TaskApproveResponse,
   TaskMoveResponse,
+  TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelection,
 } from "./models";
 import {
   taskApproveResponseSchema,
   taskMoveResponseSchema,
+  taskMovePreviewResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { newSetupOperationID } from "./setupOperationID";
@@ -42,7 +44,8 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
       compactJsonObject({
         task_id: input.taskID,
         target_node_id: input.targetNodeID,
-        output_values: input.outputValues ?? {},
+        transition_key: input.transitionKey,
+        values: input.values,
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
         proceed_despite_dependencies: input.proceedDespiteDependencies ?? false,
@@ -51,6 +54,22 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
     ),
   );
   return response;
+}
+
+export async function previewMoveTask(
+  transport: RpcTransport,
+  taskID: string,
+  targetNodeID: string,
+): Promise<TaskMovePreviewResponse> {
+  return parseRpcResponse(
+    "workflow.task.move.preview",
+    taskMovePreviewResponseSchema,
+    await transport.call(
+      "workflow.task.move.preview",
+      { task_id: taskID, target_node_id: targetNodeID },
+      { timeoutMs: null },
+    ),
+  );
 }
 
 export async function approveApproval(

@@ -5,7 +5,6 @@ export type BoardCardDragPayload = Readonly<{
   canStart: boolean;
   activeNodeIDs: readonly string[];
   statusKind: string;
-  manualMoveTargetNodeIDs: readonly string[];
 }>;
 
-export type BoardColumnDropState = "idle" | "allowed" | "blocked";
+export type BoardColumnDropState = "idle" | "blocked";

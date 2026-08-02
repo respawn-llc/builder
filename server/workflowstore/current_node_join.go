@@ -143,14 +143,22 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 	if err != nil {
 		return nil, false, err
 	}
+	if len(rows) == 0 {
+		return nil, false, nil
+	}
 	if len(rows) < 2 {
 		return nil, false, errors.New("active fan-out has fewer than two expected branches")
 	}
 	arrivals := make([]currentFanoutJoinArrival, 0, len(rows))
+	ready := true
 	for _, row := range rows {
 		switch row.ArrivalState {
 		case "pending":
-			return nil, false, nil
+			ready = false
+			arrivals = append(arrivals, currentFanoutJoinArrival{
+				BranchKey: workflow.TransitionBranchKey(row.TransitionBranchKey),
+			})
+			continue
 		case "arrived":
 			if !row.ArrivalValuesJson.Valid {
 				return nil, false, errors.New("arrived fan-out branch has no materialized values")
@@ -167,7 +175,7 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 			Values:    values,
 		})
 	}
-	return arrivals, true, nil
+	return arrivals, ready, nil
 }
 
 func currentFanoutBranchKeys(arrivals []currentFanoutJoinArrival) []workflow.TransitionBranchKey {

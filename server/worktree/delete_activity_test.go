@@ -39,6 +39,10 @@ func (deleteActivityTestLLMClient) Generate(context.Context, llm.Request) (llm.R
 	return llm.Response{}, nil
 }
 
+func (deleteActivityTestLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func deleteActivityTestRuntimePlan(t *testing.T, env *serviceTestEnv, workdir string) sessionruntime.AgentRuntimePlan {
 	t.Helper()
 	settings := env.cfg.Settings

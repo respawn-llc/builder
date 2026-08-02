@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -38,6 +39,8 @@ type Service struct {
 		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+		ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
+		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -79,6 +82,14 @@ type manualMovePreflight struct {
 	preparation                workflowstore.ManualMovePreparation
 	unsatisfiedDependencyCount int
 	target                     initiatingActionTargetPreflight
+}
+
+type manualMoveNoOpBeforeInterruptError struct {
+	currentNodes []workflow.CurrentNode
+}
+
+func (e *manualMoveNoOpBeforeInterruptError) Error() string {
+	return "manual move became a no-op before interruption"
 }
 
 type executionTargetInfrastructure interface {
@@ -137,6 +148,8 @@ func WithCurrentNodeExecution(execution interface {
 	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+	ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
+	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -899,15 +912,16 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: true,
 		targetPreflight:         preflight.target,
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
-		return s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.StartTaskResult, error) {
+		started, err := s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+		return &started, err
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	if coordinated.selectionRequired != nil {
 		return serverapi.WorkflowTaskStartResponse{
-			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+			Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
 			SelectionRequired: coordinated.selectionRequired,
 		}, nil
 	}
@@ -922,14 +936,14 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID)
 	}
 	return serverapi.WorkflowTaskStartResponse{
-		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskStartApplied{
 			CurrentNodes: workflowCurrentNodes(started.Mutation.Created),
 		},
 	}, nil
 }
 
-func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (T, error)) (initiatingActionResult[T], error) {
+func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
 	var candidate *workflowstore.ExecutionTargetCandidate
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
@@ -948,9 +962,15 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	}
 	applied, err := apply(candidate)
 	if err != nil {
+		// A mutation may commit before its post-commit lifecycle work fails.
+		// Preserve that result so the operation owner can publish and finalize
+		// the durable mutation instead of reporting it as unapplied.
+		if applied != nil {
+			return initiatingActionResult[T]{applied: applied}, err
+		}
 		return initiatingActionResult[T]{}, err
 	}
-	return initiatingActionResult[T]{applied: &applied}, nil
+	return initiatingActionResult[T]{applied: applied}, nil
 }
 
 func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID workflow.TaskID, explicit *serverapi.WorkflowExecutionTargetSelection) (initiatingActionTargetPreflight, error) {
@@ -1265,6 +1285,97 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return s.moveWorkflowTask(ctx, req)
 }
 
+func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskMovePreviewResponse{}, err
+	}
+	if s.currentNodeExecution == nil {
+		return serverapi.WorkflowTaskMovePreviewResponse{}, errors.New("current node workflow execution is required")
+	}
+	preview, err := s.store.PreviewManualMove(ctx, workflowstore.ManualMoveRequest{
+		TaskID:       workflow.TaskID(req.TaskID),
+		TargetNodeID: workflow.NodeID(req.TargetNodeID),
+	})
+	if err != nil {
+		return serverapi.WorkflowTaskMovePreviewResponse{}, err
+	}
+	if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
+				CurrentNodes: workflowCurrentNodes(preview.CurrentNodes),
+			},
+		}, nil
+	}
+	if preview.Outcome == workflowstore.ManualMovePreviewOutcomeBlocked {
+		reason, err := manualMovePreviewBlocker(preview.Blocker)
+		if err != nil {
+			return serverapi.WorkflowTaskMovePreviewResponse{}, err
+		}
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
+			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
+				Reason: reason,
+			},
+		}, nil
+	}
+	disposition, err := s.currentNodeExecution.ManualMoveDisposition(workflow.TaskID(req.TaskID))
+	if err != nil {
+		return serverapi.WorkflowTaskMovePreviewResponse{}, err
+	}
+	switch disposition {
+	case workflowexecution.ManualMoveDispositionWaitingQuestion:
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
+			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
+				Reason: serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
+			},
+		}, nil
+	case workflowexecution.ManualMoveDispositionLifecycleConflict:
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
+			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
+				Reason: serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict,
+			},
+		}, nil
+	case workflowexecution.ManualMoveDispositionQuiescent, workflowexecution.ManualMoveDispositionAutoInterruptible:
+	default:
+		return serverapi.WorkflowTaskMovePreviewResponse{}, fmt.Errorf("manual move disposition %q is invalid", disposition)
+	}
+	switch preview.Outcome {
+	case workflowstore.ManualMovePreviewOutcomeDirect:
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeDirect,
+			Direct:  &serverapi.WorkflowTaskMovePreviewDirect{},
+		}, nil
+	case workflowstore.ManualMovePreviewOutcomeTransition:
+		choices := make([]serverapi.WorkflowTaskMovePreviewTransitionChoice, 0, len(preview.Choices))
+		for _, choice := range preview.Choices {
+			requiredValues := make([]serverapi.WorkflowTaskMoveRequiredValue, 0, len(choice.RequiredValues))
+			for _, value := range choice.RequiredValues {
+				requiredValues = append(requiredValues, serverapi.WorkflowTaskMoveRequiredValue{
+					NodeKey:       string(value.NodeKey),
+					OutputName:    value.OutputName,
+					Description:   value.Description,
+					ResolvedValue: value.ResolvedValue,
+				})
+			}
+			choices = append(choices, serverapi.WorkflowTaskMovePreviewTransitionChoice{
+				TransitionKey:         string(choice.TransitionKey),
+				Label:                 choice.Label,
+				SourceNodeDisplayName: workflow.NodeDisplayName(choice.SourceNode),
+				RequiredValues:        requiredValues,
+			})
+		}
+		return serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome:    serverapi.WorkflowTaskMovePreviewOutcomeTransition,
+			Transition: &serverapi.WorkflowTaskMovePreviewTransition{Choices: choices},
+		}, nil
+	default:
+		return serverapi.WorkflowTaskMovePreviewResponse{}, fmt.Errorf("manual move preview outcome %q is invalid", preview.Outcome)
+	}
+}
+
 func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
@@ -1275,95 +1386,163 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("current node workflow execution is required")
 	}
-	moveRequest := workflowstore.ManualMoveRequest{
-		TaskID:       workflow.TaskID(req.TaskID),
-		TargetNodeID: workflow.NodeID(req.TargetNodeID),
-		OutputValues: req.OutputValues,
-		Commentary:   req.Commentary,
+	values := make(map[workflow.ModelKey]map[string]string, len(req.Values))
+	for nodeKey, outputs := range req.Values {
+		converted := make(map[string]string, len(outputs))
+		for outputName, value := range outputs {
+			converted[outputName] = value
+		}
+		values[workflow.ModelKey(nodeKey)] = converted
 	}
-	preflight, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (manualMovePreflight, error) {
-		if err := s.currentNodeExecution.EnsureTaskQuiescent(moveRequest.TaskID); err != nil {
-			return manualMovePreflight{}, err
-		}
-		prepared, err := s.store.PrepareManualMove(ctx, moveRequest)
-		if err != nil {
-			return manualMovePreflight{}, err
-		}
-		if !prepared.RequiresExecutionTarget() {
-			return manualMovePreflight{preparation: prepared}, nil
-		}
-		if err := req.SetupOperationID.Validate(); err != nil {
-			return manualMovePreflight{}, err
-		}
-		target, err := s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
-		if err != nil {
-			return manualMovePreflight{}, err
-		}
-		if req.ProceedDespiteDependencies {
-			return manualMovePreflight{preparation: prepared, target: target}, nil
-		}
-		count, err := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
-		if err != nil {
-			return manualMovePreflight{}, err
-		}
-		return manualMovePreflight{preparation: prepared, unsatisfiedDependencyCount: count, target: target}, nil
-	})
+	var transitionKey *workflow.TransitionID
+	if req.TransitionKey != nil {
+		value := workflow.TransitionID(*req.TransitionKey)
+		transitionKey = &value
+	}
+	moveRequest := workflowstore.ManualMoveRequest{
+		TaskID:        workflow.TaskID(req.TaskID),
+		TargetNodeID:  workflow.NodeID(req.TargetNodeID),
+		TransitionKey: transitionKey,
+		Values:        values,
+		Commentary:    req.Commentary,
+	}
+	prepared, err := s.store.PrepareManualMove(ctx, moveRequest)
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	if preflight.unsatisfiedDependencyCount > 0 {
-		count := preflight.unsatisfiedDependencyCount
+	if prepared.IsNoOp() {
 		return serverapi.WorkflowTaskMoveResponse{
-			Outcome:                    serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired,
-			UnsatisfiedDependencyCount: &count,
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: workflowCurrentNodes(prepared.CurrentNodes()),
+			},
 		}, nil
 	}
-	prepared := preflight.preparation
+	if prepared.RequiresExecutionTarget() {
+		if err := req.SetupOperationID.Validate(); err != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+	}
+	var targetPreflight initiatingActionTargetPreflight
+	if prepared.RequiresExecutionTarget() {
+		if !req.ProceedDespiteDependencies {
+			count, countErr := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
+			if countErr != nil {
+				return serverapi.WorkflowTaskMoveResponse{}, countErr
+			}
+			if count > 0 {
+				return serverapi.WorkflowTaskMoveResponse{
+					Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+					UnsatisfiedDependencyCount: &count,
+				}, nil
+			}
+		}
+		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
+		if err != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+	}
 	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
 		taskID:                  moveRequest.TaskID,
 		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
-		targetPreflight:         preflight.target,
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
-		return s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
+		targetPreflight:         targetPreflight,
+		afterTargetResolution: func() error {
+			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
+				preview, err := s.store.PreviewManualMove(ctx, moveRequest)
+				if err != nil {
+					return err
+				}
+				if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+					return &manualMoveNoOpBeforeInterruptError{
+						currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+					}
+				}
+				return nil
+			})
+		},
+	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
+		moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
+		if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
+			moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
+			return nil, err
+		}
+		return &moved, err
 	})
-	if err != nil {
+	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
+	if errors.As(err, &noOpBeforeInterrupt) {
+		return serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: workflowCurrentNodes(noOpBeforeInterrupt.currentNodes),
+			},
+		}, nil
+	}
+	if err != nil && coordinated.applied == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if coordinated.selectionRequired != nil {
 		return serverapi.WorkflowTaskMoveResponse{
-			Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
+			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
 			SelectionRequired: coordinated.selectionRequired,
 		}, nil
 	}
 	if coordinated.applied == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
 	}
-	moved := *coordinated.applied
-	s.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
-	currentNodes := moved.Created
-	if moved.PendingApproval != nil {
-		if len(moved.Created) != 0 || len(moved.Retained) == 0 {
-			return serverapi.WorkflowTaskMoveResponse{}, errors.New("approval-required task move did not retain its source current node")
-		}
-		currentNodes = moved.Retained
-		if s.attentionFinalizer != nil {
-			finalizeCtx, cancel := workflowAttentionContext(ctx)
-			defer cancel()
-			s.attentionFinalizer.PublishPendingApproval(finalizeCtx, moved.PendingApproval.ID)
-		}
-	} else if len(moved.Retained) != 0 {
-		return serverapi.WorkflowTaskMoveResponse{}, errors.New("applied task move unexpectedly retained current nodes")
+	if err != nil {
+		slog.Error(
+			"manual move committed with post-commit lifecycle error",
+			"task_id", req.TaskID,
+			"target_node_id", req.TargetNodeID,
+			"error", err,
+		)
 	}
+	moved := *coordinated.applied
+	if err := moved.Validate(); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
+		return serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: workflowCurrentNodes(moved.CurrentNodes),
+			},
+		}, nil
+	}
+	s.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID)
 	}
 	return serverapi.WorkflowTaskMoveResponse{
-		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
-			CurrentNodes: workflowCurrentNodes(currentNodes),
+			CurrentNodes: workflowCurrentNodes(moved.Mutation.Created),
 		},
 	}, nil
+}
+
+func manualMovePreviewBlocker(blocker workflowstore.ManualMoveBlocker) (serverapi.WorkflowTaskMovePreviewBlocker, error) {
+	switch blocker {
+	case workflowstore.ManualMoveBlockerInvalidWorkflow:
+		return serverapi.WorkflowTaskMovePreviewBlockerInvalidWorkflow, nil
+	case workflowstore.ManualMoveBlockerNoSourcePosition:
+		return serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition, nil
+	case workflowstore.ManualMoveBlockerUnsupportedDestination:
+		return serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination, nil
+	case workflowstore.ManualMoveBlockerWaitingQuestion:
+		return serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion, nil
+	case workflowstore.ManualMoveBlockerLifecycleConflict:
+		return serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict, nil
+	case workflowstore.ManualMoveBlockerContextSessionUnavailable:
+		return serverapi.WorkflowTaskMovePreviewBlockerContextSessionUnavailable, nil
+	case workflowstore.ManualMoveBlockerNoUsableTransition:
+		return serverapi.WorkflowTaskMovePreviewBlockerNoUsableTransition, nil
+	case workflowstore.ManualMoveBlockerParallelBranchRequiresFanOut:
+		return serverapi.WorkflowTaskMovePreviewBlockerParallelBranchRequiresFanOut, nil
+	default:
+		return "", fmt.Errorf("manual move blocker %q is invalid", blocker)
+	}
 }
 
 func (s *Service) authorizeWorkflowTaskMutation(

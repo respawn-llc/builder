@@ -427,21 +427,32 @@ func (s *executionPromptStore) Close(err error) {
 		return
 	}
 	s.mu.Lock()
+	snapshots := s.closeLocked(err)
+	s.mu.Unlock()
+	for _, snapshot := range snapshots {
+		s.publishResolved(snapshot)
+	}
+}
+
+func (s *executionPromptStore) closeLocked(err error) []ExecutionPromptSnapshot {
+	if err == nil {
+		err = context.Canceled
+	}
 	if s.closed {
-		s.mu.Unlock()
-		return
+		return nil
 	}
 	s.closed = true
 	entries := make([]*executionPromptEntry, 0, len(s.pending))
+	snapshots := make([]ExecutionPromptSnapshot, 0, len(s.pending))
 	for requestID, entry := range s.pending {
 		entries = append(entries, entry)
+		snapshots = append(snapshots, entry.snapshot)
 		delete(s.pending, requestID)
 	}
-	s.mu.Unlock()
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
-		s.publishResolved(entry.snapshot)
 	}
+	return snapshots
 }
 
 func (s *executionPromptStore) hasPending() bool {

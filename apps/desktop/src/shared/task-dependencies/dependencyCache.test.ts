@@ -139,7 +139,6 @@ function detailFixture(): TaskDetail {
       canInterrupt: false,
       canResume: false,
       canDelete: true,
-      manualMoveTargetNodeIDs: [],
     },
     labelIDs: [],
     attentionCount: 0,

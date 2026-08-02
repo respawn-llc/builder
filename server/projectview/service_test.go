@@ -1320,6 +1320,10 @@ func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Resp
 	return llm.Response{}, nil
 }
 
+func (projectViewTestLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 type projectViewRuntimeGuard struct {
 	activityCounts []int
 	activityErr    error

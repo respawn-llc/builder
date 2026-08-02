@@ -48,6 +48,10 @@ type cancellationAwareModelClient struct {
 	started chan struct{}
 }
 
+func (cancellationAwareModelClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return defaultTestProviderCapabilities(), nil
+}
+
 func (c cancellationAwareModelClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	close(c.started)
 	<-ctx.Done()

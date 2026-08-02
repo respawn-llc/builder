@@ -376,7 +376,6 @@ const TaskCard = memo(function TaskCard({
     canStart: card.actions.canStart,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.statusKind,
-    manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
   };
   return (
     <ContextMenu>

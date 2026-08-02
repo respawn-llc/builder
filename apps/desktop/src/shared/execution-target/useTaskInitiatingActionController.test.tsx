@@ -186,6 +186,63 @@ describe("task initiating action controller", () => {
 
     expect(action.input.proceedDespiteDependencies).toBe(true);
   });
+
+  it("keeps the execution-target draft when the submitted action fails", async () => {
+    let callCount = 0;
+    const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
+      if (action.kind !== "move") {
+        throw new Error("Controller test requires a Move action.");
+      }
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          kind: "move",
+          action,
+          response: {
+            outcome: "selection_required",
+            selectionRequired: { reason: "policy_requires_selection" },
+          },
+        };
+      }
+      throw new Error("execution target setup failed");
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = moveTaskInitiatingAction({
+      taskID: "task-1",
+      targetNodeID: "node-2",
+    });
+
+    await act(async () => result.current.run(action));
+    act(() => {
+      result.current.selectMode("custom_ref");
+      result.current.setCustomRef("feature/manual-move");
+    });
+    const pending = result.current.pending;
+    if (pending?.kind !== "execution_target") {
+      throw new Error("Expected execution target selection.");
+    }
+
+    await act(async () => {
+      await expect(
+        result.current.run(action, {
+          mode: "custom_ref",
+          customRef: "feature/manual-move",
+        }),
+      ).rejects.toThrow("execution target setup failed");
+    });
+
+    expect(result.current.pending).toMatchObject({
+      kind: "execution_target",
+      action,
+      selection: { mode: "custom_ref", customRef: "feature/manual-move" },
+    });
+  });
 });
 
 function deferred<T>(): Readonly<{

@@ -377,7 +377,18 @@ function nonEmpty(value: string | undefined): string | undefined {
 function interruptedCurrentNodeFallback(notification: AttentionNotification, t: Translate): string {
   const fallback = t("app.attention.interruptedCurrentNodeFallback");
   const reason = nonEmpty(notification.interruptedCurrentNode?.reason);
-  return reason === undefined ? fallback : `${fallback}: ${reason}`;
+  if (reason === undefined) {
+    return fallback;
+  }
+  const reasonCopy: Readonly<Record<string, string>> = {
+    workflow_protocol_violation_cap: t("app.attention.interruptedCurrentNodeProtocolCap"),
+    workflow_runtime_start_failed: t("app.attention.interruptedCurrentNodeRuntimeFailed"),
+    workflow_script_completion_failed: t("app.attention.interruptedCurrentNodeScriptFailed"),
+    workflow_script_execution_failed: t("app.attention.interruptedCurrentNodeScriptFailed"),
+    workflow_script_failed: t("app.attention.interruptedCurrentNodeScriptFailed"),
+    workflow_startup_recovery: t("app.attention.interruptedCurrentNodeStartupRecovery"),
+  };
+  return reasonCopy[reason] ?? fallback;
 }
 
 function isTaskNotFoundError(error: unknown): boolean {

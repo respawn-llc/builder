@@ -550,6 +550,14 @@ func (currentNodeQuestionLLMClient) Generate(context.Context, llm.Request) (llm.
 	return llm.Response{}, errors.New("question fixture model must not generate")
 }
 
+func (currentNodeQuestionLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}, nil
+}
+
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 	t.Helper()
 	home := t.TempDir()

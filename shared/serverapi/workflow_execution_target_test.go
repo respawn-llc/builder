@@ -169,21 +169,40 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 	requirement := WorkflowExecutionTargetSelectionRequirement{
 		Reason: WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
 	}
+	dependencyCount := 2
 	for _, response := range []interface{ Validate() error }{
-		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied},
-		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
+		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeApplied, Applied: &startApplied},
+		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
+		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeNoOp, NoOp: &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
+		WorkflowTaskMoveResponse{
+			Outcome:                    WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+			UnsatisfiedDependencyCount: &dependencyCount,
+		},
 	} {
 		if err := response.Validate(); err != nil {
 			t.Fatalf("%T valid response rejected: %v", response, err)
 		}
 	}
-	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied, SelectionRequired: &requirement}).Validate(); err == nil {
+	if err := (WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeApplied, Applied: &startApplied, SelectionRequired: &requirement}).Validate(); err == nil {
 		t.Fatal("multi-branch response validated")
 	}
-	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
+	if err := (WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
 		t.Fatal("mismatched response branch validated")
+	}
+	if err := (WorkflowTaskMoveResponse{
+		Outcome:           WorkflowExecutionTargetActionOutcomeNoOp,
+		NoOp:              &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes},
+		SelectionRequired: &requirement,
+	}).Validate(); err == nil {
+		t.Fatal("move no-op response with selection requirement validated")
+	}
+	if err := (WorkflowTaskMoveResponse{
+		Outcome:                    WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+		UnsatisfiedDependencyCount: intPointer(0),
+	}).Validate(); err == nil {
+		t.Fatal("move dependency confirmation response accepted non-positive count")
 	}
 }
 
