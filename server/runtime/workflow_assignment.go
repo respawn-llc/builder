@@ -4,17 +4,32 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/config"
+	"core/shared/toolspec"
 )
 
 type WorkflowAssignment struct {
 	ContextMode    workflow.ContextMode
 	CompletionMode workflowruntime.CompletionMode
 	Prompt         workflowruntime.PromptContract
+}
+
+// PersistedWorkflowAssignmentContext supplies the runtime-owned context needed
+// to seed a fresh dormant Session before its first workflow assignment.
+type PersistedWorkflowAssignmentContext struct {
+	Workdir                 string
+	GlobalConfigDir         string
+	Model                   string
+	ThinkingLevel           string
+	SkillPolicy             config.SkillPolicy
+	SubagentCatalogSettings config.Settings
+	EnabledTools            []toolspec.ID
 }
 
 type WorkflowAssignmentSteer struct {
@@ -109,7 +124,11 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 	return steer, nil
 }
 
-func SteerPersistedWorkflowAssignment(store *session.Store, assignment WorkflowAssignment) (WorkflowAssignmentSteer, error) {
+func SteerPersistedWorkflowAssignment(
+	store *session.Store,
+	assignment WorkflowAssignment,
+	deliveryContext PersistedWorkflowAssignmentContext,
+) (WorkflowAssignmentSteer, error) {
 	if store == nil {
 		return WorkflowAssignmentSteer{}, errors.New("session store is required")
 	}
@@ -117,8 +136,39 @@ func SteerPersistedWorkflowAssignment(store *session.Store, assignment WorkflowA
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	receipt, err := SteerPersistedMessage(store, "", message)
-	return CompletedWorkflowAssignmentSteer(receipt, err), nil
+	engine, err := newPersistedSteeringEngine(store)
+	if err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	recent, err := engine.eventLog.ReadRecentRecords(1)
+	if err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	if len(recent.Records) == 0 {
+		builder := newActiveMetaContextBuilder(
+			engine.store.Meta(),
+			deliveryContext.Workdir,
+			deliveryContext.Model,
+			deliveryContext.ThinkingLevel,
+			deliveryContext.GlobalConfigDir,
+			deliveryContext.SkillPolicy,
+			time.Now(),
+		).withSubagents(deliveryContext.SubagentCatalogSettings, deliveryContext.EnabledTools)
+		if err := engine.steerBaseMetaContext("", builder, config.SubagentInvocationContextWorkflow); err != nil {
+			return WorkflowAssignmentSteer{}, err
+		}
+	}
+	return completePersistedWorkflowAssignment(engine, message), nil
+}
+
+func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) WorkflowAssignmentSteer {
+	receipt, err := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{message},
+	))
+	return CompletedWorkflowAssignmentSteer(receipt, err)
 }
 
 func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {

@@ -188,28 +188,43 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 		return nil
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
-	opts := baseMetaContextBuildOptions(true)
+	invocationContext := config.SubagentInvocationContextOrdinary
 	if e.workflowPromptActive() {
-		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
+		invocationContext = config.SubagentInvocationContextWorkflow
 	}
-	metaResult, err := builder.Build(opts)
-	if err != nil {
-		return err
-	}
-	intents := make([]steeringIntent, 0, 2)
-	if combined := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); combined != "" {
-		intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
-			Visibility: transcript.EntryVisibilityOngoing,
-			Role:       string(transcript.EntryRoleWarning),
-			Text:       combined,
-		}))
-	}
-	intents = append(intents, steerMessagesWithPersistenceIntent(steeringPriorityRuntimeContext, steeringMessageEventDefault, true, metaResult.OrderedBaseMessages()))
-	if err := e.steer(stepID, intents...); err != nil {
+	if err := e.steerBaseMetaContext(stepID, builder, invocationContext); err != nil {
 		return err
 	}
 	e.baseMetaInjected = true
 	return nil
+}
+
+func (e *Engine) steerBaseMetaContext(
+	stepID string,
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) error {
+	options := baseMetaContextBuildOptions(true)
+	options.SubagentInvocationContext = invocationContext
+	metaResult, err := builder.Build(options)
+	if err != nil {
+		return err
+	}
+	intents := make([]steeringIntent, 0, 2)
+	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
+		intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Role:       string(transcript.EntryRoleWarning),
+			Text:       warning,
+		}))
+	}
+	intents = append(intents, steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		metaResult.OrderedBaseMessages(),
+	))
+	return e.steer(stepID, intents...)
 }
 
 // steerHeadlessModeTransitionIfNeeded reconciles the launch mode with the
