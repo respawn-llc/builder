@@ -14,7 +14,7 @@ kent worktree leave
 kent worktree delete <selector>
 ```
 
-Every command supports `--json`. Session-scoped commands use `KENT_SESSION_ID` inside a Kent shell or accept `--session <id>` explicitly.
+Every command supports `--json`. Session-scoped commands automatically use the current Session inside a Kent shell or accept `--session <id>` explicitly.
 
 ## Select
 
@@ -26,7 +26,7 @@ Select a worktree by its exact ID, branch, display name, or path. IDs take prece
 - **external**: available to Git but not managed by Kent; entering it registers it
 - **missing**: managed by Kent, but absent from Git
 
-`list` resolves the workspace bound to the current directory and does not require a session. When `KENT_SESSION_ID` or `--session` is present, it marks that session's current worktree with `*`; Kent does not infer a session from workspace history.
+`list` resolves the workspace bound to the current directory and does not require a Session. With current Session context or `--session`, it marks that Session's current worktree with `*`; Kent does not infer a Session from workspace history.
 
 `status` reports a missing checkout or branch without changing the session's worktree.
 

@@ -45,7 +45,7 @@ description: Do a specific workflow. Use when the user asks for concrete trigger
 
 `name` and `description` are required. Use a stable, lowercase, unique, kebab-case `name`.
 
-### How to Write Description
+### How to Write a Description
 Write `description` as a trigger condition. Keep description to 1-3 terse sentences, 1-2 lines, and no formatting, because users may have many skills each contributing to the load on your memory.
 
 - Include what the skill does and when to use it. Mention concrete task types, workflows, or domains that should activate the skill.
@@ -63,8 +63,8 @@ Follow these rules for authoring skill docs (especially SKILL.md).
 Overall, treat writing skills like public developer documentation or guidance. Ask yourself a question when designing a skill: "If a developer saw this tool/repository/workflow/task for the first time, what would they need to know to accomplish/use it effectively?".
 
 - **Do not repeat trigger rules** in the SKILL.md body text.
-- Important: Do not document anything that you as a model already know - generic APIs of widely known tools you already remember, basic coding guidelines, widespread tools (like git, docker, jetpack compose, java). If the user asks for a skill for a thing you already know / widespread / too generic, assume they are mistaken and explain that you already know the tool. If they insist, proceed with minimal content that does not duplicate known info, like maybe repo-specific patterns observed in real code, specific user preferences, niche tooling stack, repo-scoped architecture guidelines, new modern APIs you don't yet know, or similar.
-- Important: Do not include in skills anything that can quickly become outdated or info that isn't practically useful for completion of tasks, or that only documents events. Assume skills are updated once a year or more rarely. Do not include temporal data, taken decisions, or explainers of your behavior anywhere in the skill. Avoid mentioning in the skill files any user requests that pertain to this conversation or other guidance/feedback you received in this conversation.
+- Do not document anything that you as a model already know - generic APIs of widely known tools you already remember, basic coding guidelines, widespread tools (like git, docker, jetpack compose, java). If the user asks for a skill for a thing you already know / widespread / too generic, assume they are mistaken and explain that you already know the tool. If they insist, proceed with minimal content that does not duplicate known info, like maybe repo-specific patterns observed in real code, specific user preferences, niche tooling stack, repo-scoped architecture guidelines, new modern APIs you don't yet know, or similar.
+- Important: Do not include in skills anything that can quickly become outdated or info that isn't practically useful for completion of tasks, or that only documents events. Assume skills are updated once a year at most. Do not include temporal data, taken decisions, or explainers of your behavior anywhere in the skill. Avoid mentioning in the skill files any user requests that pertain to this conversation or other guidance/feedback you received in this conversation.
   - Bad: "Per user instruction, corrected this skill to explain Decompose Components".
   - Bad: "Added section about committing as requested".
   - Bad: "Introduced Decompose on April 29th in commit `abcdef`".
@@ -105,4 +105,4 @@ More info in the `kent-dogfooding` skill, if available, or official docs.
 6. If SKILL.md did not encompass the entire topic, write adjacent files.
 7. If skill needs reusable scripts, create and manually test them.
 8. Double-check that SKILL.md does not exceed 300 lines, no temporal references or fluff were left, and each file in the skill folder is mentioned at least in one place.
-9. Preferably, run a subagent to split-brain review your created for adherence to the guidance listed in this `creating-skills` skill.
+9. If available, run a subagent to split-brain review your created skill for adherence to the guidance listed in this `creating-skills` skill.

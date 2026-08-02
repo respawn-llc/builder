@@ -1,0 +1,1 @@
+You cannot start, interrupt, resume, approve, or manually move the Task assigned to this workflow Session. Act on a different Task, complete your own Current Node through its completion contract, or ask the user for help.
