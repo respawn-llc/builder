@@ -469,13 +469,9 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 12. Accessibility And Input
 
-- Transcript semantics and live-region policy.
-- Screen-reader behavior during streaming.
-- Focus restoration across prompts, sheets, and route changes.
-- Keyboard navigation without hiding primary actions.
-- Reduced motion.
-- Copy/select behavior.
-- High zoom and narrow layouts.
+- Dedicated screen-reader, live-region, ARIA architecture, blind-user QA, and accessibility-only work are outside the initiative.
+- Shared components retain incidental semantics without a Chat-specific accessibility layer.
+- Keep only locked product mechanics: Chat shortcuts, functional focus transitions required by those flows, Copy/select behavior, resizable-window layouts, and already-specified reduced-motion behavior.
 
 ## 13. Delivery And Task Graph
 

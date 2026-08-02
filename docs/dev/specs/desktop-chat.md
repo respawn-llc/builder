@@ -448,4 +448,6 @@
 ## Desktop Exceptions
 
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
+- Dedicated accessibility support is outside this initiative. Desktop Chat adds no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, blind-user acceptance flow, or accessibility-only task.
+- Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
 - Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.
