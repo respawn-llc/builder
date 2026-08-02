@@ -378,6 +378,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Process inspection and control.
 - Worktree is a first-class Session execution-target control in the under-composer row.
 - Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
+- Task-owned Workflow Sessions use the same Worktree controls and mutations as ordinary Sessions. A Session Switch does not rewrite the Task's locked Execution Target, and existing Task/worktree safety blockers remain authoritative.
 - The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
 - Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
 - Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
@@ -403,8 +404,14 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
 - The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
 - Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.
-- Base ref defaults to HEAD and appears/enables only for New branch. There is no custom path field. Create submits; Back returns to the list.
+- Branch or ref changes resolve after a brief debounce. Only the latest trimmed value may apply; editing clears the prior classification/error and stale responses are discarded.
+- A plain-text line beneath the label shows only a spinner while a nonempty value resolves, with no `Resolving…` copy. Success replaces it with bold `New branch`, `Existing branch`, or `Detached ref`; no chip, badge, or card.
+- Resolution failure replaces that line with the authoritative diagnostic in error-colored plain text, preserves the input, and shows no Sonner.
+- Create pressed before the latest nonempty resolution finishes waits for that result and submits on success. Further editing cancels that pending submit intent. Empty submission shows inline `Branch or ref is required` and sends no request.
+- Base ref defaults to HEAD and appears/enables only for New branch. Every blank, validation, or authoritative Git Base-ref error appears beneath that field. Placement uses typed ownership and never parses diagnostic text. Blank shows `Base ref is required` without submitting.
+- There is no custom path field. Create submits; Back returns to the list.
 - Creation and optional setup use one simple spinner for the complete operation. Do not expose phases, phase labels, percentage, or a progress bar.
+- Pre-retention Create failure keeps the form and all entered values intact. Show a non-field-owned authoritative diagnostic as error-colored form-level plain text below the fields, with no Sonner.
 - The Worktree sidebar remains dismissible during creation/setup. Dismissing it does not cancel the submitted operation; creation continues in the background without the sidebar spinner.
 - Dismissal does not suppress the ordinary automatic Switch after successful creation/setup. Success remains silent and the authoritative current-target control changes when the Switch applies.
 - Setup failure returns to the refreshed list only while the sidebar remains open. A dismissed sidebar stays closed; Sonner surfaces the diagnostic, and the next open performs its ordinary fresh list read.

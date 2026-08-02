@@ -219,6 +219,9 @@
 - Worktree is a Session execution-target control, not a Session setting.
 - Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
 - Worktree management never materializes a lazy Session and is not a first-agentic trigger.
+- A Session owned by a Workflow Task uses the same Worktree affordance, sidebar, and mutations as an ordinary Session.
+- Switching a Task-owned Session changes that Session's execution target. It does not replace or rewrite the Task's locked Execution Target.
+- Workflow Task and Worktree safety rules remain authoritative. Desktop does not bypass a blocker that protects a Worktree referenced by a non-terminal Task.
 - The under-composer control row contains one Worktree affordance that identifies the Session's current concise execution target.
 - For a branch-backed worktree, the affordance shows the branch name. For a detached or otherwise non-branch worktree, it shows the Kent worktree display name. For the main workspace, it shows the workspace name.
 - When the current target is missing or inaccessible, the affordance preserves that recorded target name and adds warning iconography and semantic warning treatment. It does not replace the identity with generic warning copy.
@@ -271,11 +274,23 @@
 - `Branch or ref` starts focused and is prefilled only from the sanitized Session title. When the Session has no usable title, the field starts empty.
 - Desktop never falls back to the current branch, `main`, or a generated generic Worktree name.
 - Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
+- Desktop briefly debounces `Branch or ref` changes. A response applies only when it matches the latest trimmed field value.
+- Changing `Branch or ref` clears its prior classification and related resolver error. Desktop discards stale responses.
+- A plain-text classification line sits beneath the `Branch or ref` label. While a nonempty value is resolving, the line shows only a spinner with no loading copy.
+- Successful resolution replaces the spinner with bold `New branch`, `Existing branch`, or `Detached ref` text. Desktop uses no chip, badge, or card for this classification.
+- Resolution failure replaces the spinner or classification with the authoritative diagnostic in error-colored plain text on the same line. Desktop preserves the field value and shows no Sonner for this failure.
+- Submitting a nonempty value before its latest resolution finishes waits for that resolution and then creates only if it succeeds. Editing the field again cancels that pending submit intent.
+- Submitting an empty value sends no resolution or creation request and shows the inline validation error `Branch or ref is required`.
 - `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
+- Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
+- An empty Base ref sends no creation request and shows `Base ref is required`.
 - The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If creation fails before Kent retains a worktree, Desktop keeps the creation state open with every entered value preserved.
+- A pre-retention creation failure not owned by one field shows the authoritative diagnostic as error-colored form-level plain text below the fields. It shows no Sonner.
 - The Worktree sidebar remains dismissible while creation and optional setup run.
 - Dismissing the Worktree sidebar does not cancel the submitted creation operation. The operation continues without its spinner after the destination closes.
 - Dismissing the Worktree sidebar does not suppress the automatic Switch after successful creation and setup.
