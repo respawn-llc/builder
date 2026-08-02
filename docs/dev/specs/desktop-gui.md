@@ -178,88 +178,47 @@
 - `queued` and `running` use a spinner.
 - `waiting_approval` and `interrupted` use a secondary-colored circle.
 - `waiting_question` uses a primary-colored circle.
-- Desktop must push a Task Detail onto the sidebar-local navigation stack when a related-Task row is selected.
-- Desktop must not change browser history for sidebar-local navigation.
-- Desktop must return to an earlier matching Task entry when the selected Task already appears earlier in the sidebar stack.
-- Desktop must remove every later destination when it returns to an earlier matching Task entry.
-- Desktop must silently discard unsent Task edits and comment drafts from every removed later destination.
-- Desktop must keep X before Back in the sidebar header.
-- Desktop must return to the preceding sidebar destination on Back.
-- Desktop must hide Back at the root sidebar destination.
-- Desktop must use the existing sidebar navigation icon-control presentation for Back.
-- Desktop must not provide Forward.
-- Desktop must close the complete sidebar stack on X.
-- Desktop must silently discard unsent Task edits and comment drafts in the stack on X.
-- Desktop must bound a sidebar stack to at most 50 destinations.
-- Desktop must keep only the current sidebar destination live.
-- Desktop must retain bounded interface state for earlier destinations without continuing to load or receive live updates.
-- Desktop must apply the 50-destination bound to sidebar entries and retained interface state.
-- Desktop must not keep inactive Task Detail data live or extend its normal
-  lifetime solely because sidebar history retains its interface state.
-- Desktop must preserve the root when the sidebar reaches its 50-destination bound.
-- Desktop must evict the oldest non-root destination when the sidebar reaches its 50-destination bound.
-- Desktop must evict that destination silently.
-- Desktop must discard evicted destination interface state, including unsent Task edits and comment drafts.
-- Desktop must keep the browser Task route anchored to the root Task that opened the sidebar stack.
-- Desktop must not update the browser Task route on sidebar push or Back.
-- Desktop must close the complete sidebar stack on an external browser route change.
-- Desktop must silently discard unsent Task edits and comment drafts on an external browser route change.
-- Desktop must preserve the complete sidebar stack and its saved interface state across disconnect and reconnect.
-- Desktop must refresh server-authoritative data when a retained destination is restored.
-- Desktop must use a quick horizontal transition for Push and Back.
-- Desktop must respect reduced-motion settings for Push and Back.
+
+Selecting a related-Task row pushes that Task Detail onto a sidebar-local stack
+while the browser Task route remains anchored to the root Task.
+
+The sidebar header keeps X before Back. Back returns to the preceding
+destination and is hidden at the root. X closes the complete stack.
+
+When a selected Task already appears in the stack, the sidebar returns to that
+Task and removes later destinations. The stack retains at most 50 destinations,
+keeps the root, and removes the oldest non-root destination at the limit.
+Earlier destinations retain bounded interface state while only the current
+destination remains live. Restoring a destination refreshes its
+server-authoritative data, and disconnect/reconnect preserves the stack and its
+saved interface state. An external browser route change closes the stack.
+
+The `Blocked by` and `Blocks` Add controls push the ordinary New Task form.
+Related-Task creation uses the open Task's Project, Workflow, and default source
+workspace, then atomically creates the Backlog Task and directed Task
+Dependency. Success replaces New Task with the created Task Detail and keeps
+the originating Task immediately behind it. Failure preserves ordinary New Task
+recovery, while leaving through Back or X creates neither record.
+
+While a Task title/body or add/edit-comment save is pending, related-Task
+selection and Dependency Add are unavailable. Back, X, route change, Pop out,
+and connected relationship Remove remain available. Successful or failed saves
+restore dependency navigation when the Task Detail remains current.
+
+Back restores the prior Task Detail's scroll position, description expansion,
+selected Comments or Activity tab, unsent Task edits, and unsent comment
+drafts, then refreshes server data. An unfinished Question response is not
+restored. Deleted Tasks are removed from the stack, and Back skips destinations
+that no longer exist.
+
+Pop out opens only the current Task in the separate window and closes the
+originating stack after the window opens. If the destination changes first, the
+window remains open and the current sidebar remains unchanged.
+
 - Each relationship row has an accessible trailing Remove action rendered as a
   minimal uncircled red `X`.
 - Remove acts immediately without confirmation.
 - Dependency actions use icon-only controls outside confirmation dialogs.
-- Desktop must push the ordinary New Task form for a new Blocker Task when `Blocked by` Add is selected.
-- Desktop must push the ordinary New Task form for a new Blocked Task when `Blocks` Add is selected.
-- Desktop must make related-Task selection unavailable while a Task title/body save or add/edit-comment save is pending.
-- Desktop must make Dependency Add unavailable while a Task title/body save or add/edit-comment save is pending.
-- Desktop must keep Back, X, route change, and Pop out available while those saves are pending.
-- Desktop must re-enable dependency navigation after a successful save when Task Detail remains current.
-- Desktop must not retain submitted input after a successful save.
-- Desktop must re-enable dependency navigation after a failed save when Task Detail remains current.
-- Desktop must preserve the failed draft after a failed save.
-- Desktop must use ordinary discard or close behavior when leaving through Back, X, route change, or Pop out while a save is pending.
-- Desktop must not restore or reopen a destination after a pending save settles.
-- Desktop must not offer an existing-Task search or chooser for Dependency Add.
-- Desktop must use the open Task's Project and Workflow for related-Task creation.
-- Desktop must default related-Task creation to the open Task's source workspace.
-- Desktop must keep the ordinary source-workspace selector available for related-Task creation.
-- Desktop must not show Dependencies in New Task.
-- Desktop must carry a related New Task's preconfigured originating relationship without showing it in the form.
-- Desktop must not show a Cancel button in New Task.
-- Desktop must discard an unsubmitted New Task form and return to the preceding Task Detail on Back.
-- Desktop must atomically create the Backlog Task and directed Task Dependency when related-Task creation is submitted.
-- Desktop must replace New Task with the newly created Task Detail after successful related-Task creation.
-- Desktop must keep the originating Task immediately behind the created Task in the sidebar stack.
-- Desktop must keep the created Task and relationship when related-Task creation succeeds after New Task is no longer current.
-- Desktop must leave the current sidebar unchanged when stale related-Task creation succeeds.
-- Desktop must create neither Task nor relationship when related-Task creation fails.
-- Desktop must preserve the ordinary New Task recovery path after related-Task creation fails.
-- Desktop must create neither Task nor relationship when related-Task creation is left through Back or X.
-- Desktop must open only the current Task in the separate window when a stacked Task Detail is popped out.
-- Desktop must close the complete originating sidebar stack after the separate window opens.
-- Desktop must leave the separate window open and the current sidebar unchanged when the window opens after that Task Detail is no longer current.
-- Desktop must not warn about unsent input in the sidebar stack during Pop out.
-- Desktop must discard unsent input in the originating stack when Pop out closes it.
-- Desktop must restore the prior Task Detail scroll position, description expansion, selected Comments or Activity tab, unsent Task edits, and unsent comment drafts on Back.
-- Desktop must reapply the captured pixel offset after ordinary server refresh during scroll restoration.
-- Desktop must use the nearest available position when refreshed content cannot provide the captured offset.
-- Desktop must not retain or replay Activity or Comments pages only to reconstruct an earlier viewport.
-- Desktop must apply a Task Detail initial-focus request only to its first activation.
-- Desktop must restore captured scroll position without replaying an earlier Dependencies, Question, Approval, or interrupted-node focus request.
-- Desktop must discard the current Task Detail's unsent Task edits and comment drafts without warning on Back.
-- Desktop must retain restored drafts only for their earlier retained destination.
-- Desktop must not preserve an unfinished Question response on Back.
-- Desktop must refetch current server data on Back.
-- Desktop must layer retained unsent Task and comment drafts over refetched server data on Back.
-- Desktop must remove a retained Task's sidebar destination when that Task is deleted.
-- Desktop must skip deleted destinations on Back.
-- Desktop must close the sidebar only when no destination survives after deleted destinations are skipped.
-- Desktop must close the originating Task Detail lifecycle as an ordinary close when the final destination is removed.
-- Desktop must clear an anchored browser Task route when the final destination is removed.
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
 - Kent rechecks the limit when related-Task creation is submitted.
@@ -269,11 +228,9 @@
 ## Inbox, Questions, Approvals, And Notifications
 
 - Inbox lists the global infinite-scrolling attention feed. Task Detail owns Question and Approval actions through its bounded Task attention view.
-- Desktop must let Inbox-opened Task Detail move through the live Inbox order with Previous and Next.
-- Desktop must advance Next to the replacement item after resolution removes the open Task.
-- Desktop must replace the current Inbox Task for Previous and Next.
-- Desktop must not push sidebar history for Inbox Previous and Next.
-- Desktop must make Inbox Previous and Next unavailable outside Inbox.
+- Inbox-opened Task Detail can move through the live Inbox order with Previous
+  and Next. After resolution removes the open Task, Next advances to the
+  replacement item. These controls are unavailable outside Inbox.
 - The top Task Detail action opens or focuses the highest-priority unresolved attention. All unresolved items retain inline controls.
 - Home Inbox shows only task-scoped attention. It has no Workflow-validity badge or section.
 - Questions support suggestions, freeform commentary, recommendations, pointer or keyboard selection, and ordinary focus navigation. An option Question selects its valid recommended option by default and otherwise selects option 1; malformed recommendation metadata follows the same option-1 fallback. Live refresh preserves the user's selection and draft. Selection and recommendation remain distinct states. A Question with no suggestions has only freeform response and does not offer `Neither`.
