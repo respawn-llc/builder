@@ -108,7 +108,7 @@
 - Changing the field retains the selected direction.
 - Board sort is not persisted. Opening another Workflow board resets it to `Updated Desc`.
 - `Updated` and `Created` use chronological order. `Title` uses case-insensitive alphabetical order. `Short ID` uses its Project-local numeric sequence. `Labels` uses the shared Label-sort semantics in the Workflow orchestration specification.
-- Task Short ID is the final tie-breaker in the selected direction when another field is primary.
+- Board sorting follows the shared ordering and tie-breaking contract in the Workflow orchestration specification.
 - Label filtering and board sorting are independent and never change each other's state.
 - Sort refresh never clears the rendered board. Existing cards remain visible until a background refresh replaces them with the authoritative order.
 - If a replacement refresh fails, the selected sort and stale cards remain visible and the board surfaces an error. A failed pagination request surfaces its error at the affected infinite-scroll boundary.
