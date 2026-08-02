@@ -318,6 +318,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Compact is unavailable before the first Agent Step. Pre-Session `/compact` remains recognized, creates no Session, and surfaces the typed unavailable/too-soon failure.
 - Click/tap opens the compact usage pop-up. Enter/Space opens it only through ordinary browser button behavior while the meter has focus; neither is a global shortcut. Escape/click-away closes it.
 - The pop-up matches the TUI Context summary: remaining percentage/tokens against the window, automatic-compaction threshold tokens/percentage, Auto-compaction on/off, and completed compaction count.
+- Reuse ordinary authoritative broadcasts to update an open pop-up. Add no Context-specific polling or reconciliation path.
 - It omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown. It does not add cache-hit, compaction-mode, debug, cost, or token-category rows.
 - Present those facts as four plain-text lines. Bold primary text emphasizes important labels and numeric values; supporting text stays muted.
 - Do not introduce chips, badges, stat cards, inset rows, or nested detail containers.

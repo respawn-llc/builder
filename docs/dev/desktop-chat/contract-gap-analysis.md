@@ -202,6 +202,8 @@ The separate Context meter opens a compact detail pop-up. Its `Compact` action u
 
 The pop-up reproduces the TUI Context summary without its detailed instruction, skill, and Agent-file token breakdown. It needs remaining tokens and percentage against the context window, automatic-compaction threshold tokens and percentage, Auto-compaction state, and completed compaction count. The runtime main view already provides usage, Auto-compaction state, and count, but it does not expose the configured automatic-compaction threshold. The server read model must add that typed fact; Desktop must not derive policy by reading configuration.
 
+An open pop-up consumes the ordinary Session-status and context-usage broadcasts already used by Chat. Desktop must not add a Context-specific poll, refresh timer, or reconciliation state machine. Facts not changed by an ordinary broadcast refresh through the next standard authoritative snapshot.
+
 Lazy New Chat needs the same facts before a Session runtime exists. The server-owned Chat draft must project the effective draft Agent's context window, automatic-compaction threshold, and Auto-compaction state. Desktop presents zero used tokens and zero compactions until materialization. Agent or setting changes that alter the effective context contract update this one draft projection.
 
 Manual compaction is unavailable before the first Agent Step. A pre-Session `/compact` must remain a recognized command and return the typed unavailable or too-soon outcome without materializing a Session. Desktop must not create a throwaway Session merely to reject compaction.

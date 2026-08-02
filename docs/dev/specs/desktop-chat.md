@@ -126,6 +126,7 @@
 - Clicking or tapping the Context meter opens a compact pop-up with detailed context-window usage and a `Compact` action. When normal browser focus is on the meter, its ordinary button Enter and Space behavior also opens the pop-up; these keys are not Context shortcuts elsewhere.
 - Escape or clicking away closes the Context pop-up.
 - The pop-up shows remaining-context percentage and tokens against the complete context window, the automatic-compaction threshold in tokens and percentage, whether Auto-compaction is on or off, and the completed compaction count.
+- An open Context pop-up reacts to ordinary authoritative Session-status and context-usage broadcasts. It adds no Context-specific polling, refresh loop, or reconciliation state.
 - The pop-up omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown.
 - The Context details are four plain-text lines. Important labels and numeric values use bold primary text; connective and explanatory text stays muted.
 - The pop-up has no chips, badges, statistic cards, inset items, or other secondary containers.
