@@ -240,6 +240,10 @@
 - The affordance end-truncates a long target name. The Worktree sidebar owns the complete target facts.
 - Activating the Worktree affordance opens the shared adaptive contextual-sidebar host.
 - Desktop does not place Worktree management in the Settings popover or a separate full-page destination.
+- Opening the Worktree list moves keyboard focus to its first enabled list action. If no row has an enabled action, focus moves to the header `+` action.
+- Opening Worktree creation moves focus to `Branch or ref`.
+- Escape closes the delete popup back to the list, returns creation to the list, and closes the list-level sidebar.
+- Closing Worktree restores focus to the under-composer Worktree control when that control opened it, or to the composer when a slash command opened it.
 - The Worktree sidebar opens directly to one management list. It has no overview landing page, cards, tabs, or nested Manage screen.
 - The sidebar header has a primary icon-only `+` action for creating a worktree.
 - The sidebar header has a secondary icon-only Refresh action beside `+`.
@@ -257,6 +261,8 @@
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
 - Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
 - While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
+- The Worktree sidebar remains dismissible while the immediate Switch request is pending.
+- Dismissing the sidebar does not cancel the Switch request.
 - A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
 - If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
@@ -286,6 +292,10 @@
 - If deletion fails before returning Completed or Scheduled for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
 - After an immediate deletion failure, the existing confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
 - Immediate deletion failure shows no separate Retry action and no Sonner while the popup remains open.
+- The delete popup remains dismissible while a Delete request is pending.
+- Dismissing the popup does not cancel the Delete request.
+- If a Delete request fails after its popup was dismissed, Desktop shows the authoritative diagnostic through Sonner and does not reopen the popup.
+- A clean-to-dirty rejection received after dismissal also uses Sonner. Reopening the delete flow starts a new preview.
 - Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
 - A Completed result closes the popup and refreshes the list.
 - A Scheduled result closes the popup back to the refreshed list. Desktop does not wait for current-Session retargeting or Git removal to finish.
@@ -319,6 +329,9 @@
 - A pre-retention creation failure not owned by one field shows the authoritative diagnostic as error-colored form-level plain text below the fields. It shows no Sonner.
 - The Worktree sidebar remains dismissible while creation and optional setup run.
 - Dismissing the Worktree sidebar does not cancel the submitted creation operation. The operation continues without its spinner after the destination closes.
+- Reopening Worktree while that creation operation remains in flight opens the ordinary list and performs its ordinary fresh read.
+- The reopened list keeps its normal actions available. Desktop does not reattach the creation spinner or add a client-wide Worktree mutation lock.
+- Concurrent requests follow the server's ordinary Worktree ordering and re-evaluation behavior.
 - Dismissing the Worktree sidebar does not suppress the automatic Switch after successful creation and setup.
 - Successful creation and automatic Switch remain silent. The authoritative current-target control changes when the Switch applies.
 - If optional setup fails while the Worktree sidebar remains open, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.

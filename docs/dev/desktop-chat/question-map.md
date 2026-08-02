@@ -391,6 +391,8 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
 - Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
 - Worktree management is not nested in Settings and does not use a separate full-page destination.
+- Opening the list focuses its first enabled row action, falling back to header `+`; Create focuses Branch or ref.
+- Escape closes delete to list, Create to list, then list-level sidebar. Closing restores focus to the under-composer Worktree control or to the composer for slash-command entry.
 - The sidebar opens directly to a simple complete authoritative topology list. A primary icon-only `+` action in the header opens worktree creation; creation is not a list row.
 - A secondary icon-only Refresh action sits beside `+`. Open performs one fresh list read, successful mutations refresh, and manual Refresh catches out-of-band Git changes. No poll or timer exists.
 - Initial list loading/error uses standard compact Loading and Error + Retry.
@@ -399,6 +401,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
 - Switch copies TUI lifecycle: request-scoped pending only until scheduling acknowledgement, then close the sidebar immediately. Never wait through the Agent Step, never optimistically move selection, and let authoritative target/outcome updates refresh state.
+- The sidebar remains dismissible during the immediate Switch request, and dismissal does not cancel it.
 - Scheduled acknowledgement and successful completion are silent on Desktop. They show no Sonner or other success notice.
 - An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses Sonner for the typed diagnostic and preserves the existing model-visible failure Steer.
 - The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
@@ -411,6 +414,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Only branch-backed rows show both `Confirm` and `Confirm + Branch`. Branchless rows show `Confirm` only. The popup remains both confirmation and branch-cleanup selector, with no second dialog.
 - Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
 - Another immediate Delete failure keeps the popup open with the authoritative inline error and restores its existing confirmation actions. Confirm itself is the retry after the blocker is addressed; no separate Retry or Sonner appears.
+- The popup remains dismissible during Delete. Dismissal does not cancel the request; a later failure, including a clean-to-dirty rejection, uses Sonner and never reopens the popup.
 - Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner.
 - Completed deletion, Scheduled deletion, and later successful transition completion show no Sonner or other success notice. Final failure uses Sonner while authoritative outcomes refresh state.
 - A typed Completed result with retained requested branch cleanup or a leftover filesystem root shows one warning Sonner with the branch/root and authoritative diagnostic. It does not reopen the popup.
@@ -426,6 +430,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Creation and optional setup use one simple spinner for the complete operation. Do not expose phases, phase labels, percentage, or a progress bar.
 - Pre-retention Create failure keeps the form and all entered values intact. Show a non-field-owned authoritative diagnostic as error-colored form-level plain text below the fields, with no Sonner.
 - The Worktree sidebar remains dismissible during creation/setup. Dismissing it does not cancel the submitted operation; creation continues in the background without the sidebar spinner.
+- Reopening during that background operation shows the ordinary fresh list with normal actions. Desktop does not reattach the spinner or add a client-wide mutation lock; server ordering owns concurrent requests.
 - Dismissal does not suppress the ordinary automatic Switch after successful creation/setup. Success remains silent and the authoritative current-target control changes when the Switch applies.
 - Setup failure returns to the refreshed list only while the sidebar remains open. A dismissed sidebar stays closed; Sonner surfaces the diagnostic, and the next open performs its ordinary fresh list read.
 - Preserve the setup-failed worktree; no inline Error, Retry, or automatic deletion.
