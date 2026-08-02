@@ -275,3 +275,29 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatalf("submit calls = %d, want 1", client.submitCalls)
 	}
 }
+
+func TestQueuedSubmitFailurePreservesActivity(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	model.setRuntimeActivityBusyForTest(true)
+	model.activeSubmit = activeSubmitState{token: 1, text: "queued message", queuedID: "queued-id"}
+	beforeActivity := model.activity
+
+	next, cmd := model.Update(submitDoneMsg{
+		token:         1,
+		submittedText: "queued message",
+		err:           io.EOF,
+	})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+	if got, want := updated.transientStatus, runtimeattach.FormatSubmissionError(io.EOF); got != want {
+		t.Fatalf("transient status = %q, want %q", got, want)
+	}
+}

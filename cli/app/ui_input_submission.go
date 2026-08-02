@@ -223,7 +223,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
-		m.activity = uiActivityError
+		if activeQueuedID == "" {
+			m.activity = uiActivityError
+		}
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
 		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
