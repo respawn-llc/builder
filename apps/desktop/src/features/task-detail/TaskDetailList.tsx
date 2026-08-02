@@ -45,6 +45,7 @@ export function TaskDetailList({
   detail,
   disabled,
   dependencyDisabled,
+  dependencyRemoveDisabled,
   draft,
   descriptionPresentation,
   editingComment,
@@ -76,6 +77,7 @@ export function TaskDetailList({
   detail: TaskDetail;
   disabled: boolean;
   dependencyDisabled: boolean;
+  dependencyRemoveDisabled: boolean;
   draft: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -201,6 +203,7 @@ export function TaskDetailList({
           detail={detail}
           disabled={disabled}
           dependencyDisabled={dependencyDisabled}
+          dependencyRemoveDisabled={dependencyRemoveDisabled}
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
@@ -243,6 +246,7 @@ type TaskDetailListRowProps = Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   dependencyDisabled: boolean;
+  dependencyRemoveDisabled: boolean;
   draft: TaskDraft;
   draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
@@ -358,6 +362,7 @@ function BodyRow({
 function DependenciesRow({
   detail,
   dependencyDisabled,
+  dependencyRemoveDisabled,
   onAddDependency,
   onRemoveDependency,
   onSelectDependencyTask,
@@ -369,6 +374,7 @@ function DependenciesRow({
       onAdd={onAddDependency}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}
+      removeDisabled={dependencyRemoveDisabled}
       taskID={detail.id}
     />
   );

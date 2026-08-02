@@ -23,6 +23,7 @@ import {
 } from "@/app-facade";
 import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "@/app-facade";
 import {
+  findTaskDetailIndex,
   sidebarStackReducer,
   type SidebarStackAction,
   type SidebarStackState,
@@ -279,15 +280,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (activeEntry === undefined) {
         return;
       }
-      const existingTask = state.entries.find(
-        (entry) =>
-          destination.kind === "taskDetail" &&
-          entry.destination.kind === "taskDetail" &&
-          entry.destination.taskID === destination.taskID,
-      );
+      const existingTaskIndex = findTaskDetailIndex(state.entries, destination);
       clearCloseTimeout();
       clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
-      const nextDestination = existingTask?.destination ?? destination;
+      const nextDestination =
+        existingTaskIndex === undefined
+          ? destination
+          : (state.entries[existingTaskIndex]?.destination ?? destination);
       const activationID = nextID("activation");
       setActiveWidthProfile(sidebarWidthProfile(nextDestination));
       setPhase("open");

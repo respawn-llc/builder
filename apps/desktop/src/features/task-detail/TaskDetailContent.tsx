@@ -381,6 +381,7 @@ export function TaskDetailContent({
       detail={detail}
       disabled={connection.phase !== "connected"}
       dependencyDisabled={connection.phase !== "connected" || savePending}
+      dependencyRemoveDisabled={connection.phase !== "connected"}
       draft={draft}
       descriptionPresentation={descriptionPresentation}
       editingComment={editingComment}

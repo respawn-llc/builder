@@ -74,6 +74,7 @@ describe("TaskDependenciesArea", () => {
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        removeDisabled={false}
         taskID="task-1"
       />,
     );
@@ -101,6 +102,7 @@ describe("TaskDependenciesArea", () => {
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        removeDisabled={false}
         taskID="task-1"
       />,
     );
@@ -118,6 +120,7 @@ describe("TaskDependenciesArea", () => {
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        removeDisabled
         taskID="task-1"
       />,
     );
@@ -139,6 +142,7 @@ describe("TaskDependenciesArea", () => {
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        removeDisabled={false}
         taskID="task-1"
       />,
     );
@@ -165,6 +169,34 @@ describe("TaskDependenciesArea", () => {
 
     expect(onSelectTask).toHaveBeenCalledWith("task-2");
     expect(onAdd).toHaveBeenCalledWith("blocked-by");
+    expect(onRemove).toHaveBeenCalledWith({
+      blockerTaskID: "task-2",
+      blockedTaskID: "task-1",
+    });
+  });
+
+  it("keeps relationship removal available while saves disable navigation and Add", async () => {
+    const onAdd = vi.fn();
+    const onRemove = vi.fn();
+    const onSelectTask = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <TaskDependenciesArea
+        dependencies={dependencies}
+        disabled
+        onAdd={onAdd}
+        onRemove={onRemove}
+        onSelectTask={onSelectTask}
+        removeDisabled={false}
+        taskID="task-1"
+      />,
+    );
+
+    expect(screen.getByTestId("dependency-add-blocked-by")).toBeDisabled();
+    expect(screen.getByTestId("dependency-remove-task-2")).toBeEnabled();
+
+    await user.click(screen.getByTestId("dependency-remove-task-2"));
     expect(onRemove).toHaveBeenCalledWith({
       blockerTaskID: "task-2",
       blockedTaskID: "task-1",

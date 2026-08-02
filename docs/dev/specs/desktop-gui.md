@@ -194,10 +194,8 @@
 - Desktop must keep only the current sidebar destination live.
 - Desktop must retain bounded interface state for earlier destinations without continuing to load or receive live updates.
 - Desktop must apply the 50-destination bound to sidebar entries and retained interface state.
-- Desktop must not apply the 50-destination bound to the app's ordinary query cache.
-- Desktop must leave inactive Task Detail queries on the app's ordinary time-based cache lifecycle.
-- Desktop must allow dependency traversal to temporarily increase inactive query cache until ordinary expiry.
-- Desktop must not pin, copy, extend, isolate, or explicitly evict Task Detail queries.
+- Desktop must not keep inactive Task Detail data live or extend its normal
+  lifetime solely because sidebar history retains its interface state.
 - Desktop must preserve the root when the sidebar reaches its 50-destination bound.
 - Desktop must evict the oldest non-root destination when the sidebar reaches its 50-destination bound.
 - Desktop must evict that destination silently.

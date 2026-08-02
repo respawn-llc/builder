@@ -188,7 +188,7 @@ function deactivateEntry(entry: SidebarStackEntry): SidebarStackEntry {
   return { ...entry, destination };
 }
 
-function findTaskDetailIndex(
+export function findTaskDetailIndex(
   entries: readonly SidebarStackEntry[],
   destination: SidebarDestination,
 ): number | undefined {

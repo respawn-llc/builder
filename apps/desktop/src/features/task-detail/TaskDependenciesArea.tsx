@@ -22,6 +22,7 @@ export function TaskDependenciesArea({
   onAdd,
   onRemove,
   onSelectTask,
+  removeDisabled,
   taskID,
 }: Readonly<{
   dependencies: TaskDependencies;
@@ -29,6 +30,7 @@ export function TaskDependenciesArea({
   onAdd(direction: TaskDependencyDirection): void;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
+  removeDisabled: boolean;
   taskID: string;
 }>) {
   const { t } = useTranslation();
@@ -53,6 +55,7 @@ export function TaskDependenciesArea({
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        removeDisabled={removeDisabled}
         taskID={taskID}
       />
       <div className="h-px bg-[var(--color-outline)]" />
@@ -62,6 +65,7 @@ export function TaskDependenciesArea({
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        removeDisabled={removeDisabled}
         taskID={taskID}
       />
     </Island>
@@ -74,6 +78,7 @@ function DependencyDirection({
   onAdd,
   onRemove,
   onSelectTask,
+  removeDisabled,
   taskID,
 }: Readonly<{
   direction: TaskDependencyDirectionProjection;
@@ -81,6 +86,7 @@ function DependencyDirection({
   onAdd(direction: TaskDependencyDirection): void;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
+  removeDisabled: boolean;
   taskID: string;
 }>) {
   const { t } = useTranslation();
@@ -124,6 +130,7 @@ function DependencyDirection({
             key={item.taskID}
             onRemove={onRemove}
             onSelectTask={onSelectTask}
+            removeDisabled={removeDisabled}
             taskID={taskID}
           />
         ))}
@@ -138,6 +145,7 @@ function DependencyRow({
   item,
   onRemove,
   onSelectTask,
+  removeDisabled,
   taskID,
 }: Readonly<{
   direction: TaskDependencyDirection;
@@ -145,6 +153,7 @@ function DependencyRow({
   item: TaskDependencyItem;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
+  removeDisabled: boolean;
   taskID: string;
 }>) {
   const { t } = useTranslation();
@@ -159,7 +168,7 @@ function DependencyRow({
           aria-label={t("task.dependenciesRemove")}
           className="grid size-7 place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-[var(--color-error)] outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-error)_35%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
           data-testid={`dependency-remove-${item.taskID}`}
-          disabled={disabled}
+          disabled={removeDisabled}
           onClick={() => {
             onRemove(pair);
           }}
