@@ -212,6 +212,7 @@ func (m *Manager) fallbackBackgroundEvent(eventType EventType, snapshot Snapshot
 		}
 		preview = ""
 	}
+	preview = limitModelVisibleFallbackOutput(preview, snapshot.RawOutput)
 	removed := 0
 	if truncated {
 		removed = 1
@@ -358,7 +359,7 @@ func (c *terminalEventCache) fallbackEvent(cause error) Event {
 	return newFallbackBackgroundEvent(
 		c.eventType,
 		c.snapshot,
-		c.snapshot.RecentOutput,
+		limitModelVisibleFallbackOutput(c.snapshot.RecentOutput, c.snapshot.RawOutput),
 		warning,
 		1,
 		c.noticeSuppressed,

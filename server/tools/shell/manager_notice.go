@@ -250,7 +250,7 @@ func projectBackgroundNoticeOutput(evt Event, maxChars int, mode BackgroundOutpu
 				output.logLineCount = &lineCount
 			}
 			if completion.source == completionOutputFallback && mode != BackgroundOutputConcise {
-				output.visible.command = preview
+				output.visible.command = limitModelVisibleFallbackOutput(preview, evt.Snapshot.RawOutput)
 				output.truncated = output.truncated || truncated
 				if truncated && output.previewRemoved == 0 {
 					output.previewRemoved = 1
