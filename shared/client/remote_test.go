@@ -1492,6 +1492,19 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorkflowTaskMutationSelfTargetError(t *testing.T) {
+	source := &serverapi.WorkflowTaskMutationSelfTargetError{TaskID: "task-1"}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskMutationSelfTarget,
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowTaskMutationSelfTargetError
+	if !errors.As(err, &decoded) || decoded.TaskID != source.TaskID {
+		t.Fatalf("decoded error = %T %v, want self-target task %q", err, err, source.TaskID)
+	}
+}
+
 func TestProtocolErrorDecodesWorkflowLabelError(t *testing.T) {
 	projectID := "project-1"
 	labelID := "11111111-1111-4111-8111-111111111111"

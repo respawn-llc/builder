@@ -179,6 +179,31 @@ func (s *Store) CountTaskSessions(ctx context.Context, taskID workflow.TaskID) (
 	return s.queries.CountTaskSessions(ctx, sql.NullString{String: string(taskID), Valid: true})
 }
 
+func (s *Store) TaskIDForSession(ctx context.Context, sessionID runtimeids.SessionID) (*workflow.TaskID, error) {
+	if sessionID.IsZero() {
+		return nil, errors.New("session id is required")
+	}
+	if _, err := s.metadata.ResolvePersistedSession(ctx, sessionID.String()); err != nil {
+		return nil, fmt.Errorf("resolve persisted Session %q: %w", sessionID, err)
+	}
+	return s.taskIDForSessionOwnership(ctx, sessionID)
+}
+
+func (s *Store) taskIDForSessionOwnership(ctx context.Context, sessionID runtimeids.SessionID) (*workflow.TaskID, error) {
+	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	if err != nil {
+		return nil, err
+	}
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
+		return nil, fmt.Errorf("session %q has invalid task ownership", sessionID)
+	}
+	taskID := workflow.TaskID(taskIDs[0].String)
+	return &taskID, nil
+}
+
 func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {
 	return latestTaskSessionForNode(ctx, s.queries, currentNode)
 }
@@ -190,18 +215,14 @@ func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID
 	if sessionID.IsZero() {
 		return CurrentNodeStartContext{}, errors.New("session id is required")
 	}
-	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	if len(taskIDs) == 0 {
+	if taskID == nil {
 		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
 	}
-	if len(taskIDs) != 1 || !taskIDs[0].Valid {
-		return CurrentNodeStartContext{}, fmt.Errorf("session %q has invalid task ownership", sessionID)
-	}
-	taskID := workflow.TaskID(taskIDs[0].String)
-	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
+	currentNodes, err := s.ListCurrentNodes(ctx, *taskID)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
@@ -211,7 +232,7 @@ func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID
 			continue
 		}
 		if currentNode != nil {
-			return CurrentNodeStartContext{}, fmt.Errorf("session %q is bound to multiple current nodes for task %q", sessionID, taskID)
+			return CurrentNodeStartContext{}, fmt.Errorf("session %q is bound to multiple current nodes for task %q", sessionID, *taskID)
 		}
 		currentNode = &currentNodes[i]
 	}
@@ -242,11 +263,11 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	if err := reference.Validate(); err != nil {
 		return err
 	}
-	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if len(taskIDs) != 1 || !taskIDs[0].Valid || workflow.TaskID(taskIDs[0].String) != reference.TaskID {
+	if taskID == nil || *taskID != reference.TaskID {
 		return ErrSessionNotCurrentWorkflowNode
 	}
 	currentNode, err := currentNodeForReference(ctx, s.queries, reference)

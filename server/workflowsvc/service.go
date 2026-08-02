@@ -860,6 +860,9 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
+	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
+	}
 	preflight, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (initiatingActionPreflight, error) {
 		taskID := workflow.TaskID(req.TaskID)
 		if err := s.currentNodeExecution.EnsureTaskQuiescent(taskID); err != nil {
@@ -1152,6 +1155,9 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
+	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, err
+	}
 	selector := workflowexecution.InterruptSelector{TaskID: workflow.TaskID(req.TaskID)}
 	if rawSessionID := strings.TrimSpace(req.SessionID); rawSessionID != "" {
 		sessionID, err := runtimeids.ParseSessionID(rawSessionID)
@@ -1197,6 +1203,9 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
@@ -1225,6 +1234,15 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	if req.InvokingSessionID != nil {
+		approval, err := s.store.PendingApproval(ctx, approvalID)
+		if err != nil {
+			return serverapi.WorkflowTaskApproveResponse{}, err
+		}
+		if err := s.authorizeWorkflowTaskMutation(ctx, approval.Source.TaskID, req.InvokingSessionID); err != nil {
+			return serverapi.WorkflowTaskApproveResponse{}, err
+		}
+	}
 	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
@@ -1249,6 +1267,9 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 
 func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if s.currentNodeExecution == nil {
@@ -1343,6 +1364,24 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			CurrentNodes: workflowCurrentNodes(currentNodes),
 		},
 	}, nil
+}
+
+func (s *Service) authorizeWorkflowTaskMutation(
+	ctx context.Context,
+	targetTaskID workflow.TaskID,
+	invokingSessionID *runtimeids.SessionID,
+) error {
+	if invokingSessionID == nil {
+		return nil
+	}
+	invokingTaskID, err := s.store.TaskIDForSession(ctx, *invokingSessionID)
+	if err != nil {
+		return err
+	}
+	if invokingTaskID != nil && *invokingTaskID == targetTaskID {
+		return &serverapi.WorkflowTaskMutationSelfTargetError{TaskID: string(targetTaskID)}
+	}
+	return nil
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
