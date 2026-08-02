@@ -717,13 +717,8 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptCancelsBlockedPreparation(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	live := currentNodeReferenceForControllerTest(t, "task-blocked-preparation-interrupt", "live")
-	blocked := currentNodeReferenceForControllerTest(t, "task-blocked-preparation-interrupt", "blocked")
+func TestCurrentNodeControllerConflictingLifecycleFailsWhilePreparationContinues(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-blocked-preparation-lifecycle", "node")
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -731,16 +726,18 @@ func TestCurrentNodeControllerTaskInterruptCancelsBlockedPreparation(t *testing.
 			controller.ExecutionFinalized(scope)
 		}),
 	})
-	runner := &liveAndInterruptiblePreparationRunner{
-		authority:   authority,
-		shellPath:   shellPath,
-		live:        live,
-		liveStarted: make(chan struct{}),
-		entered:     make(chan struct{}),
-		canceled:    make(chan struct{}),
+	runner := &interruptiblePreparationRunner{
+		entered:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		released: make(chan struct{}),
 	}
 	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
+		select {
+		case <-runner.released:
+		default:
+			close(runner.released)
+		}
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
 		}
@@ -749,35 +746,31 @@ func TestCurrentNodeControllerTaskInterruptCancelsBlockedPreparation(t *testing.
 		}
 	})
 
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, live); err != nil {
-		t.Fatalf("start live current node: %v", err)
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start current node: %v", err)
 	}
-	select {
-	case <-runner.liveStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("live current node did not start")
-	}
-	waitForRunningCurrentNode(t, authority, live)
-	controller.enqueueStarts([]currentNodeQueuedStart{{
-		reference:         blocked,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
-		policy:            currentNodeAdmissionExplicitOverride,
-	}})
 	select {
 	case <-runner.entered:
 	case <-time.After(3 * time.Second):
 		t.Fatal("blocked preparation did not start")
 	}
 
-	interruptCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := controller.Interrupt(interruptCtx, InterruptSelector{TaskID: live.TaskID}); err != nil {
-		t.Fatalf("Task Interrupt: %v", err)
+	quiescenceDone := make(chan error, 1)
+	go func() {
+		quiescenceDone <- controller.EnsureTaskQuiescent(reference.TaskID)
+	}()
+	select {
+	case err := <-quiescenceDone:
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("conflicting lifecycle error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("conflicting lifecycle operation waited for preparation")
 	}
 	select {
 	case <-runner.canceled:
-	case <-time.After(time.Second):
-		t.Fatal("blocked preparation did not observe interruption cancellation")
+		t.Fatal("conflicting lifecycle operation canceled preparation")
+	default:
 	}
 }
 

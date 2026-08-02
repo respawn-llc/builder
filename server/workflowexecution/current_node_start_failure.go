@@ -14,6 +14,24 @@ type CurrentNodeStartFailure struct {
 	Detail workflow.CurrentNodeInterruptionDetail
 }
 
+type ExecutionTargetPreparationFailure struct {
+	Cause error
+}
+
+func (e *ExecutionTargetPreparationFailure) Error() string {
+	if e == nil || e.Cause == nil {
+		return "execution target preparation failed"
+	}
+	return e.Cause.Error()
+}
+
+func (e *ExecutionTargetPreparationFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 func (e *CurrentNodeStartFailure) Error() string {
 	if e == nil || e.Cause == nil {
 		return "current node start failed"

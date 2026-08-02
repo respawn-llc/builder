@@ -261,6 +261,30 @@ describe("task initiating action controller", () => {
     expect(result.current.pending).toBeNull();
     expect(result.current.running).toBe(false);
   });
+
+  it("reports rejected Start and Move through the action-specific callback", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("transport failed"));
+    const onExecuteError = vi.fn();
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+        onExecuteError,
+      }),
+    );
+
+    const start = startTaskInitiatingAction("task-1");
+    await act(async () => result.current.run(start));
+    const move = moveTaskInitiatingAction({ taskID: "task-1", targetNodeID: "node-1" });
+    await act(async () => result.current.run(move));
+
+    expect(onExecuteError).toHaveBeenCalledTimes(2);
+    expect(onExecuteError.mock.calls[0]?.[0]).toBe(start);
+    expect(onExecuteError.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+    expect(onExecuteError.mock.calls[1]?.[0]).toBe(move);
+    expect(onExecuteError.mock.calls[1]?.[1]).toBeInstanceOf(Error);
+  });
 });
 
 function deferred<T>(): Readonly<{

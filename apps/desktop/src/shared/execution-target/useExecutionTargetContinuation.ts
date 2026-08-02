@@ -38,6 +38,7 @@ export function useTaskInitiatingActionController({
   execute,
   onApplied,
   onAppliedError,
+  onExecuteError,
 }: Readonly<{
   execute: (
     action: TaskInitiatingAction,
@@ -45,6 +46,7 @@ export function useTaskInitiatingActionController({
   ) => Promise<TaskInitiatingActionResult>;
   onApplied: (result: TaskInitiatingActionResult) => void | Promise<void>;
   onAppliedError: (error: unknown) => void;
+  onExecuteError?: (action: TaskInitiatingAction, error: unknown) => void;
 }>): TaskInitiatingActionController {
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
@@ -92,7 +94,11 @@ export function useTaskInitiatingActionController({
           await handleResult(result);
         } catch (error) {
           setPending(null);
-          onAppliedError(error);
+          if (onExecuteError !== undefined) {
+            onExecuteError(action, error);
+          } else {
+            onAppliedError(error);
+          }
         }
       })();
       initialRunRef.current = operation;
@@ -105,7 +111,7 @@ export function useTaskInitiatingActionController({
       void operation.then(settle, settle);
       await operation;
     },
-    [execute, handleResult, onAppliedError],
+    [execute, handleResult, onAppliedError, onExecuteError],
   );
 
   const close = useCallback(() => {

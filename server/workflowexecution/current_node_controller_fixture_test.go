@@ -685,7 +685,7 @@ type controlledScriptRunner struct {
 	handles     chan sessionruntime.ExecutionHandle
 }
 
-func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *controlledScriptRunner) StartCurrentNodeWithPreparation(_ context.Context, _ workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	close(r.entered)
 	<-r.startRunner
 	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
@@ -705,7 +705,7 @@ type failingCurrentNodeRunner struct {
 	cause error
 }
 
-func (r failingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
+func (r failingCurrentNodeRunner) StartCurrentNodeWithPreparation(context.Context, workflow.CurrentNodeReference, LaunchPreparation, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
 	return r.cause
 }
 
@@ -718,6 +718,7 @@ type blockingCurrentNodeRunner struct {
 type interruptiblePreparationRunner struct {
 	entered  chan struct{}
 	canceled chan struct{}
+	released chan struct{}
 }
 
 func (r *interruptiblePreparationRunner) StartCurrentNodeWithPreparation(
@@ -730,47 +731,16 @@ func (r *interruptiblePreparationRunner) StartCurrentNodeWithPreparation(
 	_ workflowruntime.Controller,
 ) error {
 	close(r.entered)
-	<-ctx.Done()
-	close(r.canceled)
-	return context.Cause(ctx)
-}
-
-type liveAndInterruptiblePreparationRunner struct {
-	authority   *sessionruntime.Authority
-	shellPath   string
-	live        workflow.CurrentNodeReference
-	liveStarted chan struct{}
-	entered     chan struct{}
-	canceled    chan struct{}
-}
-
-func (r *liveAndInterruptiblePreparationRunner) StartCurrentNodeWithPreparation(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-	_ LaunchPreparation,
-	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
-	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
-) error {
-	if reference.Equal(r.live) {
-		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
-			Command: sessionruntime.ScriptCommand{
-				Path: r.shellPath,
-				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-			},
-		})
-		close(r.liveStarted)
-		return err
+	select {
+	case <-ctx.Done():
+		close(r.canceled)
+		return context.Cause(ctx)
+	case <-r.released:
+		return errors.New("preparation released")
 	}
-	close(r.entered)
-	<-ctx.Done()
-	close(r.canceled)
-	return context.Cause(ctx)
 }
 
-func (r *blockingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
+func (r *blockingCurrentNodeRunner) StartCurrentNodeWithPreparation(context.Context, workflow.CurrentNodeReference, LaunchPreparation, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
 	r.once.Do(func() {
 		close(r.entered)
 	})
@@ -784,7 +754,7 @@ type countingCurrentNodeRunner struct {
 	deliveries []workflowruntime.TaskPromptDelivery
 }
 
-func (r *countingCurrentNodeRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *countingCurrentNodeRunner) StartCurrentNodeWithPreparation(_ context.Context, _ workflow.CurrentNodeReference, _ LaunchPreparation, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	r.mu.Lock()
 	r.count++
 	r.deliveries = append(r.deliveries, delivery)
@@ -839,9 +809,10 @@ type boundedExplicitAdmissionRunner struct {
 	release chan struct{}
 }
 
-func (r *boundedExplicitAdmissionRunner) StartCurrentNode(
+func (r *boundedExplicitAdmissionRunner) StartCurrentNodeWithPreparation(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	_ sessionruntime.WorkflowExecutionLease,
@@ -877,9 +848,10 @@ type runningAndFinalizingScriptRunner struct {
 	finalize            func(context.Context, sessionruntime.ExecutionScope, *CurrentNodeController) error
 }
 
-func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
+func (r *runningAndFinalizingScriptRunner) StartCurrentNodeWithPreparation(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
@@ -942,9 +914,10 @@ func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
 	}
 }
 
-func (r *runningAndQueuedGateRunner) StartCurrentNode(
+func (r *runningAndQueuedGateRunner) StartCurrentNodeWithPreparation(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
@@ -973,9 +946,10 @@ func (r *runningAndQueuedGateRunner) StartCurrentNode(
 	return nil
 }
 
-func (r *parallelExplicitRunner) StartCurrentNode(
+func (r *parallelExplicitRunner) StartCurrentNodeWithPreparation(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
@@ -1001,7 +975,7 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 	return err
 }
 
-func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *firstAdmissionBlockingScriptRunner) StartCurrentNodeWithPreparation(_ context.Context, reference workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	r.entered <- reference
 	<-r.release
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
@@ -1011,7 +985,7 @@ func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context,
 	return err
 }
 
-func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+func (r *completingScriptRunner) StartCurrentNodeWithPreparation(_ context.Context, reference workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	if reference.Equal(r.source) {
 		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 			Workflow: &lease,
@@ -1039,7 +1013,7 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 	return err
 }
 
-func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *recordingScriptRunner) StartCurrentNodeWithPreparation(_ context.Context, reference workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 		Workflow: &lease,
 		Command:  r.command,

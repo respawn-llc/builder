@@ -57,7 +57,7 @@ func (s *Store) GetTaskExecutionTargetContext(ctx context.Context, taskID workfl
 	if err != nil {
 		return TaskExecutionTargetContext{}, err
 	}
-	sourceWorkspace, err := taskSourceWorkspaceForExecution(ctx, s.queries, task)
+	sourceWorkspace, err := sourceWorkspaceForExecutionTarget(ctx, s.queries, task)
 	if err != nil {
 		return TaskExecutionTargetContext{}, err
 	}
@@ -295,7 +295,7 @@ func executionRootForTask(ctx context.Context, q *sqlitegen.Queries, task sqlite
 	if snapshot == nil {
 		return ExecutionRoot{}, &ExecutionRootError{Kind: ExecutionRootErrorSnapshotMissing}
 	}
-	sourceWorkspace, err := taskSourceWorkspaceForExecution(ctx, q, task)
+	sourceWorkspace, err := sourceWorkspaceForExecutionTarget(ctx, q, task)
 	if err != nil {
 		return ExecutionRoot{}, err
 	}
@@ -328,6 +328,38 @@ func executionRootForLockedTaskIfPresent(ctx context.Context, q *sqlitegen.Queri
 		return nil, err
 	}
 	return &root, nil
+}
+
+func sourceWorkspaceForExecutionTarget(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.Workspace, error) {
+	snapshot, err := executionTargetSnapshotFromTask(task)
+	if err != nil {
+		return sqlitegen.Workspace{}, err
+	}
+	if snapshot == nil || snapshot.Mode == workflow.ExecutionTargetModeNone ||
+		!task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" {
+		return taskSourceWorkspaceForExecution(ctx, q, task)
+	}
+	worktree, err := q.GetWorktreeByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sqlitegen.Workspace{}, &ExecutionRootError{Kind: ExecutionRootErrorManagedRecordMissing, Cause: err}
+		}
+		return sqlitegen.Workspace{}, err
+	}
+	workspace, err := q.GetWorkspaceByID(ctx, strings.TrimSpace(worktree.WorkspaceID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sqlitegen.Workspace{}, &ExecutionRootError{Kind: ExecutionRootErrorSourceWorkspaceMissing, Cause: err}
+		}
+		return sqlitegen.Workspace{}, err
+	}
+	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(task.ProjectID) {
+		return sqlitegen.Workspace{}, &ExecutionRootError{
+			Kind:  ExecutionRootErrorSourceWorkspaceOwnership,
+			Cause: fmt.Errorf("managed worktree workspace %q does not belong to task project %q", workspace.ID, task.ProjectID),
+		}
+	}
+	return workspace, nil
 }
 
 func executionRootForManagedWorktree(ctx context.Context, q *sqlitegen.Queries, sourceWorkspace sqlitegen.Workspace, managedWorktreeID string) (ExecutionRoot, error) {
@@ -382,6 +414,10 @@ func validateExecutionTargetCandidateForTask(ctx context.Context, q *sqlitegen.Q
 	}
 	if candidate.Snapshot.Mode == workflow.ExecutionTargetModeNone {
 		return nil
+	}
+	taskWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
+	if taskWorkspaceID != "" && taskWorkspaceID != workspaceID {
+		return errors.New("managed execution target candidate source workspace changed during preparation")
 	}
 	if candidate.Root.Managed == nil {
 		return errors.New("managed execution target candidate has no managed worktree")

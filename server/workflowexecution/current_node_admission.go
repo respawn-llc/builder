@@ -267,18 +267,8 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	runnerCtx, cancelRunner := context.WithCancel(ctx)
-	leaseCancelDone := make(chan struct{})
-	go func() {
-		select {
-		case <-lease.Done():
-			cancelRunner()
-		case <-runnerCtx.Done():
-		}
-		close(leaseCancelDone)
-	}()
 	runnerErr := c.runner.StartCurrentNodeWithPreparation(
-		runnerCtx,
+		ctx,
 		reference,
 		start.launchPreparation,
 		start.taskPromptDelivery,
@@ -286,8 +276,6 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		lease,
 		c,
 	)
-	cancelRunner()
-	<-leaseCancelDone
 	if runnerErr != nil {
 		return currentNodeAdmissionError{
 			cause:    c.discardAdmission(reference, key, lease, runnerErr),

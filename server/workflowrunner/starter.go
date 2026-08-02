@@ -134,6 +134,10 @@ func (s *Starter) StartCurrentNodeWithPreparation(
 		}
 		root, err := s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
 		if err != nil {
+			if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone ||
+				preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedManaged {
+				return &workflowexecution.ExecutionTargetPreparationFailure{Cause: err}
+			}
 			return err
 		}
 		preparedRoot = &root
@@ -174,6 +178,13 @@ func currentNodeStartFailure(cause error) error {
 		Code:   string(reason),
 		Fields: map[string]string{"error": cause.Error()},
 	}
+	var targetPreparation *workflowexecution.ExecutionTargetPreparationFailure
+	if errors.As(cause, &targetPreparation) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code:   "workflow_execution_target_preparation_failed",
+			Fields: map[string]string{"error": targetPreparation.Error()},
+		}
+	}
 	var validation workflowscript.ValidationError
 	if errors.As(cause, &validation) {
 		reason = workflow.CurrentNodeInterruptionReason(workflowscript.ReasonValidationFailed)
@@ -211,13 +222,13 @@ func currentNodeStartFailure(cause error) error {
 		detail = workflow.CurrentNodeInterruptionDetail{
 			Code: "workflow_execution_target_resolution_failed",
 			Fields: map[string]string{
-				"code":           string(defaultBranchResolution.Kind),
+				"code":           string(defaultBranchResolutionCode(defaultBranchResolution.Kind)),
 				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),
 			},
 		}
 	}
 	var locked *worktree.LockedTaskWorktreeError
-	if errors.As(cause, &locked) {
+	if errors.As(cause, &locked) && targetPreparation == nil {
 		detail = workflow.CurrentNodeInterruptionDetail{
 			Code:   "workflow_locked_execution_target_unavailable",
 			Fields: map[string]string{"cause": string(locked.Cause)},
@@ -234,6 +245,17 @@ func currentNodeStartFailure(cause error) error {
 		Cause:  cause,
 		Reason: reason,
 		Detail: detail,
+	}
+}
+
+func defaultBranchResolutionCode(kind worktree.GitDefaultBranchResolutionErrorKind) serverapi.WorkflowExecutionTargetUnavailableCause {
+	switch kind {
+	case worktree.GitDefaultBranchResolutionErrorMissing:
+		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing
+	case worktree.GitDefaultBranchResolutionErrorAmbiguous:
+		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous
+	default:
+		return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure
 	}
 }
 

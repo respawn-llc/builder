@@ -82,9 +82,10 @@ func (r *controllerBackedTaskStatusRunner) configure(
 	r.configs[taskID] = config
 }
 
-func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
+func (r *controllerBackedTaskStatusRunner) StartCurrentNodeWithPreparation(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	_ workflowexecution.LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
@@ -383,9 +384,10 @@ func (s staticTaskStatusLiveObservationSource) ObserveWorkflowTaskExecutions([]w
 	return s.observation, nil
 }
 
-func (taskStatusProjectionTestRunner) StartCurrentNode(
+func (taskStatusProjectionTestRunner) StartCurrentNodeWithPreparation(
 	context.Context,
 	workflow.CurrentNodeReference,
+	workflowexecution.LaunchPreparation,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
 	sessionruntime.WorkflowExecutionLease,

@@ -290,7 +290,7 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *selectiveScriptFailureRunner) StartCurrentNodeWithPreparation(_ context.Context, reference workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	if reference.Equal(r.failed) {
 		return errors.New("script start failed")
 	}
@@ -312,9 +312,10 @@ type finalizingBeforeLiveRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *finalizingBeforeLiveRunner) StartCurrentNode(
+func (r *finalizingBeforeLiveRunner) StartCurrentNodeWithPreparation(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,

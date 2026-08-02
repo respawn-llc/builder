@@ -66,13 +66,6 @@ func (l WorkflowExecutionLease) Cancel() {
 	}
 }
 
-// Done closes when the controller cancels this not-yet-live execution lease.
-// Slow admission work must observe it so lifecycle interruption can stop
-// preparation before the lease becomes a live scope.
-func (l WorkflowExecutionLease) Done() <-chan struct{} {
-	return l.canceled
-}
-
 func (l WorkflowExecutionLease) wait(ctx context.Context) error {
 	if l.start == nil || l.canceled == nil {
 		return errors.New("workflow execution lease start gate is invalid")

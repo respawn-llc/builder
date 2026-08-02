@@ -3,10 +3,13 @@ package workflowstore
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/config"
 )
 
 func TestDurablePlacementLeavesExecutionTargetUnlockedUntilExplicitLock(t *testing.T) {
@@ -83,7 +86,10 @@ func TestManagedExecutionTargetLockBindsRegisteredWorktree(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	worktreeID := "registered-" + string(task.ID)
-	worktreeRoot := t.TempDir()
+	worktreeRoot := filepath.Join(binding.CanonicalRoot, "managed-worktree")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree root: %v", err)
+	}
 	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 		ID:            worktreeID,
 		WorkspaceID:   binding.WorkspaceID,
@@ -93,7 +99,6 @@ func TestManagedExecutionTargetLockBindsRegisteredWorktree(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-
 	commitOID := "0123456789abcdef"
 	requestedRef := "HEAD"
 	registered, err := store.queries.GetWorktreeByID(ctx, worktreeID)
@@ -125,6 +130,33 @@ func TestManagedExecutionTargetLockBindsRegisteredWorktree(t *testing.T) {
 		targetContext.Task.ManagedWorktreeID != worktreeID {
 		t.Fatalf("managed locked target = %+v, want worktree %q", targetContext.Task, worktreeID)
 	}
+	newRoot := t.TempDir()
+	newRootCanonical, err := config.CanonicalWorkspaceRoot(newRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	if _, err := store.metadata.RebindWorkspace(ctx, binding.CanonicalRoot, newRoot); err != nil {
+		t.Fatalf("RebindWorkspace after managed lock: %v", err)
+	}
+	targetContext, err = store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext after locked rebind: %v", err)
+	}
+	if targetContext.SourceWorkspaceID != binding.WorkspaceID || targetContext.SourceWorkspaceRoot != newRootCanonical {
+		t.Fatalf("locked source workspace = %q at %q, want rebound workspace %q at %q",
+			targetContext.SourceWorkspaceID, targetContext.SourceWorkspaceRoot, binding.WorkspaceID, newRootCanonical)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after locked rebind: %v", err)
+	}
+	root, err := executionRootForTask(ctx, store.queries, row)
+	if err != nil {
+		t.Fatalf("executionRootForTask after locked rebind: %v", err)
+	}
+	if root.SourceWorkspaceRoot != newRootCanonical {
+		t.Fatalf("execution root source workspace root = %q, want %q", root.SourceWorkspaceRoot, newRootCanonical)
+	}
 }
 
 func TestExecutionTargetLockUsesCapturedWorkspaceAfterRebind(t *testing.T) {
@@ -154,6 +186,62 @@ func TestExecutionTargetLockUsesCapturedWorkspaceAfterRebind(t *testing.T) {
 	}
 	if root.SourceWorkspaceID != binding.WorkspaceID || root.SourceWorkspaceRoot != oldRoot {
 		t.Fatalf("locked execution root = %+v, want captured workspace %q at %q", root, binding.WorkspaceID, oldRoot)
+	}
+}
+
+func TestManagedTargetLockRejectsSourceWorkspaceRebind(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	oldRoot := binding.CanonicalRoot
+	newBinding, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	worktreeID := "registered-rebind-" + string(task.ID)
+	worktreeRoot := t.TempDir()
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	worktreeRecord, err := store.queries.GetWorktreeByID(ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeByID: %v", err)
+	}
+	commitOID := "0123456789abcdef"
+	requestedRef := "HEAD"
+	candidate := &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: oldRoot,
+			Managed:             &ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRecord.CanonicalRootPath},
+		},
+	}
+	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID:            task.ID,
+		SourceWorkspaceID: newBinding.WorkspaceID,
+	}); err != nil {
+		t.Fatalf("UpdateTask source workspace: %v", err)
+	}
+	if _, err := store.LockTaskExecutionTarget(ctx, task.ID, candidate); err == nil {
+		t.Fatal("LockTaskExecutionTarget after source workspace rebind succeeded")
+	}
+	if targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID); err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext after rejected rebind: %v", err)
+	} else if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("target locked after rejected rebind: %+v", targetContext.Task.ExecutionTarget)
 	}
 }
 

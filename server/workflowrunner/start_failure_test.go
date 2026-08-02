@@ -8,6 +8,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/workflowscript"
 	"core/server/worktree"
+	"core/shared/serverapi"
 )
 
 func TestCurrentNodeStartFailureProjectsTypedCauses(t *testing.T) {
@@ -49,14 +50,26 @@ func TestCurrentNodeStartFailureProjectsTypedCauses(t *testing.T) {
 			},
 		},
 		{
-			name: "default branch resolution",
+			name: "default branch missing",
+			cause: &worktree.GitDefaultBranchResolutionError{
+				Kind: worktree.GitDefaultBranchResolutionErrorMissing,
+			},
+			wantReason: workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
+			wantCode:   "workflow_execution_target_resolution_failed",
+			wantFields: map[string]string{
+				"code":           string(serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing),
+				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),
+			},
+		},
+		{
+			name: "default branch ambiguous",
 			cause: &worktree.GitDefaultBranchResolutionError{
 				Kind: worktree.GitDefaultBranchResolutionErrorAmbiguous,
 			},
 			wantReason: workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
 			wantCode:   "workflow_execution_target_resolution_failed",
 			wantFields: map[string]string{
-				"code":           string(worktree.GitDefaultBranchResolutionErrorAmbiguous),
+				"code":           string(serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous),
 				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),
 			},
 		},
@@ -69,6 +82,17 @@ func TestCurrentNodeStartFailureProjectsTypedCauses(t *testing.T) {
 			wantCode:   "workflow_locked_execution_target_unavailable",
 			wantFields: map[string]string{
 				"cause": string(worktree.LockedTaskWorktreeCauseRootInaccessible),
+			},
+		},
+		{
+			name: "unlocked target preparation",
+			cause: &workflowexecution.ExecutionTargetPreparationFailure{
+				Cause: errors.New("source workspace lookup failed"),
+			},
+			wantReason: workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
+			wantCode:   "workflow_execution_target_preparation_failed",
+			wantFields: map[string]string{
+				"error": "source workspace lookup failed",
 			},
 		},
 		{

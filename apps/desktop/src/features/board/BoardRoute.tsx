@@ -17,12 +17,10 @@ import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
-  executeTaskInitiatingAction,
   moveTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
-  useTaskInitiatingActionController,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
@@ -52,6 +50,7 @@ import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLa
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
+import { useBoardInitiatingAction } from "./useBoardInitiatingAction";
 import { useBoardResumeAction } from "./useBoardResumeAction";
 export type BoardRouteProps = Readonly<{
   projectId: string;
@@ -224,19 +223,10 @@ function BoardContent({
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions();
-  const initiatingAction = useTaskInitiatingActionController({
-    execute: async (action, selection) => executeTaskInitiatingAction(api, action, selection),
-    onApplied: async () => {
+  const initiatingAction = useBoardInitiatingAction({
+    api,
+    onRefresh: async () => {
       await actions.refresh();
-    },
-    onAppliedError: (error) => {
-      push({
-        body: errorMessage(error),
-        durationMs: Infinity,
-        id: "board-action-refresh-error",
-        title: t("board.loadFailed"),
-        tone: "danger",
-      });
     },
   });
   const resumeAction = useBoardResumeAction(initiatingAction);
@@ -397,14 +387,6 @@ function BoardContent({
       reportDeleteError(error);
     }
   }
-  function reportStartError(error: unknown): void {
-    reportActionError("board-start-error", t("board.startFailed"), error);
-  }
-
-  function reportMoveError(error: unknown): void {
-    reportActionError("board-move-error", t("board.moveFailed"), error);
-  }
-
   function reportInterruptError(error: unknown): void {
     reportActionError("board-interrupt-error", t("board.interruptFailed"), error);
   }
@@ -491,12 +473,9 @@ function BoardContent({
     selection?: WorkflowExecutionTargetSelection,
   ): void {
     setPendingCardMove(pendingMove);
-    void initiatingAction
-      .run(action, selection)
-      .catch(action.kind === "start" ? reportStartError : reportMoveError)
-      .finally(() => {
-        clearPendingCardMove(pendingMove);
-      });
+    void initiatingAction.run(action, selection).finally(() => {
+      clearPendingCardMove(pendingMove);
+    });
   }
 
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
@@ -507,7 +486,11 @@ function BoardContent({
     if (result.action.kind === "resume") return;
     const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
     if (targetColumnID === undefined) {
-      reportStartError(new Error("Cannot continue task action without a target board column."));
+      reportActionError(
+        "board-start-error",
+        t("board.startFailed"),
+        new Error("Cannot continue task action without a target board column."),
+      );
       return;
     }
     runCardAction(
