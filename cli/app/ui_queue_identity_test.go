@@ -302,6 +302,9 @@ func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
 	}
+	if got, want := testMainInput(updated), "$ echo queued"; got != want {
+		t.Fatalf("restored queued text = %q, want %q", got, want)
+	}
 	if got, want := updated.transientStatus, runtimeattach.FormatSubmissionError(io.EOF); got != want {
 		t.Fatalf("transient status = %q, want %q", got, want)
 	}

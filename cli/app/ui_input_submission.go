@@ -200,14 +200,14 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.token != 0 && msg.token != m.activeSubmit.token {
 		return m, nil
 	}
+	submitOrigin := m.activeSubmit.origin
 	m.observeRuntimeRequestResult(msg.err)
-	restoreSubmittedText := msg.err != nil && (msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
+	restoreSubmittedText := msg.err != nil && (submitOrigin == activeSubmitOriginQueued || msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
 	if msg.token != 0 && msg.err != nil && isRuntimeOperationInterrupted(msg.err) && m.activeSubmit.restoreOnInterrupt {
 		restore, _ := m.shouldRestoreActiveSubmitAfterInterrupt()
 		restoreSubmittedText = restore
 	}
 	activeQueuedID := m.activeSubmit.queuedID
-	submitOrigin := m.activeSubmit.origin
 	m.activeSubmit = activeSubmitState{}
 	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindPreSubmitCompact)
 	c.finishRuntimeOperationAffordance(false)
