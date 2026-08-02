@@ -55,6 +55,40 @@ The desktop client needs typed schemas, DTO adapters, RPC methods, and contract 
 
 These are client gaps, not reasons to duplicate server business logic in React.
 
+### Worktree
+
+The existing server and shared contracts already own Worktree topology, current
+target identity, selector resolution, create and optional setup, enter/leave,
+delete `Completed`/`Scheduled` outcomes, transition lifecycle, structured
+operational errors, and Worktree operation/setup identities. Desktop must adapt
+those contracts rather than reproduce selector matching, target authority,
+setup orchestration, transition scheduling, or mutation ordering.
+
+Four concrete gaps remain:
+
+- Delete confirmation needs one typed, target-local preview operation with
+  exhaustive `Clean`, `Dirty`, and `Unknown` results. `Dirty` carries the
+  modified/untracked file count; `Unknown` carries an authoritative diagnostic.
+  Preview creates no lock, reservation, or revision. Actual Delete rechecks
+  cleanliness through the same authoritative evaluator.
+- Create failures need typed field ownership for Base ref. Blank, validation,
+  and authoritative Git failures owned by Base ref must be distinguishable from
+  form-level failures without parsing diagnostic text.
+- Desktop needs a typed Worktree API adapter covering the existing topology,
+  mutation, setup, and transition contracts plus the two missing contracts
+  above. React remains presentation-only and does not acquire Worktree business
+  rules.
+- Desktop Chat needs one authoritative runtime-state projection for current
+  execution target, reconnect hydration, and later transition outcomes.
+  Worktree UI must not introduce a local current-target authority or infer
+  completion from its initiating request.
+
+The Worktree surface uses explicit reads and mutation-triggered refreshes. It
+adds no polling, speculative reconnect recovery, client-wide mutation lock, or
+client-retained operation replay. Generic client request IDs are being removed
+by `KENT-346`; Desktop Worktree transport must be built after that compatibility
+cut while preserving domain-owned Worktree operation and setup identities.
+
 ## Confirmed Product/Contract Decisions Needed
 
 ### Reviewer Feedback Projection
