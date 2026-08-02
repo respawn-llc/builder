@@ -25,7 +25,7 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 	defer stream.Stop()
 
 	first := nextTranscriptEvent(t, stream.Events)
-	if first.Kind != ongoingTranscriptEventMessage || first.Message.Kind != clientui.TranscriptMessageHydration {
+	if first.Kind != ongoingTranscriptEventMessage || first.Message.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("first event = %+v, want hydration message", first)
 	}
 	loss := nextTranscriptEvent(t, stream.Events)
@@ -40,7 +40,7 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 
 	stream.RequestRehydration()
 	second := nextTranscriptEvent(t, stream.Events)
-	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind != clientui.TranscriptMessageHydration {
+	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("second event = %+v, want reopened hydration message", second)
 	}
 	if got, want := subscriber.sessionIDs, []string{"session-1", "session-1"}; !reflect.DeepEqual(got, want) {

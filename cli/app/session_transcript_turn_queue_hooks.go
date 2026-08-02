@@ -41,12 +41,10 @@ func (h *turnQueueHooks) OnTranscriptMessage(message clientui.TranscriptMessage)
 	if h.notifications != nil {
 		h.notifications.OnTranscriptMessage(message)
 	}
-	if h.taskCompletions == nil ||
-		message.Kind != clientui.TranscriptMessageLiveRunFinished ||
-		message.Payload.LiveRunFinished == nil {
+	if h.taskCompletions == nil || message.Kind() != clientui.TranscriptMessageLiveRunFinished {
 		return
 	}
-	result := *message.Payload.LiveRunFinished
+	result := message.Payload().(clientui.TranscriptLiveRunResult)
 	if result.Status != clientui.LiveRunStatusCompleted ||
 		result.ResultKind != clientui.LiveRunResultAssistantFinalAnswer ||
 		result.FinalAnswer == nil {

@@ -19,6 +19,15 @@ import (
 	"github.com/google/uuid"
 )
 
+func transcriptPayload[T any](t *testing.T, event clientui.TranscriptEvent) T {
+	t.Helper()
+	payload, ok := event.Payload().(T)
+	if !ok {
+		t.Fatalf("transcript payload type = %T, want %T", event.Payload(), *new(T))
+	}
+	return payload
+}
+
 func TestTranscriptProjectionOwnsNestedDeletionPresentation(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	source := &transcript.ToolCallMeta{
@@ -197,10 +206,11 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 			Text:       "detail-only row",
 		},
 	})
-	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one committed row", messages)
 	}
-	if got := messages[0].Payload.CommittedRow.Visibility; got != transcript.EntryVisibilityDetail {
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if got := row.Visibility; got != transcript.EntryVisibilityDetail {
 		t.Fatalf("committed row visibility = %q, want detail", got)
 	}
 
@@ -266,13 +276,15 @@ func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(completion)
 	var row *clientui.TranscriptCommittedRow
 	for _, message := range messages {
-		if message.Kind == clientui.TranscriptMessageCommittedRow &&
-			message.Payload.CommittedRow != nil &&
-			message.Payload.CommittedRow.Tool != nil {
+		if message.Kind() == clientui.TranscriptMessageCommittedRow {
+			candidate := transcriptPayload[clientui.TranscriptCommittedRow](t, message)
+			if candidate.Tool == nil {
+				continue
+			}
 			if row != nil {
 				t.Fatalf("client transcript messages = %+v, want exactly one committed tool row", messages)
 			}
-			row = message.Payload.CommittedRow
+			row = &candidate
 		}
 	}
 	if row == nil {
@@ -435,10 +447,11 @@ func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 			Preview:     "tests",
 		},
 	})
-	if len(messages) != 1 || messages[0].Payload.BackgroundActivity == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one background activity", messages)
 	}
-	if got := messages[0].Payload.BackgroundActivity.ActivityID.String(); got != activityID.String() {
+	background := transcriptPayload[clientui.TranscriptBackgroundActivity](t, messages[0])
+	if got := background.ActivityID.String(); got != activityID.String() {
 		t.Fatalf("background transcript id = %q, want activity id %q", got, activityID)
 	}
 }
@@ -471,10 +484,11 @@ func TestTranscriptBackgroundActivityLifecycleIgnoresPreviewTruncation(t *testin
 					PreviewRemoved: tt.previewRemoved,
 				},
 			})
-			if len(messages) != 1 || messages[0].Payload.BackgroundActivity == nil {
+			if len(messages) != 1 {
 				t.Fatalf("messages = %+v, want one background activity", messages)
 			}
-			if got := messages[0].Payload.BackgroundActivity.Lifecycle; got != tt.wantLifecycle {
+			background := transcriptPayload[clientui.TranscriptBackgroundActivity](t, messages[0])
+			if got := background.Lifecycle; got != tt.wantLifecycle {
 				t.Fatalf("background activity lifecycle = %q, want %q", got, tt.wantLifecycle)
 			}
 		})
@@ -498,10 +512,14 @@ func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 		},
 	})
 
-	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Notice == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one background notice", messages)
 	}
-	background := messages[0].Payload.CommittedRow.Notice.Background
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if row.Notice == nil {
+		t.Fatal("background notice row is missing notice payload")
+	}
+	background := row.Notice.Background
 	if background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
 		t.Fatalf("background notice = %+v, want exit code %d", background, exitCode)
 	}
@@ -528,10 +546,14 @@ func TestTranscriptWorktreeNoticeCarriesTypedContextWithoutServerPresentation(t 
 		},
 	})
 
-	if len(messages) != 1 || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Notice == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one worktree notice", messages)
 	}
-	notice := messages[0].Payload.CommittedRow.Notice
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if row.Notice == nil {
+		t.Fatal("worktree notice row is missing notice payload")
+	}
+	notice := row.Notice
 	if notice.Worktree == nil {
 		t.Fatal("worktree transcript context is missing")
 	}
@@ -564,13 +586,14 @@ func TestTranscriptWorktreeNoticeKeepsMissingBranchNullable(t *testing.T) {
 			Content:         textutil.Value("model-visible detached worktree context"),
 		},
 	})
-	if len(messages) != 1 ||
-		messages[0].Payload.CommittedRow == nil ||
-		messages[0].Payload.CommittedRow.Notice == nil ||
-		messages[0].Payload.CommittedRow.Notice.Worktree == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one typed worktree notice", messages)
 	}
-	if branch := messages[0].Payload.CommittedRow.Notice.Worktree.Branch; branch != nil {
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if row.Notice == nil || row.Notice.Worktree == nil {
+		t.Fatal("typed worktree notice is missing projected context")
+	}
+	if branch := row.Notice.Worktree.Branch; branch != nil {
 		t.Fatalf("projected detached worktree branch = %v, want null", branch)
 	}
 }
@@ -617,7 +640,11 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 			if len(messages) != 1 {
 				t.Fatalf("messages = %+v, want only assistant committed row", messages)
 			}
-			if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].Payload.CommittedRow == nil || messages[0].Payload.CommittedRow.Assistant == nil {
+			if messages[0].Kind() != clientui.TranscriptMessageCommittedRow {
+				t.Fatalf("message = %+v, want assistant committed row", messages[0])
+			}
+			row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+			if row.Assistant == nil {
 				t.Fatalf("message = %+v, want assistant committed row", messages[0])
 			}
 		})

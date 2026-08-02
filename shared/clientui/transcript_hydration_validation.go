@@ -204,7 +204,7 @@ func validateHydrationPrompts(prompts []TranscriptPrompt) error {
 		if err := prompt.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration prompt %d: %w", index, err)
 		}
-		if prompt.State != TranscriptPromptStatePending {
+		if prompt.Status != TranscriptPromptStatusPending {
 			return fmt.Errorf("transcript hydration prompt %d is not pending", index)
 		}
 		if _, exists := seen[prompt.PromptID]; exists {

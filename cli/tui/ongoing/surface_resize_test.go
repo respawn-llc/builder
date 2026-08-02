@@ -299,20 +299,16 @@ func TestScratchHydrationResetErasesExpandedBottomBand(t *testing.T) {
 }
 
 func committedAssistantMessage(text string) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageCommittedRow,
-		Payload: clientui.TranscriptPayload{
-			CommittedRow: &clientui.TranscriptCommittedRow{
-				Visibility: transcript.EntryVisibilityOngoing,
-				Integrity:  transcript.RowIntegrityValid,
-				Kind:       clientui.TranscriptRowAssistant,
-				Assistant: &clientui.TranscriptAssistantRow{
-					Text:  text,
-					Phase: transcript.AssistantPhaseFinal,
-				},
-			},
+	return clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text:  text,
+			Phase: transcript.AssistantPhaseFinal,
 		},
-	}
+	}))
+
 }
 
 func screenContains(snapshot pty.ScreenSnapshot, want string) bool {

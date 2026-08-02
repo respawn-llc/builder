@@ -133,12 +133,7 @@ func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
 	model.promptAttention = newUnfocusedBellHooks(ringer)
 	prompt := testQuestionPrompt("ask-1", "Question?", "yes")
-	message := clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessagePromptPending,
-		Payload: clientui.TranscriptPayload{
-			PromptPending: &prompt,
-		},
-	}
+	message := clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(prompt))
 
 	command := model.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{})
 	if ringer.total() != 0 {

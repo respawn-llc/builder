@@ -165,19 +165,12 @@ func TestResolvedTerminalCapabilitiesControlBoundedAndOngoingMarkdownLinks(t *te
 				TerminalResize: capabilities.ResizePolicy,
 				MarkdownLinks:  capabilities.MarkdownLinks,
 			})
-			_, err := surface.ApplyTerminalMessage(
-				clientui.TranscriptMessage{
-					Kind: clientui.TranscriptMessageAssistantDelta,
-					Payload: clientui.TranscriptPayload{
-						AssistantDelta: &clientui.TranscriptAssistantDelta{
-							StepID:   mustMarkdownHyperlinkStepID(t),
-							StreamID: runtimeids.NewAssistantStreamID(),
-							Delta:    "[label](" + target + ")\n\n",
-							Phase:    transcript.AssistantPhaseCommentary,
-						},
-					},
-				},
-				ongoing.FrameInput{Size: ongoing.Size{Width: 80, Height: 12}},
+			_, err := surface.ApplyTerminalMessage(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptAssistantDelta{
+				StepID:   mustMarkdownHyperlinkStepID(t),
+				StreamID: runtimeids.NewAssistantStreamID(),
+				Delta:    "[label](" + target + ")\n\n",
+				Phase:    transcript.AssistantPhaseCommentary,
+			})), ongoing.FrameInput{Size: ongoing.Size{Width: 80, Height: 12}},
 			)
 			if err != nil {
 				t.Fatalf("render ongoing Markdown: %v", err)

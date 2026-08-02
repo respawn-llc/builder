@@ -246,7 +246,7 @@ func newTestSessionRuntimeClientWithControls(controls apicontract.RuntimeControl
 func testQuestionPrompt(id, question string, suggestions ...string) clientui.TranscriptPrompt {
 	return clientui.TranscriptPrompt{
 		Kind:        clientui.TranscriptPromptKindQuestion,
-		State:       clientui.TranscriptPromptStatePending,
+		Status:      clientui.TranscriptPromptStatusPending,
 		PromptID:    clientui.PromptID(id),
 		SessionID:   ongoingTestSessionID(),
 		StepID:      ongoingTestStepID(),
@@ -259,7 +259,7 @@ func testQuestionPrompt(id, question string, suggestions ...string) clientui.Tra
 func testApprovalPrompt(id, question string, decisions ...clientui.ApprovalDecision) clientui.TranscriptPrompt {
 	return clientui.TranscriptPrompt{
 		Kind:            clientui.TranscriptPromptKindApproval,
-		State:           clientui.TranscriptPromptStatePending,
+		Status:          clientui.TranscriptPromptStatusPending,
 		PromptID:        clientui.PromptID(id),
 		SessionID:       ongoingTestSessionID(),
 		StepID:          ongoingTestStepID(),

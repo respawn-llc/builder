@@ -1088,8 +1088,24 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	if err := json.Unmarshal(notification.Params, &params); err != nil {
 		t.Fatalf("decode transcript event: %v", err)
 	}
-	if params.Message.Sequence != 1 || params.Message.Kind != clientui.TranscriptMessageHydration || params.Message.Payload.Hydration == nil {
+	if params.Message.Sequence != 1 || params.Message.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("transcript message = %+v, want seq=1 hydration", params.Message)
+	}
+	var paramsWire map[string]json.RawMessage
+	if err := json.Unmarshal(notification.Params, &paramsWire); err != nil {
+		t.Fatalf("decode transcript event envelope: %v", err)
+	}
+	var messageWire map[string]json.RawMessage
+	if err := json.Unmarshal(paramsWire["message"], &messageWire); err != nil {
+		t.Fatalf("decode transcript message wire envelope: %v", err)
+	}
+	for _, field := range []string{"sequence", "kind", "payload"} {
+		if _, ok := messageWire[field]; !ok {
+			t.Fatalf("transcript wire envelope missing %q: %s", field, notification.Params)
+		}
+	}
+	if string(messageWire["kind"]) != `"hydration"` || string(messageWire["payload"]) == "null" {
+		t.Fatalf("transcript wire envelope = %s, want hydration with payload", notification.Params)
 	}
 }
 
