@@ -217,6 +217,8 @@
 ## Worktree
 
 - Worktree is a Session execution-target control, not a Session setting.
+- Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
+- Worktree management never materializes a lazy Session and is not a first-agentic trigger.
 - The under-composer control row contains one Worktree affordance that identifies the Session's current concise execution target.
 - For a branch-backed worktree, the affordance shows the branch name. For a detached or otherwise non-branch worktree, it shows the Kent worktree display name. For the main workspace, it shows the workspace name.
 - When the current target is missing or inaccessible, the affordance preserves that recorded target name and adds warning iconography and semantic warning treatment. It does not replace the identity with generic warning copy.
@@ -232,6 +234,12 @@
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
+- Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
+- While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
+- A successful Switch acknowledgement closes the Worktree sidebar immediately and reports that the switch was scheduled.
+- Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
+- If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
+- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic, and follows the server's existing model-visible failure-Steer behavior.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
@@ -240,18 +248,34 @@
 - Worktree rows never show a path.
 - An External row places an `External` warning-colored chip after its title.
 - A Missing row places a `Missing` error-colored chip after its title.
-- Every deletable row has an icon-only trash action. Activating it opens a two-item popup menu with `Confirm` and `Confirm + Branch`.
+- Every deletable row has an icon-only trash action. Activating it opens the delete popup in a loading state and requests an authoritative typed deletion preview for that target.
+- The deletion preview reports Clean, Dirty with the modified-or-untracked file count, or Unknown with an authoritative diagnostic.
+- The popup shows a Dirty or Unknown warning before its action items. Worktree List and Worktree Status remain lightweight and do not add dirty state.
+- After preview, a branch-backed target offers `Confirm` and `Confirm + Branch`.
 - The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.
-- For a deletable target without a branch, the delete popup contains only `Confirm`.
+- For a deletable target without a branch, the previewed delete popup contains only `Confirm`.
 - Only a branch-backed target offers both `Confirm` and `Confirm + Branch`.
+- Confirming after a Dirty or Unknown preview authorizes force folder removal in the same click. Confirming after a Clean preview does not authorize force folder removal.
+- Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
+- If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
+- Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
+- A Completed result closes the popup, refreshes the list, and reports completed deletion.
+- A Scheduled result closes the popup back to the refreshed list and reports scheduled deletion. Desktop does not wait for current-Session retargeting or Git removal to finish.
+- The later authoritative transition outcome refreshes target and list state and surfaces final failure. Desktop adds no long-lived scheduled-deletion spinner.
 - A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
 - A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
 - Worktree creation uses a focused child state within the same Worktree sidebar destination.
 - The creation state places `Branch or ref` before `Base ref`.
+- `Branch or ref` starts focused and is prefilled only from the sanitized Session title. When the Session has no usable title, the field starts empty.
+- Desktop never falls back to the current branch, `main`, or a generated generic Worktree name.
 - Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
 - `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
 - The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
+- While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
+- Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
 - If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
 - Desktop does not delete or otherwise roll back a successfully created worktree because its automatic Switch failed.

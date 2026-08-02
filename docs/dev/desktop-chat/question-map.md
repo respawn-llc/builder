@@ -377,6 +377,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
 - Worktree is a first-class Session execution-target control in the under-composer row.
+- Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
 - The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
 - Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
 - Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
@@ -386,15 +387,23 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Initial list loading/error uses standard compact Loading and Error + Retry.
 - The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
+- Switch copies TUI lifecycle: request-scoped pending only until scheduling acknowledgement, then close the sidebar immediately. Never wait through the Agent Step, never optimistically move selection, and let authoritative target/outcome updates refresh state.
+- An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses the typed outcome and existing model-visible failure Steer.
 - The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
 - Rows use display name as the title. A second line shows branch/ref only when it differs from the title. Rows show no path.
 - Before adoption, an External row uses branch name as its title or the final path component when detached. It never shows the full path; ordinary Kent display-name rules apply after adoption.
 - External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
-- Every deletable row has an icon-only trash action. Its two-item popup contains `Confirm` and `Confirm + Branch` and acts as both confirmation and branch-cleanup selector. There is no second dialog.
-- Only branch-backed rows show both delete choices. Branchless rows show `Confirm` only.
+- Every deletable row has an icon-only trash action. Opening its popup performs one typed target-local delete preview with a loading state.
+- Preview reports Clean, Dirty with file count, or Unknown with diagnostic. Dirty/Unknown warnings appear before the action items; List/Status stay free of dirty state.
+- Only branch-backed rows show both `Confirm` and `Confirm + Branch`. Branchless rows show `Confirm` only. The popup remains both confirmation and branch-cleanup selector, with no second dialog.
+- Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
+- Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner. Final outcome refreshes/surfaces failure.
 - Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
 - The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
+- Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.
 - Base ref defaults to HEAD and appears/enables only for New branch. There is no custom path field. Create submits; Back returns to the list.
+- Creation and optional setup use one simple spinner for the complete operation. Do not expose phases, phase labels, percentage, or a progress bar.
+- Setup failure returns immediately to the refreshed list and uses Sonner for the authoritative diagnostic. Preserve the retained worktree; no inline Error, Retry, or automatic deletion.
 - Successful creation completes optional setup and then automatically uses the ordinary Switch operation. If Switch fails, preserve the created worktree, refresh the list, keep the prior Session target, and surface failure without rollback.
 - Review/init/file-backed prompt entry points.
 - Login/logout and account state.
