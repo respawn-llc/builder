@@ -105,18 +105,18 @@ export function TaskHeaderIsland({
 }
 
 export function DescriptionIsland({
-  canSaveDraft,
   disabled,
   draft,
+  draftDirty,
   error,
   onDraftChange,
   onPresentationChange,
   onSave,
   presentation,
 }: Readonly<{
-  canSaveDraft: boolean;
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   error: unknown;
   onDraftChange: (draft: TaskDraft) => void;
   onPresentationChange: (presentation: DescriptionPresentationState) => void;
@@ -128,11 +128,15 @@ export function DescriptionIsland({
   const descriptionError = error == null ? "" : errorMessage(error);
   const descriptionShortcut = useTextFieldSubmitShortcut({
     action: () => {
+      if (!draftDirty) {
+        onPresentationChange({ ...presentation, editing: false });
+        return;
+      }
       void onSave(draft).then(() => {
         onPresentationChange({ ...presentation, editing: false });
       });
     },
-    available: canSaveDraft && presentation.editing,
+    available: !disabled && draft.title.trim().length > 0 && presentation.editing,
     kind: "direct",
   });
 

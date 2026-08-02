@@ -95,11 +95,8 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
-  const canSaveDraft =
-    (draft.title !== detail.title || draft.body !== detail.body) &&
-    !disabled &&
-    !updatePending &&
-    draft.title.trim().length > 0;
+  const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
+  const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
     () => activity.data?.pages.flatMap((page) => page.items) ?? [],
     [activity.data],
@@ -189,6 +186,7 @@ export function TaskDetailList({
           attentionPending={attention.isPending}
           commentCount={commentItems.length}
           canSaveDraft={canSaveDraft}
+          draftDirty={draftDirty}
           detail={detail}
           disabled={disabled}
           draft={draft}
@@ -233,6 +231,7 @@ type TaskDetailListRowProps = Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
   errorTitle: string;
@@ -311,10 +310,10 @@ function HeaderRow({
 }
 
 function BodyRow({
-  canSaveDraft,
   detail,
   disabled,
   draft,
+  draftDirty,
   mutations,
   onDraftChange,
   onDescriptionPresentationChange,
@@ -329,9 +328,9 @@ function BodyRow({
       data-testid="task-detail-body-split"
     >
       <DescriptionIsland
-        canSaveDraft={canSaveDraft}
         disabled={disabled || updatePending}
         draft={draft}
+        draftDirty={draftDirty}
         error={updateError}
         onDraftChange={onDraftChange}
         onPresentationChange={onDescriptionPresentationChange}
