@@ -219,7 +219,7 @@ func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testin
 		"answer",
 		"--session", sessionID,
 		"--option", "2",
-		"--commentary", "Because it is safer",
+		"--commentary", "  Because it is safer \t",
 	}, &stdout, &stderr)
 
 	if exitCode != 0 || stderr.Len() != 0 || stdout.Len() == 0 {
@@ -339,6 +339,26 @@ func TestQuestionAnswerRequiresOptionOrCommentary(t *testing.T) {
 	}
 }
 
+func TestQuestionAnswerRejectsExplicitBlankCommentaryWithOption(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	sessionID := uuid.NewString()
+	remote := &stubQuestionCommandRemote{}
+	openedSessions := installQuestionCommandRemote(t, remote)
+
+	exitCode := questionSubcommand(
+		[]string{"answer", "--session", sessionID, "--option", "1", "--commentary", " \t "},
+		io.Discard,
+		io.Discard,
+	)
+
+	if exitCode != 2 {
+		t.Fatalf("exit=%d, want usage error", exitCode)
+	}
+	if len(*openedSessions) != 0 {
+		t.Fatalf("opened sessions = %v, want none", *openedSessions)
+	}
+}
+
 func TestQuestionRejectsCurrentAgentSession(t *testing.T) {
 	sessionID := uuid.NewString()
 	previous, present := os.LookupEnv(sessionenv.SessionIDEnv)
@@ -388,7 +408,7 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	exitCode := questionSubcommand(
-		[]string{"answer", "--task", taskID, "--commentary", "Proceed"},
+		[]string{"answer", "--task", taskID, "--commentary", "  Proceed \n"},
 		&stdout,
 		&stderr,
 	)

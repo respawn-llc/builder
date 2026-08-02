@@ -133,7 +133,15 @@ func questionAnswerSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, "question answer does not accept positional arguments")
 		return 2
 	}
-	if option == nil && (commentary == nil || strings.TrimSpace(*commentary) == "") {
+	if commentary != nil {
+		trimmedCommentary := strings.TrimSpace(*commentary)
+		if trimmedCommentary == "" {
+			fmt.Fprintln(stderr, "question answer requires non-blank --commentary when provided")
+			return 2
+		}
+		commentary = &trimmedCommentary
+	}
+	if option == nil && commentary == nil {
 		fmt.Fprintln(stderr, "question answer requires --option or non-blank --commentary")
 		return 2
 	}
