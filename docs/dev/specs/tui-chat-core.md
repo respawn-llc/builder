@@ -41,6 +41,12 @@
 - Pending messages have no fixed count limit and survive only until delivery or process exit.
 - Pending messages render as a visible pane between transcript and input until drained. The pane shows both queued post-turn messages and pending steering messages, each in FIFO order; queued messages render above steering messages.
 - There is no standalone per-item removal or reordering affordance. The only user-facing removal is the busy `Ctrl+C` interrupt, which drains both pending queues into the main input (see Interrupts And Exit).
+- The following creation-failure behavior applies to every queued message or Steer, including Allow commentary.
+- If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
+- The restored text is the exact message Kent attempted to submit. If the composer already contains a newer draft, Kent keeps that draft first, inserts one blank line, appends the failed message, and places the cursor at the end.
+- The failure appears as a transient status-line error using the ordinary submission failure detail. It does not change the activity indicator. The TUI does not create a transcript feedback row for this failure.
+- If the failed message is Allow commentary, Kent delivers the Approval answer independently while the transient notice is active. Successful Allow commentary creation still precedes the Approval answer.
+- Across interrupt recovery and a late creation result, Kent must not lose message content. Duplicate editable text is allowed.
 
 ## Interrupts And Exit
 
