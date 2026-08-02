@@ -15,7 +15,7 @@ export function useBoardSelectedTaskDeletion({
 }: Readonly<{
   onNavigationError(error: unknown): void;
   projectId: string;
-  selectedTaskId: string;
+  selectedTaskId: string | undefined;
   workflowId: string | undefined;
 }>) {
   const navigation = useAppNavigation();
@@ -27,11 +27,10 @@ export function useBoardSelectedTaskDeletion({
     stackEntryTokens,
   } = useSidebar();
   return useCallback(() => {
-    const deletedToken = sidebarEntryTokenForDeletedTask(
-      stackDestinations,
-      stackEntryTokens,
-      selectedTaskId,
-    );
+    const deletedToken =
+      selectedTaskId === undefined
+        ? undefined
+        : sidebarEntryTokenForDeletedTask(stackDestinations, stackEntryTokens, selectedTaskId);
     if (deletedToken !== undefined) {
       const expectation: SidebarRouteChangeExpectation = {
         kind: "projectTaskCleared",

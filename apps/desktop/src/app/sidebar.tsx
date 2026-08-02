@@ -25,7 +25,7 @@ import { useStatusController } from "@/app-facade";
 import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-facade";
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { SidebarHeaderOffsetContext } from "@/app-facade";
-import { sidebarPopOutOptions, shouldCloseSidebarAfterPopOut } from "./sidebarPopOut";
+import { sidebarPopOutOptions } from "./sidebarPopOut";
 import { sidebarTitle } from "@/app-facade";
 import { sidebarSizePreference } from "@/app-facade";
 import { useSidebar, type SidebarDestination } from "@/app-facade";
@@ -368,10 +368,6 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
   const { nativeBridge } = useAppServices();
   const { activeToken, closeSidebarIfCurrent } = useSidebar();
   const { push } = useStatusController();
-  const activeTokenRef = useRef(activeToken);
-  useEffect(() => {
-    activeTokenRef.current = activeToken;
-  }, [activeToken]);
   if (!nativeBridge.capabilities.dialogWindows) {
     return null;
   }
@@ -386,9 +382,7 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
         void nativeBridge.dialogs
           .openWindow(options)
           .then(() => {
-            if (shouldCloseSidebarAfterPopOut(openedToken, activeTokenRef.current)) {
-              closeSidebarIfCurrent(openedToken, "closed");
-            }
+            closeSidebarIfCurrent(openedToken, "closed");
           })
           .catch((error: unknown) => {
             push({

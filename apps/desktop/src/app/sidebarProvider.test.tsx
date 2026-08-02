@@ -329,13 +329,13 @@ describe("SidebarProvider stack contract", () => {
     expect(
       result.current.consumeSidebarRouteChangePreservation({
         pathname: "/projects/project-1",
-        searchStr: "workflowId=workflow-1&taskId=",
+        searchStr: "workflowId=workflow-1",
       }),
     ).toBe(true);
     expect(
       result.current.consumeSidebarRouteChangePreservation({
         pathname: "/projects/project-1",
-        searchStr: "workflowId=workflow-1&taskId=",
+        searchStr: "workflowId=workflow-1",
       }),
     ).toBe(false);
   });
@@ -361,7 +361,7 @@ describe("SidebarProvider stack contract", () => {
     expect(
       result.current.consumeSidebarRouteChangePreservation({
         pathname: "/projects/project-1",
-        searchStr: "workflowId=workflow-1&taskId=",
+        searchStr: "workflowId=workflow-1",
       }),
     ).toBe(false);
   });
@@ -386,7 +386,7 @@ describe("SidebarProvider stack contract", () => {
     expect(
       result.current.consumeSidebarRouteChangePreservation({
         pathname: "/projects/project-1",
-        searchStr: "workflowId=workflow-1&taskId=",
+        searchStr: "workflowId=workflow-1",
       }),
     ).toBe(false);
 
@@ -408,7 +408,7 @@ describe("SidebarProvider stack contract", () => {
     expect(
       result.current.consumeSidebarRouteChangePreservation({
         pathname: "/projects/project-1",
-        searchStr: "workflowId=workflow-1&taskId=",
+        searchStr: "workflowId=workflow-1",
       }),
     ).toBe(false);
   });

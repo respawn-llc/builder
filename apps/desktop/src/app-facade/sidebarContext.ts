@@ -187,7 +187,7 @@ export function sidebarRouteMatchesExpectation(
   const search = new URLSearchParams(location.searchStr.startsWith("?") ? location.searchStr.slice(1) : location.searchStr);
   return (
     location.pathname === `/projects/${expectation.projectID}` &&
-    search.get("taskId") === "" &&
+    search.get("taskId") === null &&
     (search.get("workflowId") ?? undefined) === expectation.workflowID
   );
 }

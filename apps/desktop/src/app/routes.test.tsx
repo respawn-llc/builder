@@ -6,10 +6,11 @@ it("rejects malformed present workflow selectors while preserving omission", () 
   if (!(validate instanceof Function)) {
     throw new Error("project route search validation is unavailable");
   }
-  expect(validate({})).toEqual({ taskId: "", workflowId: undefined });
+  expect(validate({})).toEqual({ taskId: undefined, workflowId: undefined });
   expect(validate({ workflowId: "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0" })).toEqual({
-    taskId: "",
+    taskId: undefined,
     workflowId: "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0",
   });
+  expect(() => validate({ taskId: "" })).toThrow();
   expect(() => validate({ workflowId: "workflow-1" })).toThrow();
 });

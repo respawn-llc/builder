@@ -76,7 +76,7 @@ function RoutePersistence() {
         void navigate({
           to: "/projects/$projectId",
           params: { projectId: restored.projectId },
-          search: { workflowId: restored.workflowId, taskId: "" },
+          search: { workflowId: restored.workflowId },
           replace: true,
         });
       }

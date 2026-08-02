@@ -77,7 +77,7 @@ export function useAppNavigation(): AppNavigation {
           await navigate({
             to: "/projects/$projectId",
             params: { projectId: projectID },
-            search: { workflowId: workflowID, taskId: "" },
+            search: { workflowId: workflowID },
           });
         });
       },
@@ -124,7 +124,7 @@ export function useAppNavigation(): AppNavigation {
             await navigate({
               to: "/projects/$projectId",
               params: { projectId: projectID },
-              search: { workflowId: workflowID, taskId: "" },
+              search: { workflowId: workflowID },
             });
           },
           true,

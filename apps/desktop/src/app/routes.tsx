@@ -17,7 +17,7 @@ const optionalWorkflowSelector = workflowIDSchema.optional();
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
-  taskId: optionalSearchString,
+  taskId: z.string().min(1).optional(),
 });
 
 const workflowEditorSearchSchema = z.object({

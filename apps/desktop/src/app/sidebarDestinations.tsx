@@ -59,6 +59,7 @@ export function SidebarDestinationView({
   if (destination.kind === "taskDetail") {
     return (
       <TaskDetailSurface
+        key={activeActivationID ?? undefined}
         enabled
         initialFocus={destination.initialFocus}
         sidebarSnapshot={activeSnapshot?.kind === "taskDetail" ? activeSnapshot : undefined}
