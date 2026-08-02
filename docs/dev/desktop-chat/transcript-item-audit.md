@@ -34,10 +34,24 @@ Legend:
 | User message with fork target | Same user presentation. The single Edit action submits into a new session branch. |
 | Final assistant message | Visible assistant island, always fully expanded, with Copy and authoritative committed timestamp. |
 | Provisional assistant message | Appears on the first nonempty delta and streams through the shared Streamdown-backed renderer. |
-| Provider reasoning summary | Hidden from the transcript. Appears only in the separately designed Thinking loader island/chip. |
+| Provider Reasoning Trace | Dedicated borderless tool-style transcript item. Collapsed presentation uses a brain icon and a responsive first-line preview; expansion reveals the complete selectable plain text in a muted tone. |
 | Empty pre-first-token assistant state | No synthetic transcript row. Runtime status owns the waiting state. |
 | Empty user/assistant content | No conversational row. |
 | Assistant no-op final | No committed conversational row. |
+
+Reasoning Trace correction:
+
+- Thinking Status is not a transcript item.
+- Each server-provided Reasoning Trace is a separate durable item in server
+  order.
+- A live trace starts collapsed on its first nonempty update and updates in
+  place.
+- A provider-attempt reset removes that provisional trace without clearing
+  Thinking Status.
+- The collapsed row uses a brain icon and responsive first-line preview.
+- Expansion shows complete selectable muted plain text, never Markdown.
+- Committed expansion adds authoritative timestamp and Copy; live expansion has
+  neither.
 
 ## A. Committed Conversational Items
 

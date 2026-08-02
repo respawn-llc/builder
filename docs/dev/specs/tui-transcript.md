@@ -129,7 +129,7 @@
 - assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - reviewer suggestions/status: `OC` or `O`
-- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning. Detail keeps persisted reasoning traces faint, treats them as plaintext, and removes only literal `**` delimiters. A reasoning trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither reasoning-summary rows nor assistant commentary/thinking rows.
+- Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither Reasoning Trace rows nor assistant commentary/thinking rows.
 - Kent decides which messages become transcript entries and which role they use.
 - The TUI decides how each role appears in Ongoing Mode and Detail Mode.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.

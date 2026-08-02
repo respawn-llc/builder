@@ -186,15 +186,34 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The gate is below 1,000 net production lines and includes actual-cadence 50k-character, malformed Markdown, GFM, hostile-content, and 500-line unfinished-fence fixtures. The user makes the final performance verdict through manual product review; no fixed benchmark hardware, numeric timing budget, or mandatory visible-render cadence substitutes for that verdict. Failure selects plain streaming text followed by shared static Markdown on commit.
 - Diffs, links, copying, selection, and accessibility.
 - Grouping and spacing of user, assistant, tool, prompt, notice, and reviewer entries.
+- Durable islands are limited to user messages, assistant commentary, and assistant final answers. Every other durable transcript item defaults to borderless tool-style inline presentation. Transient Thinking Status is the sole non-message exception and may imitate an assistant island.
 - Timestamp policy.
+
+## Thinking Status And Reasoning Traces
+
+- Thinking Status and Reasoning Trace are separate product types. Thinking Status is transient runtime presentation; Reasoning Traces are durable transcript content.
+- One Thinking Status tail appears immediately before the composer while authoritative runtime activity is running. It is outside the composer and is the sole transient non-message surface allowed to imitate an assistant island.
+- Main-agent user/workflow/Goal work shows the latest server Thinking Status or `Working…`; Reviewer work shows `Reviewing…`; compaction shows `Compacting…`; shell/background/maintenance shows `Running…`.
+- Main-agent Thinking Status remains through assistant streaming and tool execution. It is hidden while a Question or Approval waits, and resumes fresh at `Working…`.
+- A provider-attempt reset retains Thinking Status but removes the discarded provisional Reasoning Trace.
+- Thinking Status is non-interactive and has no disclosure, Copy, timestamp, or link to a Reasoning Trace.
+- Reasoning Traces use borderless tool-style inline disclosure. The collapsed header is brain icon, responsive first-line preview, and disclosure affordance.
+- Live traces start collapsed, update one server-identified item in place, and never auto-open or auto-close. A committed expanded trace adds authoritative timestamp and Copy.
+- Expanded trace content is complete selectable muted plain text. The server presentation projection removes only provider outer `**` delimiters; clients do not repeat the cleanup.
+- Desktop preserves every server-provided trace and its order without concatenation, grouping, dropping, or interpretation.
+- Current Chat omits duration. A future optional server capability measures from a trace's first nonempty update through commit and can support `Thought for N seconds`.
 
 ## AI Elements Baselines
 
-- Selectively reuse Chain of Thought, Context, Model Selector adapted as Agent Role Selector, and Reasoning.
+- Reuse Context, Model Selector adapted as Agent Role Selector, and Reasoning where their interaction models fit the locked Kent contracts.
+- Thinking Status does not use Chain of Thought or Reasoning disclosure behavior. It is one non-interactive transient runtime line.
+- Reasoning adapts to dedicated Reasoning Trace items: brain icon, responsive first-line preview, manual expansion, muted selectable plain text, no Markdown, and no upstream auto-open/auto-close.
+- Chain of Thought is rejected for the current Sessions/Chat design because Kent has no typed thought-step contract and Desktop must not parse or invent steps.
 - Keep the selected source close to pinned upstream registry output and deliberately re-sync it; Kent's shared UI kit owns the sole local source and typed Kent adapters.
+- Do not record an exact AI Elements release or commit in the product or task contract.
 - All other AI Elements components are out of scope/not fitting unless explicitly reopened.
 - Speech Input is future Voice Mode work and creates no Sessions/Chat behavior or task.
-- Audit the four active candidates independently; adopting their upstream state/data ownership is not implied.
+- Audit the three active candidates independently; adopting their upstream state/data ownership is not implied.
 - Attachments/client uploads are outside this initiative and create no task. Workspace `@` references remain independent.
 
 ## 6. Composer

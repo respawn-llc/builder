@@ -242,6 +242,20 @@ A transient or persistent global notification surfaced by the desktop app. Toast
 
 The temporary assistant message shown while a response is arriving. A Streaming Message is not committed transcript history. Committed assistant text replaces and finalizes it exactly once. If a completed response has no committed assistant text, Kent removes the Streaming Message with the typed `superseded` reason before the next model generation or before the response exits. This includes Question-only and tool-only continuation, Workflow preflight, external Workflow completion, reasoning-only or no-op retry, and final-answer-with-tools termination before final text is committed. A completed response with no active Streaming Message emits no stream-terminal event. Kent also removes the Streaming Message after interruption or abnormal termination. No assistant text can arrive after Kent finalizes or removes the Streaming Message.
 
+### Thinking Status
+
+The transient one-line description of a Session's current runtime work. While
+the main Agent works, the server may update Thinking Status with its current
+reasoning status. Thinking Status is live runtime presentation, not conversation
+content or durable transcript history.
+
+### Reasoning Trace
+
+A provider-produced plain-text reasoning summary associated with an Agent Step.
+Kent may project a Reasoning Trace progressively while it arrives. A completed
+Reasoning Trace is durable transcript content. A Reasoning Trace is distinct
+from Thinking Status.
+
 ### Ongoing Mode
 
 The primary long-running TUI transcript mode. Ongoing Mode writes committed history to terminal Scrollback and shows live content below it. It does not own a separate scrollable viewport. It never rewrites lines that it has emitted.

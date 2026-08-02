@@ -157,6 +157,40 @@ The ratified desktop flow keeps TUI's zero-form and lazy semantics:
 
 Current `SessionLaunchService.PlanSession` creates an independent session plan but `server/launch.Planner.createSession` calls `EnsureDurable` before first model use. That code/spec drift must be resolved at the server ownership boundary rather than hidden by a desktop-only workaround.
 
+### Thinking Status And Reasoning Traces
+
+The current transcript feed combines two product concepts in
+`TranscriptReasoningUpdate`: cumulative Reasoning Trace text and an optional
+current Thinking Status. Hydration retains only one active reasoning update,
+while completed traces are persisted later as detail-only reasoning local
+entries.
+
+The shipped contract already supports cumulative live trace updates and an
+explicit provider-attempt reset. It does not yet provide the complete Desktop
+contract:
+
+- Thinking Status and Reasoning Trace need distinct typed ownership so clients
+  cannot conflate live runtime status with durable conversation content.
+- Hydration and live delivery must preserve every server-provided trace and its
+  authoritative order rather than exposing only one ambiguous active value.
+- One server-identified provisional trace must reconcile with its committed row
+  without duplication. A provider-attempt reset removes only the discarded
+  provisional trace and retains Thinking Status.
+- The server presentation projection must provide the compact first logical line
+  and complete plain text. It must move the TUI's existing removal of outer
+  literal `**` delimiters to the shared server projection while leaving
+  persisted and model-facing content unchanged.
+- Runtime activity and active-work kind already provide the authority for
+  Thinking Status visibility and fallback copy. Desktop must not infer activity
+  from transcript rows, local booleans, or reasoning-text presence.
+- Committed Reasoning Traces need the stable row identity and authoritative
+  timestamp owned by the transcript-row metadata task.
+
+Kent does not retain authoritative Reasoning Trace duration. That optional
+future capability is independent of initial Desktop parity. Its approved
+meaning is elapsed server time from the first nonempty update for one trace
+through that trace's commit.
+
 ### Session Settings And Lazy Draft
 
 The existing server surface provides useful but incomplete pieces:
