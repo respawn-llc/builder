@@ -77,13 +77,14 @@ func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
 				Kind:          runtime.EventLiveRunFinished,
 				LiveRunResult: &test.result,
 			})
-			if len(messages) != 1 || messages[0].Kind != clientui.TranscriptMessageLiveRunFinished {
+			if len(messages) != 1 || messages[0].Kind() != clientui.TranscriptMessageLiveRunFinished {
 				t.Fatalf("messages = %+v", messages)
 			}
-			if err := messages[0].Payload.LiveRunFinished.Validate(); err != nil {
+			projected := transcriptPayload[clientui.TranscriptLiveRunResult](t, messages[0])
+			if err := projected.Validate(); err != nil {
 				t.Fatalf("validate: %v", err)
 			}
-			test.check(t, *messages[0].Payload.LiveRunFinished)
+			test.check(t, projected)
 		})
 	}
 }
@@ -102,10 +103,10 @@ func TestTranscriptProjectsMissingAssistantFinalTextAsNoFinalResult(t *testing.T
 		},
 	})
 
-	if len(messages) != 1 || messages[0].Payload.LiveRunFinished == nil {
+	if len(messages) != 1 {
 		t.Fatalf("messages = %+v, want one live-run completion", messages)
 	}
-	projected := messages[0].Payload.LiveRunFinished
+	projected := transcriptPayload[clientui.TranscriptLiveRunResult](t, messages[0])
 	if projected.ResultKind != clientui.LiveRunResultNoFinalAnswer || projected.FinalAnswer != nil {
 		t.Fatalf("projected live run = %+v, want no-final result without fabricated answer", projected)
 	}

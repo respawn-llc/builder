@@ -34,9 +34,9 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 	defer c.mu.Unlock()
 
 	result := runtimeTupleMergeResult{decision: runtimeTupleIgnore, view: c.mainView}
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		hydration := message.Payload.Hydration
+		hydration := message.Payload().(clientui.TranscriptHydration)
 		candidate := runtimeTupleFromReadModelUpdate(hydration.RuntimeReadModelUpdate)
 		decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, runtimeTupleIngressHydration)
 		if decision == runtimeTupleIgnore && !runtimeTupleMatchesView(candidate, c.mainView) {
@@ -45,12 +45,12 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 		if decision == runtimeTupleApply {
 			applyRuntimeTuple(&c.mainView, candidate)
 		}
-		applyTranscriptHydrationMetadataToMainView(&c.mainView, *hydration)
+		applyTranscriptHydrationMetadataToMainView(&c.mainView, hydration)
 		c.ensureMainViewIdentity()
 		c.advanceMetadataRevision()
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: true}
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		candidate := runtimeTupleFromReadModelUpdate(*message.Payload.RuntimeReadModelUpdate)
+		candidate := runtimeTupleFromReadModelUpdate(message.Payload().(clientui.RuntimeReadModelUpdate))
 		decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, runtimeTupleIngressIncremental)
 		if decision == runtimeTupleApply {
 			applyRuntimeTuple(&c.mainView, candidate)
@@ -80,17 +80,17 @@ func (c *sessionRuntimeClient) ensureMainViewIdentity() bool {
 }
 
 func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage) bool {
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageSessionStatus:
-		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, *message.Payload.SessionStatus)
+		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageSessionIdentity:
-		applyTranscriptSessionIdentityToRuntimeView(&view.Session, *message.Payload.SessionIdentity)
+		applyTranscriptSessionIdentityToRuntimeView(&view.Session, message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageContextUsage:
-		view.Status.ContextUsage = runtimeContextUsageFromTranscript(*message.Payload.ContextUsage)
+		view.Status.ContextUsage = runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		view.Status.Goal = runtimeGoalFromTranscript(*message.Payload.GoalStatus)
+		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus))
 	case clientui.TranscriptMessageCompactionStatus:
-		view.Status.CompactionCount = message.Payload.CompactionStatus.Count
+		view.Status.CompactionCount = message.Payload().(clientui.TranscriptCompactionStatus).Count
 	default:
 		return false
 	}

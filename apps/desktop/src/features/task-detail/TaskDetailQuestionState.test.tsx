@@ -6,8 +6,9 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { PendingAsk, QuestionAnswerInput, QuestionAttentionItem } from "@/api";
-import { queryKeys } from "@/app-facade";
+import { AppServicesProvider, queryKeys } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
+import { createTestServices } from "@/test-support/app-services";
 import { QuestionBox } from "./TaskDetailQuestionForm";
 import {
   anchorQuestionSelection,
@@ -24,19 +25,25 @@ type FixtureQuestionAttention = QuestionAttentionItem & Readonly<{ sessionID: st
 let questionAnswerMutation: QuestionAnswerMutation;
 let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
 
-vi.mock("@/app-facade", () => ({
-  queryKeys: {
-    pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
-  },
-  useAppServices: () => ({
-    api: { listPendingAsks },
-  }),
-  useOpenExternalLink: () => {
-    return () => {
-      return;
-    };
-  },
-}));
+vi.mock("@/app-facade", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    queryKeys: {
+      pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
+    },
+    useAppServices: () => ({
+      api: { listPendingAsks },
+    }),
+    useOpenExternalLink: () => {
+      return () => {
+        return;
+      };
+    },
+  };
+});
+
+const shortcutServices = createTestServices([], undefined, { platform: "macos" });
 
 beforeAll(async () => {
   await initializeI18n();
@@ -203,11 +210,8 @@ describe("questionPresentation", () => {
     expect(
       anchorQuestionSelection(
         emptyQuestionSelection("ask-1"),
-        questionPresentation(
-          approvalAttention(["deny", "allow_session", "allow_once"]),
-          undefined,
-          false,
-        ).defaultSelection,
+        questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
+          .defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_once",
@@ -216,8 +220,7 @@ describe("questionPresentation", () => {
     expect(
       anchorQuestionSelection(
         emptyQuestionSelection("ask-1"),
-        questionPresentation(approvalAttention(["allow_session", "deny"]), undefined, false)
-          .defaultSelection,
+        questionPresentation(approvalAttention(["allow_session", "deny"]), undefined, false).defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_session",
@@ -228,8 +231,7 @@ describe("questionPresentation", () => {
   it("does not rederive an anchored or explicit choice on refresh", () => {
     const ordinarySelection = anchorQuestionSelection(
       emptyQuestionSelection("ask-1"),
-      questionPresentation(ordinaryAttention(["one", "two", "three"], 2), undefined, false)
-        .defaultSelection,
+      questionPresentation(ordinaryAttention(["one", "two", "three"], 2), undefined, false).defaultSelection,
     );
     const refreshedOrdinary = questionPresentation(
       ordinaryAttention(["three", "one", "two"], 1),
@@ -238,10 +240,7 @@ describe("questionPresentation", () => {
     ).defaultSelection;
     expect(anchorQuestionSelection(ordinarySelection, refreshedOrdinary)).toBe(ordinarySelection);
     expect(
-      anchorQuestionSelection(
-        withOrdinaryQuestionOption(ordinarySelection, 3),
-        refreshedOrdinary,
-      ),
+      anchorQuestionSelection(withOrdinaryQuestionOption(ordinarySelection, 3), refreshedOrdinary),
     ).toMatchObject({
       provenance: "explicit",
       selectedOption: 3,
@@ -249,11 +248,8 @@ describe("questionPresentation", () => {
 
     const approvalSelection = anchorQuestionSelection(
       emptyQuestionSelection("ask-1"),
-      questionPresentation(
-        approvalAttention(["deny", "allow_session", "allow_once"]),
-        undefined,
-        false,
-      ).defaultSelection,
+      questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
+        .defaultSelection,
     );
     const refreshedApproval = questionPresentation(
       approvalAttention(["deny", "allow_once", "allow_session"]),
@@ -262,10 +258,7 @@ describe("questionPresentation", () => {
     ).defaultSelection;
     expect(anchorQuestionSelection(approvalSelection, refreshedApproval)).toBe(approvalSelection);
     expect(
-      anchorQuestionSelection(
-        withApprovalQuestionDecision(approvalSelection, "deny"),
-        refreshedApproval,
-      ),
+      anchorQuestionSelection(withApprovalQuestionDecision(approvalSelection, "deny"), refreshedApproval),
     ).toMatchObject({
       approvalDecision: "deny",
       provenance: "explicit",
@@ -593,9 +586,7 @@ function QuestionFormHarness({
   );
 }
 
-function recordingQuestionAnswerMutation(
-  inputs: QuestionAnswerInput[],
-): QuestionAnswerMutation {
+function recordingQuestionAnswerMutation(inputs: QuestionAnswerInput[]): QuestionAnswerMutation {
   return {
     isPending: false,
     async mutateAsync(input: QuestionAnswerInput): Promise<void> {
@@ -641,12 +632,14 @@ function questionFormTree(
 ) {
   return (
     <I18nextProvider i18n={appI18n}>
-      <QuestionFormHarness
-        answerQuestion={answerQuestion}
-        attention={attention}
-        initialSelection={selection}
-        presentation={presentation}
-      />
+      <AppServicesProvider services={shortcutServices}>
+        <QuestionFormHarness
+          answerQuestion={answerQuestion}
+          attention={attention}
+          initialSelection={selection}
+          presentation={presentation}
+        />
+      </AppServicesProvider>
     </I18nextProvider>
   );
 }
@@ -659,7 +652,9 @@ function questionBoxTree(
   return (
     <I18nextProvider i18n={appI18n}>
       <QueryClientProvider client={queryClient}>
-        <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+        <AppServicesProvider services={shortcutServices}>
+          <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+        </AppServicesProvider>
       </QueryClientProvider>
     </I18nextProvider>
   );

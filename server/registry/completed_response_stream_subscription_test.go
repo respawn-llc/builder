@@ -103,7 +103,7 @@ func newStreamSubscriptionFixture(t *testing.T, client llm.Client, toolRegistry 
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	t.Cleanup(func() { _ = sub.Close() })
 	hydration := nextTranscriptMessage(t, sub)
-	if hydration.Sequence != 1 || hydration.Kind != clientui.TranscriptMessageHydration {
+	if hydration.Sequence != 1 || hydration.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("initial message = %+v, want seq=1 hydration", hydration)
 	}
 	return &streamSubscriptionFixture{
@@ -165,10 +165,11 @@ func (f *streamSubscriptionFixture) freshCleanHydration() *clientui.TranscriptHy
 	fresh := subscribeTranscriptForTest(f.t, f.registry, f.engine.SessionID())
 	defer func() { _ = fresh.Close() }()
 	message := nextTranscriptMessage(f.t, fresh)
-	if message.Payload.Hydration == nil || message.Payload.Hydration.ActiveAssistant != nil {
-		f.t.Fatalf("fresh hydration active stream = %+v, want none", message.Payload.Hydration)
+	hydration := message.Payload().(clientui.TranscriptHydration)
+	if hydration.ActiveAssistant != nil {
+		f.t.Fatalf("fresh hydration active stream = %+v, want none", hydration)
 	}
-	return message.Payload.Hydration
+	return &hydration
 }
 
 type streamObservation struct {
@@ -200,13 +201,11 @@ func (r *streamLifecycleRecorder) record(t *testing.T, message clientui.Transcri
 	r.lastSequence = message.Sequence
 	position := r.nextPosition
 	r.nextPosition++
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageAssistantDelta:
-		if message.Payload.AssistantDelta == nil {
-			t.Fatalf("assistant delta payload missing: %+v", message)
-		}
-		observation := &streamObservation{position: position, streamID: message.Payload.AssistantDelta.StreamID}
-		switch message.Payload.AssistantDelta.Phase {
+		payload := message.Payload().(clientui.TranscriptAssistantDelta)
+		observation := &streamObservation{position: position, streamID: payload.StreamID}
+		switch payload.Phase {
 		case transcript.AssistantPhaseCommentary:
 			if r.initialDelta == nil {
 				r.initialDelta = observation
@@ -217,26 +216,25 @@ func (r *streamLifecycleRecorder) record(t *testing.T, message clientui.Transcri
 			}
 		}
 	case clientui.TranscriptMessageAssistantStreamAbort:
-		if message.Payload.AssistantStreamAbort != nil && message.Payload.AssistantStreamAbort.Reason == clientui.AssistantStreamAbortSuperseded {
-			r.abort = &streamObservation{position: position, streamID: message.Payload.AssistantStreamAbort.StreamID}
+		payload := message.Payload().(clientui.TranscriptAssistantStreamAbort)
+		if payload.Reason == clientui.AssistantStreamAbortSuperseded {
+			r.abort = &streamObservation{position: position, streamID: payload.StreamID}
 		}
-	case clientui.TranscriptMessagePromptResolved:
-		if message.Payload.PromptResolved != nil && message.Payload.PromptResolved.State == clientui.TranscriptPromptStateResolved {
+	case clientui.TranscriptMessagePrompt:
+		payload := message.Payload().(clientui.TranscriptPrompt)
+		if payload.Status == clientui.TranscriptPromptStatusResolved {
 			r.promptResolved = &eventPosition{position: position}
 		}
 	case clientui.TranscriptMessageToolStart:
-		if message.Payload.ToolStart != nil {
-			r.toolStarts[string(message.Payload.ToolStart.ToolCallID)] = &eventPosition{position: position}
-		}
+		payload := message.Payload().(clientui.TranscriptToolStart)
+		r.toolStarts[string(payload.ToolCallID)] = &eventPosition{position: position}
 	case clientui.TranscriptMessageCommittedRow:
-		if message.Payload.CommittedRow == nil {
-			t.Fatalf("committed row payload missing: %+v", message)
+		payload := message.Payload().(clientui.TranscriptCommittedRow)
+		if payload.Tool != nil {
+			r.toolCompletions[string(payload.Tool.ToolCallID)] = &eventPosition{position: position}
 		}
-		if message.Payload.CommittedRow.Tool != nil {
-			r.toolCompletions[string(message.Payload.CommittedRow.Tool.ToolCallID)] = &eventPosition{position: position}
-		}
-		if message.Payload.CommittedRow.Assistant != nil && message.Payload.CommittedRow.Assistant.StreamID != nil {
-			r.finalAssistant = &streamObservation{position: position, streamID: *message.Payload.CommittedRow.Assistant.StreamID}
+		if payload.Assistant != nil && payload.Assistant.StreamID != nil {
+			r.finalAssistant = &streamObservation{position: position, streamID: *payload.Assistant.StreamID}
 		}
 	}
 }

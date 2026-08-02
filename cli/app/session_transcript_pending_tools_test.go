@@ -62,11 +62,7 @@ func TestCommittedToolRowAppendsImmediatelyAndRemovesPendingToolInSameEvent(t *t
 			Text:       "done",
 		},
 	}
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 3,
-		Kind:     clientui.TranscriptMessageCommittedRow,
-		Payload:  clientui.TranscriptPayload{CommittedRow: &row},
-	}); err != nil {
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(row))); err != nil {
 		t.Fatalf("accept committed tool row: %v", err)
 	}
 
@@ -89,28 +85,16 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 	}
 
 	starts := []clientui.TranscriptMessage{
-		{
-			Sequence: 2,
-			Kind:     clientui.TranscriptMessageToolStart,
-			Payload: clientui.TranscriptPayload{
-				ToolStart: &clientui.TranscriptToolStart{
-					StepID:     ongoingTestStepID(),
-					ToolCallID: "tool-a",
-					ToolName:   "alpha",
-				},
-			},
-		},
-		{
-			Sequence: 3,
-			Kind:     clientui.TranscriptMessageToolStart,
-			Payload: clientui.TranscriptPayload{
-				ToolStart: &clientui.TranscriptToolStart{
-					StepID:     ongoingTestStepID(),
-					ToolCallID: "tool-b",
-					ToolName:   "beta",
-				},
-			},
-		},
+		clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+			StepID:     ongoingTestStepID(),
+			ToolCallID: "tool-a",
+			ToolName:   "alpha",
+		})),
+		clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+			StepID:     ongoingTestStepID(),
+			ToolCallID: "tool-b",
+			ToolName:   "beta",
+		})),
 	}
 	for _, message := range starts {
 		if _, err := controller.Accept(message); err != nil {
@@ -121,17 +105,12 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 		t.Fatalf("pending tool lines = %v, want %v", got, want)
 	}
 
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 4,
-		Kind:     clientui.TranscriptMessageToolAbort,
-		Payload: clientui.TranscriptPayload{
-			ToolAbort: &clientui.TranscriptToolAbort{
-				StepID:     ongoingTestStepID(),
-				ToolCallID: "tool-a",
-				Reason:     clientui.ToolAbortCanceled,
-			},
-		},
-	}); err != nil {
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(4, clientui.NewTranscriptEvent(clientui.TranscriptToolAbort{
+		StepID:     ongoingTestStepID(),
+		ToolCallID: "tool-a",
+		Reason:     clientui.ToolAbortCanceled,
+	})),
+	); err != nil {
 		t.Fatalf("accept tool abort: %v", err)
 	}
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"⢎  beta"}; !reflect.DeepEqual(got, want) {
@@ -146,22 +125,17 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 		t.Fatalf("accept hydration: %v", err)
 	}
 
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageToolStart,
-		Payload: clientui.TranscriptPayload{
-			ToolStart: &clientui.TranscriptToolStart{
-				StepID:     ongoingTestStepID(),
-				ToolCallID: "77777777-7777-4777-8777-777777777777",
-				ToolName:   "exec_command",
-				Presentation: &transcript.ToolCallMeta{
-					ToolName:     "exec_command",
-					Presentation: transcript.ToolPresentationShell,
-					Command:      "go test ./cli/app",
-				},
-			},
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+		StepID:     ongoingTestStepID(),
+		ToolCallID: "77777777-7777-4777-8777-777777777777",
+		ToolName:   "exec_command",
+		Presentation: &transcript.ToolCallMeta{
+			ToolName:     "exec_command",
+			Presentation: transcript.ToolPresentationShell,
+			Command:      "go test ./cli/app",
 		},
-	}); err != nil {
+	})),
+	); err != nil {
 		t.Fatalf("accept tool start: %v", err)
 	}
 
@@ -199,11 +173,7 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 			Presentation: &transcript.ToolCallMeta{ToolName: "exec_command", Presentation: transcript.ToolPresentationShell, Command: "go test ./cli/app"},
 		},
 	}
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 3,
-		Kind:     clientui.TranscriptMessageCommittedRow,
-		Payload:  clientui.TranscriptPayload{CommittedRow: &row},
-	}); err != nil {
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(row))); err != nil {
 		t.Fatalf("accept committed tool row: %v", err)
 	}
 	if got := surface.lastFrameSectionKinds(); len(got) != 0 {

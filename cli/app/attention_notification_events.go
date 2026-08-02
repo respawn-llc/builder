@@ -24,7 +24,7 @@ func tuiSupportsAttentionNotification(notification clientui.AttentionNotificatio
 }
 
 func notifyTranscriptPromptActivation(hook promptAttentionSink, prompt clientui.TranscriptPrompt, projectedPreview string) {
-	if hook == nil || prompt.State != clientui.TranscriptPromptStatePending {
+	if hook == nil || prompt.Status != clientui.TranscriptPromptStatusPending {
 		return
 	}
 	kind := clientui.AttentionNotificationKindQuestion

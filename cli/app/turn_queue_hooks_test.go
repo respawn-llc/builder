@@ -179,11 +179,13 @@ func TestTurnQueueHooksDoNotCompleteNonCompletedAssistantFinalResult(t *testing.
 			completions := &recordingTaskCompletionSink{}
 			hooks := newTurnQueueHooks(newUnfocusedBellHooks(&countRinger{}), completions)
 			message := testAssistantFinalLiveRunMessage(2, "answer before non-completed outcome", true)
-			message.Payload.LiveRunFinished.Status = status
+			result := message.Payload().(clientui.TranscriptLiveRunResult)
+			result.Status = status
 			if status == clientui.LiveRunStatusFailed {
 				failure := "terminal failure"
-				message.Payload.LiveRunFinished.Failure = &failure
+				result.Failure = &failure
 			}
+			message = clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(result))
 
 			hooks.OnTranscriptMessage(message)
 			hooks.OnTurnQueueDrained()
@@ -202,18 +204,13 @@ func testAssistantFinalLiveRunMessage(
 ) clientui.TranscriptMessage {
 	startedAt := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
 	finishedAt := startedAt.Add(time.Duration(sequence) * time.Second)
-	return clientui.TranscriptMessage{
-		Sequence: sequence,
-		Kind:     clientui.TranscriptMessageLiveRunFinished,
-		Payload: clientui.TranscriptPayload{
-			LiveRunFinished: &clientui.TranscriptLiveRunResult{
-				Status:        clientui.LiveRunStatusCompleted,
-				ResultKind:    clientui.LiveRunResultAssistantFinalAnswer,
-				WorkPerformed: workPerformed,
-				FinalAnswer:   &answer,
-				StartedAt:     startedAt,
-				FinishedAt:    finishedAt,
-			},
-		},
-	}
+	return clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{
+		Status:        clientui.LiveRunStatusCompleted,
+		ResultKind:    clientui.LiveRunResultAssistantFinalAnswer,
+		WorkPerformed: workPerformed,
+		FinalAnswer:   &answer,
+		StartedAt:     startedAt,
+		FinishedAt:    finishedAt,
+	}))
+
 }

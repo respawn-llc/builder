@@ -80,14 +80,12 @@ func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageSessionIdentity,
-		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
-			SessionID:             sessionID,
-			ConversationFreshness: clientui.ConversationFreshnessEstablished,
-			ExecutionTarget:       &entered,
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptSessionIdentity{
+		SessionID:             sessionID,
+		ConversationFreshness: clientui.ConversationFreshnessEstablished,
+		ExecutionTarget:       &entered,
+	})),
+	); err != nil {
 		t.Fatalf("admit transcript session identity: %v", err)
 	}
 

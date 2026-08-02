@@ -10,6 +10,7 @@ import { useNativeDialogFallback } from "@/app-facade";
 import { usePublishSidebarHeaderAction } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import { Button, ErrorState, HelpHint, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import {
@@ -202,6 +203,13 @@ function ProjectEditContent({
   // Publish the save control into the shared sidebar header (left of delete). It only appears when a
   // draft (name or key) differs from the saved value, and is disabled while invalid or disconnected.
   const canSave = dirty && nameErrors.length === 0 && keyErrors.length === 0 && !mutating;
+  const projectSaveShortcut = useTextFieldSubmitShortcut({
+    action: () => {
+      void saveProject();
+    },
+    available: canSave,
+    kind: "direct",
+  });
   const headerSaveAction = useMemo<ReactNode>(() => {
     if (!dirty) {
       return null;
@@ -229,6 +237,7 @@ function ProjectEditContent({
       nameDraft={nameDraft}
       nameErrors={nameErrors}
       onAttach={() => void chooseWorkspace()}
+      onKeyDown={projectSaveShortcut}
       onKeyChange={setKeyDraft}
       onNameChange={setNameDraft}
     />
@@ -269,6 +278,7 @@ function ProjectEditListHeader({
   nameDraft,
   nameErrors,
   onAttach,
+  onKeyDown,
   onKeyChange,
   onNameChange,
 }: Readonly<{
@@ -278,6 +288,7 @@ function ProjectEditListHeader({
   nameDraft: string;
   nameErrors: readonly string[];
   onAttach: () => void;
+  onKeyDown: React.KeyboardEventHandler<HTMLInputElement>;
   onKeyChange: (value: string) => void;
   onNameChange: (value: string) => void;
 }>) {
@@ -289,12 +300,14 @@ function ProjectEditListHeader({
           disabled={disabled}
           nameDraft={nameDraft}
           nameErrors={nameErrors}
+          onKeyDown={onKeyDown}
           onNameChange={onNameChange}
         />
         <ProjectKeyField
           disabled={disabled}
           keyDraft={keyDraft}
           keyErrors={keyErrors}
+          onKeyDown={onKeyDown}
           onKeyChange={onKeyChange}
         />
       </div>

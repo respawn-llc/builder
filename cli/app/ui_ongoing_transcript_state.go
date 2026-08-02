@@ -18,55 +18,56 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		return nil
 	}
 	if m.turnQueueHook != nil {
-		if message.Kind == clientui.TranscriptMessageHydration {
+		if message.Kind() == clientui.TranscriptMessageHydration {
 			m.turnQueueHook.OnTurnQueueAborted()
 		} else {
 			m.turnQueueHook.OnTranscriptMessage(message)
 		}
 	}
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		return m.applyTranscriptHydration(*message.Payload.Hydration, admission)
+		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
 	case clientui.TranscriptMessageReasoningUpdate:
-		m.applyTranscriptReasoningUpdate(*message.Payload.ReasoningUpdate)
+		m.applyTranscriptReasoningUpdate(message.Payload().(clientui.TranscriptReasoningUpdate))
 	case clientui.TranscriptMessageReasoningReset:
 		// A reset replaces the live reasoning body. The typed status remains
 		// current until another status arrives or the owning step finishes.
 	case clientui.TranscriptMessageUserMessageFlushed:
-		return m.applyTranscriptUserMessageFlushed(*message.Payload.UserMessageFlushed)
+		return m.applyTranscriptUserMessageFlushed(message.Payload().(clientui.TranscriptUserMessageFlushed))
 	case clientui.TranscriptMessageQueuedMessageState:
-		return m.applyTranscriptQueuedMessageState(*message.Payload.QueuedMessageState)
+		return m.applyTranscriptQueuedMessageState(message.Payload().(clientui.TranscriptQueuedMessageState))
 	case clientui.TranscriptMessageStepState:
-		m.applyTranscriptStepState(*message.Payload.StepState)
+		m.applyTranscriptStepState(message.Payload().(clientui.TranscriptStepState))
 	case clientui.TranscriptMessageReviewerState:
-		m.applyTranscriptReviewerState(*message.Payload.ReviewerState)
+		m.applyTranscriptReviewerState(message.Payload().(clientui.TranscriptReviewerState))
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
 		return m.applyTranscriptRuntimeReadModelUpdate(admission)
 	case clientui.TranscriptMessageSessionStatus:
-		m.applyTranscriptSessionStatus(*message.Payload.SessionStatus)
+		m.applyTranscriptSessionStatus(message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageSessionIdentity:
-		return m.applyTranscriptSessionIdentity(*message.Payload.SessionIdentity)
+		return m.applyTranscriptSessionIdentity(message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageCompactionStatus:
-		m.applyTranscriptCompactionStatus(*message.Payload.CompactionStatus)
+		m.applyTranscriptCompactionStatus(message.Payload().(clientui.TranscriptCompactionStatus))
 	case clientui.TranscriptMessageContextUsage:
-		m.applyTranscriptContextUsage(*message.Payload.ContextUsage)
+		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
 		// The runtime-client main-view cache is the goal read model used by the
 		// status line and goal flow.
 	case clientui.TranscriptMessageBackgroundActivity:
-		m.applyTranscriptBackgroundActivity(*message.Payload.BackgroundActivity)
+		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {
 			return m.requestProcessListRefresh()
 		}
-	case clientui.TranscriptMessagePromptPending:
-		prompt := *message.Payload.PromptPending
+	case clientui.TranscriptMessagePrompt:
+		prompt := message.Payload().(clientui.TranscriptPrompt)
+		if prompt.Status == clientui.TranscriptPromptStatusResolved {
+			return m.askController().resolvePrompt(string(prompt.PromptID))
+		}
 		return m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
-	case clientui.TranscriptMessagePromptResolved:
-		return m.askController().resolvePrompt(string(message.Payload.PromptResolved.PromptID))
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
-		return m.reconcileTranscriptWorktreeTransitionOutcome(*message.Payload.WorktreeTransitionOutcome)
+		return m.reconcileTranscriptWorktreeTransitionOutcome(message.Payload().(clientui.TranscriptWorktreeTransitionOutcome))
 	case clientui.TranscriptMessageOperationalDiagnostic:
-		return m.applyTranscriptOperationalDiagnostic(*message.Payload.OperationalDiagnostic)
+		return m.applyTranscriptOperationalDiagnostic(message.Payload().(clientui.TranscriptOperationalDiagnostic))
 	}
 	return nil
 }

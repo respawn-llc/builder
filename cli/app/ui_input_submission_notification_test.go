@@ -42,9 +42,11 @@ func TestTranscriptHydrationClearsNotificationStateWithoutReplayingRows(t *testi
 	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
 	hydration := ongoingHydrationMessage(1)
 	hydratedFinal := bellAssistantFinalMessageWithText(2, "hydrated historical answer")
-	hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
-		*hydratedFinal.Payload.CommittedRow,
+	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
+	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+		hydratedFinal.Payload().(clientui.TranscriptCommittedRow),
 	}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 	model.applyAdmittedTranscriptMessageState(hydration, runtimeTupleMergeResult{})
 	hooks.OnTurnQueueDrained()
 

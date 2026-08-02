@@ -439,10 +439,7 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 		if err != nil {
 			return err
 		}
-		entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
-			Kind:    clientui.TranscriptMessageSessionStatus,
-			Payload: clientui.TranscriptPayload{SessionStatus: &status},
-		}})
+		entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)})
 	}
 	r.recordQueuedMessageOperationStatus(evt)
 	return nil
@@ -470,10 +467,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(
 	} else if resolved, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
 		identity.ExecutionTarget = &resolved
 	}
-	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
-		Kind:    clientui.TranscriptMessageSessionIdentity,
-		Payload: clientui.TranscriptPayload{SessionIdentity: &identity},
-	}})
+	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)})
 	return nil
 }
 
@@ -489,10 +483,7 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
-		Kind:    clientui.TranscriptMessageSessionStatus,
-		Payload: clientui.TranscriptPayload{SessionStatus: &status},
-	}})
+	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)})
 	return nil
 }
 
@@ -584,10 +575,7 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 			Detail: outcome.Failure.Diagnostic,
 		}
 	}
-	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
-		Kind:    clientui.TranscriptMessageWorktreeTransitionOutcome,
-		Payload: clientui.TranscriptPayload{WorktreeTransitionOutcome: &transcriptOutcome},
-	}})
+	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptOutcome)})
 }
 
 func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {

@@ -95,6 +95,8 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
+  const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
+  const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
     () => activity.data?.pages.flatMap((page) => page.items) ?? [],
     [activity.data],
@@ -175,6 +177,8 @@ export function TaskDetailList({
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
           commentCount={commentItems.length}
+          canSaveDraft={canSaveDraft}
+          draftDirty={draftDirty}
           detail={detail}
           disabled={disabled}
           draft={draft}
@@ -214,10 +218,12 @@ type TaskDetailListRowProps = Readonly<{
   activityCount: number;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
+  canSaveDraft: boolean;
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
   errorTitle: string;
@@ -275,6 +281,7 @@ function TaskDetailListRow(props: TaskDetailListRowProps): ReactNode {
 }
 
 function HeaderRow({
+  canSaveDraft,
   detail,
   disabled,
   draft,
@@ -284,6 +291,7 @@ function HeaderRow({
 }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskHeaderIsland
+      canSaveDraft={canSaveDraft}
       detail={detail}
       disabled={disabled || updatePending}
       draft={draft}
@@ -297,9 +305,11 @@ function BodyRow({
   detail,
   disabled,
   draft,
+  draftDirty,
   mutations,
   onDraftChange,
   onDescriptionPresentationChange,
+  onSaveDraft,
   descriptionPresentation,
   updateError,
   updatePending,
@@ -312,9 +322,11 @@ function BodyRow({
       <DescriptionIsland
         disabled={disabled || updatePending}
         draft={draft}
+        draftDirty={draftDirty}
         error={updateError}
         onDraftChange={onDraftChange}
         onPresentationChange={onDescriptionPresentationChange}
+        onSave={onSaveDraft}
         presentation={descriptionPresentation}
       />
       <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />

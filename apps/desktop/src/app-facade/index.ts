@@ -19,6 +19,7 @@ export * from "./sidebarTitle";
 export * from "./statusContextValue";
 export * from "./statusStore";
 export * from "./taskDetailInitialFocus";
+export * from "./textFieldSubmitShortcut";
 export * from "./useAppServices";
 export * from "./useConnectionSnapshot";
 export * from "./useNativeDialogFallback";

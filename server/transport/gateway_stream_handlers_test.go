@@ -12,9 +12,9 @@ import (
 func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *testing.T) {
 	inner := &scriptedGatewayTranscriptSubscription{
 		messages: []clientui.TranscriptMessage{
-			{Sequence: 1, Kind: clientui.TranscriptMessageHydration},
-			{Sequence: 2, Kind: clientui.TranscriptMessageLiveRunFinished},
-			{Sequence: 3, Kind: clientui.TranscriptMessageOperationalDiagnostic},
+			clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptHydration{})),
+			clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{})),
+			clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{})),
 		},
 	}
 	subscription := &legacyTranscriptSubscription{inner: inner}
@@ -23,7 +23,7 @@ func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *te
 	if err != nil {
 		t.Fatalf("read hydration: %v", err)
 	}
-	if first.Sequence != 1 || first.Kind != clientui.TranscriptMessageHydration {
+	if first.Sequence != 1 || first.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("hydration = %+v", first)
 	}
 
@@ -31,7 +31,7 @@ func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *te
 	if err != nil {
 		t.Fatalf("read diagnostic: %v", err)
 	}
-	if second.Sequence != 2 || second.Kind != clientui.TranscriptMessageOperationalDiagnostic {
+	if second.Sequence != 2 || second.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("renumbered diagnostic = %+v", second)
 	}
 	if err := subscription.Close(); err != nil {
@@ -45,8 +45,8 @@ func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *te
 func TestLegacyTranscriptSubscriptionRejectsSequenceBelowSuppressedCount(t *testing.T) {
 	inner := &scriptedGatewayTranscriptSubscription{
 		messages: []clientui.TranscriptMessage{
-			{Sequence: 1, Kind: clientui.TranscriptMessageLiveRunFinished},
-			{Sequence: 0, Kind: clientui.TranscriptMessageOperationalDiagnostic},
+			clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{})),
+			clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{})),
 		},
 	}
 	subscription := &legacyTranscriptSubscription{inner: inner}

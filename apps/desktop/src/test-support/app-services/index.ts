@@ -1,4 +1,4 @@
-import { createBrowserNativeBridge } from "@app/native-bridge";
+import { createBrowserNativeBridge, type NativePlatform } from "@app/native-bridge";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, useMemo, type ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -39,6 +39,7 @@ export type TestAppServices = Omit<AppServices, "logger"> &
 export type CreateTestServicesOptions = Readonly<{
   debugThemeOverrideEnabled?: boolean | undefined;
   homePath?: string | undefined;
+  platform?: NativePlatform | undefined;
 }>;
 
 export function TestAppProviders({
@@ -76,17 +77,20 @@ export function TestAppProviders({
 
 export function createTestServices(
   routes: readonly FakeRoute[],
-  nativeBridge = createBrowserNativeBridge(),
+  nativeBridge?: ReturnType<typeof createBrowserNativeBridge>,
   options: CreateTestServicesOptions = {},
 ): TestAppServices {
   const transport = new FakeRpcTransport(routes);
+  const resolvedNativeBridge =
+    nativeBridge ??
+    createBrowserNativeBridge(options.platform === undefined ? {} : { platform: options.platform });
   return {
     api: new ApiClient(transport),
     debugThemeOverrideEnabled: options.debugThemeOverrideEnabled ?? false,
     endpoint: "ws://127.0.0.1:53082/rpc",
     homePath: options.homePath ?? "",
     logger: createTestLogger(),
-    nativeBridge,
+    nativeBridge: resolvedNativeBridge,
     protocolVersion,
     storageNamespace: {
       kind: "browser-endpoint",

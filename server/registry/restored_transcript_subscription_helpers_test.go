@@ -21,7 +21,7 @@ func nextTranscriptMessageOfKind(t *testing.T, subscription serverapi.Transcript
 	t.Helper()
 	for range 8 {
 		message := nextTranscriptMessage(t, subscription)
-		if message.Kind == kind {
+		if message.Kind() == kind {
 			return message
 		}
 	}

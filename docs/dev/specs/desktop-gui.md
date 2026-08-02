@@ -11,6 +11,9 @@
 - Keep unsent local drafts for new Tasks, comments, and editable Task or Project text while the window stays open. Do not queue or replay mutations. After reconnection, refresh server state and let the operator submit preserved drafts manually; a save overwrites remote changes.
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
 - Text input is plain multiline Markdown. Raw HTML is unavailable. Links allow only safe protocols and open externally. Code is styled distinctly.
+- When focus is in a Desktop text field outside the Workflow editor, Command+Enter on macOS and Ctrl+Enter on Windows or Linux must invoke that field's existing submit, save, or selection action. The shortcut must follow the same validation, disabled state, and confirmation behavior as that action.
+- The shortcut must do nothing when the focused text field has no existing submission action.
+- The shortcut must not change the field's ordinary Enter behavior.
 - Desktop uses localized user-facing text, accessible controls, standard compact loading, error, and empty states, and motion that respects reduced-motion preference. macOS, Linux, and browser presentation use a contrast fade for readable top chrome; Windows uses progressive blur without a darkening fade.
 - Dialogs, popups, confirmation flows, and dropdowns only collect an operator
   result. They close before returning that result to their parent destination.
@@ -220,6 +223,8 @@
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.
 - A Markdown task-list item uses one product-styled checkbox in place of its list bullet.
 - Selecting a checkbox in an editable Task description updates the local Markdown body Draft without saving it. The existing Task Save action persists the changed body.
+- From an editable Task description, the text-field submission shortcut must save the current Task title and body together.
+- From an editable Task description, the text-field submission shortcut must close description editing.
 - Task Detail begins with Inbox, which contains current blockers and answer, Approval, and Resume controls. Comments have composer, list, edit, delete, and count. There is no completed Workflow movement or execution-history view.
 - Task Detail shows Task Short ID, title, Markdown body, Project, Workflow, source workspace name and root, all Current Nodes and states, completion state, and available actions including Task Delete. When available, it also shows Execution Target, managed worktree, requested revision, resolved commit, branch, Agent role and execution state, Session identity, source URL, and assignee or column.
 - Source root and Execution Root are not separate facts. Unavailable expected facts are hidden; useful continuity facts may be empty or unassigned; unexpected meaningful absence is an unavailable or error state. Unavailable managed worktrees have no managed-worktree fact.

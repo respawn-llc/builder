@@ -6,26 +6,25 @@ import (
 )
 
 func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageAssistantDelta:
-		if delta := message.Payload.AssistantDelta; delta != nil && isNoopFinalText(delta.Delta) {
+		delta := message.Payload().(clientui.TranscriptAssistantDelta)
+		if isNoopFinalText(delta.Delta) {
 			h.clearPendingTurnCompletionForSilentFinal(delta.StepID)
 		}
 	case clientui.TranscriptMessageToolStart:
-		if tool := message.Payload.ToolStart; tool != nil {
-			h.recordToolCall(tool.StepID)
-		}
+		tool := message.Payload().(clientui.TranscriptToolStart)
+		h.recordToolCall(tool.StepID)
 	case clientui.TranscriptMessageReviewerState:
-		if reviewer := message.Payload.ReviewerState; reviewer != nil {
-			h.recordReviewerState(*reviewer)
-		}
+		h.recordReviewerState(message.Payload().(clientui.TranscriptReviewerState))
 	case clientui.TranscriptMessageStepState:
-		if step := message.Payload.StepState; step != nil && step.Lifecycle == clientui.StepLifecycleFinished {
+		step := message.Payload().(clientui.TranscriptStepState)
+		if step.Lifecycle == clientui.StepLifecycleFinished {
 			h.recordStepFinished(step.StepID)
 		}
 	case clientui.TranscriptMessageCommittedRow:
-		row := message.Payload.CommittedRow
-		if row == nil || row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 			return
 		}
 		switch row.Assistant.Phase {

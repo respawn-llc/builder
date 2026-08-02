@@ -17,11 +17,11 @@ const (
 	TranscriptPromptKindApproval TranscriptPromptKind = "approval"
 )
 
-type TranscriptPromptState string
+type TranscriptPromptStatus string
 
 const (
-	TranscriptPromptStatePending  TranscriptPromptState = "pending"
-	TranscriptPromptStateResolved TranscriptPromptState = "resolved"
+	TranscriptPromptStatusPending  TranscriptPromptStatus = "pending"
+	TranscriptPromptStatusResolved TranscriptPromptStatus = "resolved"
 )
 
 type ToolProvenance struct {
@@ -31,7 +31,7 @@ type ToolProvenance struct {
 
 type TranscriptPrompt struct {
 	Kind                   TranscriptPromptKind
-	State                  TranscriptPromptState
+	Status                 TranscriptPromptStatus `json:"State"`
 	PromptID               PromptID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
@@ -47,7 +47,7 @@ func (p TranscriptPrompt) Validate() error {
 	if err := p.Kind.Validate(); err != nil {
 		return err
 	}
-	if err := p.State.Validate(); err != nil {
+	if err := p.Status.Validate(); err != nil {
 		return err
 	}
 	if err := p.PromptID.Validate(); err != nil {
@@ -87,9 +87,9 @@ func (k TranscriptPromptKind) Validate() error {
 	}
 }
 
-func (s TranscriptPromptState) Validate() error {
+func (s TranscriptPromptStatus) Validate() error {
 	switch s {
-	case TranscriptPromptStatePending, TranscriptPromptStateResolved:
+	case TranscriptPromptStatusPending, TranscriptPromptStatusResolved:
 		return nil
 	default:
 		return fmt.Errorf("unknown pending prompt state %q", s)
