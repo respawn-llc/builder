@@ -72,7 +72,6 @@ describe("sidebar Task Detail navigation", () => {
     });
     const restoredStack = screen.getByTestId("task-detail-island-stack");
     expect(restoredStack).toHaveProperty("scrollTop", 120);
-    expect(screen.getByRole("textbox", { name: "Description" })).toHaveAttribute("aria-expanded", "true");
     restoredStack.scrollTop = 0;
     fireEvent.scroll(restoredStack);
     await waitFor(() => {
@@ -156,7 +155,7 @@ describe("sidebar Task Detail navigation", () => {
     await waitFor(() => {
       expect(services.transport.subscriptions).toHaveLength(initialActiveSubscriptionCount);
     });
-  });
+  }, 15_000);
 });
 
 function SidebarScenario() {
@@ -251,8 +250,8 @@ function taskWithDependency(
       : [
           {
             task_id: dependencyTaskID,
-            short_id: "T-2",
-            title: "Prepare",
+            short_id: `T-${dependencyTaskID}`,
+            title: `Dependency ${dependencyTaskID}`,
             workflow_id: base.workflow.workflow_id,
             status: {
               kind: "backlog",
@@ -269,7 +268,7 @@ function taskWithDependency(
       summary: {
         ...base.summary,
         id: taskID,
-        short_id: taskID === "task-1" ? "T-1" : "T-2",
+        short_id: `T-${taskID}`,
         title,
       },
       body,

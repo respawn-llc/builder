@@ -26,7 +26,7 @@ export function useBoardSelectedTaskDeletion({
     stackDestinations,
     stackEntryTokens,
   } = useSidebar();
-  return useCallback(() => {
+  return useCallback(async () => {
     const deletedToken =
       selectedTaskId === undefined
         ? undefined
@@ -40,12 +40,14 @@ export function useBoardSelectedTaskDeletion({
       preserveSidebarOnNextRouteChange(deletedToken, expectation);
       removeSidebarEntry(deletedToken);
     }
-    void navigation.closeProjectTask(projectId, workflowId).catch((error: unknown) => {
+    try {
+      await navigation.closeProjectTask(projectId, workflowId);
+    } catch (error: unknown) {
       if (deletedToken !== undefined) {
         clearSidebarRouteChangePreservation(deletedToken);
       }
       onNavigationError(error);
-    });
+    }
   }, [
     clearSidebarRouteChangePreservation,
     navigation,

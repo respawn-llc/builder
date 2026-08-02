@@ -309,8 +309,14 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
   const backSidebar = useCallback((): void => {
     const state = stackStateRef.current;
+    const pending = pendingRef.current;
     const activeEntry = state?.entries.at(-1);
-    if (state === null || state.entries.length <= 1 || activeEntry === undefined) {
+    if (
+      state === null ||
+      pending?.lifecycleID !== state.lifecycleID ||
+      state.entries.length <= 1 ||
+      activeEntry === undefined
+    ) {
       return;
     }
     clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
@@ -437,6 +443,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   useEffect(() => {
     return () => {
       clearCloseTimeout();
+      pendingRef.current?.resolve({ status: "canceled", reason: "closed" });
       pendingRef.current = null;
       clearAllCaptures();
     };

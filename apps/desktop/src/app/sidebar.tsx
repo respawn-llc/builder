@@ -292,24 +292,26 @@ export function SidebarHost() {
           className="absolute top-0 right-0 left-0 z-10 grid grid-cols-[auto_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-[var(--space-3)] border-b border-[var(--color-outline)] bg-[var(--color-island-0)] px-[var(--space-4)] py-[var(--space-3)] [backdrop-filter:blur(8px)]"
           ref={headerRef}
         >
-          <IconTooltipButton
-            label={t("app.close")}
-            onClick={() => {
-              closeSidebar("closed");
-            }}
-          >
-            <X aria-hidden="true" size={18} strokeWidth={1.5} />
-          </IconTooltipButton>
-          {canGoBack ? (
+          <div className="flex items-center gap-[var(--space-2)]">
             <IconTooltipButton
-              label={t("app.back")}
+              label={t("app.close")}
               onClick={() => {
-                backSidebar();
+                closeSidebar("closed");
               }}
             >
-              <ChevronLeft aria-hidden="true" size={18} strokeWidth={1.5} />
+              <X aria-hidden="true" size={18} strokeWidth={1.5} />
             </IconTooltipButton>
-          ) : null}
+            {canGoBack ? (
+              <IconTooltipButton
+                label={t("app.back")}
+                onClick={() => {
+                  backSidebar();
+                }}
+              >
+                <ChevronLeft aria-hidden="true" size={18} strokeWidth={1.5} />
+              </IconTooltipButton>
+            ) : null}
+          </div>
           <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
             {title}
           </h2>

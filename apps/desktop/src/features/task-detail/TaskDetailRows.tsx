@@ -246,7 +246,6 @@ function DescriptionReadView({
     <div className="relative min-w-0">
       <div
         aria-label={t("task.description")}
-        aria-expanded={expanded}
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1),
@@ -290,6 +289,7 @@ function DescriptionReadView({
             data-testid="task-description-fade"
           />
           <button
+            aria-expanded={expanded}
             aria-label={t("app.expand")}
             className={cx(
               "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",

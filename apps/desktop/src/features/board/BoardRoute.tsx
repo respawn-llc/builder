@@ -158,7 +158,9 @@ function BoardRouteData({
   });
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
-    onSelectedTaskDeleted: handleSelectedTaskDeleted,
+    onSelectedTaskDeleted: () => {
+      void handleSelectedTaskDeleted();
+    },
     ...(selectedTaskId === undefined ? {} : { selectedTaskID: selectedTaskId }),
     selectedWorkflowID,
   });
@@ -190,6 +192,7 @@ function BoardRouteData({
       onBoardRefreshRetry={() => {
         void boardQuery.refetch().catch(reportBoardLoadError);
       }}
+      onSelectedTaskDeleted={handleSelectedTaskDeleted}
       selectedTaskId={selectedTaskId}
     />
   );
@@ -200,12 +203,14 @@ function BoardContent({
   boardQueryWorkflowID,
   boardRefreshError,
   onBoardRefreshRetry,
+  onSelectedTaskDeleted,
   selectedTaskId,
 }: Readonly<{
   board: SelectedWorkflowBoard;
   boardQueryWorkflowID: string | undefined;
   boardRefreshError: Error | null;
   onBoardRefreshRetry(): void;
+  onSelectedTaskDeleted(): Promise<void>;
   selectedTaskId: string | undefined;
 }>) {
   const { t } = useTranslation();
@@ -408,9 +413,7 @@ function BoardContent({
     try {
       await actions.delete.mutateAsync(target.taskID);
       if (target.taskID === selectedTaskId) {
-        await navigation
-          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
-          .catch(reportNavigationError);
+        await onSelectedTaskDeleted();
       }
       close();
     } catch (error) {
