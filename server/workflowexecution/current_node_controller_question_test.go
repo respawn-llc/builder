@@ -237,6 +237,203 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	}
 }
 
+func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-question-permit", "node-question")
+	firstID := uuid.NewString()
+	secondID := uuid.NewString()
+	runID := uuid.NewString()
+	stepID := uuid.NewString()
+	first := askquestion.AskQuestionRequest{
+		ID:       firstID,
+		StepID:   stepID,
+		RunID:    runID,
+		Origin:   askquestion.AskQuestionOriginModelTool,
+		Question: "First?",
+		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
+			Origin:              askquestion.AskQuestionOriginModelTool,
+			RunID:               runID,
+			StepID:              stepID,
+			BatchID:             uuid.NewString(),
+			PromptID:            firstID,
+			BatchPromptIDs:      []string{firstID, secondID},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 2,
+		},
+	}
+	second := first
+	second.ID = secondID
+	second.Question = "Second?"
+	second.QuestionBatch = &askquestion.AskQuestionBatchMetadata{
+		Origin:              first.QuestionBatch.Origin,
+		RunID:               runID,
+		StepID:              stepID,
+		BatchID:             first.QuestionBatch.BatchID,
+		PromptID:            secondID,
+		BatchPromptIDs:      []string{firstID, secondID},
+		CandidateOrdinal:    1,
+		PreparedPromptCount: 2,
+	}
+	firstResult := make(chan currentNodePromptResult, 1)
+	secondResult := make(chan currentNodePromptResult, 1)
+	allowSuccessor := make(chan struct{}, 1)
+	t.Cleanup(func() {
+		select {
+		case allowSuccessor <- struct{}{}:
+		default:
+		}
+	})
+	handle, sessionID := fixture.startQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+		response, err := fixture.authority.AwaitPromptResponse(ctx, scope.ID(), first)
+		firstResult <- currentNodePromptResult{response: response, err: err}
+		if err != nil {
+			return err
+		}
+		<-allowSuccessor
+		response, err = fixture.authority.AwaitPromptResponse(ctx, scope.ID(), second)
+		secondResult <- currentNodePromptResult{response: response, err: err}
+		return err
+	})
+	fixture.waitForPendingPrompt(t, reference.TaskID, firstID)
+	independentReference := currentNodeReferenceForControllerTest(t, "task-question-independent", "node-question")
+	independentRequest := askquestion.AskQuestionRequest{
+		ID:       uuid.NewString(),
+		StepID:   uuid.NewString(),
+		Question: "Independent?",
+	}
+	independent := fixture.startPendingPrompt(t, independentReference, independentRequest)
+	fixture.waitForPendingPrompt(t, independentReference.TaskID, independentRequest.ID)
+
+	answerDone := make(chan error, 1)
+	go func() {
+		answerDone <- fixture.controller.AnswerWorkflowQuestion(
+			context.Background(),
+			reference.TaskID,
+			firstID,
+			askquestion.AskQuestionResponse{RequestID: firstID, Answer: "one"},
+			nil,
+		)
+	}()
+	select {
+	case result := <-firstResult:
+		if result.err != nil || result.response.RequestID != firstID {
+			t.Fatalf("first prompt result = %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for accepted first answer")
+	}
+
+	independentDone := make(chan error, 1)
+	go func() {
+		independentDone <- fixture.controller.AnswerWorkflowQuestion(
+			context.Background(),
+			independentReference.TaskID,
+			independentRequest.ID,
+			askquestion.AskQuestionResponse{RequestID: independentRequest.ID, Answer: "independent"},
+			nil,
+		)
+	}()
+	select {
+	case err := <-independentDone:
+		if err != nil {
+			t.Fatalf("independent AnswerWorkflowQuestion: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("accepted answer blocked an independent workflow question while waiting for its successor")
+	}
+	select {
+	case result := <-independent.result:
+		if result.err != nil || result.response.RequestID != independentRequest.ID {
+			t.Fatalf("independent prompt result = %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for independent prompt response")
+	}
+	if _, err := independent.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait independent prompt execution: %v", err)
+	}
+	select {
+	case err := <-answerDone:
+		t.Fatalf("answer returned before successor became pending: %v", err)
+	default:
+	}
+
+	allowSuccessor <- struct{}{}
+	fixture.waitForPendingPrompt(t, reference.TaskID, secondID)
+	select {
+	case err := <-answerDone:
+		if err != nil {
+			t.Fatalf("AnswerWorkflowQuestion: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("answer did not return after successor became pending")
+	}
+	if err := fixture.authority.SubmitPromptResponse(sessionID, askquestion.AskQuestionResponse{RequestID: secondID, Answer: "two"}, nil); err != nil {
+		t.Fatalf("submit second prompt: %v", err)
+	}
+	select {
+	case result := <-secondResult:
+		if result.err != nil || result.response.RequestID != secondID {
+			t.Fatalf("second prompt result = %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for second prompt response")
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait prompt execution: %v", err)
+	}
+}
+
+func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariantError(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-question-invalid-batch", "node-question")
+	request := askquestion.AskQuestionRequest{
+		ID:       uuid.NewString(),
+		StepID:   uuid.NewString(),
+		RunID:    uuid.NewString(),
+		Origin:   askquestion.AskQuestionOriginModelTool,
+		Question: "Proceed?",
+		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
+			Origin:              askquestion.AskQuestionOriginModelTool,
+			RunID:               uuid.NewString(),
+			StepID:              uuid.NewString(),
+			BatchID:             uuid.NewString(),
+			PromptID:            uuid.NewString(),
+			BatchPromptIDs:      []string{uuid.NewString()},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 1,
+		},
+	}
+	pending := fixture.startPendingPrompt(t, reference, request)
+	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
+
+	err := fixture.controller.AnswerWorkflowQuestion(
+		context.Background(),
+		reference.TaskID,
+		request.ID,
+		askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"},
+		nil,
+	)
+	var invariantErr sessionruntime.PromptBatchInvariantError
+	if !errors.As(err, &invariantErr) {
+		t.Fatalf("AnswerWorkflowQuestion error = %v, want PromptBatchInvariantError", err)
+	}
+	select {
+	case result := <-pending.result:
+		if !errors.As(result.err, &invariantErr) {
+			t.Fatalf("prompt await error = %v, want PromptBatchInvariantError", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt awaiter remained blocked after malformed prepared batch")
+	}
+	if _, err := pending.handle.Wait(context.Background()); !errors.As(err, &invariantErr) {
+		t.Fatalf("prompt execution error = %v, want PromptBatchInvariantError", err)
+	}
+	if _, err := fixture.authority.ResolvePendingWorkflowPrompt(reference.TaskID, request.ID); !errors.Is(err, serverapi.ErrPromptNotFound) {
+		t.Fatalf("resolved malformed prompt error = %v, want prompt not found", err)
+	}
+}
+
 func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-mismatch", "node-question")

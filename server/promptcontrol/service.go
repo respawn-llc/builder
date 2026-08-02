@@ -13,13 +13,16 @@ import (
 )
 
 type PendingPromptResponder interface {
-	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
-	SubmitPromptResponseAndAwaitSuccessor(ctx context.Context, sessionID string, resp askquestion.AskQuestionResponse, err error) error
+	AcceptPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) (PromptResponseAcceptance, error)
+}
+
+type PromptResponseAcceptance interface {
+	AwaitSuccessor(context.Context) error
 }
 
 type PromptControlService struct {
 	prompts   PendingPromptResponder
-	asks      *requestmemo.Memo[askAnswerMemoRequest, struct{}]
+	asks      *requestmemo.Memo[askAnswerMemoRequest, PromptResponseAcceptance]
 	approvals *requestmemo.Memo[approvalAnswerMemoRequest, struct{}]
 }
 
@@ -43,13 +46,9 @@ type approvalAnswerMemoRequest struct {
 func NewPromptControlService(prompts PendingPromptResponder) *PromptControlService {
 	return &PromptControlService{
 		prompts:   prompts,
-		asks:      requestmemo.New[askAnswerMemoRequest, struct{}](),
+		asks:      requestmemo.New[askAnswerMemoRequest, PromptResponseAcceptance](),
 		approvals: requestmemo.New[approvalAnswerMemoRequest, struct{}](),
 	}
-}
-
-func (s *PromptControlService) withPromptAccess(fn func(PendingPromptResponder) error) error {
-	return fn(s.prompts)
 }
 
 func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error {
@@ -67,20 +66,21 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
 		FreeformAnswer:       req.FreeformAnswer,
 	}
-	_, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withPromptAccess(func(prompts PendingPromptResponder) error {
-			if req.ErrorMessage != "" {
-				return prompts.SubmitPromptResponseAndAwaitSuccessor(ctx, req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
-			}
-			return prompts.SubmitPromptResponseAndAwaitSuccessor(ctx, req.SessionID, askquestion.AskQuestionResponse{
-				RequestID:            req.AskID,
-				Answer:               req.Answer,
-				SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-				FreeformAnswer:       req.FreeformAnswer,
-			}, nil)
-		})
+	acceptance, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(context.Context) (PromptResponseAcceptance, error) {
+		if req.ErrorMessage != "" {
+			return s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
+		}
+		return s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
+			RequestID:            req.AskID,
+			Answer:               req.Answer,
+			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
+			FreeformAnswer:       req.FreeformAnswer,
+		}, nil)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return acceptance.AwaitSuccessor(ctx)
 }
 
 func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error {
@@ -98,18 +98,18 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 		Commentary:   req.Commentary,
 	}
 	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withPromptAccess(func(prompts PendingPromptResponder) error {
-			if req.ErrorMessage != "" {
-				return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.ApprovalID}, errors.New(req.ErrorMessage))
-			}
-			return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
-				RequestID: req.ApprovalID,
-				Approval: &askquestion.AskQuestionApprovalPayload{
-					Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
-					Commentary: req.Commentary,
-				},
-			}, nil)
-		})
+		if req.ErrorMessage != "" {
+			_, err := s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.ApprovalID}, errors.New(req.ErrorMessage))
+			return struct{}{}, err
+		}
+		_, err := s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
+			RequestID: req.ApprovalID,
+			Approval: &askquestion.AskQuestionApprovalPayload{
+				Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
+				Commentary: req.Commentary,
+			},
+		}, nil)
+		return struct{}{}, err
 	})
 	return err
 }

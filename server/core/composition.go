@@ -542,25 +542,16 @@ type authorityPromptResponder struct {
 	authority *sessionruntime.Authority
 }
 
-func (r authorityPromptResponder) SubmitPromptResponse(sessionID string, response askquestion.AskQuestionResponse, submitErr error) error {
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return r.authority.SubmitPromptResponse(id, response, submitErr)
-}
-
-func (r authorityPromptResponder) SubmitPromptResponseAndAwaitSuccessor(
-	ctx context.Context,
+func (r authorityPromptResponder) AcceptPromptResponse(
 	sessionID string,
 	response askquestion.AskQuestionResponse,
 	submitErr error,
-) error {
+) (promptcontrol.PromptResponseAcceptance, error) {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return r.authority.SubmitPromptResponseAndAwaitSuccessor(ctx, id, response, submitErr)
+	return r.authority.AcceptPromptResponse(id, response, submitErr)
 }
 
 type authorityStepLifecycle struct {

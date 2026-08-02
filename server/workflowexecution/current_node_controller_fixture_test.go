@@ -604,6 +604,21 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 
 func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference workflow.CurrentNodeReference, request askquestion.AskQuestionRequest) currentNodePendingPrompt {
 	t.Helper()
+	result := make(chan currentNodePromptResult, 1)
+	handle, sessionID := f.startQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+		response, askErr := f.authority.AwaitPromptResponse(ctx, scope.ID(), request)
+		result <- currentNodePromptResult{response: response, err: askErr}
+		return askErr
+	})
+	return currentNodePendingPrompt{handle: handle, sessionID: sessionID, result: result}
+}
+
+func (f currentNodeQuestionFixture) startQuestionExecution(
+	t *testing.T,
+	reference workflow.CurrentNodeReference,
+	runner sessionruntime.AgentRunner,
+) (sessionruntime.ExecutionHandle, runtimeids.SessionID) {
+	t.Helper()
 	store, err := session.Create(
 		f.sessionDir,
 		filepath.Base(f.sessionDir),
@@ -639,17 +654,12 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
 	lease.Release()
-	result := make(chan currentNodePromptResult, 1)
 	handle, err := f.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
 		Workflow:   &lease,
 		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			response, askErr := f.authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			result <- currentNodePromptResult{response: response, err: askErr}
-			return askErr
-		},
+		Runner:     runner,
 	})
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
@@ -662,7 +672,7 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 	f.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
 	f.controller.liveByNode[key] = lease.ScopeID()
 	f.controller.mu.Unlock()
-	return currentNodePendingPrompt{handle: handle, sessionID: sessionID, result: result}
+	return handle, sessionID
 }
 
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {

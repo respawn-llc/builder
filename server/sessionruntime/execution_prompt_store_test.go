@@ -2,7 +2,6 @@ package sessionruntime
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -22,11 +21,15 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 
 	answerDone := make(chan error, 1)
 	go func() {
-		answerDone <- store.SubmitAndAwaitSuccessor(
-			context.Background(),
+		acceptance, err := store.Accept(
 			tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
 			nil,
 		)
+		if err != nil {
+			answerDone <- err
+			return
+		}
+		answerDone <- acceptance.AwaitSuccessor(context.Background())
 	}()
 	select {
 	case result := <-firstResult:
@@ -80,11 +83,15 @@ func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSucc
 
 	answerDone := make(chan error, 1)
 	go func() {
-		answerDone <- store.SubmitAndAwaitSuccessor(
-			context.Background(),
+		acceptance, err := store.Accept(
 			tools.AskQuestionResponse{RequestID: request.ID, Answer: "one"},
 			nil,
 		)
+		if err != nil {
+			answerDone <- err
+			return
+		}
+		answerDone <- acceptance.AwaitSuccessor(context.Background())
 	}()
 	select {
 	case <-result:
@@ -105,27 +112,6 @@ func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSucc
 	case <-time.After(3 * time.Second):
 		t.Fatal("answer did not return after exact execution closed")
 	}
-}
-
-func TestExecutionPromptStoreRejectsMalformedPreparedBatch(t *testing.T) {
-	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	request := batchedPromptRequest("ask-1", 0)
-	request.QuestionBatch.BatchPromptIDs[0] = "different"
-	go func() {
-		_, _ = store.Await(context.Background(), request)
-	}()
-	requirePromptPending(t, &store, request.ID)
-
-	err := store.SubmitAndAwaitSuccessor(
-		context.Background(),
-		tools.AskQuestionResponse{RequestID: request.ID, Answer: "one"},
-		nil,
-	)
-	var invariantErr PromptBatchInvariantError
-	if !errors.As(err, &invariantErr) {
-		t.Fatalf("malformed batch error = %v, want PromptBatchInvariantError", err)
-	}
-	store.Close(context.Canceled)
 }
 
 func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {

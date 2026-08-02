@@ -315,6 +315,21 @@ type executionPromptResult struct {
 	err      error
 }
 
+// PromptResponseAcceptance is returned after a prompt response mutation has
+// been accepted. Waiting for a prepared successor is a separate, repeatable
+// observation and does not change the accepted mutation.
+type PromptResponseAcceptance struct {
+	store        *executionPromptStore
+	successorIDs []string
+}
+
+func (a PromptResponseAcceptance) AwaitSuccessor(ctx context.Context) error {
+	if a.store == nil {
+		return errors.New("prompt response acceptance is required")
+	}
+	return a.store.AwaitAnyPendingOrClosed(ctx, a.successorIDs)
+}
+
 type executionPromptEntry struct {
 	snapshot ExecutionPromptSnapshot
 	response chan executionPromptResult
@@ -412,16 +427,18 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	return err
 }
 
-func (s *executionPromptStore) SubmitAndAwaitSuccessor(
-	ctx context.Context,
+func (s *executionPromptStore) Accept(
 	resp tools.AskQuestionResponse,
 	submitErr error,
-) error {
+) (PromptResponseAcceptance, error) {
 	successorIDs, err := s.submit(resp, submitErr)
 	if err != nil {
-		return err
+		return PromptResponseAcceptance{}, err
 	}
-	return s.AwaitAnyPendingOrClosed(ctx, successorIDs)
+	return PromptResponseAcceptance{
+		store:        s,
+		successorIDs: successorIDs,
+	}, nil
 }
 
 func (s *executionPromptStore) submit(
@@ -449,7 +466,11 @@ func (s *executionPromptStore) submit(
 	}
 	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
 	if err != nil {
+		delete(s.pending, requestID)
+		s.signalLocked()
 		s.mu.Unlock()
+		s.publishResolved(entry.snapshot)
+		entry.response <- executionPromptResult{err: err}
 		return nil, err
 	}
 	delete(s.pending, requestID)
@@ -692,17 +713,16 @@ func (a *Authority) SubmitPromptResponse(sessionID runtimeids.SessionID, resp to
 	return execution.prompts.Submit(resp, err)
 }
 
-func (a *Authority) SubmitPromptResponseAndAwaitSuccessor(
-	ctx context.Context,
+func (a *Authority) AcceptPromptResponse(
 	sessionID runtimeids.SessionID,
 	resp tools.AskQuestionResponse,
 	err error,
-) error {
+) (PromptResponseAcceptance, error) {
 	execution := a.sessionExecution(sessionID)
 	if execution == nil {
-		return fmt.Errorf("session %s has no active execution", sessionID)
+		return PromptResponseAcceptance{}, fmt.Errorf("session %s has no active execution", sessionID)
 	}
-	return execution.prompts.SubmitAndAwaitSuccessor(ctx, resp, err)
+	return execution.prompts.Accept(resp, err)
 }
 
 // ResolvePendingWorkflowPrompt selects one exact live Agent scope by Task and
@@ -762,17 +782,16 @@ func (a *Authority) SubmitPromptResponseForScope(scopeID runtimeids.ExecutionSco
 	return execution.prompts.Submit(resp, err)
 }
 
-func (a *Authority) SubmitPromptResponseForScopeAndAwaitSuccessor(
-	ctx context.Context,
+func (a *Authority) AcceptPromptResponseForScope(
 	scopeID runtimeids.ExecutionScopeID,
 	resp tools.AskQuestionResponse,
 	err error,
-) error {
+) (PromptResponseAcceptance, error) {
 	execution, resolveErr := a.agentExecutionByScope(scopeID)
 	if resolveErr != nil {
-		return resolveErr
+		return PromptResponseAcceptance{}, resolveErr
 	}
-	return execution.prompts.SubmitAndAwaitSuccessor(ctx, resp, err)
+	return execution.prompts.Accept(resp, err)
 }
 
 func (a *Authority) agentExecutionByScope(scopeID runtimeids.ExecutionScopeID) (*execution, error) {

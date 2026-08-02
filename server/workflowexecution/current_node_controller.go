@@ -293,7 +293,8 @@ func (c *CurrentNodeController) AnswerWorkflowQuestion(
 	if strings.TrimSpace(response.RequestID) != askID {
 		return errors.New("workflow question response does not match ask id")
 	}
-	return c.permit.Run(ctx, func(ctx context.Context) error {
+	var acceptance sessionruntime.PromptResponseAcceptance
+	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		resolution, err := c.authority.ResolvePendingWorkflowPrompt(taskID, askID)
 		if err != nil {
 			return err
@@ -310,8 +311,13 @@ func (c *CurrentNodeController) AnswerWorkflowQuestion(
 			}
 			return err
 		}
-		return c.authority.SubmitPromptResponseForScopeAndAwaitSuccessor(ctx, resolution.ScopeID, response, submitErr)
+		acceptance, err = c.authority.AcceptPromptResponseForScope(resolution.ScopeID, response, submitErr)
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	return acceptance.AwaitSuccessor(ctx)
 }
 
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
