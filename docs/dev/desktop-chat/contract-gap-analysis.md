@@ -258,6 +258,54 @@ Compaction policy, ordering, pre-submit compaction, and execution remain server-
 
 Existing onboarding language that calls `none` Manual-only is product drift. Its correction is a separate follow-up candidate and is not part of Desktop Sessions/Chat.
 
+### Goal Control
+
+The server already owns durable Goal state and typed set, pause, resume, complete,
+clear, and show operations. Goal inspection works for live and dormant Sessions.
+Runtime and transcript projections broadcast objective, status, and the
+runtime-local suspension fact. The unary Goal projection also carries created
+and updated timestamps.
+
+Desktop's locked Goal design exposes a narrower user contract:
+
+- Goal suspension is not a Desktop product state and must not affect Goal copy,
+  controls, or visual state.
+- The sidebar needs Goal created time for `Set <age> ago`, but the current
+  `clientui.RuntimeGoal` and transcript Goal projection drop both timestamps.
+- The under-composer control can use the ordinary Chat Goal snapshot, while the
+  sidebar intentionally performs one fresh ShowGoal read on open and then
+  consumes ordinary Goal broadcasts.
+- A Goal broadcast that arrives while the open read is pending must win over the
+  late unary response. This is one bounded client rule, not a Goal revision,
+  retry loop, or poller.
+- The selected Agent's authoritative locked-tool capability must distinguish
+  missing `ask_question` from Questions being toggled off. Only the former makes
+  Save and Resume unavailable.
+
+The current runtime-control implementation intentionally allows user Goal
+mutations in workflow-controlled Sessions, and tests assert that behavior. The
+authoritative runtime spec rejects user Goal control there. Server admission and
+tests must be corrected at the Goal owner; hiding Desktop buttons is not an
+acceptable enforcement mechanism. Read-only Goal inspection and agent-originated
+Goal mutation remain available.
+
+Goal Set currently requires an existing Session ID. Lazy New Chat therefore
+needs a first-agentic-trigger flow that materializes the Session and then applies
+the Goal operation. Product does not require rollback if later Goal validation
+or admission fails: the Session remains, Goal work does not start for the failed
+request, the Goal draft remains available in the open sidebar, and the error is
+surfaced. Once Goal work is accepted, later provider, tool, or runtime failure
+uses ordinary Session failure behavior and leaves the Session and Goal intact.
+
+The current Task Description Markdown field is feature-local. Goal must not copy
+it. The editor/read-view, overflow, Markdown, focus, accessibility, and draft
+reconciliation behavior need one shared UI-kit module used by both Task Detail
+and Goal. Save and Goal lifecycle controls remain outside that field.
+
+Desktop deliberately does not copy two TUI presentation mechanics: active-Goal
+Clear has no confirmation, and Goal mutation requests are single-flight rather
+than client-coalesced newest-request state.
+
 ### Project Workflow Links Read Model
 
 The current project-workflow link response is unpaginated and contains only link IDs plus default state. The current workflow list is cursor paginated but does not produce one project-link row with workflow identity, default state, and execution validation. The project `Workflows` tab requires one server-owned cursor read model combining those facts.

@@ -146,6 +146,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Step/run lifecycle stays in runtime/status; actual user/assistant/tool/error-feedback rows own durable history rather than lifecycle markers.
 - Compaction lifecycle is Thinking/status/Context-only; goal lifecycle is Goal/status-only. Neither creates lifecycle transcript rows, while committed compaction/goal rows own history.
 - Live background activity and process controls belong to a new dedicated contextual-sidebar destination with no duplicate live transcript rows.
+- Goal uses a second typed contextual-sidebar destination for creation, objective editing, and lifecycle control. It shares the existing adaptive sidebar host and never nests another destination.
 - Processes is one typed list-only sidebar destination with no detail destination or nested navigation. Desktop presentation copies `/ps`; server scope/order/retention redesign is out of scope and remains owned by its existing ticket.
 - Process rows copy TUI fields/order, are dense and non-expandable, and expose direct actions only.
 - Desktop intentionally has no `/ps inline`/Insert output equivalent.
@@ -354,7 +355,26 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Successful user-requested compaction is silent in a focused Desktop window. An unfocused window sends a system notification after the following Pending Work drain is idle; activation opens the owning Session at latest.
 - Automatic, pre-submit, and handoff compaction send no completion notification.
 - Under disabled compaction policy, replace threshold/Auto-compaction status with disabled/unavailable text, disable Compact, and keep `/compact` recognized so its typed policy failure reaches Sonner.
-- Goal management.
+- Goal is a Session control, not a setting, and uses one typed adaptive-sidebar destination.
+- Outside workflow Sessions, target icon + `Goal` is always present on the left of the under-composer control row. Active uses a primary chip; paused, complete, and absent use the neutral affordance. It never becomes icon-only and shows no objective or state text.
+- Desktop does not implement `/goal`. The visible control and sidebar are the only Goal entry path.
+- Existing Goal opens through one fresh authoritative ShowGoal read with standard compact Loading and Error+Retry. Lazy create opens directly. Later ordinary broadcasts update the clean sidebar state; no poll or server-refresh timer exists.
+- If a Goal broadcast overlaps that open read, the broadcast wins and the late read response is discarded without retry, revision, timestamp ordering, or polling.
+- The sidebar shows ordinary-text status plus muted `Set <age> ago`, then the complete objective through the shared Task Description Markdown field. Omit Goal ID and updated time.
+- Age copy is: under 1m `Set just now`; under 1h `Set N min ago`; under 1d `Set HhMm ago`; 1d+ `Set DdHhMm ago`. Omit zero units, keep days unbounded, refresh once per minute.
+- Existing objectives open as rendered Markdown and enter the extracted shared editor on activation. Create mode focuses the editor.
+- Clean drafts follow broadcasts; dirty drafts survive while the destination is alive. Closing/navigation/relaunch discards unsaved text. No server-owned Goal-editor draft is added.
+- Save exists only for dirty nonblank text. It directly set/replaces the Goal, always yields Active, and starts/continues Goal work. Save success keeps the sidebar open and re-baselines.
+- The adaptive sticky action flow places Pause/Resume and error-outline Clear at start and dirty Save at end when wide. It wraps without overlap, truncation, shrinking, or label mangling. Create shows Save only; workflow read-only shows no actions.
+- Pause/Resume preserves dirty objective text. Clear is immediate in every state, has no confirmation/undo, discards dirty text, and resets to blank create mode.
+- No human Mark complete action exists. Paused and complete Goals offer Resume. Runtime-local suspension is not a Desktop product state and is presented simply as Active.
+- Goal mutations are single-flight. Disable all mutations while one request is pending, show pending only on the initiating action, and add no desired-state buffer, replacement queue, or client replay.
+- All Goal mutation errors use Sonner. Save preserves dirty text; lifecycle failures preserve state; successes have no toast.
+- Goal status uses ordinary foreground in every state. Only age is muted; no status badge or semantic status color.
+- A selected Agent without locked `ask_question` leaves Goal visible but makes Save and Resume unavailable with `Unavailable for this Agent`; Pause/Clear remain. Questions off does not block Goal.
+- Workflow Session with no Goal omits the affordance. An agent-created workflow Goal remains visible but opens read-only with a workflow-managed explanation. If that Goal disappears while open, close the sidebar and remove the affordance.
+- In untouched lazy New Chat, Goal Save may materialize the Session before Goal validation/admission completes. Rejected validation/admission retains that Session, starts no Goal work, preserves the dirty sidebar draft, and adds no rollback or compensation. Failure after accepted work starts follows ordinary Session failure and retains Goal.
+- Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
 - Worktree inspection and control.
 - Review/init/file-backed prompt entry points.

@@ -267,12 +267,13 @@ error-feedback row; the committed compaction summary remains the historical row.
 ### Goal lifecycle
 
 - active;
-- active and suspended;
 - paused;
 - complete.
 
 Locked: goal lifecycle appears only in the Goal/status control surface and
 creates no lifecycle transcript rows. Committed Goal feedback remains separate.
+Runtime-local Goal suspension is an implementation detail in Desktop and is
+presented as active without separate copy, state, or control behavior.
 
 ### Background activity
 

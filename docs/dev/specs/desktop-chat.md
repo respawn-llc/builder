@@ -99,7 +99,7 @@
 - Committed-message time uses the server's durable timestamp: relative age for 24 hours, then localized compact date and time, including the year only when different from the current year. Full date, time, and time zone are available on focus or hover.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
-- Contextual destinations adapt between shifted and overlay presentation. Processes is the only defined Chat destination. Session settings use a non-modal popover under the composer, not a contextual destination.
+- Contextual destinations adapt between shifted and overlay presentation. Processes and Goal are the defined Chat destinations. Session settings use a non-modal popover under the composer, not a contextual destination.
 
 ## Session Settings And Drafts
 
@@ -175,6 +175,45 @@
 - When Session policy disables compaction, the pop-up replaces the threshold and Auto-compaction lines with truthful disabled and unavailable text, and its `Compact` action is unavailable.
 - In that policy state, `/compact` remains a known command and surfaces the server's typed disabled-policy failure instead of becoming an ordinary user message.
 - Context and compaction lifecycle create no transcript status rows.
+
+## Goal
+
+- Goal is a Session control, not a Session setting.
+- Outside workflow-controlled Sessions, the left side of the under-composer control row always contains one Goal affordance. An active Goal uses a primary-colored Goal chip. A paused, completed, or absent Goal uses a neutral `Goal` affordance. Activating it opens the existing Goal when present or Goal creation when absent.
+- The control label is always `Goal`. It shows no objective preview or state text; its primary or neutral treatment communicates whether Goal work is active.
+- The control shows a target icon before `Goal`. It never becomes icon-only.
+- Desktop has no `/goal` command. The visible Goal affordance and Goal sidebar are its only Goal entry path.
+- Goal uses the shared adaptive contextual-sidebar host.
+- The same Goal sidebar handles creation and management. It edits the complete objective as Markdown and has an explicit `Save` action.
+- Goal objective editing uses the same shared UI-kit editor as Task Description. Desktop does not maintain a Goal-specific large-text editor implementation.
+- An existing Goal opens as rendered Markdown. Activating the objective enters the shared editor. Goal creation opens the editor focused.
+- `Save` appears only while the objective draft differs from the authoritative Goal and contains non-whitespace text. A whitespace-only draft has no Save action. Saving an existing Goal replaces it directly without another confirmation. Success keeps the sidebar open and re-baselines the editor to the authoritative Goal.
+- Every successful Save uses set-or-replace semantics: the resulting Goal is active and Goal work starts or continues, including when the previous Goal was paused or complete.
+- Goal management offers Pause or Resume when applicable and an error-colored outline Clear action.
+- Goal remains visible and inspectable when the selected Agent lacks the locked `ask_question` tool. In that state, Save and Resume are unavailable with `Unavailable for this Agent`; Pause and Clear remain available.
+- The Questions toggle being off does not make Goal unavailable. The server owns final Goal-loop admission, and a raced rejected request uses ordinary Goal mutation error feedback.
+- Clear applies immediately in every Goal state. Desktop shows no confirmation and offers no undo.
+- Pause or Resume preserves any dirty objective draft. Clear resets the sidebar to blank creation state and discards any dirty objective draft.
+- Goal mutations are single-flight. While one mutation request is pending, Desktop disables every Goal mutation and shows pending state only on the initiating action. Desktop keeps no desired-state buffer, replacement queue, or client-side replay.
+- Every Goal mutation failure uses Sonner. Save failure preserves the complete dirty objective draft. Pause, Resume, and Clear failure leave the Goal and sidebar state unchanged. Successful mutations show no success notification.
+- The sidebar uses one sticky adaptive action row. At wide widths, Pause or Resume and Clear occupy the start side and dirty-state Save occupies the end side. Create mode shows Save alone. Workflow read-only mode has no action row.
+- When the sidebar narrows, the action row flows onto additional lines without truncating, overlapping, shrinking, or mangling button labels and controls.
+- Desktop offers no human `Mark complete` Goal action.
+- Goal suspension is not a Desktop product state. Desktop presents a durably active Goal as Active and never shows suspension copy, explanation, iconography, or a separate Resume action for runtime-local suspension.
+- The sidebar shows the authoritative Goal status and a small secondary line `Set <age> ago` derived from the server's Goal creation timestamp. It omits Goal ID and updated time.
+- Goal status uses ordinary foreground text in every state. The age line alone uses muted text. Desktop adds no Goal-status badge or semantic status color.
+- The age line shows `Set just now` below one minute, `Set N min ago` below one hour, `Set HhMm ago` below one day, and `Set DdHhMm ago` from one day onward. It omits zero-value units, keeps days unbounded, and refreshes once per minute.
+- Opening the sidebar for an existing Goal performs one authoritative Goal read. Until it resolves, the sidebar uses the standard compact Loading state. Failure uses the matching compact Error state with Retry. Lazy Goal creation opens directly without this read.
+- While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
+- If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
+- Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
+- In a workflow-controlled Session with no Goal, Desktop omits the Goal affordance. When an agent-created Goal exists, Desktop shows its active or inactive Goal affordance and opens the sidebar read-only with a workflow-managed explanation. It offers no Save, Pause, Resume, or Clear action.
+- If that workflow Goal disappears while its read-only sidebar is open, Desktop closes the Goal sidebar and removes the affordance.
+- In untouched lazy New Chat, Goal Save is the first agentic trigger and may materialize the Session before Goal validation or admission completes.
+- If Goal validation or admission then fails, the newly materialized Session remains. Desktop keeps the complete dirty Goal draft in the open sidebar, starts no Goal work for the rejected request, and uses ordinary Goal mutation error feedback.
+- After Goal acceptance starts work, later provider, tool, or runtime failure follows ordinary Session failure behavior and leaves the Session and Goal intact.
+- Desktop adds no rollback, compensation, or history-rewrite mechanism for partial lazy Goal launch.
+- Goal remains available in the ordinary bottom control row while a Question or Approval picker replaces the editor. Opening Goal does not resolve, decline, hide, or otherwise change the pending prompt picker.
 
 ## Questions And Approvals
 
