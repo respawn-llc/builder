@@ -609,21 +609,28 @@ func TestTaskManagedWorktreeSchemaRejectsCrossProjectReferences(t *testing.T) {
 VALUES ('task-valid-worktree', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
 		t.Fatalf("valid managed worktree should be allowed: %v", err)
 	}
-	if _, err := store.db.Exec(`UPDATE tasks SET source_workspace_id = ? WHERE id = 'task-valid-worktree'`, sameProjectWorkspace.WorkspaceID); err != nil {
-		t.Fatalf("same-project source workspace rebind should be allowed: %v", err)
-	}
-	if _, err := store.db.Exec(`UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`); err != nil {
-		t.Fatalf("managed worktree without current source workspace should be allowed: %v", err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-same-project-workspace', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, sameProjectWorkspace.WorkspaceID, now, now); err != nil {
-		t.Fatalf("same-project managed worktree should be allowed: %v", err)
-	}
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks SET source_workspace_id = ? WHERE id = 'task-valid-worktree'`, sameProjectWorkspace.WorkspaceID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-same-project-workspace', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, sameProjectWorkspace.WorkspaceID, now, now)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-cross-worktree', 'link-1', 1, 3, 'BLD-3', 'Task', '', ?, 'worktree-other', ?, ?, '{}')`, binding.WorkspaceID, now, now)
-	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-missing-source-workspace', 'link-1', 1, 4, 'BLD-4', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now); err != nil {
-		t.Fatalf("managed worktree without current source workspace should be allowed: %v", err)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-missing-source-workspace', 'link-1', 1, 4, 'BLD-4', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now)
+
+	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-atomic-lock', 'link-1', 1, 5, 'BLD-5', 'Task', '', ?, ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
+		t.Fatalf("unlocked task without managed worktree should be allowed: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE tasks
+SET source_workspace_id = ?,
+    managed_worktree_id = 'worktree-valid',
+    execution_target_mode = 'head',
+    execution_target_requested_ref = 'HEAD',
+    execution_target_commit_oid = '0123456789abcdef',
+    execution_target_provenance = 'resolved'
+WHERE id = 'task-atomic-lock'`, sameProjectWorkspace.WorkspaceID); err != nil {
+		t.Fatalf("atomic managed target lock across same-project workspaces should be allowed: %v", err)
 	}
 }
 

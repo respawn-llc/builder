@@ -77,9 +77,11 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					return errors.New("authority interrupt selection does not match workflow execution ownership")
 				}
 			}
-			for _, gate := range c.gates {
-				if gate.reference.TaskID == selector.TaskID {
-					return ErrTaskExecutionNotQuiescent
+			if selector.SessionID == nil {
+				for _, gate := range c.gates {
+					if gate.reference.TaskID == selector.TaskID {
+						return ErrTaskExecutionNotQuiescent
+					}
 				}
 			}
 

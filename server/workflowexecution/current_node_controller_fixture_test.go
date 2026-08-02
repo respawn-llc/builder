@@ -541,6 +541,11 @@ type currentNodePendingPrompt struct {
 	result    <-chan currentNodePromptResult
 }
 
+type currentNodeAgentExecution struct {
+	handle    sessionruntime.ExecutionHandle
+	sessionID runtimeids.SessionID
+}
+
 type currentNodePromptResult struct {
 	response askquestion.AskQuestionResponse
 	err      error
@@ -596,7 +601,11 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 	}
 }
 
-func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference workflow.CurrentNodeReference, request askquestion.AskQuestionRequest) currentNodePendingPrompt {
+func (f currentNodeQuestionFixture) startAgent(
+	t *testing.T,
+	reference workflow.CurrentNodeReference,
+	runner func(context.Context, sessionruntime.ExecutionScope) error,
+) currentNodeAgentExecution {
 	t.Helper()
 	store, err := session.Create(
 		f.sessionDir,
@@ -633,16 +642,13 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
 	lease.Release()
-	result := make(chan currentNodePromptResult, 1)
 	handle, err := f.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
 		Workflow:   &lease,
 		Resource:   sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			response, askErr := f.authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			result <- currentNodePromptResult{response: response, err: askErr}
-			return askErr
+			return runner(ctx, scope)
 		},
 	})
 	if err != nil {
@@ -656,7 +662,18 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 	f.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
 	f.controller.liveByNode[key] = lease.ScopeID()
 	f.controller.mu.Unlock()
-	return currentNodePendingPrompt{handle: handle, sessionID: sessionID, result: result}
+	return currentNodeAgentExecution{handle: handle, sessionID: sessionID}
+}
+
+func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference workflow.CurrentNodeReference, request askquestion.AskQuestionRequest) currentNodePendingPrompt {
+	t.Helper()
+	result := make(chan currentNodePromptResult, 1)
+	agent := f.startAgent(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope) error {
+		response, askErr := f.authority.AwaitPromptResponse(ctx, scope.ID(), request)
+		result <- currentNodePromptResult{response: response, err: askErr}
+		return askErr
+	})
+	return currentNodePendingPrompt{handle: agent.handle, sessionID: agent.sessionID, result: result}
 }
 
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
