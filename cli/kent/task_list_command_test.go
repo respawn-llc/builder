@@ -342,6 +342,88 @@ func TestTaskListRejectsInvalidNamedFilterFlagCombinations(t *testing.T) {
 	}
 }
 
+func TestTaskListSortRejectsDuplicateFieldsBeforeListRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "duplicate in one flag", args: []string{"--sort", "title:asc,title:asc"}},
+		{name: "duplicate across flags", args: []string{"--sort", "title:asc", "--sort", "title:asc"}},
+		{name: "direction varies", args: []string{"--sort", "title:asc,title:desc"}},
+		{name: "canonical aliases", args: []string{"--sort", "created:asc,created_at:desc"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := newTaskListCommandRemote()
+			installWorkflowCommandRemote(t, remote)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			args := append([]string{"list", "--project", taskListCommandTestProjectID}, tt.args...)
+			if exitCode := taskSubcommand(args, &stdout, &stderr); exitCode != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr=%q", exitCode, stderr.String())
+			}
+			if len(remote.listRequests) != 0 {
+				t.Fatalf("list requests = %+v, want none", remote.listRequests)
+			}
+		})
+	}
+}
+
+func TestTaskListSortSupportsLabelsShortIDAndSevenOrderedFields(t *testing.T) {
+	remote := newTaskListCommandRemote()
+	installWorkflowCommandRemote(t, remote)
+	args := []string{
+		"list", "--project", taskListCommandTestProjectID,
+		"--sort", "labels:desc,short-id:asc,created:asc",
+		"--sort", "updated:desc,status:asc,column:desc,title:asc",
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := taskSubcommand(args, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.listRequests) != 1 {
+		t.Fatalf("list requests = %+v, want one", remote.listRequests)
+	}
+	want := []serverapi.WorkflowTaskListSort{
+		{Field: serverapi.WorkflowTaskListSortFieldLabels, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
+		{Field: serverapi.WorkflowTaskListSortFieldShortID, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldCreated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
+		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
+		{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+	}
+	if !slices.Equal(remote.listRequests[0].Sort, want) {
+		t.Fatalf("sort = %+v, want %+v", remote.listRequests[0].Sort, want)
+	}
+}
+
+func TestTaskListSortRejectsUnapprovedSpellingsAndOverCapacity(t *testing.T) {
+	for _, raw := range []string{
+		"short_id:asc",
+		"label:asc",
+		"shortid:asc",
+		"labels:asc,short-id:asc,created:asc,updated:asc,status:asc,column:asc,title:asc,created:desc",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			remote := newTaskListCommandRemote()
+			installWorkflowCommandRemote(t, remote)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			if exitCode := taskSubcommand(
+				[]string{"list", "--project", taskListCommandTestProjectID, "--sort", raw},
+				&stdout,
+				&stderr,
+			); exitCode != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr=%q", exitCode, stderr.String())
+			}
+			if len(remote.listRequests) != 0 {
+				t.Fatalf("list requests = %+v, want none", remote.listRequests)
+			}
+		})
+	}
+}
+
 func TestResolveWorkflowProjectLabelFilterReportsConflictingSelectors(t *testing.T) {
 	remote := newTaskListCommandRemote()
 	_, snapshot, err := loadWorkflowProjectLabelCatalog(t.Context(), remote, taskListCommandTestProjectID)

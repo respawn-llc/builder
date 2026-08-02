@@ -6,12 +6,14 @@ import (
 	"sync"
 
 	"core/server/workflow/label"
+	"core/shared/labelcontract"
 	"core/shared/tasksearchtext"
 
 	sqlitedriver "modernc.org/sqlite"
 )
 
 const LabelCollationName = "kent_label_casefold_v1"
+const LabelFoldFunctionName = "kent_label_casefold_v1_fold"
 const LiteralOccurrenceCountFunctionName = "kent_task_search_occurrence_count_v1"
 
 type RegistrationError struct {
@@ -45,6 +47,17 @@ func RegisterSQLiteExtensions() error {
 			return
 		}
 		if err := sqlitedriver.RegisterDeterministicScalarFunction(
+			LabelFoldFunctionName,
+			1,
+			labelFold,
+		); err != nil {
+			registrationErr = &RegistrationError{
+				ExtensionName: LabelFoldFunctionName,
+				Cause:         err,
+			}
+			return
+		}
+		if err := sqlitedriver.RegisterDeterministicScalarFunction(
 			LiteralOccurrenceCountFunctionName,
 			3,
 			literalOccurrenceCount,
@@ -56,6 +69,14 @@ func RegisterSQLiteExtensions() error {
 		}
 	})
 	return registrationErr
+}
+
+func labelFold(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+	text, err := textArgument(arguments, 0, "label fold")
+	if err != nil {
+		return nil, err
+	}
+	return labelcontract.Fold(text), nil
 }
 
 func literalOccurrenceCount(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {

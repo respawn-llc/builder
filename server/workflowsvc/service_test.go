@@ -1080,8 +1080,8 @@ func TestServiceGetsAndUpdatesTaskLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateWorkflowTaskLabels: %v", err)
 	}
-	if !reflect.DeepEqual(updated.Assignment.LabelIDs, []string{alpha.Label.ID, zulu.Label.ID}) {
-		t.Fatalf("updated assignment = %+v, want alphabetical IDs", updated.Assignment)
+	if !reflect.DeepEqual(updated.Assignment.LabelIDs, []string{zulu.Label.ID, alpha.Label.ID}) {
+		t.Fatalf("updated assignment = %+v, want project-order IDs", updated.Assignment)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
 	if !stringPointerEquals(event.ProjectID, binding.ProjectID) ||

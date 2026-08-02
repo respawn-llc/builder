@@ -130,6 +130,10 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		Sort4Desc:            workflowTaskListSortDescending(req.sortSelectors, 3),
 		Sort5Field:           string(workflowTaskListSortSelector(req.sortSelectors, 4).Field),
 		Sort5Desc:            workflowTaskListSortDescending(req.sortSelectors, 4),
+		Sort6Field:           string(workflowTaskListSortSelector(req.sortSelectors, 5).Field),
+		Sort6Desc:            workflowTaskListSortDescending(req.sortSelectors, 5),
+		Sort7Field:           string(workflowTaskListSortSelector(req.sortSelectors, 6).Field),
+		Sort7Desc:            workflowTaskListSortDescending(req.sortSelectors, 6),
 		LiveTaskStatesJson:   req.liveTaskStatesJSON,
 		LimitRows:            int64(req.limit),
 	})

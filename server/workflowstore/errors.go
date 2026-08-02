@@ -119,6 +119,9 @@ var (
 	ErrProjectLabelNameConflict = errors.New("project label name conflicts with an existing label")
 	// ErrProjectLabelLimitReached marks a Project catalog at its bounded size.
 	ErrProjectLabelLimitReached = errors.New("project label catalog limit reached")
+	// ErrProjectLabelOrderInvalid marks a reorder request that is not an exact
+	// permutation of the project's current label catalog.
+	ErrProjectLabelOrderInvalid = errors.New("project label order is invalid")
 	ErrTaskLabelTaskNotFound    = errors.New("task for label assignment not found")
 	ErrTaskLabelNotFound        = errors.New("task label reference not found")
 	ErrTaskLabelWrongProject    = errors.New("task label belongs to another project")
@@ -166,6 +169,28 @@ func (e ProjectLabelLimitError) Error() string {
 
 func (e ProjectLabelLimitError) Is(target error) bool {
 	return target == ErrProjectLabelLimitReached
+}
+
+type ProjectLabelOrderError struct {
+	ProjectID string
+	LabelID   *string
+	Reason    string
+}
+
+func (e ProjectLabelOrderError) Error() string {
+	if e.LabelID == nil {
+		return fmt.Sprintf("project %q label order is invalid: %s", e.ProjectID, e.Reason)
+	}
+	return fmt.Sprintf(
+		"project %q label order contains invalid label %q: %s",
+		e.ProjectID,
+		*e.LabelID,
+		e.Reason,
+	)
+}
+
+func (e ProjectLabelOrderError) Is(target error) bool {
+	return target == ErrProjectLabelOrderInvalid
 }
 
 type TaskLabelTaskNotFoundError struct {

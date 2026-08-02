@@ -22,7 +22,7 @@ const (
 )
 
 const WorkflowPaginationMaxLimit = 100
-const WorkflowTaskListMaxSortSelectors = 5
+const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
 type WorkflowNodeKind string
@@ -1183,6 +1183,8 @@ const (
 	WorkflowTaskListSortFieldStatus  WorkflowTaskListSortField = "status"
 	WorkflowTaskListSortFieldColumn  WorkflowTaskListSortField = "column"
 	WorkflowTaskListSortFieldTitle   WorkflowTaskListSortField = "title"
+	WorkflowTaskListSortFieldLabels  WorkflowTaskListSortField = "labels"
+	WorkflowTaskListSortFieldShortID WorkflowTaskListSortField = "short_id"
 )
 
 type WorkflowTaskListSortDirection string
@@ -1462,6 +1464,7 @@ const (
 	WorkflowProjectEventResourceWorkflowLink = protocol.WorkflowProjectEventResourceWorkflowLink
 	WorkflowProjectEventResourceTask         = protocol.WorkflowProjectEventResourceTask
 	WorkflowProjectEventResourceLabel        = protocol.WorkflowProjectEventResourceLabel
+	WorkflowProjectEventResourceLabelCatalog = protocol.WorkflowProjectEventResourceLabelCatalog
 )
 
 type WorkflowProjectEventAction = protocol.WorkflowProjectEventAction
@@ -1498,6 +1501,7 @@ const (
 	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
 	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
+	WorkflowProjectEventActionReordered              = protocol.WorkflowProjectEventActionReordered
 )
 
 type WorkflowProjectEvent struct {
@@ -2997,9 +3001,9 @@ func (r WorkflowTaskListRequest) validateAfterLabelFilter() error {
 	seenSortFields := map[WorkflowTaskListSortField]bool{}
 	for index, sortSelector := range r.Sort {
 		switch sortSelector.Field {
-		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldColumn, WorkflowTaskListSortFieldTitle:
+		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldColumn, WorkflowTaskListSortFieldTitle, WorkflowTaskListSortFieldLabels, WorkflowTaskListSortFieldShortID:
 		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, column, or title")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, column, title, labels, or short_id")
 		}
 		if seenSortFields[sortSelector.Field] {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must not be duplicated")

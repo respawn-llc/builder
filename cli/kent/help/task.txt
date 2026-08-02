@@ -59,7 +59,8 @@ Listing tasks:
   node keys.
   `--column` and `--sort column` require `--workflow` because column keys and
   positions belong to one workflow.
-  `--sort` accepts `created`, `updated`, `status`, `column`, or `title`
+  `--sort` accepts `created`, `updated`, `status`, `column`, `title`, `labels`,
+  or `short-id`
   followed by `:asc` or `:desc`.
   `--label-match` defaults to `any`; `all` requires every included and excluded label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`, or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -624,6 +625,81 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive}
 	if _, err := fixture.tasks.List(fixture.ctx, request); err != nil {
 		t.Fatalf("task-list offset with changed filter error = %v", err)
+	}
+}
+
+func TestTaskListSortsByNumericShortIDBeforePagination(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	tasks := []startedCurrentNodeViewTask{
+		fixture.startTask(t, "Short ID first"),
+		fixture.startTask(t, "Short ID second"),
+		fixture.startTask(t, "Short ID third"),
+	}
+	projectID := fixture.binding.ProjectID
+	workflowID := fixture.workflowID
+	limit := 1
+	request := serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Sort: []serverapi.WorkflowTaskListSort{{
+			Field:     serverapi.WorkflowTaskListSortFieldShortID,
+			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+		}},
+		Limit: &limit,
+	}
+	var got []string
+	for {
+		page, err := fixture.tasks.List(fixture.ctx, request)
+		if err != nil {
+			t.Fatalf("TaskList.List: %v", err)
+		}
+		if len(page.Tasks) > 1 {
+			t.Fatalf("page has %d tasks, want at most one", len(page.Tasks))
+		}
+		if len(page.Tasks) == 1 {
+			got = append(got, page.Tasks[0].TaskID)
+		}
+		if page.NextOffset == nil {
+			break
+		}
+		request.Offset = page.NextOffset
+	}
+	want := []string{string(tasks[0].task.ID), string(tasks[1].task.ID), string(tasks[2].task.ID)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("short ID pagination order = %v, want %v", got, want)
+	}
+}
+
+func TestTaskListSortsShortIDDescendingAndAcceptsSevenSelectors(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	tasks := []startedCurrentNodeViewTask{
+		fixture.startTask(t, "Short ID first"),
+		fixture.startTask(t, "Short ID second"),
+	}
+	projectID := fixture.binding.ProjectID
+	workflowID := fixture.workflowID
+	limit := 20
+	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Sort: []serverapi.WorkflowTaskListSort{
+			{Field: serverapi.WorkflowTaskListSortFieldShortID, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
+			{Field: serverapi.WorkflowTaskListSortFieldLabels, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+			{Field: serverapi.WorkflowTaskListSortFieldCreated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+			{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+			{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+			{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+			{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		},
+		Limit: &limit,
+	})
+	if err != nil {
+		t.Fatalf("TaskList.List: %v", err)
+	}
+	if len(list.Tasks) < len(tasks) || list.Tasks[0].TaskID != string(tasks[1].task.ID) {
+		t.Fatalf("descending seven-field list = %+v, want highest Short ID first", list.Tasks)
 	}
 }
 

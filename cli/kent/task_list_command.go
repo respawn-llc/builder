@@ -251,18 +251,31 @@ func taskListColumnKeysText(columnKeys []string) string {
 }
 
 func parseTaskListFilterValues(raw []string, name string) ([]string, error) {
-	values := []string{}
+	values, err := tokenizeTaskListValues(raw, name)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
+	deduplicated := make([]string, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		deduplicated = append(deduplicated, value)
+	}
+	return deduplicated, nil
+}
+
+func tokenizeTaskListValues(raw []string, name string) ([]string, error) {
+	values := []string{}
 	for _, entry := range raw {
 		for _, part := range strings.Split(entry, ",") {
 			value := strings.TrimSpace(part)
 			if value == "" {
 				return nil, fmt.Errorf("--%s contains a blank value", name)
 			}
-			if !seen[value] {
-				seen[value] = true
-				values = append(values, value)
-			}
+			values = append(values, value)
 		}
 	}
 	return values, nil
@@ -305,7 +318,7 @@ func parseTaskListAttentionKinds(raw []string) ([]serverapi.WorkflowTaskAttentio
 }
 
 func parseTaskListSortSelectors(raw []string) ([]serverapi.WorkflowTaskListSort, error) {
-	values, err := parseTaskListFilterValues(raw, "sort")
+	values, err := tokenizeTaskListValues(raw, "sort")
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +363,11 @@ func parseTaskListSortField(value string) (serverapi.WorkflowTaskListSortField, 
 		return serverapi.WorkflowTaskListSortFieldColumn, nil
 	case "title":
 		return serverapi.WorkflowTaskListSortFieldTitle, nil
+	case "labels":
+		return serverapi.WorkflowTaskListSortFieldLabels, nil
+	case "short-id":
+		return serverapi.WorkflowTaskListSortFieldShortID, nil
 	default:
-		return "", fmt.Errorf("--sort field must be created, updated, status, column, or title")
+		return "", fmt.Errorf("--sort field must be created, updated, status, column, title, labels, or short-id")
 	}
 }
