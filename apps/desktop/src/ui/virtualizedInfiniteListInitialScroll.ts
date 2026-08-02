@@ -46,3 +46,15 @@ export function resolveVirtualizedInitialScroll<TItem>({
   });
   return scrollIndex === null ? null : { requestKey, scrollIndex };
 }
+
+export function shouldDeferVirtualizedInitialScrollOffset({
+  hasNextPage,
+  maxScrollOffset,
+  offset,
+}: Readonly<{
+  hasNextPage: boolean;
+  maxScrollOffset: number;
+  offset: number;
+}>): boolean {
+  return hasNextPage && Math.max(0, offset) > Math.max(0, maxScrollOffset);
+}

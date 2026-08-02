@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useCallback, type ReactElement } from "react";
 
 import { ProjectEditRoute } from "@/features/project-edit";
 import { TaskDetailSurface } from "@/features/task-detail";
@@ -25,7 +25,16 @@ export function SidebarDestinationView({
     removeSidebarEntry,
     replaceSidebarIfCurrent,
     resolveSidebarIfCurrent,
+    setSidebarExitBlocked,
   } = useSidebar();
+  const onSubmissionStateChange = useCallback(
+    (pending: boolean) => {
+      if (activeToken !== null) {
+        setSidebarExitBlocked(activeToken, pending);
+      }
+    },
+    [activeToken, setSidebarExitBlocked],
+  );
   if (destination.kind === "newTask") {
     const formToken = activeToken;
     return (
@@ -49,6 +58,7 @@ export function SidebarDestinationView({
             });
           }
         }}
+        onSubmissionStateChange={onSubmissionStateChange}
         projectID={destination.projectID}
         pendingRelationship={destination.pendingRelationship}
         workflowID={destination.workflowID}

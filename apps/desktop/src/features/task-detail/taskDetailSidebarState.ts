@@ -6,14 +6,7 @@ export type TaskDetailSavePendingState = Readonly<{
   editComment: boolean;
 }>;
 
-export type TaskDetailSnapshotInput = Readonly<{
-  scrollTop: number;
-  descriptionExpanded: boolean;
-  selectedTab: "comments" | "activity";
-  titleBodyDraft?: Readonly<{ title: string; body: string }> | undefined;
-  newCommentDraft?: string | undefined;
-  editedCommentDraft?: Readonly<{ commentID: string; body: string }> | undefined;
-}>;
+export type TaskDetailSnapshotInput = Omit<SidebarTaskDetailSnapshot, "kind">;
 
 export function taskDetailSavePending(state: TaskDetailSavePendingState): boolean {
   return state.task || state.addComment || state.editComment;

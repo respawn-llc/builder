@@ -90,9 +90,7 @@ describe("SidebarProvider stack contract", () => {
 
     expect(rootToken).not.toBeNull();
     expect(rootActivationID).not.toBeNull();
-    expect(result.current.stackDestinations).toEqual([
-      { kind: "taskDetail", taskID: "task-1" },
-    ]);
+    expect(result.current.stackDestinations).toEqual([{ kind: "taskDetail", taskID: "task-1" }]);
     expect(result.current.canGoBack).toBe(false);
 
     act(() => {
@@ -280,6 +278,37 @@ describe("SidebarProvider stack contract", () => {
     });
 
     expect(result.current.stackDestinations).toEqual([{ kind: "taskDetail", taskID: "task-1" }]);
+  });
+
+  it("blocks sidebar exits only for the current destination token", () => {
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({
+        kind: "newTask",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+        boardQueryWorkflowID: undefined,
+      });
+    });
+    const staleToken = result.current.activeToken;
+    if (staleToken === null) {
+      throw new Error("Sidebar token was not created.");
+    }
+
+    act(() => {
+      result.current.setSidebarExitBlocked(staleToken, true);
+    });
+    expect(result.current.sidebarExitBlocked).toBe(true);
+
+    act(() => {
+      result.current.replaceSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    expect(result.current.sidebarExitBlocked).toBe(false);
+
+    act(() => {
+      result.current.setSidebarExitBlocked(staleToken, true);
+    });
+    expect(result.current.sidebarExitBlocked).toBe(false);
   });
 
   it("keeps traversal bounded while rendering one current destination", () => {

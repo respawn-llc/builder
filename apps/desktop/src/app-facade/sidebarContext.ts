@@ -148,6 +148,8 @@ export type SidebarController = Readonly<{
   activeToken: SidebarEntryToken | null;
   backSidebar(): void;
   canGoBack: boolean;
+  sidebarExitBlocked: boolean;
+  setSidebarExitBlocked(token: SidebarEntryToken, blocked: boolean): void;
   closeSidebar(reason?: SidebarCancelReason): void;
   closeSidebarIfCurrent(token: SidebarEntryToken, reason?: SidebarCancelReason): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
@@ -188,7 +190,9 @@ export function sidebarRouteMatchesExpectation(
   location: SidebarRouteLocation,
   expectation: SidebarRouteChangeExpectation,
 ): boolean {
-  const search = new URLSearchParams(location.searchStr.startsWith("?") ? location.searchStr.slice(1) : location.searchStr);
+  const search = new URLSearchParams(
+    location.searchStr.startsWith("?") ? location.searchStr.slice(1) : location.searchStr,
+  );
   return (
     location.pathname === `/projects/${expectation.projectID}` &&
     search.get("taskId") === null &&

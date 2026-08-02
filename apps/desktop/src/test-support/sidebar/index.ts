@@ -14,6 +14,10 @@ export function createTestSidebarController(
       return;
     },
     canGoBack: false,
+    sidebarExitBlocked: false,
+    setSidebarExitBlocked() {
+      return;
+    },
     closeSidebar() {
       return;
     },

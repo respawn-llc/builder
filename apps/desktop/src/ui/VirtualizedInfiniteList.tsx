@@ -4,7 +4,10 @@ import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-vi
 import { cx } from "./classes";
 import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
-import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
+import {
+  resolveVirtualizedInitialScroll,
+  shouldDeferVirtualizedInitialScrollOffset,
+} from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
@@ -166,6 +169,24 @@ export function VirtualizedInfiniteList<TItem>({
   const visibleIndexes = isFallbackRendering
     ? fallbackIndexes
     : virtualItems.map((virtualItem) => virtualItem.index);
+  const requestNextPageIfNeeded = useCallback(
+    (atBottom: boolean) => {
+      const decision = resolveLoadMore({
+        atBottom,
+        hasNextPage,
+        isFetchingNextPage,
+        lastLoadMoreKey: lastLoadMoreKeyRef.current,
+        loadMoreKey: loadMoreKey ?? items.length.toString(),
+        wasFetchingNextPage: wasFetchingNextPageRef.current,
+      });
+      wasFetchingNextPageRef.current = isFetchingNextPage;
+      lastLoadMoreKeyRef.current = decision.lastLoadMoreKey;
+      if (decision.shouldLoad) {
+        onLoadMore();
+      }
+    },
+    [hasNextPage, isFetchingNextPage, items.length, loadMoreKey, onLoadMore],
+  );
   const renderRow = (virtualIndex: number): ReactNode =>
     renderVirtualRow({
       empty,
@@ -248,11 +269,21 @@ export function VirtualizedInfiniteList<TItem>({
     if (element === null) {
       return;
     }
-    lastInitialScrollOffsetRequestKeyRef.current = initialScrollOffsetRequestKey;
     const offset = Math.max(0, initialScrollOffset);
+    if (
+      shouldDeferVirtualizedInitialScrollOffset({
+        hasNextPage,
+        maxScrollOffset: element.scrollHeight - element.clientHeight,
+        offset,
+      })
+    ) {
+      requestNextPageIfNeeded(true);
+      return;
+    }
+    lastInitialScrollOffsetRequestKeyRef.current = initialScrollOffsetRequestKey;
     element.scrollTop = offset;
     virtualizer.scrollToOffset(offset, { behavior: "auto" });
-  }, [initialScrollOffset, initialScrollOffsetRequestKey, virtualizer]);
+  }, [hasNextPage, initialScrollOffset, initialScrollOffsetRequestKey, requestNextPageIfNeeded, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);
@@ -319,28 +350,8 @@ export function VirtualizedInfiniteList<TItem>({
   useEffect(() => {
     const lastVisibleIndex = visibleIndexes.at(-1);
     const lastDataIndex = itemStartIndex + items.length - 1;
-    const decision = resolveLoadMore({
-      atBottom: lastVisibleIndex !== undefined && lastVisibleIndex >= lastDataIndex,
-      hasNextPage,
-      isFetchingNextPage,
-      lastLoadMoreKey: lastLoadMoreKeyRef.current,
-      loadMoreKey: loadMoreKey ?? items.length.toString(),
-      wasFetchingNextPage: wasFetchingNextPageRef.current,
-    });
-    wasFetchingNextPageRef.current = isFetchingNextPage;
-    lastLoadMoreKeyRef.current = decision.lastLoadMoreKey;
-    if (decision.shouldLoad) {
-      onLoadMore();
-    }
-  }, [
-    hasNextPage,
-    isFetchingNextPage,
-    itemStartIndex,
-    items.length,
-    loadMoreKey,
-    onLoadMore,
-    visibleIndexes,
-  ]);
+    requestNextPageIfNeeded(lastVisibleIndex !== undefined && lastVisibleIndex >= lastDataIndex);
+  }, [itemStartIndex, items.length, requestNextPageIfNeeded, visibleIndexes]);
 
   if (count > 0 && virtualItems.length === 0) {
     return (

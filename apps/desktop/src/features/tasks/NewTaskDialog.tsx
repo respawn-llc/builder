@@ -97,6 +97,7 @@ export function NewTaskForm({
   boardQueryWorkflowID: string | undefined;
   className?: string;
   onSubmitted: (taskID?: string) => void;
+  onSubmissionStateChange?: ((pending: boolean) => void) | undefined;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -137,6 +138,7 @@ function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
   onSubmitted,
+  onSubmissionStateChange,
   initialSourceWorkspaceID,
   pendingRelationship,
   projectID,
@@ -145,6 +147,7 @@ function NewTaskFormContent({
   boardQueryWorkflowID: string | undefined;
   className?: string;
   onSubmitted: (taskID?: string) => void;
+  onSubmissionStateChange?: ((pending: boolean) => void) | undefined;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -186,6 +189,10 @@ function NewTaskFormContent({
   });
   const canSubmit =
     connection.phase === "connected" && !createTask.isPending && initialWorkspaceID !== undefined;
+
+  useEffect(() => {
+    onSubmissionStateChange?.(createTask.isPending);
+  }, [createTask.isPending, onSubmissionStateChange]);
 
   useEffect(() => {
     if (!initializedRef.current && initialWorkspaceID !== undefined) {

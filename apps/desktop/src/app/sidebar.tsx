@@ -40,11 +40,7 @@ import {
 
 export function SidebarRouteChangeCloser() {
   const location = useLocation();
-  const {
-    closeSidebar,
-    consumeSidebarRouteChangePreservation,
-    stackDestinations,
-  } = useSidebar();
+  const { closeSidebar, consumeSidebarRouteChangePreservation, stackDestinations } = useSidebar();
   const routeKey = `${location.pathname}?${location.searchStr}`;
   const previousRouteKeyRef = useRef(routeKey);
 
@@ -82,9 +78,9 @@ export function SidebarHost() {
     phase,
     resizeSidebar,
     resolveSidebar,
+    sidebarExitBlocked,
     sidebarWidthPx,
-  } =
-    useSidebar();
+  } = useSidebar();
   const sizePreference = useMemo(() => sidebarSizePreference(activeDestination), [activeDestination]);
   const titleId = useId();
   const sidebarRef = useRef<HTMLElement | null>(null);
@@ -294,6 +290,7 @@ export function SidebarHost() {
         >
           <div className="flex items-center gap-[var(--space-2)]">
             <IconTooltipButton
+              disabled={sidebarExitBlocked}
               label={t("app.close")}
               onClick={() => {
                 closeSidebar("closed");
@@ -303,6 +300,7 @@ export function SidebarHost() {
             </IconTooltipButton>
             {canGoBack ? (
               <IconTooltipButton
+                disabled={sidebarExitBlocked}
                 label={t("app.back")}
                 onClick={() => {
                   backSidebar();
