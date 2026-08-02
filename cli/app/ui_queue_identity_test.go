@@ -309,3 +309,75 @@ func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
 		t.Fatalf("transient status = %q, want %q", got, want)
 	}
 }
+
+func TestQueuedRuntimeSubmitFailureRestoresInjectedTextWithoutDiscarding(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "queued steer"}}
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "steer-1",
+		ServerID: "steer-1",
+		Text:     "queued steer",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
+	model.activeSubmit = activeSubmitState{token: 1, origin: activeSubmitOriginQueued}
+	beforeActivity := model.activity
+
+	next, cmd := model.Update(submitDoneMsg{token: 1, err: io.EOF})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if got, want := testMainInput(updated), "queued steer"; got != want {
+		t.Fatalf("restored steer text = %q, want %q", got, want)
+	}
+	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
+		t.Fatalf("recovered queue state = pending %d, queue %d; want empty", len(updated.pendingInjected), len(updated.injectedQueue))
+	}
+	if client.discardQueuedCalls != 0 {
+		t.Fatalf("discard calls = %d, want 0", client.discardQueuedCalls)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+}
+
+func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	model.setRuntimeDisconnected(true)
+	model.queued = queuedInputsForTest("queued message")
+	beforeActivity := model.activity
+
+	next, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if got, want := testMainInput(updated), "queued message"; got != want {
+		t.Fatalf("restored queued text = %q, want %q", got, want)
+	}
+	if len(updated.queued) != 0 {
+		t.Fatalf("queued items = %d, want 0", len(updated.queued))
+	}
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if got, want := updated.transientStatus, runtimeDisconnectedStatusMessage; got != want {
+		t.Fatalf("transient status = %q, want %q", got, want)
+	}
+}

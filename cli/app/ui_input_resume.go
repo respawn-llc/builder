@@ -12,7 +12,7 @@ import (
 
 func (c uiInputController) startQueuedInjectionSubmission() tea.Cmd {
 	m := c.model
-	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, ""); blocked {
+	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return disconnectCmd
 	}
 	if m.injectedQueueBlocksDrain() {
@@ -46,7 +46,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 	m.queuedRuntimeWorkCheckCompactionOrigin = uiCompactionOriginNone
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
-		restoreCmd := c.restorePendingInjectedIntoInput()
+		restoreCmd := c.restorePendingInjectedIntoInput(injectedQueueRestoreWithDiscard)
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")

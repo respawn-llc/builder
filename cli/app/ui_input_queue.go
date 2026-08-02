@@ -36,6 +36,13 @@ const (
 	injectedRuntimeQueueDiscardFailed        injectedRuntimeQueueState = "discardFailed"
 )
 
+type injectedQueueRestoreMode uint8
+
+const (
+	injectedQueueRestoreWithDiscard injectedQueueRestoreMode = iota
+	injectedQueueRestoreWithoutDiscard
+)
+
 type injectedRuntimeQueueItem struct {
 	LocalID                  string
 	ServerID                 string
@@ -197,7 +204,7 @@ func (c uiInputController) blockDisconnectedSubmission(restoreHidden bool, submi
 		return false, nil
 	}
 	if restoreHidden {
-		restoreCmd := c.restorePendingInjectedIntoInput()
+		restoreCmd := c.restorePendingInjectedIntoInput(injectedQueueRestoreWithDiscard)
 		c.restoreSubmittedTextIntoInput(submittedText)
 		c.restoreQueuedMessagesIntoInput()
 		m.activity = uiActivityError
@@ -207,6 +214,18 @@ func (c uiInputController) blockDisconnectedSubmission(restoreHidden bool, submi
 	m.activity = uiActivityError
 	m.layout().syncViewport()
 	return true, m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, runtimeDisconnectedStatusMessage, "")
+}
+
+func (c uiInputController) blockDisconnectedQueuedSubmission() (bool, tea.Cmd) {
+	m := c.model
+	if !m.runtimeDisconnectStatusVisible() {
+		return false, nil
+	}
+	restoreCmd := c.restorePendingInjectedIntoInput(injectedQueueRestoreWithoutDiscard)
+	c.restoreQueuedMessagesIntoInput()
+	m.layout().syncViewport()
+	statusCmd := m.sendTransientStatusWithNoticeID(runtimeDisconnectedStatusMessage, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	return true, tea.Batch(restoreCmd, statusCmd)
 }
 
 func (c uiInputController) restoreQueuedMessagesIntoInput() {
@@ -240,16 +259,24 @@ func (c uiInputController) restoreSubmittedTextIntoInput(text string) {
 	m.replaceMainInputAtEnd(newInput)
 }
 
-func (c uiInputController) restorePendingInjectedIntoInput() tea.Cmd {
+func (c uiInputController) restorePendingInjectedIntoInput(mode injectedQueueRestoreMode) tea.Cmd {
 	m := c.model
 	if len(m.pendingInjected) == 0 {
 		return nil
 	}
 	pending := append([]clientui.QueuedUserMessage(nil), m.pendingInjected...)
 	cmds := make([]tea.Cmd, 0, len(pending))
-	for _, item := range pending {
-		if cmd := m.markInjectedQueueDiscardRequested(item.ID); cmd != nil {
-			cmds = append(cmds, cmd)
+	if mode == injectedQueueRestoreWithDiscard {
+		for _, item := range pending {
+			if cmd := m.markInjectedQueueDiscardRequested(item.ID); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	} else {
+		for _, item := range pending {
+			if index := m.injectedQueueIndexByAnyID(item.ID); index >= 0 {
+				m.removeInjectedQueueItemAt(index)
+			}
 		}
 	}
 	joined := strings.Join(queuedUserMessageTexts(pending), "\n\n")
@@ -270,7 +297,7 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 	if len(m.queued) == 0 {
 		return m, nil
 	}
-	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, ""); blocked {
+	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return m, disconnectCmd
 	}
 	cmds := make([]tea.Cmd, 0, 2)

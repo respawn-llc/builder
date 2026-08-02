@@ -219,7 +219,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
-		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
+		restoreMode := injectedQueueRestoreWithDiscard
+		if submitOrigin == activeSubmitOriginQueued {
+			restoreMode = injectedQueueRestoreWithoutDiscard
+		}
+		restoreInjectedCmd := c.restorePendingInjectedIntoInput(restoreMode)
 		if restoreSubmittedText {
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
 		}
@@ -330,7 +334,7 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	m.observeRuntimeRequestResult(msg.err)
 	c.finishRuntimeOperationAffordance(true)
 	if msg.err != nil {
-		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
+		restoreInjectedCmd := c.restorePendingInjectedIntoInput(injectedQueueRestoreWithDiscard)
 		c.restoreQueuedMessagesIntoInput()
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
