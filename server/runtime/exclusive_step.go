@@ -570,7 +570,17 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			<-done
+			s.mu.Lock()
+			nested := s.suspended != nil || (s.active != nil && s.active.activeKind == ActiveKindCompaction)
+			if !nested && s.boundaryDone == done {
+				s.boundaryDone = nil
+				s.boundaryReady = false
+				close(done)
+			}
+			s.mu.Unlock()
+			if nested {
+				<-done
+			}
 			return ctx.Err()
 		case <-done:
 		}

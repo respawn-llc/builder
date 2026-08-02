@@ -35,6 +35,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
 	reviewerResult, err := r.RunSuggestions(ctx, stepID, reviewerClient)
 	if err != nil {
+		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{
 			Outcome: "failed",
 			Error:   strings.TrimSpace(err.Error()),
@@ -43,6 +44,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	}
 	suggestions := reviewerResult.Suggestions
 	if len(suggestions) == 0 {
+		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
 	}
