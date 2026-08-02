@@ -1,6 +1,7 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { appI18n } from "@/i18n";
 import {
   mountTaskDetailSurface,
   questionAttention,
@@ -30,16 +31,10 @@ describe("Task Detail live refresh", () => {
     if (firstOption === undefined) {
       throw new Error("expected a question option");
     }
-    const form = firstOption.closest("form");
-    if (form === null) {
-      throw new Error("question option is not contained by a form");
-    }
-    await user.click(within(form).getByRole("button"));
+    await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
 
-    await waitFor(() => {
-      expect(firstOption).toBeInTheDocument();
-      expect(firstOption).toBeDisabled();
-    });
+    await waitFor(() => expect(firstOption).toBeDisabled());
+    expect(firstOption).toBeInTheDocument();
   });
 
   it("shows the next batch question when its waiting event arrives after an answer", async () => {
