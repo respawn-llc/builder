@@ -292,7 +292,7 @@ Assign labels atomically when creating a task or update them immediately from ta
 
 On the board, a named Label row cycles neutral → included → excluded. An included condition requires the Label; an excluded condition requires its absence. `--label-match any` matches when any included or excluded condition is true, while `all` requires every condition. `No labels` remains a binary filter for tasks without assignments and is mutually exclusive with named conditions. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
 
-The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
+The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
 
@@ -324,6 +324,8 @@ Task listing is always project-scoped. Omitting `--workflow` lists tasks across 
 kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
+
+Task sorting accepts `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id` selectors with explicit `asc` or `desc` directions. A command may provide up to seven distinct selectors in one or repeated `--sort` flags.
 
 ### Task Dependencies
 

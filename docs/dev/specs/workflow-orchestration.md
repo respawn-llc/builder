@@ -57,7 +57,11 @@
 - Label changes do not change a Task's update time, reorder Tasks, or move pagination anchors.
 - Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
 - Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count. Desktop deletion uses explicit confirmation; invoking the explicit CLI delete command is sufficient confirmation and does not prompt or require a separate confirmation flag.
-- Labels have no color or manual ordering. Label catalogs and assigned chips use case-insensitive alphabetical order. Kent does not sort Tasks by Label.
+- Labels have no color.
+- A Project Label catalog has one authoritative order. New Labels append to the catalog. Deleting a Label preserves the relative order of the remaining Labels.
+- `kent task label move` changes the authoritative catalog order and accepts exactly one placement: first, last, before another Label, or after another Label.
+- Label catalogs and task assignments use the authoritative Project Label order.
+- Kent does not sort Tasks by Label.
 - Kent applies Label filters before pagination for Workflow boards and Task lists.
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.
@@ -557,7 +561,7 @@
 - Every selector in one command must resolve before task creation, assignment, or listing proceeds. Selector-resolution failure reports every unresolved selector and never ignores or partially applies the input.
 - `kent task list` exposes one typed task status. `--status` filters primary status, `--attention` filters typed attention, and `--column` filters workflow node keys.
 - `kent task list` filters and sorts before pagination. Multiple values for one filter are ORed. Different filter types are ANDed. A Task with several Current Nodes exposes all matching column keys in Workflow order.
-- `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, and `title`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
+- `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts up to seven ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
 - `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.
 - Plain-text `kent task complete` output is a model-facing handoff acknowledgement: `Completion scheduled. The transition <source display name> → <destination display name> will execute now. Your next agent turn will begin with the next workflow instructions.`
 - The acknowledgement uses the target node display name for an ordinary transition. A fan-out uses its shared target node-group display name when present and otherwise its transition display name.
