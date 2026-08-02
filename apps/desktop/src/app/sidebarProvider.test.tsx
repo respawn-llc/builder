@@ -68,6 +68,24 @@ describe("SidebarProvider replacement", () => {
       reason: "closed",
     });
   });
+
+  it("keeps the active activation stable during the close animation", () => {
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+      <SidebarProvider>{children}</SidebarProvider>
+    );
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const activationID = result.current.activeActivationID;
+
+    act(() => {
+      result.current.closeSidebar();
+    });
+
+    expect(result.current.phase).toBe("closing");
+    expect(result.current.activeActivationID).toBe(activationID);
+  });
 });
 
 describe("SidebarProvider stack contract", () => {

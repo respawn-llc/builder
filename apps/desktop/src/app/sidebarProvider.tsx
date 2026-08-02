@@ -114,7 +114,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     const activeEntry = state?.entries.at(-1);
     return activeEntry === undefined || state === null
       ? null
-      : { entryID: activeEntry.entryID, lifecycleID: state.lifecycleID };
+      : sidebarEntryToken(state.lifecycleID, activeEntry.entryID);
   }, []);
 
   const animateClosed = useCallback(
@@ -254,7 +254,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     if (state === null || pending === null || activeEntry === undefined) {
       return false;
     }
-    const token = { entryID: activeEntry.entryID, lifecycleID: state.lifecycleID };
+    const token = sidebarEntryToken(state.lifecycleID, activeEntry.entryID);
     const capture = captureRef.current.get(tokenKey(token));
     if (capture === undefined) {
       return true;
@@ -469,20 +469,15 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   }, [clearAllCaptures, clearCloseTimeout]);
 
   const activeDestination = stackState?.entries.at(-1)?.destination ?? null;
-  const activeActivationID = phase === "closing" ? null : (stackState?.activationID ?? null);
+  const activeActivationID = stackState?.activationID ?? null;
   const activeSnapshot = stackState?.entries.at(-1)?.snapshot ?? null;
-  const activeToken = useMemo(
-    () => activeTokenForState(stackState),
-    [activeTokenForState, stackState],
-  );
+  const activeToken = useMemo(() => activeTokenForState(stackState), [activeTokenForState, stackState]);
   const stackDestinations = useMemo(
     () => stackState?.entries.map((entry) => entry.destination) ?? [],
     [stackState],
   );
   const stackEntryTokens = useMemo(
-    () =>
-      stackState?.entries.map((entry) => ({ entryID: entry.entryID, lifecycleID: stackState.lifecycleID })) ??
-      [],
+    () => stackState?.entries.map((entry) => sidebarEntryToken(stackState.lifecycleID, entry.entryID)) ?? [],
     [stackState],
   );
   const sidebarWidthPx =
@@ -555,6 +550,10 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
 function tokenKey(token: SidebarEntryToken): string {
   return `${token.lifecycleID}:${token.entryID}`;
+}
+
+function sidebarEntryToken(lifecycleID: string, entryID: string): SidebarEntryToken {
+  return { entryID, lifecycleID };
 }
 
 function defaultSidebarWidth(destination: SidebarDestination | null = null): number {
