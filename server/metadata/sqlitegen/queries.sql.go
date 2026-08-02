@@ -4247,7 +4247,6 @@ board_node_tasks_scored AS (
         labels.label_ordinals,
         CASE WHEN labels.task_id IS NULL THEN 1 ELSE 0 END AS labels_unlabeled,
         CASE args.sort_field
-            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
             WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
             WHEN 'title' THEN kent_label_casefold_v1_fold(t.title)
             WHEN 'short_id' THEN printf('%020d', t.task_seq)

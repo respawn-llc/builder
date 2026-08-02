@@ -138,7 +138,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	cursorUpdatedAtUnixMs := sql.NullInt64{}
 	if cursor.anchor != nil {
 		if sort.Field != serverapi.WorkflowBoardNodeCardsSortFieldLabels || cursor.anchor.labelOrdinals != nil {
-			cursorSortValue = sql.NullString{String: cursor.anchor.sortValue(sort), Valid: true}
+			sortValue, err := cursor.anchor.sortValue(sort)
+			if err != nil {
+				return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+			}
+			cursorSortValue = sql.NullString{String: *sortValue, Valid: true}
 		}
 		cursorTaskSeq = sql.NullInt64{Int64: cursor.anchor.taskSeq, Valid: true}
 		if cursor.anchor.updatedAtUnixMs != nil {
@@ -570,7 +574,6 @@ type boardNodeCardsPageTokenPayload struct {
 	CreatedAtUnixMs *int64                               `json:"created_at_unix_ms,omitempty"`
 	LabelOrdinals   *string                              `json:"label_ordinals,omitempty"`
 	Unlabeled       *bool                                `json:"unlabeled,omitempty"`
-	Title           *string                              `json:"title,omitempty"`
 	TitleSort       *string                              `json:"title_sort,omitempty"`
 	TaskSeq         int64                                `json:"task_seq"`
 	Direction       boardNodeCardsPageDirection          `json:"direction"`
@@ -629,39 +632,51 @@ func boardNodeCardsPageAnchorMatchesSort(payload boardNodeCardsPageTokenPayload,
 	}
 	switch sort.Field {
 	case serverapi.WorkflowBoardNodeCardsSortFieldUpdated:
-		return payload.UpdatedAtUnixMs != nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil && payload.TitleSort == nil
+		return payload.UpdatedAtUnixMs != nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.TitleSort == nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldCreated:
-		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs != nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil && payload.TitleSort == nil
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs != nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.TitleSort == nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldLabels:
-		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.Unlabeled != nil && payload.Title == nil && payload.TitleSort == nil &&
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.Unlabeled != nil && payload.TitleSort == nil &&
 			((*payload.Unlabeled && payload.LabelOrdinals == nil) ||
 				(!*payload.Unlabeled && payload.LabelOrdinals != nil && *payload.LabelOrdinals == strings.TrimSpace(*payload.LabelOrdinals)))
 	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
-		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title != nil && payload.TitleSort != nil && *payload.TitleSort == boardNodeCardsTitleSortValue(*payload.Title)
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.TitleSort != nil && *payload.TitleSort == boardNodeCardsTitleSortValue(*payload.TitleSort)
 	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
-		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.Title == nil && payload.TitleSort == nil
+		return payload.UpdatedAtUnixMs == nil && payload.CreatedAtUnixMs == nil && payload.LabelOrdinals == nil && payload.Unlabeled == nil && payload.TitleSort == nil
 	default:
 		return false
 	}
 }
 
-func (a boardNodeCardsPageAnchor) sortValue(sort serverapi.WorkflowBoardNodeCardsSort) string {
+func (a boardNodeCardsPageAnchor) sortValue(sort serverapi.WorkflowBoardNodeCardsSort) (*string, error) {
 	switch sort.Field {
 	case serverapi.WorkflowBoardNodeCardsSortFieldUpdated:
-		return fmt.Sprintf("%020d", *a.updatedAtUnixMs)
+		if a.updatedAtUnixMs == nil {
+			return nil, errors.New("board page cursor is missing updated sort value")
+		}
+		value := fmt.Sprintf("%020d", *a.updatedAtUnixMs)
+		return &value, nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldCreated:
-		return fmt.Sprintf("%020d", *a.createdAtUnixMs)
+		if a.createdAtUnixMs == nil {
+			return nil, errors.New("board page cursor is missing created sort value")
+		}
+		value := fmt.Sprintf("%020d", *a.createdAtUnixMs)
+		return &value, nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldLabels:
 		if a.labelOrdinals == nil {
-			return ""
+			return nil, errors.New("board page cursor is missing label sort value")
 		}
-		return *a.labelOrdinals
+		return a.labelOrdinals, nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
-		return *a.title
+		if a.title == nil {
+			return nil, errors.New("board page cursor is missing title sort value")
+		}
+		return a.title, nil
 	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
-		return fmt.Sprintf("%020d", a.taskSeq)
+		value := fmt.Sprintf("%020d", a.taskSeq)
+		return &value, nil
 	default:
-		panic(fmt.Sprintf("board node cards sort invariant violated: unsupported field %q", sort.Field))
+		return nil, fmt.Errorf("board node cards sort invariant violated: unsupported field %q", sort.Field)
 	}
 }
 
@@ -726,7 +741,6 @@ func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string,
 		payload.Unlabeled = &task.unlabeled
 	case serverapi.WorkflowBoardNodeCardsSortFieldTitle:
 		title := boardNodeCardsTitleSortValue(task.task.Title)
-		payload.Title = &title
 		payload.TitleSort = &title
 	case serverapi.WorkflowBoardNodeCardsSortFieldShortID:
 	default:
