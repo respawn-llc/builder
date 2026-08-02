@@ -162,7 +162,7 @@ func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterSc
 	}
 }
 
-func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T) {
+func TestCurrentNodeControllerQueuesNonLiveApprovalTargetWithoutSteering(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -196,19 +196,19 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
-	if got := steerer.references(); len(got) != 1 || !got[0].Equal(target) {
-		t.Fatalf("steered assignments = %+v, want %v", got, target)
+	if got := steerer.references(); len(got) != 0 {
+		t.Fatalf("steered assignments = %+v, want none", got)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return len(runner.promptDeliveries()) == 1
 	}, "approval target did not reach runner")
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
-		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
-		t.Fatalf("runner prompt deliveries = %+v, want Resume after transition steer", deliveries)
+		deliveries[0] != workflowruntime.TaskPromptDeliveryAssignment {
+		t.Fatalf("runner prompt deliveries = %+v, want Assignment", deliveries)
 	}
 }
 
-func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *testing.T) {
+func TestCurrentNodeControllerDoesNotDependOnApprovalAssignmentSteering(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -226,10 +226,9 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	cause := errors.New("assignment append failed")
 	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: errors.New("unused steering")},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -239,15 +238,14 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 		_ = authority.Close(context.Background())
 	})
 
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, cause) {
-		t.Fatalf("ApplyPendingApproval error = %v, want %v", err, cause)
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("ApplyPendingApproval error = %v, want no steering error", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if starts := runner.starts(); starts != 0 {
-		t.Fatalf("runner starts = %d, want none after steering failure", starts)
-	}
-	if interruption, interrupted := store.interruption(target); interrupted {
-		t.Fatalf("unassigned approval target was made resumable: %+v", interruption)
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 1
+	}, "approval target did not start without steering")
+	if got := runner.promptDeliveries(); len(got) != 1 || got[0] != workflowruntime.TaskPromptDeliveryAssignment {
+		t.Fatalf("runner prompt deliveries = %+v, want Assignment", got)
 	}
 }
 

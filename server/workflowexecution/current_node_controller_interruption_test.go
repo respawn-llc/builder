@@ -500,8 +500,9 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	controller.mu.Lock()
 	controller.agentCapacityActive = 1
 	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
-		reference: reserved,
-		policy:    currentNodeAdmissionAutomaticAgent,
+		reference:         reserved,
+		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		policy:            currentNodeAdmissionAutomaticAgent,
 		agentCapacityLease: &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,
 		},
@@ -716,6 +717,70 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 	}
 }
 
+func TestCurrentNodeControllerTaskInterruptCancelsBlockedPreparation(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	live := currentNodeReferenceForControllerTest(t, "task-blocked-preparation-interrupt", "live")
+	blocked := currentNodeReferenceForControllerTest(t, "task-blocked-preparation-interrupt", "blocked")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &liveAndInterruptiblePreparationRunner{
+		authority:   authority,
+		shellPath:   shellPath,
+		live:        live,
+		liveStarted: make(chan struct{}),
+		entered:     make(chan struct{}),
+		canceled:    make(chan struct{}),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, live); err != nil {
+		t.Fatalf("start live current node: %v", err)
+	}
+	select {
+	case <-runner.liveStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live current node did not start")
+	}
+	waitForRunningCurrentNode(t, authority, live)
+	controller.enqueueStarts([]currentNodeQueuedStart{{
+		reference:         blocked,
+		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		policy:            currentNodeAdmissionExplicitOverride,
+	}})
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked preparation did not start")
+	}
+
+	interruptCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := controller.Interrupt(interruptCtx, InterruptSelector{TaskID: live.TaskID}); err != nil {
+		t.Fatalf("Task Interrupt: %v", err)
+	}
+	select {
+	case <-runner.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("blocked preparation did not observe interruption cancellation")
+	}
+}
+
 func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-reservation-no-live", "node-agent")
 	store := &currentNodeControllerStore{}
@@ -735,7 +800,11 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+	controller.automaticReservations[key] = currentNodeQueuedStart{
+		reference:         reference,
+		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		policy:            currentNodeAdmissionAutomaticAgent,
+	}
 	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, ErrNoInterruptibleExecution) {

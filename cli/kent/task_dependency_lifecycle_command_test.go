@@ -30,6 +30,10 @@ func (r *taskDependencyLifecycleRemote) GetWorkflowTask(_ context.Context, req s
 	}, nil
 }
 
+func (r *taskDependencyLifecycleRemote) ListWorkflowTaskAttention(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
+	return serverapi.WorkflowTaskAttentionListResponse{Items: []serverapi.WorkflowAttentionItem{}}, nil
+}
+
 func (r *taskDependencyLifecycleRemote) StartWorkflowTask(_ context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
 	r.startRequests = append(r.startRequests, req)
 	return r.startResponse, nil

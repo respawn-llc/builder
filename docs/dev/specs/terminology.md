@@ -48,7 +48,7 @@ A workflow-level rule for choosing where a task's executable nodes run. The five
 
 ### Execution Target
 
-The target-selection provenance locked to a task when its first executable action succeeds. For a managed target it records the requested Git revision and resolved commit while the current managed-worktree relation, root, and named branch may be conservatively restored or changed by the operator. A no-managed-worktree target follows the task's current source workspace. Later nodes and retries reuse the locked mode and managed selection provenance despite workflow edits or Git ref movement.
+The target-selection provenance locked to a task when Kent establishes its first Execution Root. Durable movement to executable work alone does not lock it. A managed target remains unlocked if preparation fails without changing the filesystem; after preparation retains managed-worktree filesystem state, Kent locks the requested Git revision and resolved commit when persistence succeeds. A no-managed-worktree target follows the task's current source workspace. Later nodes and retries reuse the locked mode and managed selection provenance despite workflow edits or Git ref movement.
 
 ### Execution Root
 

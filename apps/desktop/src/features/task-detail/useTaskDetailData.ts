@@ -147,7 +147,7 @@ export function usePendingAsks(sessionID: string | null) {
   });
 }
 
-type TaskLifecycleAction = "dependency_remove" | "interrupt" | "resume";
+type TaskLifecycleAction = "dependency_remove" | "interrupt";
 
 type TaskMutationCallbacks = Readonly<{
   onChanged?: (() => void) | undefined;
@@ -229,13 +229,6 @@ export function useTaskMutations(
         onActionError?.("interrupt", error);
       },
       onSettled: refresh,
-    }),
-    resume: useMutation({
-      mutationFn: async () => api.resumeTask(taskID),
-      onError: (error) => {
-        onActionError?.("resume", error);
-      },
-      onSuccess: refresh,
     }),
     approveApproval: useMutation({
       mutationFn: async (approvalID: string) => api.approveApproval(approvalID),

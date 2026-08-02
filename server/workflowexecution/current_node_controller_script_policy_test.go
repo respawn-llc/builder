@@ -29,8 +29,9 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			name: "predecessor held",
 			apply: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
 				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
+					reference:         script,
+					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					policy:            currentNodeAdmissionAutomaticScript,
 				}}
 			},
 			clean: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
@@ -41,8 +42,9 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			name: "reserved",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				controller.automaticReservations[key] = currentNodeQueuedStart{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
+					reference:         script,
+					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					policy:            currentNodeAdmissionAutomaticScript,
 				}
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
@@ -123,8 +125,9 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			}
 			controller.agentCapacityActive = 1
 			controller.automaticQueue.append(currentNodeQueuedStart{
-				reference: queuedAgent,
-				policy:    currentNodeAdmissionAutomaticAgent,
+				reference:         queuedAgent,
+				launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+				policy:            currentNodeAdmissionAutomaticAgent,
 			})
 			controller.queued[queuedKey] = struct{}{}
 			test.apply(controller, scriptKey)
@@ -254,8 +257,9 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 	})
 
 	controller.enqueueStarts([]currentNodeQueuedStart{{
-		reference: failed,
-		policy:    currentNodeAdmissionAutomaticAgent,
+		reference:         failed,
+		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		policy:            currentNodeAdmissionAutomaticAgent,
 		assignmentSteer: completedCurrentNodeAssignmentSteer{
 			err: errors.New("assignment preparation failed"),
 		},

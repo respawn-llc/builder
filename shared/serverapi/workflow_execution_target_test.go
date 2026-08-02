@@ -61,6 +61,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &sessionID,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -91,6 +92,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &zero,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -99,6 +101,35 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 	} {
 		if err := request.Validate(); err == nil {
 			t.Fatalf("%T accepted zero invoking Session", request)
+		}
+	}
+}
+
+func TestWorkflowTaskResumeRequestCarriesSetupOperationAndConcreteTarget(t *testing.T) {
+	customRef := "refs/heads/release"
+	request := WorkflowTaskResumeRequest{
+		TaskID:           "task",
+		SetupOperationID: NewWorktreeSetupOperationID(),
+		ExecutionTarget: &WorkflowExecutionTargetSelection{
+			Mode:      WorkflowExecutionTargetModeCustomRef,
+			CustomRef: &customRef,
+		},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("valid Resume request rejected: %v", err)
+	}
+
+	for _, invalid := range []WorkflowTaskResumeRequest{
+		{TaskID: "task"},
+		{TaskID: "task", SetupOperationID: WorktreeSetupOperationID{}, ExecutionTarget: request.ExecutionTarget},
+		{
+			TaskID:           "task",
+			SetupOperationID: NewWorktreeSetupOperationID(),
+			ExecutionTarget:  &WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeAskOnFirstExecution},
+		},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("invalid Resume request validated: %#v", invalid)
 		}
 	}
 }
@@ -174,6 +205,10 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
+		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}},
+		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &WorkflowExecutionTargetSelectionRequirement{
+			Reason: WorkflowExecutionTargetSelectionReasonUnlockedPreparationFailed,
+		}},
 	} {
 		if err := response.Validate(); err != nil {
 			t.Fatalf("%T valid response rejected: %v", response, err)
@@ -184,6 +219,16 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 	}
 	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
 		t.Fatal("mismatched response branch validated")
+	}
+	for _, response := range []WorkflowTaskResumeResponse{
+		{Outcome: WorkflowExecutionTargetActionOutcomeApplied},
+		{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}, SelectionRequired: &requirement},
+		{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}},
+		{Outcome: WorkflowExecutionTargetActionOutcome("future")},
+	} {
+		if err := response.Validate(); err == nil {
+			t.Fatalf("invalid Resume response validated: %#v", response)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import type {
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
+  TaskResumeInput,
   TaskStartInput,
   TaskMutationInput,
   TaskListInput,
@@ -41,6 +42,7 @@ import type {
   TaskDependencyListResponse,
   TaskDependencyMutationResponse,
   TaskMoveResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowBoard,
   WorkflowDefinition,
@@ -145,7 +147,7 @@ export interface ApiService {
   startTask(input: TaskStartInput): Promise<TaskStartResponse>;
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;
   interruptTask(taskID: string, sessionID?: string): Promise<void>;
-  resumeTask(taskID: string): Promise<void>;
+  resumeTask(input: TaskResumeInput): Promise<TaskResumeResponse>;
   approveApproval(approvalID: string): Promise<TaskApproveResponse>;
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;

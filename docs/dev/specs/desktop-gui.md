@@ -69,7 +69,7 @@
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
-- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. A usable fixed policy is not overridden.
+- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution. A fixed policy is not overridden before movement.
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task
   Dependencies, Desktop opens dependency confirmation before Execution Target
   selection or another continuation dialog.
@@ -86,11 +86,17 @@
   The board applies that result through its existing start or move action path.
 - Dismissing a later continuation leaves the Task unchanged and discards that
   proceed intent.
-- Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
+- Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch.
+- Resume after an unresolved Execution Target failure uses this same selection flow.
 - Closing Execution Target selection leaves the Task unchanged. Continue closes
-  the dialog and returns the selection to the board. The board owns resolution,
-  setup, duplicate prevention, and actionable failure through its existing
-  action path.
+  the dialog and returns the selection to the invoking action. For Resume, an
+  accepted selection retries preparation in place.
+- Kent acknowledges Desktop's Start or executable Manual Move after durable movement without waiting for preparation.
+- Desktop then ends the pending board action and refreshes the Task immediately.
+- Desktop ends a pending Resume or Approval when Kent acknowledges its durable Workflow change. It does not wait for preparation.
+- The moved card uses the existing idle presentation while server-owned preparation runs. It changes to queued or running when an Exact Execution Scope exists, or interrupted when preparation fails.
+- Desktop adds no preparation-specific state, progress surface, setup-failure toast, or setup-failure dialog.
+- Preparation failures use the existing interrupted-Current-Node Task attention, Task Detail error details and Resume action, and attention notifications.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
 - Agent and Script drop targets exist only for actual Workflow edges. Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
 - A non-startable Backlog Task remains visible.
@@ -126,7 +132,7 @@
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.
 - Task Detail begins with Inbox, which contains current blockers and answer, Approval, and Resume controls. Comments have composer, list, edit, delete, and count. There is no completed Workflow movement or execution-history view.
-- Task Detail shows Task Short ID, title, Markdown body, Project, Workflow, source workspace name and root, all Current Nodes and states, completion state, and available actions including Task Delete. When available, it also shows Execution Target, managed worktree, requested revision, resolved commit, branch, Agent role and execution state, Session identity, source URL, and assignee or column.
+- Task Detail shows Task Short ID, title, Markdown body, Project, Workflow, source workspace name and root, all Current Nodes and states, completion state, and available actions including Task Delete. When available, it also shows Execution Target, managed worktree, requested revision, resolved commit, branch, Agent role and execution state, Session identity, source URL, and assignee or column. It hides all Execution Target facts until the target locks.
 - Source root and Execution Root are not separate facts. Unavailable expected facts are hidden; useful continuity facts may be empty or unassigned; unexpected meaningful absence is an unavailable or error state. Unavailable managed worktrees have no managed-worktree fact.
 - Visible values copy by selecting the value itself, with clipboard feedback that identifies the copied value on success and includes the error on failure. Short commit display copies the complete commit. Actions that copy deliberately hidden content remain explicit controls.
 - Source URL is read-only. Valid web, secure web, and mail links use their host as the label and open externally; other values are plain source text.

@@ -40,14 +40,14 @@ func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.Skill
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
-func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message) error {
+func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message, deduplicate bool) error {
 	if len(messages) == 0 {
 		return nil
 	}
 	activeItems := e.transcriptRuntimeState().SnapshotItems()
 	pending := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if latestActiveMetaContextMatches(activeItems, message) {
+		if deduplicate && latestActiveMetaContextMatches(activeItems, message) {
 			continue
 		}
 		pending = append(pending, message)
@@ -233,7 +233,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 		if err != nil {
 			return err
 		}
-		if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Headless); err != nil {
+		if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Headless, true); err != nil {
 			return err
 		}
 		return e.store.SetHeadlessActive(true)
@@ -242,7 +242,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.HeadlessExit); err != nil {
+	if err := e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.HeadlessExit, true); err != nil {
 		return err
 	}
 	return e.store.SetHeadlessActive(false)
@@ -287,7 +287,12 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		if err != nil {
 			return err
 		}
-		return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
+		return e.steerMetaContextIfChanged(
+			stepID,
+			steeringPriorityRuntimeContext,
+			metaResult.Workflow,
+			trigger != workflowTaskPromptTriggerAssignmentDelivery,
+		)
 	})
 }
 

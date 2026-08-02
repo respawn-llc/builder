@@ -26,7 +26,9 @@ import (
 	"core/server/workflowattention"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
+	"core/server/workflowscript"
 	"core/server/workflowstore"
+	"core/server/worktree"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -46,6 +48,10 @@ type RuntimeStore interface {
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 }
 
+type ExecutionTargetPreparer interface {
+	PrepareExecutionTarget(context.Context, workflow.CurrentNodeReference, workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error)
+}
+
 type WorkflowAttentionRegistry interface {
 	workflowattention.QuestionAttentionRegistry
 	workflowattention.ApprovalQuestionAttentionRegistry
@@ -62,6 +68,7 @@ type Starter struct {
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	mutationPermit       *workflowexecution.MutationPermit
 	taskAwarenessSource  workflowruntime.TaskAwarenessSource
+	executionTarget      ExecutionTargetPreparer
 	closed               atomic.Bool
 }
 
@@ -70,6 +77,7 @@ type StarterOptions struct {
 	RuntimeAuthority     *sessionruntime.Authority
 	MutationPermit       *workflowexecution.MutationPermit
 	TaskDependencies     TaskDependencyCounter
+	ExecutionTarget      ExecutionTargetPreparer
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
@@ -94,37 +102,138 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		mutationPermit:       opts.MutationPermit,
 		taskAwarenessSource:  taskAwarenessSource,
+		executionTarget:      opts.ExecutionTarget,
 	}, nil
 }
 
-func (s *Starter) StartCurrentNode(
+func (s *Starter) StartCurrentNodeWithPreparation(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	preparation workflowexecution.LaunchPreparation,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
-) error {
+) (err error) {
+	defer func() {
+		err = currentNodeStartFailure(err)
+	}()
 	if s.closed.Load() {
 		return errors.New("workflow runtime starter closed")
 	}
 	if !lease.Workflow().CurrentNode.Equal(reference) {
 		return errors.New("workflow execution lease does not match current node")
 	}
+	if err := preparation.Validate(); err != nil {
+		return err
+	}
+	var preparedRoot *workflowstore.ExecutionRoot
+	if preparation.Kind != workflowexecution.LaunchPreparationEstablishedRoot {
+		if s.executionTarget == nil {
+			return errors.New("workflow execution target preparer is required")
+		}
+		root, err := s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
+		if err != nil {
+			return err
+		}
+		preparedRoot = &root
+	}
 	input, err := s.store.ResolveCurrentNodeStartContext(ctx, reference)
 	if err != nil {
 		return err
 	}
+	if preparedRoot != nil {
+		input.ExecutionRoot = preparedRoot
+	}
+	var startErr error
 	switch input.Node.Kind {
 	case workflow.NodeKindScript:
-		return s.startCurrentNodeScript(ctx, input, lease, controller)
+		startErr = s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
 		if err := s.validateRole(input.Node.SubagentRole); err != nil {
-			return err
+			startErr = err
+			break
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
+		startErr = s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
 	default:
-		return fmt.Errorf("current node %v is not executable", reference)
+		startErr = fmt.Errorf("current node %v is not executable", reference)
+	}
+	return currentNodeStartFailure(startErr)
+}
+
+func currentNodeStartFailure(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	var existing *workflowexecution.CurrentNodeStartFailure
+	if errors.As(cause, &existing) {
+		return cause
+	}
+	reason := workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed")
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:   string(reason),
+		Fields: map[string]string{"error": cause.Error()},
+	}
+	var validation workflowscript.ValidationError
+	if errors.As(cause, &validation) {
+		reason = workflow.CurrentNodeInterruptionReason(workflowscript.ReasonValidationFailed)
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code: workflowscript.ReasonValidationFailed,
+			Fields: map[string]string{
+				"code":          validation.Diagnostic.Code,
+				"raw_path":      validation.Diagnostic.RawPath,
+				"resolved_path": validation.Diagnostic.ResolvedPath,
+			},
+		}
+	}
+	var target *serverapi.WorkflowExecutionTargetResolutionError
+	if errors.As(cause, &target) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_execution_target_resolution_failed",
+			Fields: map[string]string{
+				"code":          string(target.Code),
+				"requested_ref": target.RequestedRef,
+			},
+		}
+	}
+	var revisionResolution *worktree.GitRevisionResolutionError
+	if errors.As(cause, &revisionResolution) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_execution_target_resolution_failed",
+			Fields: map[string]string{
+				"code":          string(revisionResolution.Kind),
+				"requested_ref": revisionResolution.RequestedRef,
+			},
+		}
+	}
+	var defaultBranchResolution *worktree.GitDefaultBranchResolutionError
+	if errors.As(cause, &defaultBranchResolution) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_execution_target_resolution_failed",
+			Fields: map[string]string{
+				"code":           string(defaultBranchResolution.Kind),
+				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),
+			},
+		}
+	}
+	var locked *worktree.LockedTaskWorktreeError
+	if errors.As(cause, &locked) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code:   "workflow_locked_execution_target_unavailable",
+			Fields: map[string]string{"cause": string(locked.Cause)},
+		}
+	}
+	var retained *serverapi.WorktreeSetupRetainedError
+	if errors.As(cause, &retained) {
+		detail = workflow.CurrentNodeInterruptionDetail{
+			Code:   "workflow_worktree_setup_failed",
+			Fields: map[string]string{"diagnostic": retained.Diagnostic},
+		}
+	}
+	return &workflowexecution.CurrentNodeStartFailure{
+		Cause:  cause,
+		Reason: reason,
+		Detail: detail,
 	}
 }
 
@@ -393,7 +502,7 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
 	if assignmentSteer == nil {
-		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
+		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, input.CurrentNode.SessionID != nil)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
 	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)

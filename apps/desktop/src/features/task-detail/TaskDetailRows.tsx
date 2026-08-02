@@ -6,6 +6,7 @@ import type { TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
+import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import {
   Button,
@@ -315,10 +316,12 @@ export function PropertiesIsland({
   detail,
   disabled,
   mutations,
+  resumeContinuation,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  resumeContinuation: TaskInitiatingActionController;
 }>) {
   const { t } = useTranslation();
   const openExternalLink = useOpenExternalLink();
@@ -349,12 +352,14 @@ export function PropertiesIsland({
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-        <TaskPropertyLine
-          label={t("task.sessions")}
-          value={detail.retainedSessionCount.toString()}
-        />
+        <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
       </dl>
-      <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
+      <TaskActionPanel
+        detail={detail}
+        disabled={disabled}
+        mutations={mutations}
+        resumeContinuation={resumeContinuation}
+      />
     </Island>
   );
 }
@@ -363,10 +368,12 @@ function TaskActionPanel({
   detail,
   disabled,
   mutations,
+  resumeContinuation,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
+  resumeContinuation: TaskInitiatingActionController;
 }>) {
   const { t } = useTranslation();
   return (
@@ -375,9 +382,10 @@ function TaskActionPanel({
         <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
           <Button
-            disabled={disabled || mutations.resume.isPending}
+            data-testid="task-detail-resume"
+            disabled={disabled || resumeContinuation.running}
             onClick={() => {
-              mutations.resume.mutate();
+              void resumeContinuation.run(resumeTaskInitiatingAction(detail.id));
             }}
             variant="primary"
           >
@@ -454,9 +462,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
             </Button>
           ))
         : null}
-      {openError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p>
-      ) : null}
+      {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>
   );
 }

@@ -1,7 +1,6 @@
 import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-
 import {
   hasSelectedWorkflow,
   type BoardColumn,
@@ -53,15 +52,13 @@ import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLa
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
-
+import { useBoardResumeAction } from "./useBoardResumeAction";
 export type BoardRouteProps = Readonly<{
   projectId: string;
   workflowId: string | undefined;
   selectedTaskId: string;
 }>;
-
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
-
 export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const reportBoardLoadError = useBoardLoadErrorReporter();
   const membershipRefreshRef = useRef<BoardMembershipRefreshRef["current"]>(ignoreBoardMembershipRefresh);
@@ -82,7 +79,6 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
     </ProjectLabelsProvider>
   );
 }
-
 function BoardRouteWithLabels({
   membershipRefreshRef,
   onBackgroundError,
@@ -112,7 +108,6 @@ function BoardRouteWithLabels({
     </BoardFilterGenerationProvider>
   );
 }
-
 function BoardRouteData({
   onBackgroundError: reportBoardLoadError,
   projectId,
@@ -164,7 +159,6 @@ function BoardRouteData({
     selectedTaskID: selectedTaskId,
     selectedWorkflowID,
   });
-
   if (boardQuery.isPending && board === undefined) {
     return <LoadingState chromePadding reveal={false} title={t("states.loading")} />;
   }
@@ -183,7 +177,6 @@ function BoardRouteData({
   if (board === undefined || !hasSelectedWorkflow(board)) {
     return <BoardNoWorkflowState projectID={projectId} />;
   }
-
   return (
     <BoardContent
       board={board}
@@ -196,7 +189,6 @@ function BoardRouteData({
     />
   );
 }
-
 function BoardContent({
   board,
   boardQueryWorkflowID,
@@ -247,6 +239,7 @@ function BoardContent({
       });
     },
   });
+  const resumeAction = useBoardResumeAction(initiatingAction);
   const actionsDisabled =
     connection.phase !== "connected" || initiatingAction.running || initiatingAction.pending !== null;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
@@ -385,19 +378,12 @@ function BoardContent({
       values: missingInputValues(column.transitionOutputFields),
     });
   }
-
   function interruptTask(taskID: string): void {
     void actions.interrupt.execute(taskID).catch(reportInterruptError);
   }
-
-  function resumeTask(taskID: string): void {
-    void actions.resume.execute(taskID).catch(reportResumeError);
-  }
-
   function deleteTask(taskID: string): void {
     void taskDeleteDialog.open({ taskID });
   }
-
   async function confirmDeleteTask(target: TaskDeleteTarget, close: () => void): Promise<void> {
     try {
       await actions.delete.mutateAsync(target.taskID);
@@ -411,7 +397,6 @@ function BoardContent({
       reportDeleteError(error);
     }
   }
-
   function reportStartError(error: unknown): void {
     reportActionError("board-start-error", t("board.startFailed"), error);
   }
@@ -422,10 +407,6 @@ function BoardContent({
 
   function reportInterruptError(error: unknown): void {
     reportActionError("board-interrupt-error", t("board.interruptFailed"), error);
-  }
-
-  function reportResumeError(error: unknown): void {
-    reportActionError("board-resume-error", t("board.resumeFailed"), error);
   }
 
   function reportDeleteError(error: unknown): void {
@@ -505,7 +486,7 @@ function BoardContent({
   }
 
   function runCardAction(
-    action: TaskInitiatingAction,
+    action: Exclude<TaskInitiatingAction, { kind: "resume" }>,
     pendingMove: PendingBoardCardMove,
     selection?: WorkflowExecutionTargetSelection,
   ): void {
@@ -523,13 +504,10 @@ function BoardContent({
       openTaskDependencies(result.taskID);
       return;
     }
+    if (result.action.kind === "resume") return;
     const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
     if (targetColumnID === undefined) {
-      reportStartError(
-        new Error(
-          `Cannot continue ${result.action.kind} action for Task ${result.action.kind === "start" ? result.action.taskID : result.action.input.taskID}: the Workflow has no target board column.`,
-        ),
-      );
+      reportStartError(new Error("Cannot continue task action without a target board column."));
       return;
     }
     runCardAction(
@@ -630,9 +608,9 @@ function BoardContent({
             onInterruptTask={interruptTask}
             onRegisterColumnScrollport={dragAutoScroll.registerColumnScrollport}
             pendingCardMove={pendingCardMove}
-            onResumeTask={resumeTask}
+            onResumeTask={resumeAction.execute}
             pendingInterruptTaskIDs={actions.interrupt.pendingTaskIDs}
-            pendingResumeTaskIDs={actions.resume.pendingTaskIDs}
+            pendingResumeTaskIDs={resumeAction.pendingTaskIDs}
             scrollportRef={scrollportRef}
           />
         </div>

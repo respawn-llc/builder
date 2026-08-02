@@ -72,6 +72,42 @@ func (s *Store) GetTaskExecutionTargetContext(ctx context.Context, taskID workfl
 	}, nil
 }
 
+// LockTaskExecutionTarget records the first resolved Execution Target after
+// durable workflow placement. The candidate carries the source-workspace
+// snapshot captured by the initiating attempt; that snapshot remains
+// authoritative even if the Task is rebound before this write.
+func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (ExecutionRoot, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return ExecutionRoot{}, errors.New("task id is required")
+	}
+	if candidate == nil {
+		return ExecutionRoot{}, ErrExecutionTargetRequired
+	}
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return ExecutionRoot{}, err
+	}
+	prepared, err := s.prepareExecutionTargetMutation(ctx, task, candidate)
+	if err != nil {
+		return ExecutionRoot{}, err
+	}
+	if prepared.candidateToLock == nil {
+		return ExecutionRoot{}, ErrExecutionTargetAlreadyLocked
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ExecutionRoot{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := applyPreparedExecutionTargetMutation(ctx, s.queries.WithTx(tx), task, prepared, s.now().UnixMilli()); err != nil {
+		return ExecutionRoot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExecutionRoot{}, err
+	}
+	return prepared.executionRoot, nil
+}
+
 type preparedExecutionTargetMutation struct {
 	executionRoot   ExecutionRoot
 	candidateToLock *ExecutionTargetCandidate
@@ -84,7 +120,7 @@ func (s *Store) prepareExecutionTargetMutation(ctx context.Context, task sqliteg
 	}
 	if snapshot == nil {
 		if candidate == nil {
-			return preparedExecutionTargetMutation{}, ErrExecutionTargetRequired
+			return preparedExecutionTargetMutation{}, nil
 		}
 		if err := validateExecutionTargetCandidateForTask(ctx, s.queries, task, *candidate); err != nil {
 			return preparedExecutionTargetMutation{}, err
@@ -332,17 +368,34 @@ func validateExecutionTargetCandidateForTask(ctx context.Context, q *sqlitegen.Q
 	if err := candidate.Validate(); err != nil {
 		return fmt.Errorf("invalid execution target candidate: %w", err)
 	}
-	sourceWorkspace, err := taskSourceWorkspaceForExecution(ctx, q, task)
+	workspaceID := strings.TrimSpace(candidate.Root.SourceWorkspaceID)
+	workspaceRoot := strings.TrimSpace(candidate.Root.SourceWorkspaceRoot)
+	sourceWorkspace, err := q.GetWorkspaceByID(ctx, workspaceID)
 	if err != nil {
-		return err
+		return fmt.Errorf("load execution target candidate source workspace: %w", err)
 	}
-	if candidate.Root.SourceWorkspaceID != sourceWorkspace.ID || candidate.Root.SourceWorkspaceRoot != sourceWorkspace.CanonicalRootPath {
-		return errors.New("execution target candidate source workspace does not match task source workspace")
+	if strings.TrimSpace(sourceWorkspace.ProjectID) != strings.TrimSpace(task.ProjectID) {
+		return errors.New("execution target candidate source workspace does not belong to task project")
+	}
+	if workspaceID == "" || workspaceRoot == "" {
+		return errors.New("execution target candidate source workspace is incomplete")
 	}
 	if candidate.Snapshot.Mode == workflow.ExecutionTargetModeNone {
 		return nil
 	}
-	if !task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" || candidate.Root.Managed == nil || task.ManagedWorktreeID.String != candidate.Root.Managed.WorktreeID {
+	if candidate.Root.Managed == nil {
+		return errors.New("managed execution target candidate has no managed worktree")
+	}
+	worktree, err := q.GetWorktreeByID(ctx, candidate.Root.Managed.WorktreeID)
+	if err != nil {
+		return fmt.Errorf("load managed execution target candidate worktree: %w", err)
+	}
+	if worktree.WorkspaceID != workspaceID || worktree.CanonicalRootPath != candidate.Root.Managed.Root {
+		return errors.New("managed execution target candidate does not match source workspace")
+	}
+	if task.ManagedWorktreeID.Valid &&
+		strings.TrimSpace(task.ManagedWorktreeID.String) != "" &&
+		task.ManagedWorktreeID.String != candidate.Root.Managed.WorktreeID {
 		return errors.New("managed execution target candidate does not match task provisional worktree")
 	}
 	return nil

@@ -256,10 +256,6 @@ export function useBoardTaskActions() {
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
     onSettled: refresh,
   });
-  const resumeMutation = useMutation({
-    mutationFn: async (taskID: string) => api.resumeTask(taskID),
-    onSuccess: refresh,
-  });
   return {
     refresh,
     interrupt: useBoardTaskLifecycleAction(interruptMutation),
@@ -269,7 +265,6 @@ export function useBoardTaskActions() {
         await refreshAfterTaskDelete(taskID);
       },
     }),
-    resume: useBoardTaskLifecycleAction(resumeMutation),
   };
 }
 

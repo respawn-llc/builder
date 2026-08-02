@@ -61,6 +61,7 @@ type currentNodeAgentCapacityLease struct {
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
+	launchPreparation  LaunchPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
@@ -170,6 +171,9 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err := reference.Validate(); err != nil {
 		return err
 	}
+	if err := start.launchPreparation.Validate(); err != nil {
+		return err
+	}
 	key, err := reference.Key()
 	if err != nil {
 		return err
@@ -263,9 +267,30 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
+	runnerCtx, cancelRunner := context.WithCancel(ctx)
+	leaseCancelDone := make(chan struct{})
+	go func() {
+		select {
+		case <-lease.Done():
+			cancelRunner()
+		case <-runnerCtx.Done():
+		}
+		close(leaseCancelDone)
+	}()
+	runnerErr := c.runner.StartCurrentNodeWithPreparation(
+		runnerCtx,
+		reference,
+		start.launchPreparation,
+		start.taskPromptDelivery,
+		assignmentSteer,
+		lease,
+		c,
+	)
+	cancelRunner()
+	<-leaseCancelDone
+	if runnerErr != nil {
 		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, err),
+			cause:    c.discardAdmission(reference, key, lease, runnerErr),
 			admitted: true,
 		}
 	}
@@ -406,6 +431,26 @@ func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
 		}
 	}
 	return nil
+}
+
+func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteersInBackground(
+	starts []currentNodeQueuedStart,
+	pending []*pendingCurrentNodeAssignmentSteer,
+) {
+	if len(starts) == 0 || len(starts) != len(pending) {
+		return
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.workerWG.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.workerWG.Done()
+		_ = c.resolvePendingCurrentNodeAssignmentSteers(c.workerContext, starts, pending)
+	}()
 }
 
 func (c *CurrentNodeController) steerAssignment(
@@ -835,18 +880,27 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if admitted {
 		interrupt = c.store.InterruptAdmittedCurrentNode
 	}
+	reason := reasonCurrentNodeRuntimeStartFailed
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:   string(reasonCurrentNodeRuntimeStartFailed),
+		Fields: map[string]string{"error": cause.Error()},
+	}
+	var projected *CurrentNodeStartFailure
+	if errors.As(cause, &projected) {
+		if err := projected.Validate(); err == nil {
+			reason = projected.Reason
+			detail = projected.Detail
+		}
+	}
 	interrupted, err := interruptCurrentNodeReferences(
 		ctx,
 		interrupt,
 		references,
-		reasonCurrentNodeRuntimeStartFailed,
-		workflow.CurrentNodeInterruptionDetail{
-			Code:   string(reasonCurrentNodeRuntimeStartFailed),
-			Fields: map[string]string{"error": cause.Error()},
-		},
+		reason,
+		detail,
 	)
 	for _, reference := range interrupted {
-		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
 	}
 	return err
 }
@@ -879,8 +933,9 @@ func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQu
 			policy = currentNodeAdmissionAutomaticScript
 		}
 		starts = append(starts, currentNodeQueuedStart{
-			reference: intent.CurrentNode,
-			policy:    policy,
+			reference:         intent.CurrentNode,
+			launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+			policy:            policy,
 		})
 	}
 	return starts
@@ -903,6 +958,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		seen[key] = struct{}{}
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
+			launchPreparation:  LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 		})
 	}

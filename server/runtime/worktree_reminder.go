@@ -40,5 +40,5 @@ func (e *Engine) materializePendingWorktreeReminder(stepID string) error {
 	if err != nil {
 		return err
 	}
-	return e.steerMetaContextIfChanged(stepID, steeringPriorityNormal, append(metaResult.Worktree, metaResult.WorktreeExit...))
+	return e.steerMetaContextIfChanged(stepID, steeringPriorityNormal, append(metaResult.Worktree, metaResult.WorktreeExit...), true)
 }

@@ -413,7 +413,11 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	if prepared.target.Kind() == workflow.NodeKindScript {
+	if targetMutation.candidateToLock != nil {
+		root := targetMutation.candidateToLock.Root
+		executionRoot = &root
+	}
+	if prepared.target.Kind() == workflow.NodeKindScript && executionRoot != nil {
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
 			return StartTaskResult{}, err
 		}

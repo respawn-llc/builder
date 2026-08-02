@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -49,6 +50,38 @@ func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want no provisional candidate", row.ManagedWorktreeID)
+	}
+}
+
+func TestPrepareInitialTaskWorktreeUsesCapturedWorkspaceAfterRebind(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	capturedRoot := env.workspaceRoot
+	target := resolveTaskWorktreeTestHEAD(t, env, capturedRoot)
+	if _, err := env.store.RebindWorkspace(env.ctx, capturedRoot, t.TempDir()); err != nil {
+		t.Fatalf("RebindWorkspace: %v", err)
+	}
+
+	materialized, err := env.service.PrepareInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ResolvedTarget:   target,
+		SourceWorkspace:  &SourceWorkspaceSnapshot{ID: env.binding.WorkspaceID, Root: capturedRoot},
+	})
+	if err != nil {
+		t.Fatalf("PrepareInitialTaskWorktree after rebind: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := materialized.Cleanup(env.ctx); err != nil {
+			t.Errorf("cleanup prepared worktree: %v", err)
+		}
+	})
+	record, recordErr := env.store.GetWorktreeRecordByID(env.ctx, taskWorktreeID(materialized.Worktree))
+	if recordErr != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", recordErr)
+	}
+	if materialized.Worktree.Registered == nil || record.WorkspaceID != env.binding.WorkspaceID {
+		t.Fatalf("prepared worktree = %+v, want captured workspace %q", materialized.Worktree, env.binding.WorkspaceID)
 	}
 }
 
@@ -145,6 +178,151 @@ func TestMaterializeInitialTaskWorktreeRejectsDetachedExistingCandidate(t *testi
 	}
 	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != worktreeID {
 		t.Fatalf("task managed worktree id = %+v, want unchanged %q", row.ManagedWorktreeID, worktreeID)
+	}
+}
+
+func TestPrepareInitialTaskWorktreeLeavesBindingAndSetupForCaller(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	markerPath := filepath.Join(t.TempDir(), "setup-ran")
+	scriptRelpath := filepath.Join("scripts", "task-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf ran > %q\n", markerPath))
+	env.service.setupScript = scriptRelpath
+
+	materialized, err := env.service.PrepareInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ResolvedTarget:   resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("PrepareInitialTaskWorktree: %v", err)
+	}
+	if materialized.preparation == nil || materialized.preparation.cleanup == nil || !materialized.preparation.cleanup.active {
+		t.Fatalf("materialization preparation = %+v, want active cleanup", materialized.preparation)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree binding = %+v, want unbound", row.ManagedWorktreeID)
+	}
+	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("setup marker stat error = %v, want setup not run", err)
+	}
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); err != nil {
+		t.Fatalf("GetWorktreeRecordByID before cleanup: %v", err)
+	}
+	if err := materialized.Cleanup(env.ctx); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetWorktreeRecordByID after cleanup = %v, want no rows", err)
+	}
+}
+
+func TestPrepareInitialTaskWorktreeCleanupAfterTargetLockFailureLeavesTaskUnbound(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	materialized, err := env.service.PrepareInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ResolvedTarget:   resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("PrepareInitialTaskWorktree: %v", err)
+	}
+	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	requestedRef := resolvedTarget.RequestedRef
+	commitOID := resolvedTarget.CommitOID
+	lockErr := func() error {
+		_, err := workflowStore.LockTaskExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:         workflow.ExecutionTargetModeHead,
+				RequestedRef: &requestedRef,
+				CommitOID:    &commitOID,
+				Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   env.binding.WorkspaceID,
+				SourceWorkspaceRoot: env.workspaceRoot,
+				Managed: &workflowstore.ManagedExecutionRoot{
+					WorktreeID: "missing-worktree",
+					Root:       filepath.Join(env.workspaceRoot, "missing-worktree"),
+				},
+			},
+		})
+		return err
+	}()
+	if lockErr == nil {
+		t.Fatal("LockTaskExecutionTarget succeeded with missing worktree")
+	}
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	if err := materialized.Cleanup(env.ctx); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid || row.ExecutionTargetMode.Valid {
+		t.Fatalf("task after failed lock cleanup = %+v, want unbound", row)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetWorktreeRecord after failed lock cleanup = %v, want no rows", err)
+	}
+}
+
+func TestPreparedTaskWorktreeSetupFailureRetainsLockedBinding(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	scriptRelpath := filepath.Join("scripts", "task-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), "#!/bin/sh\nprintf setup-failed >&2\nexit 7\n")
+	env.service.setupScript = scriptRelpath
+	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	materialized, err := env.service.PrepareInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ResolvedTarget:   resolvedTarget,
+	})
+	if err != nil {
+		t.Fatalf("PrepareInitialTaskWorktree: %v", err)
+	}
+	requestedRef := resolvedTarget.RequestedRef
+	commitOID := resolvedTarget.CommitOID
+	if _, err := workflowStore.LockTaskExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  resolvedTarget.CanonicalRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   env.binding.WorkspaceID,
+			SourceWorkspaceRoot: env.workspaceRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: taskWorktreeID(materialized.Worktree),
+				Root:       taskWorktreeRoot(materialized.Worktree),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	materialized.Commit()
+	if err := materialized.RunSetup(env.ctx); err == nil {
+		t.Fatal("RunSetup succeeded, want retained setup failure")
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
+		t.Fatalf("task managed worktree binding = %+v, want %q", row.ManagedWorktreeID, taskWorktreeID(materialized.Worktree))
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, taskWorktreeID(materialized.Worktree)); err != nil {
+		t.Fatalf("GetWorktreeRecord after setup failure: %v", err)
 	}
 }
 

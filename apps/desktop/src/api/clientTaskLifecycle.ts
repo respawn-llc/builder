@@ -1,15 +1,17 @@
-import type { TaskMoveInput, TaskStartInput } from "./clientInputs";
+import type { TaskMoveInput, TaskResumeInput, TaskStartInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { compactJsonObject } from "./json";
 import type {
   TaskApproveResponse,
   TaskMoveResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelection,
 } from "./models";
 import {
   taskApproveResponseSchema,
   taskMoveResponseSchema,
+  taskResumeResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { newSetupOperationID } from "./setupOperationID";
@@ -61,6 +63,23 @@ export async function approveApproval(
     "workflow.task.approve",
     taskApproveResponseSchema,
     await transport.call("workflow.task.approve", { approval_id: approvalID }, { timeoutMs: null }),
+  );
+}
+
+export async function resumeTask(transport: RpcTransport, input: TaskResumeInput): Promise<TaskResumeResponse> {
+  const setupOperationID = input.setupOperationID ?? newSetupOperationID();
+  return parseRpcResponse(
+    "workflow.task.resume",
+    taskResumeResponseSchema,
+    await transport.call(
+      "workflow.task.resume",
+      compactJsonObject({
+        task_id: input.taskID,
+        setup_operation_id: setupOperationID.toJSONValue(),
+        execution_target: executionTargetPayload(input.executionTarget),
+      }),
+      { timeoutMs: null },
+    ),
   );
 }
 

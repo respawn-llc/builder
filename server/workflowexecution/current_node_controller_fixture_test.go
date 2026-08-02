@@ -204,7 +204,9 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTaskWithExecutionTarget(ctx, reference.TaskID, nil)
+	_, err := controller.StartTaskWithPreparation(ctx, reference.TaskID, LaunchPreparation{
+		Kind: LaunchPreparationEstablishedRoot,
+	})
 	return err
 }
 
@@ -711,6 +713,61 @@ type blockingCurrentNodeRunner struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type interruptiblePreparationRunner struct {
+	entered  chan struct{}
+	canceled chan struct{}
+}
+
+func (r *interruptiblePreparationRunner) StartCurrentNodeWithPreparation(
+	ctx context.Context,
+	_ workflow.CurrentNodeReference,
+	_ LaunchPreparation,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	_ sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	close(r.entered)
+	<-ctx.Done()
+	close(r.canceled)
+	return context.Cause(ctx)
+}
+
+type liveAndInterruptiblePreparationRunner struct {
+	authority   *sessionruntime.Authority
+	shellPath   string
+	live        workflow.CurrentNodeReference
+	liveStarted chan struct{}
+	entered     chan struct{}
+	canceled    chan struct{}
+}
+
+func (r *liveAndInterruptiblePreparationRunner) StartCurrentNodeWithPreparation(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	if reference.Equal(r.live) {
+		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+			Workflow: &lease,
+			Command: sessionruntime.ScriptCommand{
+				Path: r.shellPath,
+				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+			},
+		})
+		close(r.liveStarted)
+		return err
+	}
+	close(r.entered)
+	<-ctx.Done()
+	close(r.canceled)
+	return context.Cause(ctx)
 }
 
 func (r *blockingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {

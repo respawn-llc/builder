@@ -54,6 +54,7 @@ type WorkflowExecutionTargetSelectionReason string
 const (
 	WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection     WorkflowExecutionTargetSelectionReason = "policy_requires_selection"
 	WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable WorkflowExecutionTargetSelectionReason = "configured_target_unavailable"
+	WorkflowExecutionTargetSelectionReasonUnlockedPreparationFailed   WorkflowExecutionTargetSelectionReason = "unlocked_preparation_failed"
 )
 
 type WorkflowExecutionTargetUnavailableCause string
@@ -262,6 +263,10 @@ func (r WorkflowExecutionTargetSelectionRequirement) Validate() error {
 		if r.ConfiguredTarget != nil || r.UnavailableCause != "" {
 			return errors.New("policy selection requirement cannot include configured target failure")
 		}
+	case WorkflowExecutionTargetSelectionReasonUnlockedPreparationFailed:
+		if r.ConfiguredTarget != nil || r.UnavailableCause != "" {
+			return errors.New("unlocked preparation failure cannot include configured target failure")
+		}
 	case WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable:
 		if r.ConfiguredTarget == nil || !validWorkflowExecutionTargetUnavailableCause(r.UnavailableCause) {
 			return errors.New("configured target requirement requires configured target and unavailable cause")
@@ -404,6 +409,22 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 	return errors.New("move action response outcome is invalid")
 }
 
+func (r WorkflowTaskResumeResponse) Validate() error {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
+		if r.Applied == nil || r.SelectionRequired != nil {
+			return errors.New("resume action response applied outcome requires only applied payload")
+		}
+		return validateWorkflowTaskResumeApplied(*r.Applied)
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil {
+			return errors.New("resume action response selection_required outcome requires only selection requirement")
+		}
+		return r.SelectionRequired.Validate()
+	}
+	return errors.New("resume action response outcome is invalid")
+}
+
 func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {
 	if len(applied.CurrentNodes) == 0 {
 		return errors.New("start applied payload requires current_nodes")
@@ -420,6 +441,10 @@ func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {
 		}
 	}
 	return nil
+}
+
+func validateWorkflowTaskResumeApplied(applied WorkflowTaskResumeApplied) error {
+	return validateWorkflowTaskStartApplied(WorkflowTaskStartApplied{CurrentNodes: applied.CurrentNodes})
 }
 
 func validateWorkflowTaskApproveApplied(applied WorkflowTaskApproveApplied) error {

@@ -304,15 +304,15 @@ type currentNodeCompletionExecutionStub struct {
 	questionErr       error
 }
 
-func (s *currentNodeCompletionExecutionStub) StartTaskWithExecutionTarget(
+func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	candidate *workflowstore.ExecutionTargetCandidate,
+	_ workflowexecution.LaunchPreparation,
 ) (workflowstore.StartTaskResult, error) {
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
-	return s.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
+	return s.store.StartTaskWithExecutionTarget(ctx, taskID, nil)
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
@@ -331,6 +331,10 @@ func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, tas
 	return selected, nil
 }
 
+func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(ctx context.Context, taskID workflow.TaskID, _ workflowexecution.LaunchPreparation) ([]workflow.CurrentNode, error) {
+	return s.ResumeTask(ctx, taskID)
+}
+
 func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
 	if s.store == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("workflow store is required")
@@ -338,15 +342,15 @@ func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Co
 	return s.store.ApplyPendingApproval(ctx, approvalID)
 }
 
-func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
+func (s *currentNodeCompletionExecutionStub) ApplyManualMoveWithPreparation(
 	ctx context.Context,
 	prepared workflowstore.ManualMovePreparation,
-	candidate *workflowstore.ExecutionTargetCandidate,
+	_ workflowexecution.LaunchPreparation,
 ) (workflowstore.ManualMoveResult, error) {
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
+	return s.store.ApplyManualMove(ctx, prepared, nil)
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

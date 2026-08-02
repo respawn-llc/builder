@@ -594,7 +594,9 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTaskWithExecutionTarget(context.Background(), taskID, nil)
+		_, err := controller.StartTaskWithPreparation(context.Background(), taskID, LaunchPreparation{
+			Kind: LaunchPreparationEstablishedRoot,
+		})
 		startDone <- err
 	}()
 	select {
@@ -617,7 +619,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	select {
 	case err := <-startDone:
 		if err != nil {
-			t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+			t.Fatalf("StartTaskWithPreparation: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task start did not finish")
@@ -657,7 +659,11 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+	controller.automaticReservations[key] = currentNodeQueuedStart{
+		reference:         reference,
+		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		policy:            currentNodeAdmissionAutomaticAgent,
+	}
 	controller.mu.Unlock()
 
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
@@ -686,8 +692,9 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 			name: "automatic queue",
 			apply: func(controller *CurrentNodeController) {
 				controller.automaticQueue.append(currentNodeQueuedStart{
-					reference: reference,
-					policy:    currentNodeAdmissionAutomaticAgent,
+					reference:         reference,
+					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					policy:            currentNodeAdmissionAutomaticAgent,
 				})
 			},
 		},
@@ -698,13 +705,21 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+				controller.automaticReservations[key] = currentNodeQueuedStart{
+					reference:         reference,
+					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					policy:            currentNodeAdmissionAutomaticAgent,
+				}
 			},
 		},
 		{
 			name: "retirement held intent",
 			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
+				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
+					reference:         reference,
+					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					policy:            currentNodeAdmissionAutomaticAgent,
+				}}
 			},
 		},
 		{

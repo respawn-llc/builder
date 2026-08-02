@@ -3,6 +3,7 @@ import type { AttentionItem, TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
+import type { TaskInitiatingActionController } from "@/shared/execution-target";
 import { ApprovalBox, InterruptedCurrentNodeBox, QuestionBox } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -15,6 +16,7 @@ export function TaskInbox({
   initialFocus,
   mutations,
   questionSelections,
+  resumeContinuation,
   onQuestionSelectionChange,
 }: Readonly<{
   attentionItems: readonly AttentionItem[];
@@ -24,6 +26,7 @@ export function TaskInbox({
   initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  resumeContinuation: TaskInitiatingActionController;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
 }>) {
   const { logger } = useAppServices();
@@ -56,6 +59,7 @@ export function TaskInbox({
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
           questionSelections={questionSelections}
+          resumeContinuation={resumeContinuation}
           taskId={detail.id}
         />
       ))}
@@ -110,6 +114,7 @@ function InboxItem({
   mutations,
   onQuestionSelectionChange,
   questionSelections,
+  resumeContinuation,
   taskId,
 }: Readonly<{
   attention: AttentionItem;
@@ -119,6 +124,7 @@ function InboxItem({
   mutations: ReturnType<typeof useTaskMutations>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  resumeContinuation: TaskInitiatingActionController;
   taskId: string;
 }>) {
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
@@ -173,7 +179,11 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} mutations={mutations} />
+      <InterruptedCurrentNodeBox
+        attention={attention}
+        disabled={disabled}
+        resumeContinuation={resumeContinuation}
+      />
     </div>
   );
 }

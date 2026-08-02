@@ -1,10 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
+import type { WorkflowExecutionTargetSelection } from "@/api";
 import type { TaskInitiatingActionResult } from "./executionTargetContinuation";
 import {
   moveTaskInitiatingAction,
   proceedWithTaskInitiatingAction,
+  resumeTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
   useTaskInitiatingActionController,
@@ -185,6 +187,79 @@ describe("task initiating action controller", () => {
     });
 
     expect(action.input.proceedDespiteDependencies).toBe(true);
+  });
+
+  it("retries Resume selection with the same setup operation", async () => {
+    const execute = vi
+      .fn<
+        (
+          action: TaskInitiatingAction,
+          selection?: WorkflowExecutionTargetSelection,
+        ) => Promise<TaskInitiatingActionResult>
+      >()
+      .mockResolvedValueOnce({
+        kind: "resume",
+        action: resumeTaskInitiatingAction("task-1"),
+        response: {
+          outcome: "selection_required",
+          selectionRequired: { reason: "unlocked_preparation_failed" },
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "resume",
+        action: resumeTaskInitiatingAction("task-1"),
+        response: {
+          outcome: "applied",
+          applied: { currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }] },
+        },
+      });
+    const onApplied = vi.fn();
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied,
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = resumeTaskInitiatingAction("task-1");
+
+    await act(async () => result.current.run(action));
+    expect(result.current.pending?.kind).toBe("execution_target");
+    const pending = result.current.pending;
+    if (pending?.kind !== "execution_target") {
+      throw new Error("Expected Resume target selection.");
+    }
+    const selection = { mode: "none" as const, customRef: null };
+    await act(async () => {
+      result.current.close();
+      await result.current.run(pending.action, selection);
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({
+      kind: "resume",
+      taskID: "task-1",
+      setupOperationID: action.setupOperationID,
+    });
+    expect(execute.mock.calls[1]?.[1]).toEqual(selection);
+    expect(onApplied).toHaveBeenCalledOnce();
+  });
+
+  it("reports execution failures through the action error callback", async () => {
+    const error = new Error("transport failed");
+    const onAppliedError = vi.fn();
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute: vi.fn().mockRejectedValue(error),
+        onApplied: vi.fn(),
+        onAppliedError,
+      }),
+    );
+
+    await act(async () => result.current.run(resumeTaskInitiatingAction("task-1")));
+
+    expect(onAppliedError).toHaveBeenCalledWith(error);
+    expect(result.current.pending).toBeNull();
+    expect(result.current.running).toBe(false);
   });
 });
 

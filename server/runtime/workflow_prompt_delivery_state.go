@@ -29,6 +29,12 @@ func (s *workflowPromptDeliveryState) trigger(defaultTrigger workflowTaskPromptT
 	return s.triggerLocked(defaultTrigger)
 }
 
+func (s *workflowPromptDeliveryState) markDelivered() {
+	s.mu.Lock()
+	s.pending = false
+	s.mu.Unlock()
+}
+
 func (s *workflowPromptDeliveryState) apply(
 	defaultTrigger workflowTaskPromptTrigger,
 	run func(workflowTaskPromptTrigger) error,

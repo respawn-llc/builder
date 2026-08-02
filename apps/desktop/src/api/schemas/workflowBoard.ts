@@ -12,6 +12,7 @@ import type {
   TaskAttention,
   TaskApproveResponse,
   TaskMoveResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowBoard,
@@ -136,6 +137,7 @@ const configuredTargetSchema = z
 const selectionRequirementSchema: z.ZodType<WorkflowExecutionTargetSelectionRequirement> = z
   .discriminatedUnion("reason", [
     z.object({ reason: z.literal("policy_requires_selection") }).strict(),
+    z.object({ reason: z.literal("unlocked_preparation_failed") }).strict(),
     z
       .object({
         reason: z.literal("configured_target_unavailable"),
@@ -145,7 +147,7 @@ const selectionRequirementSchema: z.ZodType<WorkflowExecutionTargetSelectionRequ
       .strict(),
   ])
   .transform((value): WorkflowExecutionTargetSelectionRequirement => {
-    if (value.reason === "policy_requires_selection") {
+    if (value.reason === "policy_requires_selection" || value.reason === "unlocked_preparation_failed") {
       return { reason: value.reason };
     }
     return {
@@ -225,6 +227,20 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
     ),
   selectionRequiredResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
+]);
+
+export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      applied: { currentNodes: value.applied.current_nodes },
+    })),
+  selectionRequiredResponseSchema,
 ]);
 
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [

@@ -276,18 +276,11 @@ func startControllerBackedTaskStatusExecution(
 	options.executionRelease = release
 	options.started = startedHandle
 	surfaces.runner.configure(backlog.task.ID, options)
-	startedResult, err := surfaces.controller.StartTaskWithExecutionTarget(t.Context(), backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   surfaces.fixture.binding.WorkspaceID,
-			SourceWorkspaceRoot: surfaces.fixture.binding.CanonicalRoot,
-		},
+	startedResult, err := surfaces.controller.StartTaskWithPreparation(t.Context(), backlog.task.ID, workflowexecution.LaunchPreparation{
+		Kind: workflowexecution.LaunchPreparationEstablishedRoot,
 	})
 	if err != nil {
-		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+		t.Fatalf("StartTaskWithPreparation: %v", err)
 	}
 	if len(startedResult.Mutation.Created) != 1 {
 		t.Fatalf("StartTaskWithExecutionTarget mutation = %+v, want one Current Node", startedResult.Mutation)

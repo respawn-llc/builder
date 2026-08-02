@@ -87,8 +87,13 @@ export function useTaskInitiatingActionController({
       }
       setRunning(true);
       const operation = (async () => {
-        const result = await execute(action, selection);
-        await handleResult(result);
+        try {
+          const result = await execute(action, selection);
+          await handleResult(result);
+        } catch (error) {
+          setPending(null);
+          onAppliedError(error);
+        }
       })();
       initialRunRef.current = operation;
       const settle = () => {
@@ -100,7 +105,7 @@ export function useTaskInitiatingActionController({
       void operation.then(settle, settle);
       await operation;
     },
-    [execute, handleResult],
+    [execute, handleResult, onAppliedError],
   );
 
   const close = useCallback(() => {

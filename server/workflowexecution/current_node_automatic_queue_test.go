@@ -19,7 +19,8 @@ func TestCurrentNodeControllerLargeMixedKindQueueSelection(t *testing.T) {
 				TaskID: workflow.TaskID("task-large-mixed-kind-queue"),
 				NodeID: workflow.NodeID(fmt.Sprintf("node-%d", index)),
 			},
-			policy: policy,
+			launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+			policy:            policy,
 		})
 	}
 	agentAvailable := false
@@ -44,10 +45,10 @@ func TestCurrentNodeAutomaticQueueSelectionPreservesTaskLocalityAndFIFO(t *testi
 	taskOne := workflow.TaskID("task-automatic-queue-one")
 	taskTwo := workflow.TaskID("task-automatic-queue-two")
 	entries := []currentNodeQueuedStart{
-		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "agent-one"}, policy: currentNodeAdmissionAutomaticAgent},
-		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "script-two"}, policy: currentNodeAdmissionAutomaticScript},
-		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "script-one"}, policy: currentNodeAdmissionAutomaticScript},
-		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "agent-two"}, policy: currentNodeAdmissionAutomaticAgent},
+		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "agent-one"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticAgent},
+		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "script-two"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticScript},
+		{reference: workflow.CurrentNodeReference{TaskID: taskOne, NodeID: "script-one"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticScript},
+		{reference: workflow.CurrentNodeReference{TaskID: taskTwo, NodeID: "agent-two"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticAgent},
 	}
 	for _, entry := range entries {
 		queue.append(entry)
@@ -76,10 +77,10 @@ func TestCurrentNodeAutomaticQueueSelectionPreservesTaskLocalityAndFIFO(t *testi
 func TestCurrentNodeAutomaticQueueRemovalMaintainsEveryIndex(t *testing.T) {
 	queue := currentNodeAutomaticQueue{}
 	entries := []currentNodeQueuedStart{
-		{reference: workflow.CurrentNodeReference{TaskID: "task-a", NodeID: "agent-a"}, policy: currentNodeAdmissionAutomaticAgent},
-		{reference: workflow.CurrentNodeReference{TaskID: "task-a", NodeID: "script-a"}, policy: currentNodeAdmissionAutomaticScript},
-		{reference: workflow.CurrentNodeReference{TaskID: "task-b", NodeID: "agent-b"}, policy: currentNodeAdmissionAutomaticAgent},
-		{reference: workflow.CurrentNodeReference{TaskID: "task-b", NodeID: "script-b"}, policy: currentNodeAdmissionAutomaticScript},
+		{reference: workflow.CurrentNodeReference{TaskID: "task-a", NodeID: "agent-a"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticAgent},
+		{reference: workflow.CurrentNodeReference{TaskID: "task-a", NodeID: "script-a"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticScript},
+		{reference: workflow.CurrentNodeReference{TaskID: "task-b", NodeID: "agent-b"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticAgent},
+		{reference: workflow.CurrentNodeReference{TaskID: "task-b", NodeID: "script-b"}, launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, policy: currentNodeAdmissionAutomaticScript},
 	}
 	for _, entry := range entries {
 		queue.append(entry)

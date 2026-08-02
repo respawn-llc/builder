@@ -150,7 +150,8 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if targetMutation.candidateToLock != nil {
 			executionRoot = targetMutation.candidateToLock.Root
 		}
-		if targetDefinition.Kind() == workflow.NodeKindScript {
+		if targetDefinition.Kind() == workflow.NodeKindScript &&
+			(targetMutation.candidateToLock != nil || targetMutation.executionRoot != (ExecutionRoot{})) {
 			if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(targetDefinition), &executionRoot); err != nil {
 				return ManualMoveResult{}, err
 			}

@@ -7,6 +7,7 @@ import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import type { TaskDependencyPair } from "@/shared/task-dependencies";
+import type { TaskInitiatingActionController } from "@/shared/execution-target";
 import { ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
@@ -61,6 +62,7 @@ export function TaskDetailList({
   onSaveDraft,
   openLink,
   questionSelections,
+  resumeContinuation,
   selectedTab,
   setTab,
   updateError,
@@ -88,6 +90,7 @@ export function TaskDetailList({
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  resumeContinuation: TaskInitiatingActionController;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -207,6 +210,7 @@ export function TaskDetailList({
           onSaveDraft={onSaveDraft}
           openLink={openLink}
           questionSelections={questionSelections}
+          resumeContinuation={resumeContinuation}
           selectedTab={selectedTab}
           setTab={setTab}
           updateError={updateError}
@@ -247,6 +251,7 @@ type TaskDetailListRowProps = Readonly<{
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  resumeContinuation: TaskInitiatingActionController;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -309,6 +314,7 @@ function BodyRow({
   onDraftChange,
   onDescriptionPresentationChange,
   descriptionPresentation,
+  resumeContinuation,
   updateError,
   updatePending,
 }: TaskDetailListRowProps): ReactNode {
@@ -325,7 +331,12 @@ function BodyRow({
         onPresentationChange={onDescriptionPresentationChange}
         presentation={descriptionPresentation}
       />
-      <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
+      <PropertiesIsland
+        detail={detail}
+        disabled={disabled}
+        mutations={mutations}
+        resumeContinuation={resumeContinuation}
+      />
     </div>
   );
 }
@@ -358,6 +369,7 @@ function InboxRow({
   mutations,
   onQuestionSelectionChange,
   questionSelections,
+  resumeContinuation,
 }: TaskDetailListRowProps): ReactNode {
   if (attentionPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={undefined} />;
@@ -372,6 +384,7 @@ function InboxRow({
       mutations={mutations}
       onQuestionSelectionChange={onQuestionSelectionChange}
       questionSelections={questionSelections}
+      resumeContinuation={resumeContinuation}
     />
   );
 }

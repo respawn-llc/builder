@@ -10,6 +10,8 @@ export type {
   TaskMoveResponse,
   TaskStartApplied,
   TaskStartResponse,
+  TaskResumeApplied,
+  TaskResumeResponse,
   WorkflowExecutionTargetActionResponse,
   WorkflowExecutionTarget,
   WorkflowExecutionTargetMode,

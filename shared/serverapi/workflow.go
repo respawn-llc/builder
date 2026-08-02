@@ -876,11 +876,19 @@ type WorkflowTaskCurrentNode struct {
 }
 
 type WorkflowTaskResumeRequest struct {
-	TaskID            string                `json:"task_id"`
-	InvokingSessionID *runtimeids.SessionID `json:"invoking_session_id,omitempty"`
+	TaskID            string                            `json:"task_id"`
+	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
+	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
+	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 }
 
 type WorkflowTaskResumeResponse struct {
+	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	Applied           *WorkflowTaskResumeApplied                   `json:"applied,omitempty"`
+	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
+}
+
+type WorkflowTaskResumeApplied struct {
 	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
 }
 
@@ -1040,6 +1048,8 @@ type WorkflowAttentionItem struct {
 	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
 	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
 }
+
+const WorkflowAttentionItemKindInterruptedCurrentNode = "interrupted_current_node"
 
 type WorkflowAttentionApprovalSnapshot struct {
 	SourceNodeDisplayName string                            `json:"source_node_display_name"`
@@ -2716,7 +2726,16 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return validateWorkflowTaskInvokingSession(r.InvokingSessionID)
+	if err := validateWorkflowTaskInvokingSession(r.InvokingSessionID); err != nil {
+		return err
+	}
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	if r.ExecutionTarget != nil {
+		return r.ExecutionTarget.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskApproveRequest) Validate() error {

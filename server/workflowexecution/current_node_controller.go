@@ -23,9 +23,10 @@ const reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workf
 // controller mutation permit. The runner owns slow launch preparation; the
 // controller owns its gate and live-scope registration.
 type CurrentNodeRunner interface {
-	StartCurrentNode(
+	StartCurrentNodeWithPreparation(
 		context.Context,
 		workflow.CurrentNodeReference,
+		LaunchPreparation,
 		workflowruntime.TaskPromptDelivery,
 		CurrentNodeAssignmentSteer,
 		sessionruntime.WorkflowExecutionLease,

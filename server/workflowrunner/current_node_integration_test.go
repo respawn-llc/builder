@@ -51,6 +51,12 @@ type currentNodeRunnerFixture struct {
 	clientErr      error
 }
 
+type fixtureExecutionTargetPreparer func(context.Context, workflow.CurrentNodeReference, workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error)
+
+func (f fixtureExecutionTargetPreparer) PrepareExecutionTarget(ctx context.Context, reference workflow.CurrentNodeReference, preparation workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error) {
+	return f(ctx, reference, preparation)
+}
+
 type currentNodeRunnerStepLifecycle struct {
 	runtimes *registry.RuntimeRegistry
 }
@@ -193,6 +199,19 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 			}
 			return fixture.client, nil
 		}),
+		ExecutionTarget: fixtureExecutionTargetPreparer(func(ctx context.Context, reference workflow.CurrentNodeReference, _ workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error) {
+			root := workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   fixture.workspaceID,
+				SourceWorkspaceRoot: fixture.workspace,
+			}
+			return fixture.store.LockTaskExecutionTarget(ctx, reference.TaskID, &workflowstore.ExecutionTargetCandidate{
+				Snapshot: workflowstore.ExecutionTargetSnapshot{
+					Mode:       workflow.ExecutionTargetModeNone,
+					Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+				},
+				Root: root,
+			})
+		}),
 	})
 	if err != nil {
 		t.Fatalf("new starter: %v", err)
@@ -240,15 +259,12 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
-	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
+	started, err := f.controller.StartTaskWithPreparation(context.Background(), task.ID, workflowexecution.LaunchPreparation{
+		Kind:                workflowexecution.LaunchPreparationEstablishUnlockedNone,
+		SourceWorkspaceID:   f.workspaceID,
+		SourceWorkspaceRoot: f.workspace,
+		Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
 	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)
@@ -897,7 +913,7 @@ func currentNodeKindID(t *testing.T, definition workflow.Definition, kind workfl
 	return ""
 }
 
-func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *testing.T) {
+func TestCurrentNodeRuntimePreparationFailureCleansDisposableFreshSession(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
@@ -909,15 +925,12 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
-	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
+	started, err := f.controller.StartTaskWithPreparation(context.Background(), task.ID, workflowexecution.LaunchPreparation{
+		Kind:                workflowexecution.LaunchPreparationEstablishUnlockedNone,
+		SourceWorkspaceID:   f.workspaceID,
+		SourceWorkspaceRoot: f.workspace,
+		Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
 	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)
@@ -929,8 +942,8 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 		return len(nodes) == 1 && nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
 	})
-	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
-		t.Fatalf("retained Session count after runtime preparation failure = %d, %v; want assigned Session", count, err)
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 0 {
+		t.Fatalf("disposable Session count after runtime preparation failure = %d, %v; want cleanup", count, err)
 	}
 }
 

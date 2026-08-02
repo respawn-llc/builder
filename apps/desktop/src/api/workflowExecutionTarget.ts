@@ -24,6 +24,9 @@ export type WorkflowExecutionTargetSelectionRequirement =
       reason: "policy_requires_selection";
     }>
   | Readonly<{
+      reason: "unlocked_preparation_failed";
+    }>
+  | Readonly<{
       reason: "configured_target_unavailable";
       configuredTarget: Readonly<{
         mode: Exclude<WorkflowExecutionTargetSelectionMode, "none">;
@@ -63,6 +66,8 @@ export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode
 
 export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
+export type TaskResumeApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+
 export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
 export type WorkflowExecutionTargetActionResponse<TApplied> =
@@ -81,6 +86,10 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
 export type TaskMoveResponse = WorkflowExecutionTargetActionResponse<TaskMoveApplied>;
+export type TaskResumeResponse = Exclude<
+  WorkflowExecutionTargetActionResponse<TaskResumeApplied>,
+  { outcome: "dependency_confirmation_required" }
+>;
 export type TaskApproveResponse = Exclude<
   WorkflowExecutionTargetActionResponse<TaskApproveApplied>,
   { outcome: "dependency_confirmation_required" }

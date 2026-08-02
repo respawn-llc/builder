@@ -2,6 +2,7 @@ import { ApiClient } from "./client";
 import {
   taskApproveResponseSchema,
   taskMoveResponseSchema,
+  taskResumeResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -35,6 +36,15 @@ describe("task lifecycle client", () => {
           },
         },
       },
+      {
+        method: "workflow.task.resume",
+        result: {
+          outcome: "applied",
+          applied: {
+            current_nodes: [{ node_id: "node-4", transition_branch_key: null, session_id: null }],
+          },
+        },
+      },
     ]);
     const client = new ApiClient(transport);
 
@@ -50,11 +60,18 @@ describe("task lifecycle client", () => {
       outcome: "applied",
       applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
     });
+    await expect(client.resumeTask({ taskID: "task-1" })).resolves.toMatchObject({
+      outcome: "applied",
+      applied: { currentNodes: [{ nodeID: "node-4" }] },
+    });
 
     expect(transport.calls).toContainEqual({
       method: "workflow.task.approve",
       options: { timeoutMs: null },
       params: { approval_id: "approval-1" },
+    });
+    expect(transport.calls.find((call) => call.method === "workflow.task.resume")?.params).toMatchObject({
+      task_id: "task-1",
     });
     expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
       "allow_missing_edge",
@@ -141,7 +158,7 @@ describe("task lifecycle client", () => {
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {
-    const schemas = [taskStartResponseSchema, taskMoveResponseSchema, taskApproveResponseSchema];
+    const schemas = [taskStartResponseSchema, taskMoveResponseSchema, taskResumeResponseSchema, taskApproveResponseSchema];
     for (const schema of schemas) {
       expect(() =>
         schema.parse({

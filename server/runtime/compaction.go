@@ -706,6 +706,12 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, replacementErr.Error())
 		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
 	}
+	if execution, active := e.currentNodeExecutionConfig(); active && execution != nil {
+		delivery := e.currentNodeExecutionSnapshot().delivery
+		if delivery != nil {
+			delivery.markDelivered()
+		}
+	}
 	e.compactionRuntimeState().SetManualCompactionEligible(false)
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {
