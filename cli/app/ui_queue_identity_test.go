@@ -310,7 +310,7 @@ func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
 	}
 }
 
-func TestQueuedRuntimeSubmitFailureRestoresInjectedTextWithoutDiscarding(t *testing.T) {
+func TestQueuedRuntimeSubmitFailureKeepsAcceptedSteerPending(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
 	client := &runtimeControlFakeClient{}
@@ -332,11 +332,14 @@ func TestQueuedRuntimeSubmitFailureRestoresInjectedTextWithoutDiscarding(t *test
 		updated = updateUIModel(t, updated, msg)
 	}
 
-	if got, want := testMainInput(updated), "queued steer"; got != want {
-		t.Fatalf("restored steer text = %q, want %q", got, want)
+	if got := testMainInput(updated); got != "" {
+		t.Fatalf("accepted steer composer text = %q, want empty", got)
 	}
-	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
-		t.Fatalf("recovered queue state = pending %d, queue %d; want empty", len(updated.pendingInjected), len(updated.injectedQueue))
+	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
+		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
+	}
+	if updated.injectedQueue[0].State != injectedRuntimeQueueEnqueued {
+		t.Fatalf("accepted steer state = %q, want enqueued", updated.injectedQueue[0].State)
 	}
 	if client.discardQueuedCalls != 0 {
 		t.Fatalf("discard calls = %d, want 0", client.discardQueuedCalls)
@@ -357,6 +360,13 @@ func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	model.setRuntimeActivityBusyForTest(true)
 	model.setRuntimeDisconnected(true)
 	model.queued = queuedInputsForTest("queued message")
+	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "accepted steer"}}
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "steer-1",
+		ServerID: "steer-1",
+		Text:     "accepted steer",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
 	beforeActivity := model.activity
 
 	next, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
@@ -370,6 +380,9 @@ func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	}
 	if len(updated.queued) != 0 {
 		t.Fatalf("queued items = %d, want 0", len(updated.queued))
+	}
+	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
+		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
