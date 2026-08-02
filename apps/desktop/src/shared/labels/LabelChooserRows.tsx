@@ -172,7 +172,7 @@ export function LabelResultRow({
   return (
     <LabelSelectionRow
       contextualActions={
-        <div>
+        <div className="flex items-center gap-[var(--space-1)]">
           {deleteAction}
           <IconTooltipButton
             disabled={catalogMutationPending}
