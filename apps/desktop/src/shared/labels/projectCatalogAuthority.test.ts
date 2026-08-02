@@ -66,6 +66,41 @@ describe("Project catalog authority", () => {
     });
   });
 
+  it("keeps an older active read from overwriting an optimistic reorder", async () => {
+    const secondLabelID = "b74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
+    const oldRead = deferred<ProjectLabelCatalog>();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => oldRead.promise,
+    });
+    const key = queryKeys.projectLabels("project-1");
+    const original = {
+      projectID: "project-1",
+      labels: [
+        { id: labelID, name: "First" },
+        { id: secondLabelID, name: "Second" },
+      ],
+    } satisfies ProjectLabelCatalog;
+    queryClient.setQueryData(key, original);
+    const initialRead = queryClient.fetchQuery({
+      queryKey: key,
+      queryFn: async ({ signal }) => authority.read(signal),
+      staleTime: 0,
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(key)).toEqual(original);
+    });
+    authority.applyReorder([secondLabelID, labelID]);
+    oldRead.resolve(original);
+    await initialRead.catch(() => undefined);
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels.map((label) => label.id)).toEqual([
+      secondLabelID,
+      labelID,
+    ]);
+  });
+
   it("keeps a deleted label pruned until a current-generation read is accepted", async () => {
     const oldRead = deferred<ProjectLabelCatalog>();
     const reconciliation = deferred<ProjectLabelCatalog>();

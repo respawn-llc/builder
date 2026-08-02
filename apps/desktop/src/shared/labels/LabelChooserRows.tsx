@@ -172,7 +172,7 @@ export function LabelResultRow({
   return (
     <LabelSelectionRow
       contextualActions={
-        <div className={reorder === undefined ? undefined : "mr-[var(--space-7)]"}>
+        <div>
           {deleteAction}
           <IconTooltipButton
             disabled={catalogMutationPending}

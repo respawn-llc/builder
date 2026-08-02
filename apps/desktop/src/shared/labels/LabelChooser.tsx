@@ -3,7 +3,6 @@ import { PlusIcon, SearchIcon } from "lucide-react";
 import type { KeyboardEvent } from "react";
 import {
   useId,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -220,18 +219,6 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
       t,
     });
   const reorderEnabled = invocation.kind === "filter" && preparedSearch.length === 0 && labels.length >= 2;
-  const onCreatePendingChange =
-    invocation.kind === "assignment" ? invocation.onCreatePendingChange : undefined;
-  useEffect(() => {
-    if (onCreatePendingChange === undefined) {
-      return;
-    }
-    onCreatePendingChange(mutations.create.isPending);
-    return () => {
-      onCreatePendingChange(false);
-    };
-  }, [onCreatePendingChange, mutations.create.isPending]);
-
   return (
     <Popover
       onOpenChange={(nextOpen) => {

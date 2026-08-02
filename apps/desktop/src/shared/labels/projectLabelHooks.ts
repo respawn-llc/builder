@@ -295,6 +295,9 @@ export function useLabelChooserMutationActions({
     if (catalogMutationPending) {
       return;
     }
+    const notifyCreatePending =
+      invocation.kind === "assignment" ? invocation.onCreatePendingChange : undefined;
+    notifyCreatePending?.(true);
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
       if (invocation.kind === "assignment") {
@@ -306,8 +309,17 @@ export function useLabelChooserMutationActions({
       mutations.create.reset();
     } catch {
       // The mutation owns the visible error state.
+    } finally {
+      notifyCreatePending?.(false);
     }
-  }, [catalogMutationPending, invocation, mutations.create, preparedSearch, setKeyboardHighlightedIndex, setSearch]);
+  }, [
+    catalogMutationPending,
+    invocation,
+    mutations.create,
+    preparedSearch,
+    setKeyboardHighlightedIndex,
+    setSearch,
+  ]);
   const commitRename = useCallback(async () => {
     if (rename === null || rename.pending || catalogMutationPending) {
       return;
