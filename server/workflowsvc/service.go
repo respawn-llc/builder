@@ -1441,6 +1441,14 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if coordinated.applied == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
 	}
+	if err != nil {
+		slog.Error(
+			"manual move committed with post-commit lifecycle error",
+			"task_id", req.TaskID,
+			"target_node_id", req.TargetNodeID,
+			"error", err,
+		)
+	}
 	moved := *coordinated.applied
 	if err := moved.Validate(); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err

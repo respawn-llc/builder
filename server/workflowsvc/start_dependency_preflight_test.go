@@ -115,7 +115,7 @@ func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *test
 	}
 }
 
-func TestExecutableMoveTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *testing.T) {
+func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructurePreflight(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -209,7 +209,7 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	}
 }
 
-func TestExecutableMoveTargetCompatibilityPreflightReturnsBeforeDependencyReader(t *testing.T) {
+func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetCompatibilityPreflight(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)

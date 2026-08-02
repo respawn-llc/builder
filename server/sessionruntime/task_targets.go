@@ -110,16 +110,19 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 				return WorkflowTaskExecutionState{}, err
 			}
 			questionPending := false
+			approvalPending := false
 			for _, prompt := range pending {
 				switch prompt.Kind {
 				case PendingPromptKindQuestion:
 					questionPending = true
 				case PendingPromptKindSessionApproval:
-					state.WaitingApprovals++
+					approvalPending = true
 				}
 			}
 			if questionPending {
 				state.WaitingQuestions++
+			} else if approvalPending {
+				state.WaitingApprovals++
 			} else if len(pending) == 0 {
 				state.Running++
 			}
