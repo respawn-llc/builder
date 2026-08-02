@@ -16,13 +16,16 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Sessions and Subagents use category filter chips over one project-scoped virtualized list.
 - The browser uses dense full-width rows with title, first-prompt preview, and recency.
 - The browser stays recency ordered and adds no search or additional status filters.
-- Row click opens full-page chat and secondary actions use a context menu. Pop-out trigger placement is unresolved.
-- Which session classes are visible?
+- Row click opens full-page chat. Its context menu contains only `Rename`; separate-window access lives only in Chat chrome. Rename uses an inline row editor with Save and Cancel.
+- Rename updates the title in place without changing activity recency or moving the row.
+- `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions. Workflow and headless launch modes create no additional category.
 - Primary New Session uses the project default workspace and opens an empty new-chat destination.
 - New in workspace opens a virtualized cursor-paginated workspace-picker sidebar; worktrees remain post-open.
 - New Session has no setup/name/model/provider/role/worktree fields.
 - Creation is lazy: abandoning untouched new chat leaves no durable session; the first agentic trigger materializes it and replaces the route.
-- How are unavailable or detached targets presented?
+- Session rows show no execution-target availability. Opening any missing or inaccessible recorded workspace or worktree retargets directly to the selected Project's default workspace.
+- Successful fallback relies on the ordinary authoritative worktree-switch reminder transcript item and adds no Sonner or second warning surface.
+- If fallback is unavailable or blocked, Chat keeps history readable, disables agentic submission, and offers the ordinary Project-workspace picker for explicit recovery.
 
 ## 3. Home And Navigation
 
@@ -32,7 +35,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The base pinned Inbox row has no required badge. An exact nonzero global unresolved count is an optional standalone feature/task backed by an authoritative server aggregate.
 - Home keeps the existing auto-fit responsive behavior: side-by-side when both panes fit and stacked when they do not. The navigation pane is not resizable or drawer-based and gains a semantic maximum width in the side-by-side layout.
 - Selecting a project shows a project workspace with Workflows and Sessions tabs.
-- One window-local last-used Workflows/Sessions tab choice follows navigation between projects; relaunch falls back to Workflows.
+- One last-used Workflows/Sessions tab choice follows navigation between projects and persists with the selected Project across relaunch.
 - The project workspace has a compact sticky header with project identity, Workflows/Sessions control, and contextual Link workflow or New Session action.
 - Project navigation uses compact list rows; title and path each allow two lines, and selection elevates the row by one island level.
 - The project Workflows tab contains project-workflow links; sessions are a parallel project-owned collection. Selecting either row enters its full-screen destination.
@@ -40,9 +43,11 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Workflow definitions leave primary navigation. The reusable Workflow Library remains a secondary `Manage workflows` destination from the Link workflow flow.
 - Link workflow opens the existing overlay with Create workflow and Manage workflows header actions.
 - Chat supports a standalone route, native pop-out, adaptive master-detail, and sidebar/overlay hosting.
+- Pop-out moves Chat into one Session-specific native window and returns the main window to that Project's Sessions tab.
+- The main window may later open the same Session normally alongside its pop-out. It neither focuses nor closes the existing pop-out, and a Session has at most one native pop-out.
 - Task Detail's `Open Chat` navigates to the standalone route.
 - Inbox items continue opening Task Detail in the existing overlay sidebar.
-- What route and scroll/composer state restore after relaunch?
+- Relaunch restores the selected Project and active Workflows/Sessions tab, but never reopens Chat or restores Chat transcript/composer presentation state.
 - Standalone route and native pop-out are the foundational hosting surfaces.
 
 ## 4. Chat Surface Layout
@@ -71,7 +76,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Chat uses the existing global sidebar host for explicitly designed capability destinations: `shift` on wide windows and `overlay` on compact windows.
 - Chat adds no embedded host, Chat-specific sidebar runtime, or permanent `custom` destination.
 - Chat has one input-field island containing composer/status elements.
-- Pop-out action placement is unresolved.
+- The separate-window action is icon-only in Chat chrome and appears nowhere in Session rows.
 - Every input/status element must be designed with its own question; no aggregate composition is assumed.
 - Sidebar destination contents, entry actions, placement, sizing, and adaptive behavior.
 - Transcript, pending-work area, prompts, composer, and secondary controls.

@@ -7,13 +7,24 @@
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
-- Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation. The location of the separate-window action is unspecified.
+- Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation.
+- The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
+- Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
+- Selecting the same Session in the main window afterward opens Chat there normally alongside the pop-out. Desktop adds no focus redirection, move-back behavior, or second pop-out for that Session.
+- Desktop relaunch restores the selected Project and its active Workflows or Sessions tab. It does not reopen Chat or restore Chat transcript/composer presentation state.
 
 ## Sessions
 
-- A Project's session browser has `Sessions` and `Subagents` categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
+- A Project's session browser has `Sessions` and `Subagents` categories. `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions; Workflow and headless launch modes do not create additional browser categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
 - Sessions are recency ordered. A compact full-width row shows the Session title, first-prompt preview, and recency. There is no search or additional status filter.
-- Selecting a Session opens full-page Chat. Secondary actions are in the row menu.
+- Selecting a Session opens full-page Chat. Its row context menu contains only `Rename`.
+- Rename replaces the row title with a focused inline editor and explicit Save and Cancel actions.
+- A successful Rename updates the row in place without changing the Session's activity recency or list position.
+- Session rows do not expose execution-target availability or warnings. Chat owns missing or inaccessible target presentation and recovery.
+- Opening a Session whose recorded workspace or worktree is missing or inaccessible automatically retargets it to the selected Project's default workspace. Desktop does not first fall back to the recorded workspace's main checkout.
+- Successful automatic fallback uses the ordinary authoritative worktree-switch reminder transcript item. Desktop adds no Sonner or second warning presentation.
+- If the Project default workspace is unavailable or retargeting is blocked, Chat opens with readable history, disables agentic submission, and offers explicit recovery through the ordinary Project-workspace picker.
+- Reopening a Session after navigation or relaunch opens its latest transcript position.
 - `New Session` opens an empty Chat using the Project default workspace. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
 - New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; rename and settings remain available after Chat opens.
