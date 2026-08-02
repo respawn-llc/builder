@@ -290,8 +290,7 @@ func ongoingToolStartCandidate(
 	event, ok := ptyCheckpointTranscriptEvent(msg)
 	if !ok ||
 		event.Kind != ongoingTranscriptEventMessage ||
-		event.Message.Event().IsZero() ||
-		event.Message.Kind() != clientui.TranscriptMessageToolStart {
+		!isTranscriptMessageKind(event.Message, clientui.TranscriptMessageToolStart) {
 		return ptyOngoingTranscriptAcceptanceCandidate{}
 	}
 	return ongoingTranscriptAcceptanceCandidate(model, event)
@@ -361,11 +360,15 @@ func (candidate ptyOngoingTargetFinalDrainCandidate) terminalAppliedBy(model tea
 		appModel.ongoingTranscript.lastSequence >= candidate.sequence
 }
 
-func isCommittedAssistantFinal(message clientui.TranscriptMessage) bool {
+func isTranscriptMessageKind(message clientui.TranscriptMessage, kind clientui.TranscriptMessageKind) bool {
 	if message.Event().IsZero() {
 		return false
 	}
-	if message.Kind() != clientui.TranscriptMessageCommittedRow {
+	return message.Kind() == kind
+}
+
+func isCommittedAssistantFinal(message clientui.TranscriptMessage) bool {
+	if !isTranscriptMessageKind(message, clientui.TranscriptMessageCommittedRow) {
 		return false
 	}
 	row := message.Payload().(clientui.TranscriptCommittedRow)
