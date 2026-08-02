@@ -14,7 +14,8 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
-import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { useStatusController } from "@/app-facade";
 import {
   Button,
   IconTooltipButton,
@@ -70,7 +71,7 @@ function renderLabelChooserSearch({
   catalogAtLimit,
   choiceCount,
   createError,
-  createPending,
+  catalogMutationPending,
   invocation,
   onCreate,
   onKeyDown,
@@ -84,7 +85,7 @@ function renderLabelChooserSearch({
   catalogAtLimit: boolean;
   choiceCount: number;
   createError: string | null;
-  createPending: boolean;
+  catalogMutationPending: boolean;
   invocation: LabelChooserInvocation;
   onCreate(): void;
   onKeyDown(event: KeyboardEvent<HTMLInputElement>): void;
@@ -127,7 +128,7 @@ function renderLabelChooserSearch({
           {canCreate ? (
             <span className="absolute top-1/2 right-[var(--space-1)] -translate-y-1/2">
               <IconTooltipButton
-                disabled={catalogAtLimit || createPending}
+                disabled={catalogAtLimit || catalogMutationPending}
                 label={
                   catalogAtLimit ? t("labels.catalogLimit") : t("labels.create", { name: preparedSearch })
                 }
@@ -175,6 +176,7 @@ function renderLabelChooserSearch({
 
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
+  const { push } = useStatusController();
   const catalog = useProjectLabelCatalog();
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
@@ -273,7 +275,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           catalogAtLimit,
           choiceCount,
           createError,
-          createPending: mutations.create.isPending,
+          catalogMutationPending,
           invocation,
           onCreate() {
             void createLabel();
@@ -281,6 +283,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           onKeyDown(event) {
             handleLabelChooserSearchKeyDown({
               canCreate,
+              catalogMutationPending,
               catalogAtLimit,
               createLabel,
               event,
@@ -316,7 +319,17 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           unlabeledName,
           labels,
           onReorder(nextLabels) {
-            void mutations.reorder.mutateAsync(nextLabels.map((label) => label.id)).catch(() => undefined);
+            void mutations.reorder
+              .mutateAsync(nextLabels.map((label) => label.id))
+              .catch((error: unknown) => {
+                push({
+                  body: errorMessage(error),
+                  durationMs: Infinity,
+                  id: "project-label-reorder-error",
+                  title: t("labels.reorderFailed"),
+                  tone: "danger",
+                });
+              });
           },
           reorderEnabled,
           catalogMutationPending,
@@ -415,7 +428,10 @@ function renderLabelChooserResults({
               confirmDelete,
               commitRename,
               deletion,
-              highlighted: false,
+              highlighted:
+                keyboardHighlightedIndex ===
+                labels.findIndex((candidate) => candidate.id === label.id) +
+                  (showUnlabeledChoice(choices) ? 1 : 0),
               invocation,
               rename,
               setDeletion,
@@ -505,6 +521,7 @@ function renderLabelChooserChoiceRow({
         onCommit={() => {
           void commitRename();
         }}
+        catalogMutationPending={catalogMutationPending}
         rename={rename}
       />
     );

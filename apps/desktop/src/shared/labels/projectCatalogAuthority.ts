@@ -11,7 +11,7 @@ export type ProjectCatalogAuthority = Readonly<{
   applyDelete(labelID: string): void;
   acceptCatalog(catalog: ProjectLabelCatalog): void;
   restoreCatalog(catalog: ProjectLabelCatalog): void;
-  requestRefresh(): void;
+  requestRefresh(): Promise<void>;
 }>;
 
 export function createProjectCatalogAuthority({
@@ -39,6 +39,7 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   readonly #deletedLabelIDs = new Set<string>();
   #generation = 0;
   #activeRead: ActiveCatalogRead | null = null;
+  #refreshPromise: Promise<void> | null = null;
   #refreshNeeded = false;
 
   constructor(projectID: string, queryClient: QueryClient, listCatalog: () => Promise<ProjectLabelCatalog>) {
@@ -60,12 +61,13 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   applyCreate(label: ProjectLabel): void {
-    this.#advance();
+    this.#advance(true);
     this.#patchLabel(label, true);
     this.#startRefreshIfIdle();
   }
 
   applyReorder(labelIDs: readonly string[]): void {
+    this.#advance(false);
     const catalog = this.#queryClient.getQueryData<ProjectLabelCatalog>(this.#queryKey);
     if (catalog === undefined) {
       return;
@@ -87,13 +89,13 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   applyRename(label: ProjectLabel): void {
-    this.#advance();
+    this.#advance(true);
     this.#patchLabel(label, false);
     this.#startRefreshIfIdle();
   }
 
   applyDelete(labelID: string): void {
-    this.#advance();
+    this.#advance(true);
     this.#deletedLabelIDs.add(labelID);
     if (this.#deletedLabelIDs.size > workflowLabelMaxIDs) {
       throw new Error(
@@ -112,9 +114,18 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
-  requestRefresh(): void {
-    this.#advance();
+  async requestRefresh(): Promise<void> {
+    this.#advance(true);
     this.#startRefreshIfIdle();
+    const activeRead = this.#activeRead;
+    if (activeRead !== null) {
+      await activeRead.promise.catch(() => undefined);
+    }
+    this.#startRefreshIfIdle();
+    const refresh = this.#refreshPromise;
+    if (refresh !== null) {
+      await refresh;
+    }
   }
 
   acceptCatalog(catalog: ProjectLabelCatalog): void {
@@ -128,19 +139,25 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#queryClient.setQueryData(this.#queryKey, catalog);
   }
 
-  #advance(): void {
+  #advance(refreshNeeded: boolean): void {
     this.#generation += 1;
-    this.#refreshNeeded = true;
-    void this.#queryClient.cancelQueries(
-      {
-        queryKey: this.#queryKey,
-        exact: true,
-      },
-      {
-        revert: false,
-        silent: true,
-      },
-    );
+    this.#refreshNeeded = refreshNeeded;
+    try {
+      void this.#queryClient
+        .cancelQueries(
+          {
+            queryKey: this.#queryKey,
+            exact: true,
+          },
+          {
+            revert: false,
+            silent: true,
+          },
+        )
+        .catch(() => undefined);
+    } catch {
+      // Query cancellation is best effort; generation validation still rejects stale reads.
+    }
   }
 
   #patchLabel(label: ProjectLabel, prepend: boolean): void {
@@ -198,15 +215,27 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   #startRefreshIfIdle(): void {
-    if (this.#activeRead !== null || !this.#refreshNeeded) {
+    if (this.#activeRead !== null) {
+      return;
+    }
+    if (!this.#refreshNeeded) {
       return;
     }
     this.#refreshNeeded = false;
-    void this.#queryClient
+    const refresh = this.#queryClient
       .fetchQuery({
         queryKey: this.#queryKey,
         queryFn: async ({ signal }) => this.read(signal),
         staleTime: 0,
+      })
+      .then(() => undefined);
+    this.#refreshPromise = refresh;
+    void refresh.catch(() => undefined);
+    void refresh
+      .finally(() => {
+        if (this.#refreshPromise === refresh) {
+          this.#refreshPromise = null;
+        }
       })
       .catch(() => undefined);
   }

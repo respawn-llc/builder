@@ -48,11 +48,13 @@ const conditionIndicatorVisibility = {
 } as const;
 
 export function LabelRenameEditor({
+  catalogMutationPending,
   onCancel,
   onChange,
   onCommit,
   rename,
 }: Readonly<{
+  catalogMutationPending: boolean;
   onCancel(): void;
   onChange(draft: string): void;
   onCommit(): void;
@@ -73,14 +75,14 @@ export function LabelRenameEditor({
           aria-label={t("labels.renameField")}
           autoFocus
           className={`${fieldInputClassName} min-w-0 flex-1 py-[var(--space-1)]`}
-          disabled={rename.pending}
+          disabled={rename.pending || catalogMutationPending}
           onChange={(event) => {
             onChange(event.currentTarget.value);
           }}
           value={rename.draft}
         />
         <IconTooltipButton
-          disabled={rename.pending}
+          disabled={rename.pending || catalogMutationPending}
           label={t("labels.saveRename")}
           onClick={onCommit}
           size="icon-sm"
@@ -157,7 +159,11 @@ export function LabelResultRow({
             {deletion.error}
           </span>
         )}
-        <Button disabled={deletion?.pending === true} onClick={onDeleteConfirm} variant="danger">
+        <Button
+          disabled={deletion?.pending === true || catalogMutationPending}
+          onClick={onDeleteConfirm}
+          variant="danger"
+        >
           {t("app.confirm")}
         </Button>
       </PopoverContent>

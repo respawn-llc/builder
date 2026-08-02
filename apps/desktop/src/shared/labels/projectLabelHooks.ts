@@ -54,7 +54,7 @@ export function useProjectLabelCatalogMutations() {
         if (previous !== undefined) {
           authority.restoreCatalog(previous);
         }
-        authority.requestRefresh();
+        void authority.requestRefresh();
       },
       onSuccess(catalog) {
         authority.acceptCatalog(catalog);
@@ -101,6 +101,7 @@ export function labelMutationErrorMessage(error: unknown, t: TFunction): string 
 
 export function handleLabelChooserSearchKeyDown({
   canCreate,
+  catalogMutationPending,
   catalogAtLimit,
   choices,
   createLabel,
@@ -110,6 +111,7 @@ export function handleLabelChooserSearchKeyDown({
   setHighlightedIndex,
 }: Readonly<{
   canCreate: boolean;
+  catalogMutationPending: boolean;
   catalogAtLimit: boolean;
   choices: readonly (Readonly<{ kind: "unlabeled" }> | Readonly<{ kind: "label"; label: ProjectLabel }>)[];
   createLabel(): Promise<void>;
@@ -129,7 +131,7 @@ export function handleLabelChooserSearchKeyDown({
     activateLabelChoice(choices, Math.min(highlightedIndex ?? 0, choices.length - 1), invocation);
     return;
   }
-  if (canCreate && !catalogAtLimit) {
+  if (canCreate && !catalogAtLimit && !catalogMutationPending) {
     event.preventDefault();
     void createLabel();
   }
@@ -256,7 +258,15 @@ export function useLabelChooserMutationActions({
   createError: string | null;
   createLabel(): Promise<void>;
 }> {
+  const catalogMutationPending =
+    mutations.create.isPending ||
+    mutations.reorder.isPending ||
+    rename?.pending === true ||
+    deletion?.pending === true;
   const createLabel = useCallback(async () => {
+    if (catalogMutationPending) {
+      return;
+    }
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
       if (invocation.kind === "assignment") {
@@ -269,9 +279,9 @@ export function useLabelChooserMutationActions({
     } catch {
       // The mutation owns the visible error state.
     }
-  }, [invocation, mutations.create, preparedSearch, setKeyboardHighlightedIndex, setSearch]);
+  }, [catalogMutationPending, invocation, mutations.create, preparedSearch, setKeyboardHighlightedIndex, setSearch]);
   const commitRename = useCallback(async () => {
-    if (rename === null || rename.pending) {
+    if (rename === null || rename.pending || catalogMutationPending) {
       return;
     }
     const current = rename;
@@ -289,9 +299,9 @@ export function useLabelChooserMutationActions({
           : latest,
       );
     }
-  }, [mutations.rename, rename, setRename, t]);
+  }, [catalogMutationPending, mutations.rename, rename, setRename, t]);
   const confirmDelete = useCallback(async () => {
-    if (deletion === null || deletion.pending) {
+    if (deletion === null || deletion.pending || catalogMutationPending) {
       return;
     }
     const current = deletion;
@@ -307,13 +317,9 @@ export function useLabelChooserMutationActions({
           : latest,
       );
     }
-  }, [deletion, invocation, mutations.delete, setDeletion, t]);
+  }, [catalogMutationPending, deletion, invocation, mutations.delete, setDeletion, t]);
   return {
-    catalogMutationPending:
-      mutations.create.isPending ||
-      mutations.reorder.isPending ||
-      rename?.pending === true ||
-      deletion?.pending === true,
+    catalogMutationPending,
     commitRename,
     confirmDelete,
     createError: mutations.create.isError ? labelMutationErrorMessage(mutations.create.error, t) : null,

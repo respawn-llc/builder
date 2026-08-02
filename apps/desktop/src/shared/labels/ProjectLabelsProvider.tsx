@@ -54,6 +54,18 @@ export function ProjectLabelsProvider({
       projectID,
     });
   });
+  const reportedCatalogError = useRef<unknown>(null);
+  useEffect(() => {
+    if (!catalog.isError) {
+      reportedCatalogError.current = null;
+      return;
+    }
+    if (reportedCatalogError.current === catalog.error) {
+      return;
+    }
+    reportedCatalogError.current = catalog.error;
+    reportBackgroundError(catalog.error);
+  }, [catalog.error, catalog.isError, reportBackgroundError]);
   const reportedPersistenceError = useRef<unknown>(null);
   useEffect(() => {
     if (filter.persistence.status !== "error") {

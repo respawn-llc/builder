@@ -36,8 +36,8 @@ describe("Project label event effects", () => {
     });
 
     await effects.applyLocalCreate({ id: alphaID, name: "Alpha" });
-    await effects.consumeProjectEvent(labelEvent("created", alphaID));
-    await effects.consumeProjectEvent(labelEvent("renamed", alphaID));
+    const createdEvent = effects.consumeProjectEvent(labelEvent("created", alphaID));
+    const renamedEvent = effects.consumeProjectEvent(labelEvent("renamed", alphaID));
 
     expect(readCount).toBe(1);
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
@@ -59,6 +59,7 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       labels: [{ id: alphaID, name: "Alpha" }],
     });
+    await Promise.all([createdEvent, renamedEvent]);
   });
 
   it("refreshes the catalog after a Project label reorder event", async () => {
@@ -81,7 +82,7 @@ describe("Project label event effects", () => {
       queryClient,
     });
 
-    await effects.consumeProjectEvent(labelEvent("reordered", alphaID));
+    const reorderEvent = effects.consumeProjectEvent(labelEvent("reordered", alphaID));
 
     await waitFor(() => {
       expect(reads).toBe(1);
@@ -93,6 +94,7 @@ describe("Project label event effects", () => {
         { id: alphaID, name: "Alpha" },
       ],
     });
+    await reorderEvent;
   });
 
   it("keeps local delete and its event echo pruned before membership refresh", async () => {
@@ -402,7 +404,7 @@ describe("Project catalog authority projections", () => {
 
     authority.applyReorder([betaID, alphaID]);
     authority.restoreCatalog(original);
-    authority.requestRefresh();
+    void authority.requestRefresh();
 
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)).toEqual(original);
     await waitFor(() => {

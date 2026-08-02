@@ -74,6 +74,7 @@ export const englishResources = {
       cancelRename: "Cancel rename",
       delete: "Delete {{name}}",
       reorder: "Reorder {{name}}",
+      reorderFailed: "The label order could not be saved. Try again.",
       deleteBody: "This will delete it from every task",
       invalidName:
         "Use 1–64 letters, numbers, spaces, or these symbols: : & * % $ # @ ! ? . , / \\ + | - _ ~ '.",

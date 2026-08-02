@@ -54,19 +54,15 @@ export function ActionableListRow({
       ) : (
         selectionControl
       )}
-      {actions === undefined ? null : (
-        <div className="flex shrink-0 items-center gap-[var(--space-1)]">{actions}</div>
-      )}
-      {contextualActions === undefined ? null : (
-        <div className="pointer-events-none absolute top-1/2 right-[var(--space-1)] z-10 flex -translate-y-1/2 items-center gap-[var(--space-1)] opacity-0 transition-[right,opacity] duration-100 motion-reduce:transition-none group-data-[selected=true]/actionable-row:right-[calc(var(--space-5)+var(--space-1))] group-hover/actionable-row:pointer-events-auto group-hover/actionable-row:opacity-100 group-focus-within/actionable-row:pointer-events-auto group-focus-within/actionable-row:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100">
-          {contextualActions}
+      {actions === undefined && contextualActions === undefined ? null : (
+        <div className="ml-auto flex shrink-0 items-center gap-[var(--space-1)]">
+          {contextualActions === undefined ? null : (
+            <div className="pointer-events-none flex items-center gap-[var(--space-1)] opacity-0 transition-opacity duration-100 motion-reduce:transition-none group-hover/actionable-row:pointer-events-auto group-hover/actionable-row:opacity-100 group-focus-within/actionable-row:pointer-events-auto group-focus-within/actionable-row:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100">
+              {contextualActions}
+            </div>
+          )}
+          {actions}
         </div>
-      )}
-      {actions === undefined ? null : (
-        <span
-          aria-hidden="true"
-          className="block w-[var(--space-1)] shrink-0 [@media(pointer:coarse)]:w-[var(--space-2)]"
-        />
       )}
     </div>
   );

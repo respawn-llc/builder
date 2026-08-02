@@ -26,6 +26,11 @@ Object.defineProperty(window, "matchMedia", {
     removeListener: vi.fn(),
   })),
 });
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+  writable: true,
+});
 
 const edge: DraftWorkflowEdge = {
   id: "edge-1",
@@ -94,7 +99,44 @@ describe("EditableEdgeParameters", () => {
     );
 
     expect(screen.getAllByTestId("workflow-parameter")).toHaveLength(2);
-    expect(screen.getAllByLabelText("Reorder parameter")).toHaveLength(2);
+    const activators = screen.getAllByLabelText("Reorder parameter");
+    expect(activators).toHaveLength(2);
+    screen.getAllByTestId("workflow-parameter").forEach((node, index) => {
+      const top = index * 40;
+      Object.defineProperty(node, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({
+          bottom: top + 40,
+          height: 40,
+          left: 0,
+          right: 320,
+          top,
+          width: 320,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        }),
+      });
+    });
+    const firstActivator = activators[0];
+    if (firstActivator === undefined) {
+      throw new Error("reorder activator is missing");
+    }
+    fireEvent.keyDown(firstActivator, { code: "Space", key: " " });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    fireEvent.keyDown(firstActivator, { code: "ArrowDown", key: "ArrowDown" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    fireEvent.keyDown(firstActivator, { code: "Space", key: " " });
+    expect(dispatchMock).toHaveBeenCalledWith({
+      activeRowID: "parameter-first",
+      edgeID: "edge-1",
+      overRowID: "parameter-second",
+      type: "reorderEdgeParameter",
+    });
 
     fireEvent.change(screen.getByDisplayValue("first"), { target: { value: "updated" } });
     expect(dispatchMock).toHaveBeenCalledWith({

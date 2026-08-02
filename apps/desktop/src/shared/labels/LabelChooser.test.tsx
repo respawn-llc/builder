@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as AppFacade from "@/app-facade";
 import { createLabelFilterState, type LabelFilterAction } from "./labelFilterState";
 import { LabelChooser } from "./LabelChooser";
 import type * as ProjectLabelHooks from "./projectLabelHooks";
@@ -43,10 +44,20 @@ const hooks = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   create: vi.fn(async () => ({ id: createdLabelID, name: "New label" })),
+  createPending: false,
   reorder: vi.fn(async () => hooks.catalog.data),
   reorderPending: false,
   reset: vi.fn(),
 }));
+const statusPush = vi.hoisted(() => vi.fn());
+
+vi.mock("@/app-facade", async (importOriginal) => {
+  const actual = await importOriginal<typeof AppFacade>();
+  return {
+    ...actual,
+    useStatusController: () => ({ dismiss: vi.fn(), push: statusPush }),
+  };
+});
 
 vi.mock("./projectLabelHooks", async (importOriginal) => {
   const actual = await importOriginal<typeof ProjectLabelHooks>();
@@ -57,7 +68,7 @@ vi.mock("./projectLabelHooks", async (importOriginal) => {
       create: {
         error: null,
         isError: false,
-        isPending: false,
+        isPending: hooks.createPending,
         mutateAsync: hooks.create,
         reset: hooks.reset,
       },
@@ -86,36 +97,34 @@ vi.mock("./projectLabelHooks", async (importOriginal) => {
   };
 });
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t(key: string, values?: Readonly<Record<string, string>>): string {
-      if (key === "labels.search") {
-        return "Search or create labels";
-      }
-      if (key === "labels.unlabeled") {
-        return "No labels";
-      }
-      if (key === "labels.reorder") {
-        return `Reorder ${values?.name ?? ""}`.trim();
-      }
-      if (key === "labels.filterConditionNeutral") {
-        return "Neutral label condition";
-      }
-      if (key === "workflowEditor.reorderParameter") {
-        return "Reorder parameter";
-      }
-      if (key === "workflowEditor.deleteParameter") {
-        return "Delete parameter";
-      }
-      return key;
-    },
-  }),
-}));
+vi.mock("react-i18next", () => {
+  const translations: Readonly<Record<string, (values?: Readonly<Record<string, string>>) => string>> = {
+    "labels.create": (values) => `Create “${values?.name ?? ""}”`,
+    "labels.delete": (values) => `Delete ${values?.name ?? ""}`.trim(),
+    "labels.filterConditionNeutral": () => "Neutral label condition",
+    "labels.rename": (values) => `Rename ${values?.name ?? ""}`.trim(),
+    "labels.reorder": (values) => `Reorder ${values?.name ?? ""}`.trim(),
+    "labels.reorderFailed": () => "Label order failed",
+    "labels.search": () => "Search or create labels",
+    "labels.unlabeled": () => "No labels",
+    "workflowEditor.deleteParameter": () => "Delete parameter",
+    "workflowEditor.reorderParameter": () => "Reorder parameter",
+  };
+  return {
+    useTranslation: () => ({
+      t(key: string, values?: Readonly<Record<string, string>>): string {
+        return translations[key]?.(values) ?? key;
+      },
+    }),
+  };
+});
 
 beforeEach(() => {
+  hooks.createPending = false;
   hooks.reorderPending = false;
   hooks.reorder.mockClear();
   hooks.create.mockClear();
+  statusPush.mockClear();
 });
 
 describe("LabelChooser", () => {
@@ -175,11 +184,31 @@ describe("LabelChooser", () => {
     await user.click(screen.getByRole("button", { name: "Open label chooser" }));
 
     expect(screen.getByRole("button", { name: "Reorder Alpha" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rename Alpha" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete Alpha" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: /^Alpha/ }));
+    await user.type(screen.getByRole("textbox", { name: "Search or create labels" }), "Gamma");
+    expect(screen.getByRole("button", { name: "Create “Gamma”" })).toBeDisabled();
     expect(onAction).toHaveBeenCalledWith({
       labelID: "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
       type: "named.cycle",
     });
+  });
+
+  it("keeps the keyboard highlight aligned with the fixed unlabeled row", async () => {
+    const user = userEvent.setup();
+    render(
+      <LabelChooser
+        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        trigger={<button type="button">Open label chooser</button>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Open label chooser" }));
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+
+    expect(screen.getAllByRole("listitem")[1]).toHaveClass(
+      "bg-[var(--color-island-1)]",
+    );
   });
 
   it("selects an assignment-created label only after creation succeeds", async () => {
@@ -199,6 +228,7 @@ describe("LabelChooser", () => {
       expect(onSelectionChange).toHaveBeenCalledWith(createdLabelID, true);
     });
   });
+
 });
 
 type ReorderableTestItem = Readonly<{
@@ -302,6 +332,61 @@ describe("ReorderableList", () => {
       { id: "first", name: "First" },
       { id: "third", name: "Third" },
     ]);
+  });
+
+  it("commits a pointer reorder from the consumer activator", async () => {
+    const onCommit = vi.fn();
+    render(<ReorderableTestList onCommit={onCommit} />);
+    mockVerticalRects();
+    Object.defineProperty(Element.prototype, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(Element.prototype, "releasePointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+
+    const handle = screen.getByRole("button", { name: "Move First" });
+    fireEvent.pointerDown(handle, {
+      buttons: 1,
+      clientX: 10,
+      clientY: 10,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    fireEvent.pointerMove(handle, {
+      buttons: 1,
+      clientX: 10,
+      clientY: 20,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.pointerMove(handle, {
+      buttons: 1,
+      clientX: 10,
+      clientY: 60,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    fireEvent.pointerUp(handle, { isPrimary: true, pointerId: 1, pointerType: "mouse" });
+
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith([
+        { id: "second", name: "Second" },
+        { id: "first", name: "First" },
+        { id: "third", name: "Third" },
+      ]);
+    });
   });
 
   it("cancels a keyboard reorder without committing", async () => {
