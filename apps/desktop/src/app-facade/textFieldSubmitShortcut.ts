@@ -2,6 +2,7 @@ import { useCallback, type KeyboardEvent as ReactKeyboardEvent, type KeyboardEve
 import type { NativePlatform } from "@app/native-bridge";
 import { useAppServices } from "./useAppServices";
 type TextFieldSubmitKeyEvent = Readonly<{
+  altKey: boolean;
   ctrlKey: boolean;
   defaultPrevented: boolean;
   isComposing?: boolean | undefined;
@@ -10,6 +11,7 @@ type TextFieldSubmitKeyEvent = Readonly<{
   nativeEvent?: Readonly<{ isComposing?: boolean | undefined }> | undefined;
   preventDefault(): void;
   repeat: boolean;
+  shiftKey: boolean;
   stopPropagation(): void;
 }>;
 type DirectShortcutOptions = Readonly<{ kind: "direct"; action: (() => void) | null; available: boolean }>;
@@ -38,18 +40,31 @@ export function useTextFieldSubmitShortcut(
 export function isTextFieldSubmitShortcut(
   event: Pick<
     TextFieldSubmitKeyEvent,
-    "ctrlKey" | "isComposing" | "key" | "metaKey" | "nativeEvent" | "repeat"
+    | "altKey"
+    | "ctrlKey"
+    | "isComposing"
+    | "key"
+    | "metaKey"
+    | "nativeEvent"
+    | "repeat"
+    | "shiftKey"
   >,
   platform: NativePlatform,
 ): boolean {
-  if (event.key !== "Enter" || event.isComposing === true || event.nativeEvent?.isComposing === true) {
+  if (
+    event.key !== "Enter" ||
+    event.isComposing === true ||
+    event.nativeEvent?.isComposing === true ||
+    event.altKey ||
+    event.shiftKey
+  ) {
     return false;
   }
   if (platform === "macos") {
-    return event.metaKey;
+    return event.metaKey && !event.ctrlKey;
   }
   if (platform === "linux" || platform === "windows") {
-    return event.ctrlKey;
+    return event.ctrlKey && !event.metaKey;
   }
   return false;
 }

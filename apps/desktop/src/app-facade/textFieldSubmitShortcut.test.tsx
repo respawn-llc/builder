@@ -51,6 +51,10 @@ describe("text field submit shortcut", () => {
     ["macos", { key: "Enter", ctrlKey: true }],
     ["windows", { key: "Enter", metaKey: true }],
     ["macos", { key: "Enter", metaKey: true, isComposing: true }],
+    ["macos", { key: "Enter", metaKey: true, shiftKey: true }],
+    ["macos", { key: "Enter", metaKey: true, altKey: true }],
+    ["macos", { key: "Enter", metaKey: true, ctrlKey: true }],
+    ["windows", { key: "Enter", ctrlKey: true, metaKey: true }],
     ["browser", { key: "Enter", metaKey: true }],
     ["unknown", { key: "Enter", ctrlKey: true }],
   ] as const)("ignores unsupported shortcut %s", (platform, event) => {
