@@ -412,6 +412,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 13. Delivery And Task Graph
 
+- Every implementation task must estimate 200–2,000 changed LOC including tests. Merge a coherent sub-200-line slice into its nearest owner; split an over-2,000-line slice before creation.
 - Contract prerequisites.
 - UI-kit primitives.
 - Navigation and route substrate.
