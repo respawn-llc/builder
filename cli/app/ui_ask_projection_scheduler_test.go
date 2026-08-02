@@ -295,12 +295,7 @@ func TestPromptProjectionSchedulerLiveAdmissionReturnsProjectionCommand(t *testi
 		return questionRenderResultMsg{request: request, rows: []string{"rendered"}}
 	}
 	prompt := testQuestionPrompt("ask-1", "Live question", "yes")
-	message := clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessagePromptPending,
-		Payload: clientui.TranscriptPayload{
-			PromptPending: &prompt,
-		},
-	}
+	message := clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(prompt))
 
 	command := model.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{})
 	if command == nil {

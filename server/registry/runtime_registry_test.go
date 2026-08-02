@@ -163,9 +163,8 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	if !errors.Is(nextErr, io.EOF) {
 		t.Fatalf("subscription close error = %v, want EOF", nextErr)
 	}
-	if lastMessage.Kind != clientui.TranscriptMessageRuntimeReadModelUpdate ||
-		lastMessage.Payload.RuntimeReadModelUpdate == nil ||
-		lastMessage.Payload.RuntimeReadModelUpdate.Activity.State != clientui.RuntimeActivityUnavailable {
+	if lastMessage.Kind() != clientui.TranscriptMessageRuntimeReadModelUpdate ||
+		transcriptPayload[clientui.RuntimeReadModelUpdate](t, lastMessage).Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("last transcript message before EOF = %+v, want unavailable runtime read-model update", lastMessage)
 	}
 	select {
@@ -254,7 +253,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		CommittedTranscriptChanged: true,
 	})
 	message := nextTranscriptMessage(t, sub)
-	if message.Kind != clientui.TranscriptMessageCommittedRow {
+	if message.Kind() != clientui.TranscriptMessageCommittedRow {
 		t.Fatalf("authority event projection = %+v", message)
 	}
 
@@ -266,8 +265,9 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), outcome)
 
 	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
-	if projected := message.Payload.WorktreeTransitionOutcome; projected == nil || projected.OperationID != outcome.OperationID {
-		t.Fatalf("worktree transition projection = %+v, want %+v", message.Payload.WorktreeTransitionOutcome, outcome)
+	projected := transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
+	if projected.OperationID != outcome.OperationID {
+		t.Fatalf("worktree transition projection = %+v, want %+v", projected, outcome)
 	}
 }
 
@@ -331,34 +331,35 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
 	hydration := nextTranscriptMessage(t, sub)
-	if hydration.Payload.Hydration.ActiveStep != nil {
+	payload := transcriptPayload[clientui.TranscriptHydration](t, hydration)
+	if payload.ActiveStep != nil {
 		t.Fatalf(
 			"hydrated active step = %+v, want none after canonical runtime became idle",
-			hydration.Payload.Hydration.ActiveStep,
+			payload.ActiveStep,
 		)
 	}
-	if hydration.Payload.Hydration.ActiveReasoning != nil {
+	if payload.ActiveReasoning != nil {
 		t.Fatalf(
 			"hydrated active reasoning = %+v, want none after canonical runtime became idle",
-			hydration.Payload.Hydration.ActiveReasoning,
+			payload.ActiveReasoning,
 		)
 	}
-	if hydration.Payload.Hydration.ActiveReviewer != nil {
+	if payload.ActiveReviewer != nil {
 		t.Fatalf(
 			"hydrated active reviewer = %+v, want none after canonical runtime became idle",
-			hydration.Payload.Hydration.ActiveReviewer,
+			payload.ActiveReviewer,
 		)
 	}
-	if hydration.Payload.Hydration.ActiveCompaction != nil {
+	if payload.ActiveCompaction != nil {
 		t.Fatalf(
 			"hydrated active compaction = %+v, want none after canonical runtime became idle",
-			hydration.Payload.Hydration.ActiveCompaction,
+			payload.ActiveCompaction,
 		)
 	}
-	if len(hydration.Payload.Hydration.InFlightTools) != 0 {
+	if len(payload.InFlightTools) != 0 {
 		t.Fatalf(
 			"hydrated in-flight tools = %+v, want none after canonical runtime became idle",
-			hydration.Payload.Hydration.InFlightTools,
+			payload.InFlightTools,
 		)
 	}
 }
@@ -419,9 +420,10 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		Question: "Proceed?",
 	}
 	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
-	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptPending)
-	if pendingTranscript.Payload.PromptPending == nil || pendingTranscript.Payload.PromptPending.PromptID != "ask-draining" {
-		t.Fatalf("pending transcript prompt = %+v", pendingTranscript.Payload.PromptPending)
+	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
+	pendingPrompt := transcriptPayload[clientui.TranscriptPrompt](t, pendingTranscript)
+	if pendingPrompt.Status != clientui.TranscriptPromptStatusPending || pendingPrompt.PromptID != "ask-draining" {
+		t.Fatalf("pending transcript prompt = %+v", pendingPrompt)
 	}
 	pendingAttention := nextRegistryAttentionEvent(t, attentionSub)
 	if pendingAttention.Type != clientui.AttentionNotificationEventPending {
@@ -432,9 +434,10 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		t.Fatalf("drain resource: %v", err)
 	}
 
-	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptResolved)
-	if resolvedTranscript.Payload.PromptResolved == nil || resolvedTranscript.Payload.PromptResolved.PromptID != "ask-draining" {
-		t.Fatalf("resolved transcript prompt = %+v", resolvedTranscript.Payload.PromptResolved)
+	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
+	resolvedPrompt := transcriptPayload[clientui.TranscriptPrompt](t, resolvedTranscript)
+	if resolvedPrompt.Status != clientui.TranscriptPromptStatusResolved || resolvedPrompt.PromptID != "ask-draining" {
+		t.Fatalf("resolved transcript prompt = %+v", resolvedPrompt)
 	}
 	resolvedCtx, cancelResolved := context.WithTimeout(context.Background(), time.Second)
 	defer cancelResolved()

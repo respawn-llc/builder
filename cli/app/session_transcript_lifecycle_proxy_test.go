@@ -20,12 +20,7 @@ func TestClientLifecycleProxyEmitsInputRequiredWhenPendingPromptIsObserved(t *te
 		"continue",
 	)
 
-	proxy.AcceptTranscript(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessagePromptPending,
-		Payload: clientui.TranscriptPayload{
-			PromptPending: &prompt,
-		},
-	})
+	proxy.AcceptTranscript(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(prompt)))
 
 	event := appfixture.DecodeLifecycleHookEvents(
 		t,
@@ -54,7 +49,9 @@ func TestClientLifecycleProxyEmitsInputRequiredForEachHydratedPendingPrompt(t *t
 		clientui.ApprovalDecisionDeny,
 	)
 	hydration := ongoingHydrationMessage(1)
-	hydration.Payload.Hydration.PendingPrompts = []clientui.TranscriptPrompt{question, approval}
+	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
+	hydrationPayload.PendingPrompts = []clientui.TranscriptPrompt{question, approval}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 
 	proxy.AcceptTranscript(hydration)
 
@@ -103,7 +100,7 @@ func TestTurnQueueHooksEmitFocusedTaskCompletionWithoutNotificationEligibility(t
 	if err := json.Unmarshal(event.Details, &details); err != nil {
 		t.Fatalf("decode lifecycle completion details: %v", err)
 	}
-	result := *message.Payload.LiveRunFinished
+	result := message.Payload().(clientui.TranscriptLiveRunResult)
 	if event.Category != lifecyclecontract.CategoryTaskComplete ||
 		!event.OccurredAt.Equal(result.FinishedAt) ||
 		!event.Focused ||

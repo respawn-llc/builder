@@ -148,14 +148,9 @@ func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {
 		t.Fatal("answered ask is not awaiting the canonical transcript resolution")
 	}
 	resolved := cloneTranscriptPromptForAsk(active.prompt)
-	resolved.State = clientui.TranscriptPromptStateResolved
-	message := clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessagePromptResolved,
-		Payload: clientui.TranscriptPayload{
-			PromptResolved: &resolved,
-		},
-	}
+	resolved.Status = clientui.TranscriptPromptStatusResolved
+	message := clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(resolved))
+
 	if err := message.Validate(); err != nil {
 		t.Fatalf("validate prompt resolution transcript message: %v", err)
 	}

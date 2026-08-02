@@ -11,7 +11,7 @@ func TestPendingPromptAcceptsQuestionWithBoundedRecommendation(t *testing.T) {
 	recommended := 2
 	prompt := TranscriptPrompt{
 		Kind:                   TranscriptPromptKindQuestion,
-		State:                  TranscriptPromptStatePending,
+		Status:                 TranscriptPromptStatusPending,
 		PromptID:               PromptID("prompt-1"),
 		SessionID:              transcriptTestSessionID(t),
 		StepID:                 transcriptTestStepID(t),
@@ -32,7 +32,7 @@ func TestPendingPromptAcceptsQuestionWithBoundedRecommendation(t *testing.T) {
 func TestPendingPromptRejectsInvalidQuestionOptions(t *testing.T) {
 	base := TranscriptPrompt{
 		Kind:      TranscriptPromptKindQuestion,
-		State:     TranscriptPromptStatePending,
+		Status:    TranscriptPromptStatusPending,
 		PromptID:  PromptID("prompt-1"),
 		SessionID: transcriptTestSessionID(t),
 		StepID:    transcriptTestStepID(t),
@@ -75,7 +75,7 @@ func TestPendingPromptRejectsInvalidQuestionOptions(t *testing.T) {
 func TestPendingPromptAcceptsTypedApprovalWithoutServerLabels(t *testing.T) {
 	prompt := TranscriptPrompt{
 		Kind:      TranscriptPromptKindApproval,
-		State:     TranscriptPromptStatePending,
+		Status:    TranscriptPromptStatusPending,
 		PromptID:  PromptID("approval-1"),
 		SessionID: transcriptTestSessionID(t),
 		StepID:    transcriptTestStepID(t),
@@ -95,7 +95,7 @@ func TestPendingPromptAcceptsTypedApprovalWithoutServerLabels(t *testing.T) {
 func TestPendingPromptRejectsInvalidApprovalOptions(t *testing.T) {
 	base := TranscriptPrompt{
 		Kind:      TranscriptPromptKindApproval,
-		State:     TranscriptPromptStatePending,
+		Status:    TranscriptPromptStatusPending,
 		PromptID:  PromptID("approval-1"),
 		SessionID: transcriptTestSessionID(t),
 		StepID:    transcriptTestStepID(t),
@@ -141,7 +141,7 @@ func TestPendingPromptRejectsInvalidApprovalOptions(t *testing.T) {
 func TestPendingPromptRequiresCompleteIdentityAndToolProvenance(t *testing.T) {
 	base := TranscriptPrompt{
 		Kind:      TranscriptPromptKindQuestion,
-		State:     TranscriptPromptStateResolved,
+		Status:    TranscriptPromptStatusResolved,
 		PromptID:  PromptID("prompt-1"),
 		SessionID: transcriptTestSessionID(t),
 		StepID:    transcriptTestStepID(t),

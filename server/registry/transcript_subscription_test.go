@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func init() {
 	transcriptContractViolationsPanic = true
 }
 
-func transcriptBrokerHydration(t *testing.T) clientui.TranscriptMessage {
+func transcriptBrokerHydration(t *testing.T) clientui.TranscriptEvent {
 	t.Helper()
 	sessionID, err := runtimeids.ParseSessionID("session-1")
 	if err != nil {
@@ -44,20 +45,14 @@ func transcriptBrokerHydration(t *testing.T) clientui.TranscriptMessage {
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
 	}
-	return clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &hydration},
-	}
+	return clientui.NewTranscriptEvent(hydration)
 }
 
-func transcriptBrokerDiagnostic(code clientui.OperationalDiagnosticCode, detail string) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageOperationalDiagnostic,
-		Payload: clientui.TranscriptPayload{OperationalDiagnostic: &clientui.TranscriptOperationalDiagnostic{
-			Code:   code,
-			Detail: detail,
-		}},
-	}
+func transcriptBrokerDiagnostic(code clientui.OperationalDiagnosticCode, detail string) clientui.TranscriptEvent {
+	return clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+		Code:   code,
+		Detail: detail,
+	})
 }
 
 func mustRegistryStepID(t *testing.T) runtimeids.StepID {
@@ -78,18 +73,18 @@ func TestTranscriptSubscriptionBrokerSequencesEachSubscriberFromHydration(t *tes
 	defer func() { _ = first.Close() }()
 
 	firstHydration := nextTranscriptMessage(t, first)
-	if firstHydration.Sequence != 1 || firstHydration.Kind != clientui.TranscriptMessageHydration {
+	if firstHydration.Sequence != 1 || firstHydration.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("first hydration = %+v, want seq=1 hydration", firstHydration)
 	}
 
-	broker.Publish([]clientui.TranscriptMessage{
+	broker.Publish([]clientui.TranscriptEvent{
 		transcriptBrokerDiagnostic(clientui.OperationalDiagnosticSleepGuardFailed, "sleep guard failed"),
 		transcriptBrokerDiagnostic(clientui.OperationalDiagnosticPromptHistoryPersistFailed, "prompt history failed"),
 	})
-	if got := nextTranscriptMessage(t, first); got.Sequence != 2 || got.Kind != clientui.TranscriptMessageOperationalDiagnostic {
+	if got := nextTranscriptMessage(t, first); got.Sequence != 2 || got.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("first live one = %+v, want seq=2 operational diagnostic", got)
 	}
-	if got := nextTranscriptMessage(t, first); got.Sequence != 3 || got.Kind != clientui.TranscriptMessageOperationalDiagnostic {
+	if got := nextTranscriptMessage(t, first); got.Sequence != 3 || got.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("first live two = %+v, want seq=3 operational diagnostic", got)
 	}
 
@@ -99,7 +94,7 @@ func TestTranscriptSubscriptionBrokerSequencesEachSubscriberFromHydration(t *tes
 	}
 	defer func() { _ = second.Close() }()
 	secondHydration := nextTranscriptMessage(t, second)
-	if secondHydration.Sequence != 1 || secondHydration.Kind != clientui.TranscriptMessageHydration {
+	if secondHydration.Sequence != 1 || secondHydration.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("second hydration = %+v, want fresh seq=1 hydration", secondHydration)
 	}
 	if event, err := nextTranscriptMessageTimeout(second, 20*time.Millisecond); err == nil {
@@ -129,7 +124,7 @@ func TestTranscriptSubscriptionBrokerCloseAndOverflowUseTerminalErrors(t *testin
 			t.Fatalf("Subscribe: %v", err)
 		}
 		for i := 0; i < transcriptSubscriptionBufferSize+1; i++ {
-			broker.Publish([]clientui.TranscriptMessage{transcriptBrokerDiagnostic(clientui.OperationalDiagnosticSleepGuardFailed, "sleep guard failed")})
+			broker.Publish([]clientui.TranscriptEvent{transcriptBrokerDiagnostic(clientui.OperationalDiagnosticSleepGuardFailed, "sleep guard failed")})
 		}
 		for {
 			_, err = sub.Next(context.Background())
@@ -161,14 +156,45 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 			t.Fatal("contract-invalid tool completion did not panic in test mode")
 		}
 	}()
-	broker.Publish([]clientui.TranscriptMessage{{
-		Kind: clientui.TranscriptMessageCommittedRow,
-		Payload: clientui.TranscriptPayload{CommittedRow: &clientui.TranscriptCommittedRow{
-			Visibility: clientui.EntryVisibilityDetail,
-			Kind:       clientui.TranscriptRowTool,
-			Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
-		}},
-	}})
+	broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Kind:       clientui.TranscriptRowTool,
+		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
+	})})
+}
+
+func TestSessionFeedSequencerRejectsUninitializedEventBeforeMutation(t *testing.T) {
+	sequencer := newSessionFeedSequencer(newTranscriptSubscriptionBroker())
+	before := sequencer.snapshot
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("uninitialized transcript event did not fail fast")
+		}
+		if !reflect.DeepEqual(sequencer.snapshot, before) {
+			t.Fatalf("sequencer snapshot mutated on invalid event: before=%+v after=%+v", before, sequencer.snapshot)
+		}
+	}()
+	sequencer.Publish([]clientui.TranscriptEvent{{}})
+}
+
+func TestTranscriptBrokerRejectsUninitializedEventWithoutSequenceOrDelivery(t *testing.T) {
+	restore := withTranscriptContractViolationPanic(false)
+	defer restore()
+	broker := newTranscriptSubscriptionBroker()
+	sub, err := broker.Subscribe(transcriptBrokerHydration(t))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+	broker.Publish([]clientui.TranscriptEvent{{}})
+	_, err = nextTranscriptMessageTimeout(sub, time.Second)
+	if err == nil {
+		t.Fatal("uninitialized event was delivered")
+	}
+	reason, ok := serverapi.TranscriptCloseReasonOf(err)
+	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
+		t.Fatalf("close reason = %q ok=%t, want contract violation", reason, ok)
+	}
 }
 
 func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(t *testing.T) {
@@ -182,14 +208,11 @@ func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(
 	}
 	_ = nextTranscriptMessage(t, sub)
 
-	broker.Publish([]clientui.TranscriptMessage{{
-		Kind: clientui.TranscriptMessageCommittedRow,
-		Payload: clientui.TranscriptPayload{CommittedRow: &clientui.TranscriptCommittedRow{
-			Visibility: clientui.EntryVisibilityDetail,
-			Kind:       clientui.TranscriptRowTool,
-			Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
-		}},
-	}})
+	broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Kind:       clientui.TranscriptRowTool,
+		Tool:       &clientui.TranscriptToolRow{StepID: mustRegistryStepID(t), ToolCallID: ""},
+	})})
 	_, err = sub.Next(context.Background())
 	if err == nil {
 		t.Fatal("contract-invalid tool completion was delivered")

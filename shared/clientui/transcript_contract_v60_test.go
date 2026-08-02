@@ -7,41 +7,24 @@ import (
 
 func TestTranscriptContractHydratesAtOneThenCarriesAtomicRuntimeReadModelUpdateAtTwo(t *testing.T) {
 	update := transcriptTestRuntimeReadModelUpdate(t)
-
-	hydration := TranscriptMessage{
-		Sequence: 1,
-		Kind:     TranscriptMessageHydration,
-		Payload: TranscriptPayload{
-			Hydration: &TranscriptHydration{
-				RuntimeReadModelUpdate: update,
-				SessionIdentity:        transcriptTestSessionIdentity(t),
-				SessionStatus:          transcriptTestSessionStatus(),
-				CommittedRows:          []TranscriptCommittedRow{},
-			},
-		},
-	}
+	hydration := NewTranscriptMessage(1, NewTranscriptEvent(TranscriptHydration{
+		RuntimeReadModelUpdate: update,
+		SessionIdentity:        transcriptTestSessionIdentity(t),
+		SessionStatus:          transcriptTestSessionStatus(),
+		CommittedRows:          []TranscriptCommittedRow{},
+	}))
 	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)
 	}
 
-	live := TranscriptMessage{
-		Sequence: 2,
-		Kind:     TranscriptMessageRuntimeReadModelUpdate,
-		Payload: TranscriptPayload{
-			RuntimeReadModelUpdate: &update,
-		},
-	}
+	live := NewTranscriptMessage(2, NewTranscriptEvent(update))
 	if err := live.Validate(); err != nil {
 		t.Fatalf("validate live runtime read-model update: %v", err)
 	}
 }
 
 func TestTranscriptPayloadValidationPrecedesPerSubscriptionSequenceAssignment(t *testing.T) {
-	update := transcriptTestRuntimeReadModelUpdate(t)
-	message := TranscriptMessage{
-		Kind:    TranscriptMessageRuntimeReadModelUpdate,
-		Payload: TranscriptPayload{RuntimeReadModelUpdate: &update},
-	}
+	message := NewTranscriptMessage(0, NewTranscriptEvent(transcriptTestRuntimeReadModelUpdate(t)))
 	if err := message.ValidatePayload(); err != nil {
 		t.Fatalf("validate unsequenced payload: %v", err)
 	}
@@ -52,20 +35,8 @@ func TestTranscriptPayloadValidationPrecedesPerSubscriptionSequenceAssignment(t 
 
 func TestTranscriptContractRejectsSequenceOutsideMessageLifecycle(t *testing.T) {
 	tests := []TranscriptMessage{
-		{
-			Sequence: 2,
-			Kind:     TranscriptMessageHydration,
-			Payload: TranscriptPayload{
-				Hydration: &TranscriptHydration{},
-			},
-		},
-		{
-			Sequence: 1,
-			Kind:     TranscriptMessageRuntimeReadModelUpdate,
-			Payload: TranscriptPayload{
-				RuntimeReadModelUpdate: &RuntimeReadModelUpdate{},
-			},
-		},
+		NewTranscriptMessage(2, NewTranscriptEvent(TranscriptHydration{})),
+		NewTranscriptMessage(1, NewTranscriptEvent(RuntimeReadModelUpdate{})),
 	}
 	for _, message := range tests {
 		if err := message.Validate(); err == nil {
@@ -74,36 +45,9 @@ func TestTranscriptContractRejectsSequenceOutsideMessageLifecycle(t *testing.T) 
 	}
 }
 
-func TestTranscriptContractRequiresOnePayloadMatchingItsKind(t *testing.T) {
-	tests := []TranscriptMessage{
-		{Sequence: 2, Kind: TranscriptMessageRuntimeReadModelUpdate},
-		{
-			Sequence: 2,
-			Kind:     TranscriptMessageRuntimeReadModelUpdate,
-			Payload: TranscriptPayload{
-				Hydration:              &TranscriptHydration{},
-				RuntimeReadModelUpdate: &RuntimeReadModelUpdate{},
-			},
-		},
-		{
-			Sequence: 2,
-			Kind:     TranscriptMessageRuntimeReadModelUpdate,
-			Payload: TranscriptPayload{
-				Hydration: &TranscriptHydration{},
-			},
-		},
-		{
-			Sequence: 2,
-			Kind:     TranscriptMessageKind("unknown"),
-			Payload: TranscriptPayload{
-				RuntimeReadModelUpdate: &RuntimeReadModelUpdate{},
-			},
-		},
-	}
-	for _, message := range tests {
-		if err := message.ValidatePayload(); err == nil {
-			t.Fatalf("accepted invalid payload union: %+v", message)
-		}
+func TestTranscriptContractRejectsUninitializedEvents(t *testing.T) {
+	if err := (TranscriptMessage{}).ValidatePayload(); err == nil {
+		t.Fatal("accepted invalid transcript event")
 	}
 }
 
@@ -128,12 +72,21 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 	}{
 		{owner: TranscriptSessionIdentity{}, field: "SessionName"},
 		{owner: TranscriptUserRow{}, field: "CondensedText"},
+		{owner: TranscriptUserRow{}, field: "RollbackTargetID"},
+		{owner: TranscriptAssistantRow{}, field: "StreamID"},
 		{owner: TranscriptAssistantRow{}, field: "CondensedText"},
 		{owner: TranscriptToolRow{}, field: "ResultSummary"},
 		{owner: TranscriptToolRow{}, field: "CondensedText"},
-		{owner: TranscriptCompactionNotice{}, field: "Count"},
-		{owner: TranscriptCompactionNotice{}, field: "Detail"},
+		{owner: TranscriptNoticeRow{}, field: "Background"},
+		{owner: TranscriptNoticeRow{}, field: "Worktree"},
 		{owner: TranscriptPrompt{}, field: "RecommendedOptionIndex"},
+		{owner: TranscriptHydration{}, field: "ActiveAssistant"},
+		{owner: TranscriptHydration{}, field: "ActiveReasoning"},
+		{owner: TranscriptHydration{}, field: "ActiveStep"},
+		{owner: TranscriptHydration{}, field: "ActiveReviewer"},
+		{owner: TranscriptHydration{}, field: "ActiveCompaction"},
+		{owner: TranscriptHydration{}, field: "ContextUsage"},
+		{owner: TranscriptHydration{}, field: "GoalStatus"},
 	}
 	for _, test := range tests {
 		field, present := reflect.TypeOf(test.owner).FieldByName(test.field)
@@ -141,7 +94,7 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 			t.Fatalf("%T.%s is missing", test.owner, test.field)
 		}
 		if field.Type.Kind() != reflect.Pointer {
-			t.Fatalf("%T.%s type = %s, want pointer-encoded absence", test.owner, test.field, field.Type)
+			t.Fatalf("%T.%s = %s, want pointer", test.owner, test.field, field.Type)
 		}
 	}
 }
