@@ -90,7 +90,7 @@ Stdout of your scripts must be workflow completion JSON. Stderr is diagnostics o
 
 If there is only one outgoing transition, `transition` can be omitted. Include declared transition parameters as top-level string fields. For multiple outgoing transitions, fields for unselected transitions should be `null`.
 
-Relative script paths cannot be fully checked until the task managed worktree exists, so run manual QA on them to ensure the user doesn't discover bugs when they try to execute real work.
+Relative script paths cannot be fully checked until the task-managed worktree exists, so run manual QA on them to ensure the user doesn't discover bugs when they try to execute real work.
 
 ## Edit Existing Workflows
 Use the edge/node CRUD commands to manage the workflow:
