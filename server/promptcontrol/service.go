@@ -14,6 +14,7 @@ import (
 
 type PendingPromptResponder interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
+	SubmitPromptResponseAndAwaitSuccessor(ctx context.Context, sessionID string, resp askquestion.AskQuestionResponse, err error) error
 }
 
 type PromptControlService struct {
@@ -69,9 +70,9 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 	_, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, s.withPromptAccess(func(prompts PendingPromptResponder) error {
 			if req.ErrorMessage != "" {
-				return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
+				return prompts.SubmitPromptResponseAndAwaitSuccessor(ctx, req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
 			}
-			return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
+			return prompts.SubmitPromptResponseAndAwaitSuccessor(ctx, req.SessionID, askquestion.AskQuestionResponse{
 				RequestID:            req.AskID,
 				Answer:               req.Answer,
 				SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),

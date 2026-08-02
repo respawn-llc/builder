@@ -228,6 +228,7 @@ export const questionAttention = {
     session_id: "session-1",
   },
   session_id: "session-1",
+  session_name: "Session one",
   question_id: "ask-1",
   message: "Choose snack",
   recommended_option_index: 1,

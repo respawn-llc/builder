@@ -310,7 +310,7 @@ func (c *CurrentNodeController) AnswerWorkflowQuestion(
 			}
 			return err
 		}
-		return c.authority.SubmitPromptResponseForScope(resolution.ScopeID, response, submitErr)
+		return c.authority.SubmitPromptResponseForScopeAndAwaitSuccessor(ctx, resolution.ScopeID, response, submitErr)
 	})
 }
 

@@ -14,10 +14,21 @@ import (
 
 type stubPromptResponder struct {
 	calls     int
+	awaits    int
 	sessionID string
 	response  askquestion.AskQuestionResponse
 	err       error
 	submitErr error
+}
+
+func (s *stubPromptResponder) SubmitPromptResponseAndAwaitSuccessor(
+	_ context.Context,
+	sessionID string,
+	resp askquestion.AskQuestionResponse,
+	err error,
+) error {
+	s.awaits++
+	return s.SubmitPromptResponse(sessionID, resp, err)
 }
 
 func (s *stubPromptResponder) SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error {
@@ -61,6 +72,9 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	}
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	}
+	if responder.awaits != 1 {
+		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
 	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
 		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
@@ -180,5 +194,8 @@ func TestServiceAnswerApprovalDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	}
+	if responder.awaits != 0 {
+		t.Fatalf("approval unexpectedly awaited a successor %d times", responder.awaits)
 	}
 }

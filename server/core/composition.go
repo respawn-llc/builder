@@ -550,6 +550,19 @@ func (r authorityPromptResponder) SubmitPromptResponse(sessionID string, respons
 	return r.authority.SubmitPromptResponse(id, response, submitErr)
 }
 
+func (r authorityPromptResponder) SubmitPromptResponseAndAwaitSuccessor(
+	ctx context.Context,
+	sessionID string,
+	response askquestion.AskQuestionResponse,
+	submitErr error,
+) error {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return r.authority.SubmitPromptResponseAndAwaitSuccessor(ctx, id, response, submitErr)
+}
+
 type authorityStepLifecycle struct {
 	registry *registry.RuntimeRegistry
 }

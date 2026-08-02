@@ -544,6 +544,7 @@ function ordinaryAttention(
       sessionID: "session-1",
     },
     sessionID: "session-1",
+    sessionName: "Session one",
     suggestions,
     taskID: "task-1",
     taskShortID: "TASK-1",

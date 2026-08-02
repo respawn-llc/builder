@@ -430,7 +430,7 @@ func newWorktreeCommandTransitionHeader(sessionID string) (serverapi.WorktreeTra
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeCommandRemote, error) {
-	configRoot, err := worktreeCommandConfigRoot()
+	configRoot, err := nearestCommandConfigRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +452,7 @@ func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeC
 }
 
 func openWorktreeWorkspaceListRemote(ctx context.Context) (*client.Remote, serverapi.ProjectBinding, error) {
-	configRoot, err := worktreeCommandConfigRoot()
+	configRoot, err := nearestCommandConfigRoot()
 	if err != nil {
 		return nil, serverapi.ProjectBinding{}, err
 	}
@@ -483,7 +483,7 @@ func openWorktreeWorkspaceListRemote(ctx context.Context) (*client.Remote, serve
 	return remote, binding, nil
 }
 
-func worktreeCommandConfigRoot() (string, error) {
+func nearestCommandConfigRoot() (string, error) {
 	workspaceRoot, err := config.FindNearestWorkspaceSettingsRoot(".")
 	if err != nil {
 		return "", err

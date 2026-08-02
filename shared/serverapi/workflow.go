@@ -1039,6 +1039,7 @@ type WorkflowAttentionItem struct {
 	ApprovalID             *string                            `json:"approval_id,omitempty"`
 	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
 	SessionID              *string                            `json:"session_id,omitempty"`
+	SessionName            *string                            `json:"session_name,omitempty"`
 	DetailJSON             *string                            `json:"detail_json,omitempty"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
@@ -2427,6 +2428,9 @@ func (r WorkflowAttentionItem) Validate() error {
 		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
 			return err
 		}
+		if err := validateOptionalAttentionString("session_name", r.SessionName); err != nil {
+			return err
+		}
 		if err := validateWorkflowAttentionRecommendation(r.Suggestions, r.RecommendedOptionIndex); err != nil {
 			return err
 		}
@@ -2455,6 +2459,7 @@ func (r WorkflowAttentionItem) Validate() error {
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
+			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
 			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "current_node", present: r.CurrentNode != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
@@ -2480,6 +2485,7 @@ func (r WorkflowAttentionItem) Validate() error {
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
+			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
 			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
