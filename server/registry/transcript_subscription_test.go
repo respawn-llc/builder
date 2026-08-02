@@ -188,13 +188,17 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 	}
 	_ = nextTranscriptMessage(t, sub)
 	before := sequencer.snapshot
-	valid := clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
-		Code:   clientui.OperationalDiagnosticSleepGuardFailed,
-		Detail: "sleep guard failed",
+	valid := clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+		StepID:     mustRegistryStepID(t),
+		ToolCallID: "tool-call-prefix",
+		ToolName:   "exec_command",
 	})
 	defer func() {
 		if recovered := recover(); recovered == nil {
 			t.Fatal("invalid batch did not fail fast")
+		}
+		if got, want := sequencer.snapshot.inFlightTools.len(), before.inFlightTools.len(); got != want {
+			t.Fatalf("in-flight tool ledger mutated by invalid batch: got=%d want=%d", got, want)
 		}
 		if !reflect.DeepEqual(sequencer.snapshot, before) {
 			t.Fatalf("sequencer snapshot mutated by invalid batch: before=%+v after=%+v", before, sequencer.snapshot)

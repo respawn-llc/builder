@@ -288,7 +288,10 @@ func ongoingToolStartCandidate(
 	msg tea.Msg,
 ) ptyOngoingTranscriptAcceptanceCandidate {
 	event, ok := ptyCheckpointTranscriptEvent(msg)
-	if !ok || event.Kind != ongoingTranscriptEventMessage || event.Message.Kind() != clientui.TranscriptMessageToolStart {
+	if !ok ||
+		event.Kind != ongoingTranscriptEventMessage ||
+		event.Message.Event().IsZero() ||
+		event.Message.Kind() != clientui.TranscriptMessageToolStart {
 		return ptyOngoingTranscriptAcceptanceCandidate{}
 	}
 	return ongoingTranscriptAcceptanceCandidate(model, event)

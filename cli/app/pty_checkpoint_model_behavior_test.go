@@ -259,6 +259,17 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 	}
 }
 
+func TestPTYCheckpointModelIgnoresUninitializedToolStartMessage(t *testing.T) {
+	message := dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+	})
+
+	got := ongoingToolStartCandidate(nil, message)
+	if got.valid {
+		t.Fatalf("uninitialized transcript message produced a tool-start candidate: %+v", got)
+	}
+}
+
 func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterDeferredDetailTransaction(t *testing.T) {
 	var out bytes.Buffer
 	writer := analyzer.NewWriter(&out)
