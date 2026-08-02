@@ -72,7 +72,7 @@ func (canceledWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.Wo
 func (canceledWorktreeSetupSubscription) Close() error { return nil }
 
 func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	count := 2
 	for _, tt := range []struct {
 		name       string
@@ -148,7 +148,7 @@ func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 }
 
 func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	count := 1
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
@@ -207,7 +207,7 @@ func TestTaskMoveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 }
 
 func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
@@ -234,7 +234,7 @@ func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 	}
 }
 func TestTaskMoveDependencyConfirmationMapsIgnoreFlag(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	count := 2
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
@@ -264,7 +264,7 @@ func TestTaskMoveDependencyConfirmationMapsIgnoreFlag(t *testing.T) {
 }
 
 func TestTaskMoveJSONWritesSubmittedNoOpTypedOutcome(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
 	remote := &taskDependencyLifecycleRemote{
 		moveResponse: serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,

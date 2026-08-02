@@ -26,7 +26,26 @@ type taskInterruptCommandRemote struct {
 
 func allowHumanTaskActionForTest(t *testing.T) {
 	t.Helper()
-	t.Setenv(sessionenv.SessionIDEnv, "")
+	unsetSessionIDEnvironmentForTest(t)
+}
+
+func unsetSessionIDEnvironmentForTest(t *testing.T) {
+	t.Helper()
+	value, present := os.LookupEnv(sessionenv.SessionIDEnv)
+	if err := os.Unsetenv(sessionenv.SessionIDEnv); err != nil {
+		t.Fatalf("unset %s: %v", sessionenv.SessionIDEnv, err)
+	}
+	t.Cleanup(func() {
+		if present {
+			if err := os.Setenv(sessionenv.SessionIDEnv, value); err != nil {
+				t.Errorf("restore %s: %v", sessionenv.SessionIDEnv, err)
+			}
+			return
+		}
+		if err := os.Unsetenv(sessionenv.SessionIDEnv); err != nil {
+			t.Errorf("restore unset %s: %v", sessionenv.SessionIDEnv, err)
+		}
+	})
 }
 
 func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
