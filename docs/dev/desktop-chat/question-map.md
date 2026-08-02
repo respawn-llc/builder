@@ -397,10 +397,13 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
 - Every deletable row has an icon-only trash action. Opening its popup performs one typed target-local delete preview with a loading state.
 - Preview reports Clean, Dirty with file count, or Unknown with diagnostic. Dirty/Unknown warnings appear before the action items; List/Status stay free of dirty state.
+- Preview-request failure keeps the popup open with authoritative error-colored plain text and ordinary Close. It shows no Retry, deletion actions, or Sonner; closing and reopening starts a fresh preview.
 - Only branch-backed rows show both `Confirm` and `Confirm + Branch`. Branchless rows show `Confirm` only. The popup remains both confirmation and branch-cleanup selector, with no second dialog.
 - Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
+- Another immediate Delete failure keeps the popup open with the authoritative inline error and restores its existing confirmation actions. Confirm itself is the retry after the blocker is addressed; no separate Retry or Sonner appears.
 - Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner.
 - Completed deletion, Scheduled deletion, and later successful transition completion show no Sonner or other success notice. Final failure uses Sonner while authoritative outcomes refresh state.
+- A typed Completed result with retained requested branch cleanup or a leftover filesystem root shows one warning Sonner with the branch/root and authoritative diagnostic. It does not reopen the popup.
 - Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
 - The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
 - Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.
