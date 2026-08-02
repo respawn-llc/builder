@@ -22,8 +22,8 @@ export function TaskTabs({
         ariaLabel={t("task.title")}
         className="grid-cols-2"
         items={[
-          { label: t("task.comments"), meta: commentCount, value: "comments" },
-          { label: t("task.activity"), value: "activity" },
+          { label: t("task.comments"), meta: commentCount, testId: "task-tab-comments", value: "comments" },
+          { label: t("task.activity"), testId: "task-tab-activity", value: "activity" },
         ]}
         onValueChange={onSelect}
         value={selected}

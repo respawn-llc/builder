@@ -1,5 +1,10 @@
-import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { z } from "zod";
@@ -47,38 +52,36 @@ describe("sidebar Task Detail navigation", () => {
 
     const user = userEvent.setup();
     await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Resolve blocker");
+      expect(getTaskTitleInput()).toHaveValue("Resolve blocker");
     });
-    await user.clear(screen.getByRole("textbox", { name: "Title" }));
-    await user.type(screen.getByRole("textbox", { name: "Title" }), "Drafted title");
-    await user.click(screen.getByRole("textbox", { name: "Description" }));
-    const description = screen.getByRole("textbox", { name: "Description" });
+    await user.clear(getTaskTitleInput());
+    await user.type(getTaskTitleInput(), "Drafted title");
+    await user.click(getTaskDescriptionInput());
+    const description = getTaskDescriptionInput();
     await user.clear(description);
     await user.type(description, "Drafted body");
-    await user.type(screen.getByRole("textbox", { name: "Add comment" }), "Drafted comment");
-    await user.click(screen.getByRole("tab", { name: "Activity" }));
+    await user.type(getTaskCommentInput(), "Drafted comment");
+    await user.click(getTaskTab("task-tab-activity"));
     const scrollStack = screen.getByTestId("task-detail-island-stack");
     scrollStack.scrollTop = 120;
     fireEvent.scroll(scrollStack);
     await user.click(await screen.findByTestId("dependency-row-task-2"));
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Prepare");
-    });
+    await waitFor(() => expect(getTaskTitleInput()).toHaveValue("Prepare"));
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByTestId("sidebar-back"));
     await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Drafted title");
-      expect(screen.getByRole("textbox", { name: "Description" })).toHaveTextContent("Drafted body");
+      expect(getTaskTitleInput()).toHaveValue("Drafted title");
+      expect(getTaskDescriptionInput()).toHaveTextContent("Drafted body");
     });
     const restoredStack = screen.getByTestId("task-detail-island-stack");
     expect(restoredStack).toHaveProperty("scrollTop", 120);
     restoredStack.scrollTop = 0;
     fireEvent.scroll(restoredStack);
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+      expect(getTaskTab("task-tab-activity")).toHaveAttribute("aria-selected", "true");
     });
-    await user.click(screen.getByRole("tab", { name: /Comments/ }));
-    expect(screen.getByRole("textbox", { name: "Add comment" })).toHaveValue("Drafted comment");
+    await user.click(getTaskTab("task-tab-comments"));
+    expect(getTaskCommentInput()).toHaveValue("Drafted comment");
 
     const restoredScrollStack = screen.getByTestId("task-detail-island-stack");
     restoredScrollStack.scrollTop = 40;
@@ -142,12 +145,12 @@ describe("sidebar Task Detail navigation", () => {
 
     const user = userEvent.setup();
     await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("task-0");
+      expect(getTaskTitleInput()).toHaveValue("task-0");
     });
     const initialActiveSubscriptionCount = services.transport.subscriptions.length;
     expect(initialActiveSubscriptionCount).toBeGreaterThan(0);
     for (let cycle = 0; cycle < 6; cycle += 1) {
-      await user.click(screen.getByRole("button", { name: "Cycle" }));
+      await user.click(screen.getByTestId("sidebar-cycle"));
       await waitFor(() => {
         expect(screen.getAllByTestId("task-detail-island-stack")).toHaveLength(1);
       });
@@ -159,14 +162,8 @@ describe("sidebar Task Detail navigation", () => {
 });
 
 function SidebarScenario() {
-  const {
-    activeDestination,
-    activeSnapshot,
-    backSidebar,
-    closeSidebar,
-    openSidebar,
-    resolveSidebar,
-  } = useSidebar();
+  const { activeDestination, activeSnapshot, backSidebar, closeSidebar, openSidebar, resolveSidebar } =
+    useSidebar();
   useEffect(() => {
     void openSidebar({ kind: "taskDetail", taskID: "task-1" });
   }, [openSidebar]);
@@ -175,7 +172,7 @@ function SidebarScenario() {
   }
   return (
     <>
-      <button onClick={backSidebar} type="button">
+      <button data-testid="sidebar-back" onClick={backSidebar} type="button">
         Back
       </button>
       <SidebarDestinationView
@@ -219,6 +216,7 @@ function SidebarTraversalScenario() {
           pushSidebar({ kind: "taskDetail", taskID });
         }}
         type="button"
+        data-testid="sidebar-cycle"
       >
         Cycle
       </button>
@@ -230,6 +228,22 @@ function SidebarTraversalScenario() {
       />
     </>
   );
+}
+
+function getTaskTitleInput() {
+  return within(screen.getByTestId("task-detail-title-island")).getByRole("textbox");
+}
+
+function getTaskDescriptionInput() {
+  return within(screen.getByTestId("task-description-input-frame")).getByRole("textbox");
+}
+
+function getTaskCommentInput() {
+  return within(screen.getByTestId("task-comment-input-frame")).getByRole("textbox");
+}
+
+function getTaskTab(testID: string) {
+  return within(screen.getByTestId(testID)).getByRole("tab");
 }
 
 function taskWithDependency(
