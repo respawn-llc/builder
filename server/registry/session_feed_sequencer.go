@@ -115,7 +115,7 @@ func (s *sessionFeedSequencer) Close(err error) {
 }
 
 func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.RuntimeReadModelUpdate) {
-	copied := cloneRuntimeReadModelUpdate(update)
+	copied := s.snapshot.applyRuntimeReadModel(update)
 	message := clientui.TranscriptMessage{
 		Kind:    clientui.TranscriptMessageRuntimeReadModelUpdate,
 		Payload: clientui.TranscriptPayload{RuntimeReadModelUpdate: &copied},
@@ -123,7 +123,6 @@ func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.Run
 	if err := message.ValidatePayload(); err != nil {
 		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
-	s.snapshot.runtimeReadModel = &copied
 	s.broker.Publish([]clientui.TranscriptMessage{message})
 }
 
@@ -201,6 +200,32 @@ func transcriptActiveStepFromRuntimeReadModel(update clientui.RuntimeReadModelUp
 	}
 }
 
+func (s *sessionFeedSnapshot) applyRuntimeReadModel(update clientui.RuntimeReadModelUpdate) clientui.RuntimeReadModelUpdate {
+	copied := cloneRuntimeReadModelUpdate(update)
+	s.reconcileStepOwnedState(copied.Activity.ActiveStep)
+	s.runtimeReadModel = &copied
+	return copied
+}
+
+func (s *sessionFeedSnapshot) reconcileStepOwnedState(next *clientui.RuntimeActiveStep) {
+	var current *clientui.RuntimeActiveStep
+	if s.runtimeReadModel != nil {
+		current = s.runtimeReadModel.Activity.ActiveStep
+	}
+	if current != nil &&
+		next != nil &&
+		current.RunID == next.RunID &&
+		current.StepID == next.StepID &&
+		current.ActiveKind == next.ActiveKind {
+		return
+	}
+	s.activeReasoning = nil
+	s.activeReviewer = nil
+	s.activeCompaction = nil
+	s.pendingPrompts = orderedFeedLedger[clientui.PromptID, clientui.TranscriptPrompt]{}
+	s.inFlightTools = orderedFeedLedger[clientui.ToolCallID, clientui.TranscriptToolStart]{}
+}
+
 func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 	payload := message.Payload
 	switch message.Kind {
@@ -231,8 +256,7 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 	case clientui.TranscriptMessagePromptResolved:
 		s.pendingPrompts.delete(payload.PromptResolved.PromptID)
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		update := cloneRuntimeReadModelUpdate(*payload.RuntimeReadModelUpdate)
-		s.runtimeReadModel = &update
+		s.applyRuntimeReadModel(*payload.RuntimeReadModelUpdate)
 	case clientui.TranscriptMessageSessionStatus:
 		status := cloneTranscriptSessionStatus(*payload.SessionStatus)
 		s.sessionStatus = &status

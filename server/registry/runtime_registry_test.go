@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -270,7 +271,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 }
 
-func TestTranscriptHydrationUsesCanonicalRuntimeActivityAfterStepEnds(t *testing.T) {
+func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	ref := registryTestResourceRef(engine.SessionID())
@@ -291,6 +292,40 @@ func TestTranscriptHydrationUsesCanonicalRuntimeActivityAfterStepEnds(t *testing
 	}); err != nil {
 		t.Fatalf("publish running step state: %v", err)
 	}
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:   runtime.EventReasoningDelta,
+		StepID: registryTestStepID,
+		ReasoningDelta: &llm.ReasoningSummaryDelta{
+			Key:  "planning",
+			Text: "Planning the next action",
+		},
+	}); err != nil {
+		t.Fatalf("publish active reasoning: %v", err)
+	}
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:   runtime.EventReviewerStarted,
+		StepID: registryTestStepID,
+	}); err != nil {
+		t.Fatalf("publish active reviewer: %v", err)
+	}
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:       runtime.EventCompactionStarted,
+		StepID:     registryTestStepID,
+		Compaction: &runtime.CompactionStatus{Mode: "auto", Count: 1},
+	}); err != nil {
+		t.Fatalf("publish active compaction: %v", err)
+	}
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:   runtime.EventToolCallStarted,
+		StepID: registryTestStepID,
+		ToolCall: &llm.ToolCall{
+			ID:    "tool-1",
+			Name:  "exec_command",
+			Input: json.RawMessage(`{"cmd":"sleep 1"}`),
+		},
+	}); err != nil {
+		t.Fatalf("publish in-flight tool: %v", err)
+	}
 	publishRunState(registry, engine.SessionID(), false)
 
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
@@ -300,6 +335,30 @@ func TestTranscriptHydrationUsesCanonicalRuntimeActivityAfterStepEnds(t *testing
 		t.Fatalf(
 			"hydrated active step = %+v, want none after canonical runtime became idle",
 			hydration.Payload.Hydration.ActiveStep,
+		)
+	}
+	if hydration.Payload.Hydration.ActiveReasoning != nil {
+		t.Fatalf(
+			"hydrated active reasoning = %+v, want none after canonical runtime became idle",
+			hydration.Payload.Hydration.ActiveReasoning,
+		)
+	}
+	if hydration.Payload.Hydration.ActiveReviewer != nil {
+		t.Fatalf(
+			"hydrated active reviewer = %+v, want none after canonical runtime became idle",
+			hydration.Payload.Hydration.ActiveReviewer,
+		)
+	}
+	if hydration.Payload.Hydration.ActiveCompaction != nil {
+		t.Fatalf(
+			"hydrated active compaction = %+v, want none after canonical runtime became idle",
+			hydration.Payload.Hydration.ActiveCompaction,
+		)
+	}
+	if len(hydration.Payload.Hydration.InFlightTools) != 0 {
+		t.Fatalf(
+			"hydrated in-flight tools = %+v, want none after canonical runtime became idle",
+			hydration.Payload.Hydration.InFlightTools,
 		)
 	}
 }
