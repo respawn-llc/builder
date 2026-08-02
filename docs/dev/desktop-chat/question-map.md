@@ -16,16 +16,13 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Sessions and Subagents use category filter chips over one project-scoped virtualized list.
 - The browser uses dense full-width rows with title, first-prompt preview, and recency.
 - The browser stays recency ordered and adds no search or additional status filters.
-- Row click opens full-page chat. Its context menu contains only `Rename`; separate-window access lives only in Chat chrome. Rename uses an inline row editor with Save and Cancel.
-- Rename updates the title in place without changing activity recency or moving the row.
+- Row click opens full-page Chat. Session rows have no secondary actions or context menu; separate-window access lives only in Chat chrome.
 - `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions. Workflow and headless launch modes create no additional category.
 - Primary New Session uses the project default workspace and opens an empty new-chat destination.
 - New in workspace opens a virtualized cursor-paginated workspace-picker sidebar; worktrees remain post-open.
 - New Session has no setup/name/model/provider/role/worktree fields.
 - Creation is lazy: abandoning untouched new chat leaves no durable session; the first agentic trigger materializes it and replaces the route.
-- Session rows show no execution-target availability. Opening any missing or inaccessible recorded workspace or worktree retargets directly to the selected Project's default workspace.
-- Successful fallback relies on the ordinary authoritative worktree-switch reminder transcript item and adds no Sonner or second warning surface.
-- If fallback is unavailable or blocked, Chat keeps history readable, disables agentic submission, and offers the ordinary Project-workspace picker for explicit recovery.
+- Session rows show no execution-target availability. Opening preserves the recorded target and follows the ordinary Session open, launch, and runtime path without Desktop-specific fallback, retarget, repair, or read-only behavior.
 
 ## 3. Home And Navigation
 

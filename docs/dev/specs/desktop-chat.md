@@ -17,13 +17,9 @@
 
 - A Project's session browser has `Sessions` and `Subagents` categories. `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions; Workflow and headless launch modes do not create additional browser categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
 - Sessions are recency ordered. A compact full-width row shows the Session title, first-prompt preview, and recency. There is no search or additional status filter.
-- Selecting a Session opens full-page Chat. Its row context menu contains only `Rename`.
-- Rename replaces the row title with a focused inline editor and explicit Save and Cancel actions.
-- A successful Rename updates the row in place without changing the Session's activity recency or list position.
-- Session rows do not expose execution-target availability or warnings. Chat owns missing or inaccessible target presentation and recovery.
-- Opening a Session whose recorded workspace or worktree is missing or inaccessible automatically retargets it to the selected Project's default workspace. Desktop does not first fall back to the recorded workspace's main checkout.
-- Successful automatic fallback uses the ordinary authoritative worktree-switch reminder transcript item. Desktop adds no Sonner or second warning presentation.
-- If the Project default workspace is unavailable or retargeting is blocked, Chat opens with readable history, disables agentic submission, and offers explicit recovery through the ordinary Project-workspace picker.
+- Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
+- Session rows do not expose execution-target availability or warnings.
+- Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.
 - Reopening a Session after navigation or relaunch opens its latest transcript position.
 - `New Session` opens an empty Chat using the Project default workspace. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
