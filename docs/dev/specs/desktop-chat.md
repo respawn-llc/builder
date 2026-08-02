@@ -236,10 +236,11 @@
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
 - Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
 - While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
-- A successful Switch acknowledgement closes the Worktree sidebar immediately and reports that the switch was scheduled.
+- A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
 - If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
-- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic, and follows the server's existing model-visible failure-Steer behavior.
+- A Scheduled acknowledgement and a later successful transition completion show no Toast or other success notice.
+- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
@@ -259,9 +260,10 @@
 - Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
 - If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
 - Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
-- A Completed result closes the popup, refreshes the list, and reports completed deletion.
-- A Scheduled result closes the popup back to the refreshed list and reports scheduled deletion. Desktop does not wait for current-Session retargeting or Git removal to finish.
-- The later authoritative transition outcome refreshes target and list state and surfaces final failure. Desktop adds no long-lived scheduled-deletion spinner.
+- A Completed result closes the popup and refreshes the list.
+- A Scheduled result closes the popup back to the refreshed list. Desktop does not wait for current-Session retargeting or Git removal to finish.
+- Completed deletion, Scheduled deletion, and later successful transition completion show no Toast or other success notice.
+- The later authoritative transition outcome refreshes target and list state and surfaces final failure through Sonner. Desktop adds no long-lived scheduled-deletion spinner.
 - A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
 - A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
 - Worktree creation uses a focused child state within the same Worktree sidebar destination.
@@ -274,7 +276,12 @@
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
-- If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- The Worktree sidebar remains dismissible while creation and optional setup run.
+- Dismissing the Worktree sidebar does not cancel the submitted creation operation. The operation continues without its spinner after the destination closes.
+- Dismissing the Worktree sidebar does not suppress the automatic Switch after successful creation and setup.
+- Successful creation and automatic Switch remain silent. The authoritative current-target control changes when the Switch applies.
+- If optional setup fails while the Worktree sidebar remains open, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- If the Worktree sidebar was dismissed, setup failure does not reopen it. Desktop shows the authoritative diagnostic through Sonner, and the next Worktree-sidebar open performs its ordinary fresh list read.
 - Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
 - If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
