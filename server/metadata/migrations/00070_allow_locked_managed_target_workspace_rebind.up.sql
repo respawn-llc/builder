@@ -60,10 +60,15 @@ WHEN NEW.managed_worktree_id IS NOT NULL
               AND NEW.execution_target_commit_oid IS NOT NULL
               AND NEW.execution_target_provenance IN ('resolved', 'legacy_observed')
           )
-      )
-      OR (
-          OLD.source_workspace_id IS NEW.source_workspace_id
-          AND OLD.managed_worktree_id IS NEW.managed_worktree_id
+          OR (
+              OLD.source_workspace_id IS NEW.source_workspace_id
+              AND OLD.managed_worktree_id IS NEW.managed_worktree_id
+              AND OLD.execution_target_mode IS NEW.execution_target_mode
+              AND OLD.execution_target_requested_ref IS NEW.execution_target_requested_ref
+              AND OLD.execution_target_resolved_ref IS NEW.execution_target_resolved_ref
+              AND OLD.execution_target_commit_oid IS NEW.execution_target_commit_oid
+              AND OLD.execution_target_provenance IS NEW.execution_target_provenance
+          )
       )
  )
 BEGIN

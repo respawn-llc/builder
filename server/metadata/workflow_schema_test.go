@@ -632,6 +632,9 @@ SET source_workspace_id = ?,
 WHERE id = 'task-atomic-lock'`, sameProjectWorkspace.WorkspaceID); err != nil {
 		t.Fatalf("atomic managed target lock across same-project workspaces should be allowed: %v", err)
 	}
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
+SET execution_target_requested_ref = 'refs/heads/changed'
+WHERE id = 'task-atomic-lock'`)
 }
 
 func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {
