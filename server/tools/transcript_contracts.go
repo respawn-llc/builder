@@ -102,7 +102,7 @@ func shellToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 		return transcript.ToolCallMeta{
 			ToolName:           string(toolID),
 			IsShell:            true,
-			UserInitiated:      parseShellToolCallUserInitiated(raw),
+			UserInitiated:      ParseShellToolCallUserInitiated(raw),
 			Command:            command,
 			CompactText:        command,
 			InlineMeta:         inlineMeta,
@@ -407,7 +407,7 @@ func formatTriggerHandoffToolResult(result Result) string {
 	return ""
 }
 
-func parseShellToolCallUserInitiated(raw json.RawMessage) bool {
+func ParseShellToolCallUserInitiated(raw json.RawMessage) bool {
 	var in struct {
 		UserInitiated bool `json:"user_initiated"`
 	}

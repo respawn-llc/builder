@@ -65,6 +65,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		t.Fatalf("persist post-boundary reasoning: %v", err)
 	}
 
+	completeManualEligibilityAgentStep(t, engine)
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact active segment: %v", err)
 	}
@@ -125,6 +126,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
+	completeManualEligibilityAgentStep(t, engine)
 	err := engine.CompactContext(context.Background(), "")
 	if !errors.Is(err, errLocalCompactionAttemptedToolCalls) {
 		t.Fatalf("manual local compaction error = %v, want tool-call rejection", err)

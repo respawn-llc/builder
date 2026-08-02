@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -41,6 +42,12 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		return matchErr
 	}
 	var rollbackLocator rollbackCandidateLocatorTracker
+	manualEligible := false
+	type restoredToolGeneration struct {
+		expected  map[string]struct{}
+		completed map[string]struct{}
+	}
+	generationsByStep := make(map[string][]*restoredToolGeneration)
 	for _, record := range activeWindow.Records {
 		stepID, _ := textutil.OptionalExact(record.StepID())
 		payload, err := record.Payload()
@@ -59,6 +66,27 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
 			}
+			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
+				expected := make(map[string]struct{}, len(msg.ToolCalls))
+				userShellGeneration := true
+				for _, call := range msg.ToolCalls {
+					if call.ID != "" {
+						expected[call.ID] = struct{}{}
+					}
+					if !isUserInitiatedShellCall(call) {
+						userShellGeneration = false
+					}
+				}
+				if len(expected) > 0 && !userShellGeneration {
+					generationsByStep[stepID] = append(generationsByStep[stepID], &restoredToolGeneration{
+						expected:  expected,
+						completed: make(map[string]struct{}, len(expected)),
+					})
+				}
+			} else if msg.Role == llm.RoleAssistant &&
+				((msg.Content != nil && strings.TrimSpace(*msg.Content) != "") || len(msg.ReasoningItems) > 0) {
+				manualEligible = true
+			}
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true
@@ -66,6 +94,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		case session.ToolCompletionRecord:
 			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload); err != nil {
 				return err
+			}
+			for _, generation := range generationsByStep[stepID] {
+				if _, ok := generation.expected[payload.CallID]; ok {
+					generation.completed[payload.CallID] = struct{}{}
+				}
 			}
 			completion, err := storedToolCompletionFromSessionRecord(payload)
 			if err != nil {
@@ -99,6 +132,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
+			manualEligible = false
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
 				stepID,
 				replacement.Items,
@@ -126,6 +160,14 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			reminderIssued = false
 		}
 	}
+	for _, generations := range generationsByStep {
+		for _, generation := range generations {
+			if len(generation.expected) > 0 && len(generation.completed) == len(generation.expected) {
+				manualEligible = true
+				break
+			}
+		}
+	}
 	restoredRollbackCandidate, err := rollbackLocator.Resolve(activeWindow.EndOffset)
 	if err != nil {
 		return fmt.Errorf("restore latest rollback candidate: %w", err)
@@ -134,6 +176,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
+	e.compactionRuntimeState().SetManualCompactionEligible(manualEligible)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {
 		return err
 	}
@@ -150,6 +193,13 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.handoffRuntimeState().QueueRequest(req.summarizerPrompt, req.futureAgentMessage)
 	}
 	return nil
+}
+
+func isUserInitiatedShellCall(call llm.ToolCall) bool {
+	if call.Name != string(toolspec.ToolExecCommand) {
+		return false
+	}
+	return tools.ParseShellToolCallUserInitiated(call.Input)
 }
 
 func isCompactionSoonReminderMessage(msg llm.Message) bool {
