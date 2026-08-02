@@ -179,7 +179,7 @@
 ## Goal
 
 - Goal is a Session control, not a Session setting.
-- Outside workflow-controlled Sessions, the left side of the under-composer control row always contains one Goal affordance. An active Goal uses a primary-colored Goal chip. A paused, completed, or absent Goal uses a neutral `Goal` affordance. Activating it opens the existing Goal when present or Goal creation when absent.
+- The left side of the under-composer control row always contains one Goal affordance. An active Goal uses a primary-colored Goal chip. A paused, completed, or absent Goal uses a neutral `Goal` affordance. Activating it opens the existing Goal when present or Goal creation when absent.
 - The control label is always `Goal`. It shows no objective preview or state text; its primary or neutral treatment communicates whether Goal work is active.
 - The control shows a target icon before `Goal`. It never becomes icon-only.
 - Desktop has no `/goal` command. The visible Goal affordance and Goal sidebar are its only Goal entry path.
@@ -196,7 +196,7 @@
 - Pause or Resume preserves any dirty objective draft. Clear resets the sidebar to blank creation state and discards any dirty objective draft.
 - Goal mutations are single-flight. While one mutation request is pending, Desktop disables every Goal mutation and shows pending state only on the initiating action. Desktop keeps no desired-state buffer, replacement queue, or client-side replay.
 - Every Goal mutation failure uses Sonner. Save failure preserves the complete dirty objective draft. Pause, Resume, and Clear failure leave the Goal and sidebar state unchanged. Successful mutations show no success notification.
-- The sidebar uses one sticky adaptive action row. At wide widths, Pause or Resume and Clear occupy the start side and dirty-state Save occupies the end side. Create mode shows Save alone. Workflow read-only mode has no action row.
+- The sidebar uses one sticky adaptive action row. At wide widths, Pause or Resume and Clear occupy the start side and dirty-state Save occupies the end side. Create mode shows Save alone.
 - When the sidebar narrows, the action row flows onto additional lines without truncating, overlapping, shrinking, or mangling button labels and controls.
 - Desktop offers no human `Mark complete` Goal action.
 - Goal suspension is not a Desktop product state. Desktop presents a durably active Goal as Active and never shows suspension copy, explanation, iconography, or a separate Resume action for runtime-local suspension.
@@ -207,13 +207,54 @@
 - While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
 - If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
 - Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
-- In a workflow-controlled Session with no Goal, Desktop omits the Goal affordance. When an agent-created Goal exists, Desktop shows its active or inactive Goal affordance and opens the sidebar read-only with a workflow-managed explanation. It offers no Save, Pause, Resume, or Clear action.
-- If that workflow Goal disappears while its read-only sidebar is open, Desktop closes the Goal sidebar and removes the affordance.
+- Workflow-controlled Sessions use the same Goal affordance, sidebar, and mutation controls as every other Session. Workflow ownership does not hide Goal, make it read-only, or restrict user Goal mutations.
 - In untouched lazy New Chat, Goal Save is the first agentic trigger and may materialize the Session before Goal validation or admission completes.
 - If Goal validation or admission then fails, the newly materialized Session remains. Desktop keeps the complete dirty Goal draft in the open sidebar, starts no Goal work for the rejected request, and uses ordinary Goal mutation error feedback.
 - After Goal acceptance starts work, later provider, tool, or runtime failure follows ordinary Session failure behavior and leaves the Session and Goal intact.
 - Desktop adds no rollback, compensation, or history-rewrite mechanism for partial lazy Goal launch.
 - Goal remains available in the ordinary bottom control row while a Question or Approval picker replaces the editor. Opening Goal does not resolve, decline, hide, or otherwise change the pending prompt picker.
+
+## Worktree
+
+- Worktree is a Session execution-target control, not a Session setting.
+- The under-composer control row contains one Worktree affordance that identifies the Session's current concise execution target.
+- For a branch-backed worktree, the affordance shows the branch name. For a detached or otherwise non-branch worktree, it shows the Kent worktree display name. For the main workspace, it shows the workspace name.
+- When the current target is missing or inaccessible, the affordance preserves that recorded target name and adds warning iconography and semantic warning treatment. It does not replace the identity with generic warning copy.
+- The affordance end-truncates a long target name. The Worktree sidebar owns the complete target facts.
+- Activating the Worktree affordance opens the shared adaptive contextual-sidebar host.
+- Desktop does not place Worktree management in the Settings popover or a separate full-page destination.
+- The Worktree sidebar opens directly to one management list. It has no overview landing page, cards, tabs, or nested Manage screen.
+- The sidebar header has a primary icon-only `+` action for creating a worktree.
+- The sidebar header has a secondary icon-only Refresh action beside `+`.
+- Opening the Worktree sidebar performs one fresh authoritative list read. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
+- Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
+- Desktop adds no Worktree-list polling loop or timer-based refresh.
+- The list contains the server's complete worktree topology in authoritative order without pagination.
+- The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
+- Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
+- The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
+- Each Worktree row uses the display name as its title.
+- Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
+- The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.
+- When the branch or ref differs from the display name, the row shows that branch or ref on a second line. It omits the second line when it would repeat the title.
+- Worktree rows never show a path.
+- An External row places an `External` warning-colored chip after its title.
+- A Missing row places a `Missing` error-colored chip after its title.
+- Every deletable row has an icon-only trash action. Activating it opens a two-item popup menu with `Confirm` and `Confirm + Branch`.
+- The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.
+- For a deletable target without a branch, the delete popup contains only `Confirm`.
+- Only a branch-backed target offers both `Confirm` and `Confirm + Branch`.
+- A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
+- A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
+- Worktree creation uses a focused child state within the same Worktree sidebar destination.
+- The creation state places `Branch or ref` before `Base ref`.
+- Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
+- `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
+- The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
+- Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
+- If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
+- Desktop does not delete or otherwise roll back a successfully created worktree because its automatic Switch failed.
 
 ## Questions And Approvals
 

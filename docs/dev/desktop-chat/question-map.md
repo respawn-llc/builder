@@ -356,7 +356,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Automatic, pre-submit, and handoff compaction send no completion notification.
 - Under disabled compaction policy, replace threshold/Auto-compaction status with disabled/unavailable text, disable Compact, and keep `/compact` recognized so its typed policy failure reaches Sonner.
 - Goal is a Session control, not a setting, and uses one typed adaptive-sidebar destination.
-- Outside workflow Sessions, target icon + `Goal` is always present on the left of the under-composer control row. Active uses a primary chip; paused, complete, and absent use the neutral affordance. It never becomes icon-only and shows no objective or state text.
+- Target icon + `Goal` is always present on the left of the under-composer control row. Active uses a primary chip; paused, complete, and absent use the neutral affordance. It never becomes icon-only and shows no objective or state text.
 - Desktop does not implement `/goal`. The visible control and sidebar are the only Goal entry path.
 - Existing Goal opens through one fresh authoritative ShowGoal read with standard compact Loading and Error+Retry. Lazy create opens directly. Later ordinary broadcasts update the clean sidebar state; no poll or server-refresh timer exists.
 - If a Goal broadcast overlaps that open read, the broadcast wins and the late read response is discarded without retry, revision, timestamp ordering, or polling.
@@ -365,18 +365,37 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Existing objectives open as rendered Markdown and enter the extracted shared editor on activation. Create mode focuses the editor.
 - Clean drafts follow broadcasts; dirty drafts survive while the destination is alive. Closing/navigation/relaunch discards unsaved text. No server-owned Goal-editor draft is added.
 - Save exists only for dirty nonblank text. It directly set/replaces the Goal, always yields Active, and starts/continues Goal work. Save success keeps the sidebar open and re-baselines.
-- The adaptive sticky action flow places Pause/Resume and error-outline Clear at start and dirty Save at end when wide. It wraps without overlap, truncation, shrinking, or label mangling. Create shows Save only; workflow read-only shows no actions.
+- The adaptive sticky action flow places Pause/Resume and error-outline Clear at start and dirty Save at end when wide. It wraps without overlap, truncation, shrinking, or label mangling. Create shows Save only.
 - Pause/Resume preserves dirty objective text. Clear is immediate in every state, has no confirmation/undo, discards dirty text, and resets to blank create mode.
 - No human Mark complete action exists. Paused and complete Goals offer Resume. Runtime-local suspension is not a Desktop product state and is presented simply as Active.
 - Goal mutations are single-flight. Disable all mutations while one request is pending, show pending only on the initiating action, and add no desired-state buffer, replacement queue, or client replay.
 - All Goal mutation errors use Sonner. Save preserves dirty text; lifecycle failures preserve state; successes have no toast.
 - Goal status uses ordinary foreground in every state. Only age is muted; no status badge or semantic status color.
 - A selected Agent without locked `ask_question` leaves Goal visible but makes Save and Resume unavailable with `Unavailable for this Agent`; Pause/Clear remain. Questions off does not block Goal.
-- Workflow Session with no Goal omits the affordance. An agent-created workflow Goal remains visible but opens read-only with a workflow-managed explanation. If that Goal disappears while open, close the sidebar and remove the affordance.
+- Workflow-controlled Sessions use the same Goal affordance, sidebar, and mutations as ordinary Sessions. Workflow ownership never hides Goal or makes it read-only.
 - In untouched lazy New Chat, Goal Save may materialize the Session before Goal validation/admission completes. Rejected validation/admission retains that Session, starts no Goal work, preserves the dirty sidebar draft, and adds no rollback or compensation. Failure after accepted work starts follows ordinary Session failure and retains Goal.
 - Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
-- Worktree inspection and control.
+- Worktree is a first-class Session execution-target control in the under-composer row.
+- The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
+- Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
+- Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
+- Worktree management is not nested in Settings and does not use a separate full-page destination.
+- The sidebar opens directly to a simple complete authoritative topology list. A primary icon-only `+` action in the header opens worktree creation; creation is not a list row.
+- A secondary icon-only Refresh action sits beside `+`. Open performs one fresh list read, successful mutations refresh, and manual Refresh catches out-of-band Git changes. No poll or timer exists.
+- Initial list loading/error uses standard compact Loading and Error + Retry.
+- The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
+- Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
+- The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
+- Rows use display name as the title. A second line shows branch/ref only when it differs from the title. Rows show no path.
+- Before adoption, an External row uses branch name as its title or the final path component when detached. It never shows the full path; ordinary Kent display-name rules apply after adoption.
+- External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
+- Every deletable row has an icon-only trash action. Its two-item popup contains `Confirm` and `Confirm + Branch` and acts as both confirmation and branch-cleanup selector. There is no second dialog.
+- Only branch-backed rows show both delete choices. Branchless rows show `Confirm` only.
+- Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
+- The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
+- Base ref defaults to HEAD and appears/enables only for New branch. There is no custom path field. Create submits; Back returns to the list.
+- Successful creation completes optional setup and then automatically uses the ordinary Switch operation. If Switch fails, preserve the created worktree, refresh the list, keep the prior Session target, and surface failure without rollback.
 - Review/init/file-backed prompt entry points.
 - Login/logout and account state.
 

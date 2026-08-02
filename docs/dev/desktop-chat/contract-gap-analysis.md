@@ -282,12 +282,10 @@ Desktop's locked Goal design exposes a narrower user contract:
   missing `ask_question` from Questions being toggled off. Only the former makes
   Save and Resume unavailable.
 
-The current runtime-control implementation intentionally allows user Goal
-mutations in workflow-controlled Sessions, and tests assert that behavior. The
-authoritative runtime spec rejects user Goal control there. Server admission and
-tests must be corrected at the Goal owner; hiding Desktop buttons is not an
-acceptable enforcement mechanism. Read-only Goal inspection and agent-originated
-Goal mutation remain available.
+Runtime control and its tests allow user Goal mutations in workflow-controlled
+Sessions. That behavior is authoritative. Desktop must expose the same Goal
+affordance and mutation controls there rather than inventing a workflow-specific
+read-only mode.
 
 Goal Set currently requires an existing Session ID. Lazy New Chat therefore
 needs a first-agentic-trigger flow that materializes the Session and then applies
