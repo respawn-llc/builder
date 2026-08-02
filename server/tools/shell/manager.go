@@ -366,7 +366,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (result Exec
 			var previewTruncated bool
 			preview, _, previewTruncated, previewErr := readBackgroundSummaryFromFile(snapshot.LogPath, maxOutputChars, BackgroundOutputDefault, !snapshot.RawOutput)
 			if previewErr == nil {
-				processed = postprocess.Result{Output: preview}
+				processed = postprocess.Result{Output: limitModelVisibleFallbackOutput(preview, snapshot.RawOutput)}
 				consumedCompletion = true
 				sourceTruncated = previewTruncated
 				warning, warningErr = mergeOperationalWarning(warning, fmt.Sprintf("full output log skipped: %v", readErr))

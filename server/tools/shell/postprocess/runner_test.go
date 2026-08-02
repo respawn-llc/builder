@@ -527,6 +527,78 @@ func TestRunnerAllModeAccumulatesWarnings(t *testing.T) {
 	}
 }
 
+func TestRunnerLimitsCommandOutputLinesAtFinalResultBoundary(t *testing.T) {
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
+	tests := [][2]string{
+		{strings.Repeat("a", 712), strings.Repeat("a", 712)},
+		{strings.Repeat("a", 999), strings.Repeat("a", 999)},
+		{strings.Repeat("a", 1000), strings.Repeat("a", 1000)},
+		{strings.Repeat("a", 1001), strings.Repeat("a", 975) + "… [26 characters omitted]"},
+		{strings.Repeat("界", 1001), strings.Repeat("界", 975) + "… [26 characters omitted]"},
+		{strings.Repeat("a", 999) + "\n" + strings.Repeat("b", 1001) + "\nshort\n\n" + strings.Repeat("界", 1001) + "\n",
+			strings.Repeat("a", 999) + "\n" + strings.Repeat("b", 975) + "… [26 characters omitted]\nshort\n\n" + strings.Repeat("界", 975) + "… [26 characters omitted]\n"},
+	}
+	for _, tt := range tests {
+		result, _ := runner.Apply(context.Background(), Request{Output: tt[0]})
+		if result.Output != tt[1] {
+			t.Fatalf("result = %q; want %q", result.Output, tt[1])
+		}
+		if tt[0] != tt[1] && (!result.Processed || result.ProcessorID != lineLimiterProcessorID) {
+			t.Fatalf("limiter attribution = processed:%t processor:%q", result.Processed, result.ProcessorID)
+		}
+	}
+}
+func TestRunnerLineLimitRunsAfterHookReplacement(t *testing.T) {
+	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeUser})
+	runner.hookProcessor = testProcessor{id: "test/hook", fn: func(e Envelope) (Decision, error) {
+		return Continue(e.WithCurrent(strings.Repeat("x", 1200)), "test/hook"), nil
+	}}
+	result, _ := runner.Apply(context.Background(), Request{Output: "original"})
+	want := strings.Repeat("x", 974) + "… [226 characters omitted]"
+	if result.Output != want || result.ProcessorID != lineLimiterProcessorID {
+		t.Fatalf("result = %+v", result)
+	}
+}
+func TestRunnerLineLimitRunsForUnrecoverableResultsFromEachChain(t *testing.T) {
+	oversized := strings.Repeat("x", 1001)
+	for _, tt := range []struct {
+		name string
+		mode config.ShellPostprocessingMode
+		p    lineLimitFailureProcessor
+	}{{"global", config.ShellPostprocessingModeBuiltin, lineLimitFailureProcessor{"global-failure", "global warning", "global failure"}},
+		{"builtin", config.ShellPostprocessingModeBuiltin, lineLimitFailureProcessor{"builtin-failure", "builtin warning", "builtin failure"}},
+		{"user", config.ShellPostprocessingModeUser, lineLimitFailureProcessor{"user-failure", "user warning", "user failure"}}} {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := mustNewRunner(t, Settings{Mode: tt.mode})
+			switch tt.name {
+			case "global":
+				runner.globalProcessors = []Processor{tt.p}
+			case "builtin":
+				runner.processors = []Processor{tt.p}
+			case "user":
+				runner.hookProcessor = tt.p
+			}
+			result, _ := runner.Apply(context.Background(), Request{Output: oversized})
+			want := strings.Repeat("x", 975) + "… [26 characters omitted]"
+			if result.Output != want || result.Warning == nil || result.ProcessorID != lineLimiterProcessorID ||
+				result.UnrecoverableError != "Postprocess processor "+tt.name+"-failure failed: "+tt.name+" failure" {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+type lineLimitFailureProcessor struct {
+	id, warning, message string
+}
+
+func (p lineLimitFailureProcessor) ID() string { return p.id }
+
+func (p lineLimitFailureProcessor) Process(_ context.Context, envelope Envelope) (Decision, error) {
+	failure := ProcessorFailure{ProcessorID: p.id, Severity: FailureUnrecoverable, Message: p.message}
+	return Decision{Action: ActionHalt, Next: envelope, Warning: mustWarning(p.warning), Failure: &failure}, nil
+}
+
 type warningProcessor struct{}
 
 func (warningProcessor) ID() string { return "test/warning" }

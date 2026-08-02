@@ -41,6 +41,11 @@ type Result struct {
 	UnrecoverableError string
 }
 
+const (
+	commandOutputLineLimit = 1000
+	lineLimiterProcessorID = "builtin/limit-output-lines"
+)
+
 type warningMessage string
 
 // Warning is an opaque immutable aggregate of non-empty operational warnings.
@@ -544,7 +549,51 @@ func resultFromEnvelope(envelope Envelope, processed bool, processorID string, t
 	if terminal.Severity == FailureUnrecoverable {
 		result.UnrecoverableError = formatProcessorFailure(terminal)
 	}
+	if output, limited := limitCommandOutputLines(result.Output); limited {
+		result.Output = output
+		result.Processed = true
+		result.ProcessorID = lineLimiterProcessorID
+	}
 	return result
+}
+
+func limitCommandOutputLines(output string) (string, bool) {
+	if output == "" {
+		return output, false
+	}
+	lines := strings.Split(output, "\n")
+	limited := false
+	for index, line := range lines {
+		shortened, lineLimited := limitCommandOutputLine(line)
+		lines[index] = shortened
+		limited = limited || lineLimited
+	}
+	if !limited {
+		return output, false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+func LimitOutputLines(output string) string {
+	limited, _ := limitCommandOutputLines(output)
+	return limited
+}
+
+func limitCommandOutputLine(line string) (string, bool) {
+	runes := []rune(line)
+	if len(runes) <= commandOutputLineLimit {
+		return line, false
+	}
+	prefixLength := commandOutputLineLimit
+	for prefixLength >= 0 {
+		omitted := len(runes) - prefixLength
+		marker := fmt.Sprintf("… [%d characters omitted]", omitted)
+		if prefixLength+len([]rune(marker)) <= commandOutputLineLimit {
+			return string(runes[:prefixLength]) + marker, true
+		}
+		prefixLength--
+	}
+	return "", true
 }
 
 func formatProcessorFailure(failure ProcessorFailure) string {

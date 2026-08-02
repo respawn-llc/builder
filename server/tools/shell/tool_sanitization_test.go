@@ -147,3 +147,39 @@ func TestRawBackgroundOutputPathsPreserveAnsi(t *testing.T) {
 		t.Fatalf("poll output lost ANSI: %q", text)
 	}
 }
+func TestShellCompletionPathsLimitCommandOutputLines(t *testing.T) {
+	const command = "printf '%1001s' '' | tr ' ' x"
+	want := strings.Repeat("x", 975) + "… [26 characters omitted]"
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	completed := make(chan Event, 2)
+	manager.SetEventHandler(func(evt Event) bool {
+		if evt.Type == EventCompleted || evt.Type == EventKilled {
+			completed <- evt
+		}
+		return true
+	})
+	start := func(command string, yield time.Duration, stdin bool) (ExecResult, error) {
+		return manager.Start(context.Background(), ExecRequest{Command: []string{"/bin/sh", "-c", command}, Workdir: t.TempDir(), YieldTime: yield, MaxOutputChars: 16_000, KeepStdinOpen: stdin})
+	}
+	foreground, _ := start("sleep .1; "+command, 5*time.Second, false)
+	if foreground.Backgrounded || foreground.Output != want {
+		t.Fatalf("foreground = %+v", foreground)
+	}
+	background, _ := start(command+"; sleep .2", 50*time.Millisecond, false)
+	if !background.Backgrounded {
+		t.Fatalf("background = %+v", background)
+	}
+	event := <-completed
+	summary, _ := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{})
+	if got, _ := summary.RuntimePreview(); got != want {
+		t.Fatalf("background preview = %q, want %q", got, want)
+	}
+	interactive, _ := start("read line; "+command, 50*time.Millisecond, true)
+	if !interactive.Backgrounded {
+		t.Fatalf("interactive = %+v", interactive)
+	}
+	finished, _ := manager.WriteStdin(context.Background(), WriteRequest{SessionID: interactive.SessionID, Input: "\n", YieldTime: 2 * time.Second, MaxOutputChars: 16_000})
+	if finished.Output != want {
+		t.Fatalf("write_stdin = %q; want %q", finished.Output, want)
+	}
+}
