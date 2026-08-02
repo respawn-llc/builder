@@ -190,17 +190,14 @@ func (s *Store) TaskIDForSession(ctx context.Context, sessionID runtimeids.Sessi
 }
 
 func (s *Store) taskIDForSessionOwnership(ctx context.Context, sessionID runtimeids.SessionID) (*workflow.TaskID, error) {
-	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	rawTaskID, err := s.metadata.WorkflowTaskIDForSession(ctx, sessionID.String())
 	if err != nil {
 		return nil, err
 	}
-	if len(taskIDs) == 0 {
+	if rawTaskID == nil {
 		return nil, nil
 	}
-	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
-		return nil, fmt.Errorf("session %q has invalid task ownership", sessionID)
-	}
-	taskID := workflow.TaskID(taskIDs[0].String)
+	taskID := workflow.TaskID(*rawTaskID)
 	return &taskID, nil
 }
 
